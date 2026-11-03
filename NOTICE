@@ -1,0 +1,19 @@
+MINIDORA / NOTNN-LLM-MINIDORA
+Copyright 2026 がっちむち♂
+
+本リポジトリは成果物種別でライセンスを分離します。
+
+- ソースコード、Runtime、Compiler、ライブラリ、テスト、ツール、ビルド・CI・パッケージ設定その他のソフトウェア構成物: Apache License 2.0 (`Apache-2.0`)
+- 仕様、設計、理論、論文、解説、図表、構文化・評価文書、READMEその他の説明文書: Creative Commons Attribution 4.0 International (`CC-BY-4.0`)
+
+これはリポジトリ全体を Apache-2.0 / CC-BY-4.0 のどちらか任意で利用できるデュアルライセンスではありません。適用範囲は `LICENSE`、正式条件は `LICENSE-APACHE-2.0` / `LICENSE-CC-BY-4.0` を参照してください。
+
+第三者由来のソース、資料、公開データ、モデル関連成果物については、各出典・原著作者の著作権、ライセンスおよび利用条件が適用されます。対応する source lock、manifest、provenance、監査記録を参照してください。
+
+会話の字句観測の固定依存:
+
+- SudachiPy 0.6.11 — Works Applications。Apache-2.0。公式配布の出典は https://github.com/WorksApplications/sudachi.rs/tree/develop/python および https://pypi.org/project/SudachiPy/0.6.11/ 。
+- SudachiDict-core 20260723（辞書形式V0）— Works Applications。Apache-2.0。公式配布の出典は https://github.com/WorksApplications/SudachiDict および https://pypi.org/project/SudachiDict-core/20260723/ 。
+- SudachiDictにはUniDicとNEologdの一部が含まれる。各原著作者の表記・条件は、公式の https://github.com/WorksApplications/SudachiDict/blob/develop/LEGAL を参照する。配布された辞書とそのライセンス表記を保持し、MINIDORA独自のデータとして扱わない。
+
+これらの依存は公開配布物を変更せず利用する。MINIDORAが追加する字句観測・HDS接続の実装には、本リポジトリのソフトウェア構成物のライセンスを適用する。

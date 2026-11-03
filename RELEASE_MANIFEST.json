@@ -1,0 +1,117 @@
+{
+  "schema": "MINIDORA_ENGINE_BETA_RELEASE_LOCK_V1",
+  "release_version": "0.6.0b1",
+  "release_date_jst": "2026-11-03",
+  "status": "BETA_FROZEN_SCOPED_ACCEPTANCE",
+  "upstream": {
+    "repository": "gatchimuchio/NOTNN-LLM-MINIDORA",
+    "branch": "main",
+    "commit": "9307d7e2b1799750ecef1957d85128fcbe403d02",
+    "upstream_public_source_blobs": 414
+  },
+  "source_provenance": {
+    "original_sources_preserved": 414,
+    "unchanged_git_blobs": 413,
+    "modified": [
+      {
+        "path": "src/minidora/統合駆動_v2/循環.py",
+        "upstream_blob": "5cd9a4b358f062d629d9d20408bcb6c203fafd5e",
+        "beta_blob": "e3fa77199ef98f7a400b2203dba1d04dd2990784"
+      }
+    ],
+    "added": [
+      {
+        "path": "src/minidora/engine_beta.py",
+        "beta_git_blob": "bbd6730c87b5c574078d634a9cd657c79f493075"
+      },
+      {
+        "path": "src/minidora/β実行.py",
+        "beta_git_blob": "e7f23a4270baea12e1677f7268c37fd5c5a0ec38"
+      }
+    ],
+    "deleted": [],
+    "original_test_tree_blob_count": 359,
+    "extracted_test_files_in_bundle": 147,
+    "historical_test_contract_adjustment": [
+      "tests/test_HDS正本継承循環_v1.py"
+    ]
+  },
+  "evidence": {
+    "source_git_blob_comparison": "PASS 413 unchanged + 1 modified + 2 new; missing 0",
+    "regression": {
+      "passed": 313,
+      "errors": 0,
+      "failures": 0,
+      "environment": "Linux Python 3.12; pinned SudachiPy 0.6.11, SudachiDict-core 20260723",
+      "modules": [
+        "test_HDS学習機械循環_v2",
+        "test_HDS内包統合_v2",
+        "test_HDS内包統合_v2追加",
+        "test_HDS原子的更新非退行",
+        "test_HDS非退行包絡",
+        "test_HDS実行主体_v1",
+        "test_HDS目的保持_v1",
+        "test_HDS形成隔離復帰_v1",
+        "test_MINIDORAコア閉包_v3",
+        "test_MINIDORAコア完成_v2",
+        "test_HDSコア入力優先_v1",
+        "test_HDS正本継承循環_v1",
+        "test_HDS配線境界_v3",
+        "test_HDS自律接続_v3",
+        "test_実行系_HDS_v1",
+        "test_β三機駆動",
+        "目的関係修正_v1.test_実行契約",
+        "目的関係修正_v1.test_循環回帰",
+        "目的関係修正_v1.test_有限探索",
+        "目的関係修正_v1.test_目的証拠",
+        "目的関係修正_v1.test_計画契約"
+      ],
+      "all_upstream_tests_run": false
+    },
+    "wheel_build": "PASS",
+    "wheel_install": "PASS in a fresh target directory",
+    "installed_wheel_smoke": {
+      "version": "0.6.0b1",
+      "execution_terminal": "COMMIT",
+      "output_state": "成立",
+      "render_passed": true,
+      "implicit_deliveries": 0,
+      "controlled_test_action": true
+    }
+  },
+  "distribution": {
+    "wheel_file": "dist/minidora_notnn-0.6.0b1-py3-none-any.whl",
+    "wheel_sha256": "c0abc3247b25a50f1cabb03a6dfe49c521f32458e2ee640686eab1f9ed463808",
+    "checksums_file": "checksums.sha256",
+    "checksums_file_sha256": "2d591f7c79e4d124d583f733496662eeb4a686d4a530222823e6ca6c9dfc7ef7",
+    "indexed_payload_files": 580,
+    "excluded_build_intermediates": [
+      "build/",
+      "src/minidora_notnn.egg-info/",
+      "__pycache__/"
+    ]
+  },
+  "scope": {
+    "included": [
+      "HDS入力系",
+      "HDS駆動コア",
+      "HDS出力系",
+      "ミニドラβ実行機",
+      "all upstream public source",
+      "existing legacy interfaces"
+    ],
+    "unverified": [
+      "full upstream test suite",
+      "general intelligence benchmark",
+      "external Cloud Run acceptance",
+      "cross-process durability"
+    ],
+    "no_external_delivery_without_explicit_call": true
+  },
+  "publisher": {
+    "author": "がっちむち♂",
+    "license": "per LICENSE/NOTICE",
+    "private_internal_theory_included": false
+  },
+  "source_repository_mutated": false
+}

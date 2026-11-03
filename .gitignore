@@ -1,0 +1,18 @@
+# Build/install output (the frozen wheel is in the archived β bundle)
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

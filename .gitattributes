@@ -1,0 +1,2 @@
+# Preserve fixed upstream bytes, including historical mixed line endings.
+* -text

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0c0d10" />
+  <title>MINIDORA</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark">M</div>
+        <div><strong>MINIDORA</strong><span>Product Prototype</span></div>
+      </div>
+      <div class="top-actions">
+        <span id="health" class="status-dot">接続確認中</span>
+        <button id="newSession" class="ghost">新しい会話</button>
+      </div>
+    </header>
+    <main class="layout">
+      <section class="chat-panel">
+        <div id="messages" class="messages"></div>
+        <div class="composer-wrap">
+          <form id="composer" class="composer">
+            <textarea id="input" rows="1" placeholder="MINIDORAにメッセージを送る" autofocus></textarea>
+            <button id="send" type="submit">送信</button>
+          </form>
+          <div id="retrievalNotice" class="hint hidden"></div>
+          <label id="externalPermission" class="hint hidden"><input id="externalRead" type="checkbox" /> この質問では外部検索しない</label>
+          <div class="hint">説明・比較・提示した文章の要約を依頼できます。</div>
+        </div>
+      </section>
+      <aside class="trace-panel">
+        <div class="trace-head"><strong>Governance Trace</strong><span>実行経路</span></div>
+        <div id="traceEmpty" class="trace-empty">応答を選択すると、実際に通過した能力Module・参照・監査hashを表示します。</div>
+        <div id="traceBody" class="trace-body hidden"></div>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

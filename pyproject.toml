@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minidora-notnn"
+version = "0.6.0b1"
+description = "MINIDORA HDS駆動エンジンの独立β抽出版（既存能力継承）"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "がっちむち♂" },
+]
+license = { file = "LICENSE-APACHE-2.0" }
+keywords = [
+  "LLM",
+  "HDS",
+  "general-purpose-engine",
+  "non-neural",
+  "NOTNN",
+  "MINIDORA",
+  "constitutive-specification",
+  "Japanese",
+  "deterministic-model-core",
+  "exact-probability",
+  "subject-consistency",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: Apache Software License",
+  "Natural Language :: Japanese",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+]
+dependencies = ["SudachiPy==0.6.11", "SudachiDict-core==20260723"]
+
+[project.optional-dependencies]
+cloud = ["google-adk==2.11.0", "google-auth==2.61.0", "pypdf==6.20.1"]
+
+[project.urls]
+Repository = "https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA"
+"LLM Constitutive Specification" = "https://github.com/gatchimuchio/LLM-Constitutive-Specification"
+
+[project.scripts]
+minidora = "minidora.__main__:main"
+minidora-product = "minidora.製品版.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"minidora.製品版" = ["web/*.html", "web/*.css", "web/*.js"]

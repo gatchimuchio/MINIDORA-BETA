@@ -1,0 +1,22 @@
+name: MINIDORA beta cross-platform acceptance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  acceptance:
+    name: Beta contract / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install frozen source
+        run: python -m pip install .
+      - name: Run selected beta acceptance suite
+        run: python tools/beta_acceptance.py
