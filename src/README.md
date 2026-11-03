@@ -1,39 +1,38 @@
-# ソース実装
+# MINIDORA Source Implementation
 
-`src/minidora/` はMINIDORA実行系の現行実装を保持する。
+`src/minidora/` contains the executable MINIDORA implementation. **Python filenames, symbols, semantic identifiers and protocol values remain Japanese.** This is intentional; public English documentation is an interface to the implementation, not a translation of its underlying source language.
 
-## 公開境界
+## Public-scope boundary
 
-この文書はソース配置と互換入口だけを案内する。
-内部理論の抽象定義、上位参照先、概念と実装の完全対応表は公開しない。
+This document describes file placement and established compatible entry points only. It does not publish private abstract definitions, private upper-level references or a complete private-theory-to-implementation mapping.
 
-- 局所言語規定: `../設計/00_日本語基底規定_v1.md`
-- 現行語彙: `../設計/01_日本語正本語彙_v1.md`
-- 規定言語・基底言語・内部意味正本: 日本語
-- 外国語: 実務上必要な外部互換境界のみ例外使用
+Historically, MINIDORA uses **Japanese as the canonical internal semantic language**, with foreign-language terms retained at required external compatibility boundaries. Former upstream language-contract files such as `設計/00_日本語基底規定_v1.md` and `設計/01_日本語正本語彙_v1.md` are **not bundled** as full theory documents here.
 
-## 現行統合実行系
+## Integrated execution
 
-現行実装は状態所有、作用起動、結果帰還、検証、終端判定を一つの統合実行経路で扱う。
-公開文書ではその内部抽象を固定定義として展開しない。
+The public path maintains state ownership, action activation, result feedback, verification and termination in an integrated execution route. Do not infer a complete hidden theoretical decomposition from this short public overview.
 
-実装入口:
+Representative established entry points:
+
 - `src/minidora/HDS実行主体.py`
 - `src/minidora/HDS駆動コア.py`
 - `src/minidora/統合駆動_v2/`
+- Isolated beta facade: `src/minidora/engine_beta.py`, delegating to `src/minidora/β実行.py`
 
-局所実装契約の互換参照:
-- `../設計/60_MINIDORA_HDS自律接続_v3.md`
+Public compatibility stub: `設計/60_MINIDORA_HDS自律接続_v3.md`.
 
-## 部品配置
+## Capability and module layout
 
-公開ソースには、言語模型、能力模型、計算、資料、数学、コード、文書、外部参照等の交換可能な部品が存在する。
-個々の部品の局所成功をシステム全体の最終成功へ読み替えない。
+The public tree contains replaceable elements related to language-model machinery, capabilities, computation, documents, math, code and external references. Passing a local component test is not proof of final system-wide success.
 
-歴史的な英字・旧版ファイル名は互換入口として残る場合がある。
-ファイル名や公開識別子を内部理論の定義として扱わない。
+Historical English/legacy identifiers can be kept for API compatibility. An identifier alone does not define private theory.
 
-## 外部成立規定
+## Where to start in English
 
-公開済みの言語模型成立条件は `LLM-Constitutive-Specification` を参照する。
-内部理論側の参照先・固定版は公開しない。
+- [Engine overview](../README.md)
+- [English onboarding](../docs/ENGLISH_ONBOARDING.md)
+- [Beta facade API guide](../docs/API_GUIDE.md)
+- [Scoped acceptance](../BETA_READINESS.md)
+- [Publication restrictions](../PUBLICATION_BOUNDARY.md)
+
+A separate published treatment of constitutive language-model requirements exists at `gatchimuchio/LLM-Constitutive-Specification`. Its relationship to MINIDORA does not redefine the MINIDORA execution engine as only an LLM.

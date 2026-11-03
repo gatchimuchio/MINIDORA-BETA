@@ -1,47 +1,41 @@
-# MINIDORA 公開境界方針
+# MINIDORA — Public Release Boundary
 
-## 目的
+## Purpose
 
-この公開リポジトリは、実装・試験・外部評価・局所インターフェースを公開する。
-非公開の内部理論、完全な抽象定義、固定された概念分解、内部理論から実装への完全対応表は公開しない。
+This public repository exposes executable implementations, tests, external evaluation evidence and local public interfaces. It does **not** disclose private internal theory, complete abstract definitions, exhaustive conceptual decompositions or a complete private-theory-to-source mapping.
 
-## 公開するもの
+## Permitted public material
 
-- 実装コード
-- API・入出力契約
-- 局所アルゴリズム
-- 試験と評価結果
-- 失敗条件と制限事項
-- モジュールの交換可能性
-- 再現に必要な公開データの由来
+- Executable code and its public-facing API/input/output contracts
+- Local algorithms and failure conditions
+- Tests and observed evaluation results, with scope
+- Compatibility and replaceable module interfaces
+- Public-data provenance needed for reproducibility
+- English explanations of observed public behavior
 
-## 公開しないもの
+## Excluded private material
 
-- 非公開内部理論への直接リンク、固定参照commit、参照先一覧
-- 完全な抽象定義またはそれを一意に復元できる要約
-- 内部抽象とソースファイル・型・工程の完全対応表
-- 非公開意味規則を推定できる大量の変換済み教師データ
-- 非公開定義の差分理由を復元できる履歴説明
-- 内部理論の完全な最小分解
+- Direct links, fixed reference commits, or inventories pointing to unpublished internal theory
+- Complete private abstract definitions or summaries allowing their unique reconstruction
+- Complete crosswalks between private concepts and source files, types or development stages
+- Large transformed teaching/semantic datasets capable of revealing unpublished meaning rules
+- Historical explanations sufficient to reconstruct private definition changes
+- Complete minimal decompositions of the unpublished internal theory
 
-## 文書規則
+## Documentation rule
 
-公開文書は「何を受け取り、何を返し、何を保証し、何を保証しないか」までを記述する。
-内部理論上の理由、完全な概念分解、上位参照先は記述しない。
+Explain **inputs, outputs, guarantees, non-guarantees, public behavior and observable failure modes**. Do not present internal theoretical explanations, complete private concept structures, or upper-level source references. Historical names in implementation filenames or compatible APIs are **identifiers**, not authorization to reconstruct private internal theory.
 
-実装ファイル名や互換API名に歴史的名称が残っていても、それを内部理論の定義へ展開しない。
+English translations must respect the same boundary as Japanese source documents.
 
-## 配布物規則
+## Distribution rule
 
-大量の変換済み成果物、入力と出力の対を大量に含むZIP、内部意味座標を復元できる派生データは公開配布しない。
-公開Releaseを作る前に、ソースtreeとは別にRelease assetも監査する。
+Do not publish large derived semantic-output collections, large paired input/output ZIP archives, or other derivatives that could reconstruct unpublished internal meaning coordinates. Audit release assets separately from the source Git tree **before** creating a public Release.
 
-## 履歴上の注意
+## Git history
 
-default branchから削除しても、Git履歴、tag、Release、fork、mirror、既取得物には残り得る。
-履歴除去が必要な場合は、通常のコミット削除とは別の履歴再書換え・Release削除・mirror確認を行う。
+Removing a file from the default branch does not remove it from prior Git commits, tags, releases, forks, mirrors or downloaded archives. Where genuine historical removal is required, ordinary file deletion is insufficient; history rewrite, release-asset removal and mirror review are distinct operations requiring authorization.
 
-## 自動監査
+## Automated audit
 
-`python tools/公開境界監査.py` をCIで実行する。
-既知の上位参照先、固定参照値、秘匿対象名、公開禁止アーカイブの再混入を検出する。
+The original repository documents `python tools/公開境界監査.py` as a CI audit for reintroduced forbidden references and archives. **Do not assume this script is included in or automatically executed by the isolated beta checkout.** Check availability and execution evidence before claiming the audit passed.

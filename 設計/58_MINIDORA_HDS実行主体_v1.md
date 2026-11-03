@@ -1,20 +1,17 @@
-# MINIDORA 内部設計文書 — 公開境界版
+# MINIDORA Legacy Design Path — Public Compatibility Stub
 
-互換案内: このファイルパスは既存リンク・履歴互換のため保持する公開境界スタブである。
+This Japanese-named file path is retained for compatibility with historical references. It is **not** a complete internal design specification.
 
-旧版に含まれていた内部理論の抽象定義、責任分解、状態分解、作用関係、版間の理論差分、内部抽象から実装型への対応表は、公開境界見直しにより現行default branchでは公開しない。
+Following a review of the public release boundary, the default branch no longer discloses the former private abstract definitions, exhaustive responsibility/state decomposition, action relationships, between-version theoretical changes or private theory-to-source/type crosswalks.
 
-公開側で確認できる正本は次に限定する。
+Publicly verifiable material is limited to:
 
-- 実装コード
-- API・入出力契約
-- 局所的な失敗条件
-- 試験
-- 評価結果
-- 互換性
+- Executable implementation
+- Public API, input and output contracts
+- Local observable failure conditions
+- Tests and measured evaluation evidence
+- Compatibility requirements
 
-互換先ファイル名: `60_MINIDORA_HDS自律接続_v3.md`
+Historical compatibility target: `60_MINIDORA_HDS自律接続_v3.md`. The filename is only a retained reference, not a disclosure of private theoretical definitions.
 
-上記は既存参照を壊さないためのファイル名であり、内部理論の完全定義を意味しない。
-
-公開方針は `../PUBLICATION_BOUNDARY.md` を正とする。
+See [Public release boundary](../PUBLICATION_BOUNDARY.md) and [English API guide](../docs/API_GUIDE.md).

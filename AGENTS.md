@@ -1,23 +1,31 @@
-# AGENTS.md — MINIDORA Engine β 保守規律
+# AGENTS.md — MINIDORA Engine Beta Maintenance Contract
 
-## 主語・目的
+## Subject and purpose
 
-MINIDORAを特定アプリケーションやLLMに限定せず、HDS駆動エンジンとして扱う。入力機、本体、出力機の既存責任を維持し、目的保持・停止・能力継承・非退行を優先する。
+Treat MINIDORA as an **HDS-driven execution engine**, not as an LLM-only or chatbot-only project. Preserve the existing responsibilities of the input machine, execution core, and output machine. Prioritize goal retention, bounded execution and stopping, capability inheritance, and non-regression.
 
-## 変更規律
+## Change and version discipline
 
-- このβ配布物は版単位で固定する。修正が必要なら新しい版を発行し、元版と差分を保全する。
-- 元ソース414ファイルと本版の差分を監査可能にする。
-- 元リポジトリのmainやGitHub Actionsを勝手に変更しない。作業はサンドボックス内、GitHub操作は権限と指示に従う。
-- 入力機は入力受理・意味決定の一回性を所有する。駆動や学習・最終採否を行わない。
-- 本体は作用・状態・目的・学習・最終採否の唯一の所有者とする。
-- 出力機は表現・失効・送達を所有する。駆動や学習の第二ループを設けない。
-- 旧入口、保存形式、能力、停止条件、公開境界、依存契約を無断破壊しない。
-- 失敗をCOMMITに昇格せず、実測できない性能を推定値で補完しない。
+- `0.6.0b1` is a frozen **engine/distribution snapshot**. Do not silently change executable implementation, public API contracts, saved formats, or the upstream repository. An implementation change requires a separately identified release with its diff, evidence, and new hashes.
+- Documentation localization may be revised separately **only** when it is explicitly identified as a documentation-only revision, with the original release evidence and historical bytes recoverable. See `DOCS_REVISION.md`.
+- Maintain auditable provenance for all 414 inherited public source files and the isolated beta changes. Do not confuse GitHub documentation hashes with the original frozen ZIP/wheel hashes.
+- Do not mutate upstream `main`, GitHub Actions, branches, or external services unless authorized. Perform checks in a separate workspace. Repository writes follow the user's active authorization.
+- The **input machine** owns input acceptance, one-time interpretation, and the sealed input bundle. It must not independently drive, learn, or adopt the final outcome.
+- The **MINIDORA core** is the sole owner of action execution, goal/state changes, learning, and final adoption.
+- The **output machine** owns rendering, invalidation and explicit delivery. Do not introduce a second execution, judgment, or learning cycle there.
+- Do not remove or silently break legacy entry points, established capabilities, stop conditions, compatibility paths, version boundaries, dependencies, or publication rules.
+- Do not promote a failure to a successful `COMMIT`, fabricate goal progress, infer benchmark scores, or disguise untested conditions as verified.
 
-## 受入・公開
+## Documentation and language rules
 
-- 変更に関連した試験、境界、回帰、バージョン、依存、ハッシュを確認してから新しい版を受け入れる。
-- 評価値は実行した対象版・条件・時点を記録する。旧版の値を現行値へ転記しない。
-- 内部理論の非公開定義や、大量の変換済み意味データを公開パッケージへ含めない。
-- 完了していない検証は未確認として残し、局所合格を万能性の証明へ拡張しない。
+- Write **public explanatory documentation, contribution guidance, examples, and change notes in English**, even where Python identifiers and historical filenames remain Japanese.
+- Preserve Japanese identifiers, literal enum values, source messages, and protocol fields when changing them would alter an executable contract. Explain them in English with an explicit mapping; do not silently rename them.
+- English translations describe **public behavior and interfaces**, not an equivalence proof for private theory. Do not publish hidden definitions, reconstruction mappings, or large transformed semantic datasets.
+- Keep historical records anchored to their original version, date, environment, and evidence. Never overwrite past claims with current assumptions.
+
+## Acceptance and publication
+
+- Before accepting a new version, check affected tests, interface boundaries, regressions, version/dependency changes, provenance and hashes.
+- The selected beta regression command is `python tools/beta_acceptance.py`; it is **not** a full upstream test suite or benchmark.
+- The GitHub Actions acceptance workflow is **manually dispatched only**. Do not assert cross-platform results unless runs were actually performed and inspected.
+- Follow `PUBLICATION_BOUNDARY.md` for all external content. Keep unverifiable claims explicitly unverified and do not generalize local success to universal capability.

@@ -1,58 +1,46 @@
-# MINIDORA 統合実行系 — 現行公開境界
+# MINIDORA Integrated Execution — Historical Public Compatibility Boundary
 
-このファイル名は既存リンクとの互換のため保持する。
-公開版では内部理論の完全な抽象定義、状態分解、判断規則、作用構成規則、内部理論から実装への完全対応表を記載しない。
+This filename is retained for compatibility with existing links. The public version **does not** describe complete private theory, full abstract/state decompositions, internal judgment or action-construction rules, or a complete private-concept-to-code mapping.
 
-## 状態
+**Historical records below are imported upstream evidence. They are not new measurements of the isolated `0.6.0b1` engine beta.**
 
-- 現行実装正本: **2026-10-01 三系統統合・目的依存駆動実装**。コード復元点 `9bb8238bf6afb307ca04ff0c8a419ecbcd29e060`
-- 現行性能正本: **2026-09-27 現行MINIDORA中核 40/198**。現行実装では未再測定
-- HDS構文化器KernelをMINIDORA内部の単一意味正本とする
-- 入力・駆動・出力の実装境界を分離し、既存入口は互換経路として継承する
-- 汎用駆動は現在目的の未充足ノードへ接続する作用だけを通常循環へ通し、目的経路外の学習・内部更新を起動しない
-- HDS先行統合中核へ既存MINIDORA能力、再観測、再評価、非退行、学習循環を内包
-- 同一問題は問題束を一度だけ形成し、初期R・中核・計算降下・回復循環が同じ成果を共有
-- 第二の実行主体・旧HDS監督を起動しない
-- 外付け能力モジュール・科学専門モジュールは現行中核正本値へ含めない
-- 公開実装は `src/minidora/` と試験を正とする
+## Historically recorded implementation state
 
-## 現行性能正本
+- Source reference: **2026-10-01**, three-system integrated, goal-dependent execution. Reconstruction commit `9bb8238bf6afb307ca04ff0c8a419ecbcd29e060`.
+- Historical performance reference: **2026-09-27**, MINIDORA core **40/198** (not remeasured on the later implementation).
+- Public semantic-input kernel: `HDS構文化器` remains the single meaning-authority source in the established paths.
+- Input, execution, and output ownership is separated; older public entry points remain available for compatibility.
+- Goal-directed normal execution admits actions connected to unmet current-goal states; unrelated learning or internal updates do not trigger a normal execution cycle.
+- The integrated core retains existing capabilities for re-observation, re-evaluation, non-regression and learning cycles.
+- A problem bundle is formed once per problem and reused through initial relations, core execution, computation and recovery.
+- No second execution owner or obsolete HDS supervisory loop is started.
+- External or scientific-specialty capability modules are not counted as the historically measured core.
+- The public executable and tests are the authoritative evidence for implemented behavior.
 
-2026-09-27 GPQA Diamond LIVE全198問:
+## Historical GPQA Diamond LIVE record (2026-09-27)
 
-```text
-40 / 198
-20.2020202020202%
-回答 144 / 198
-SUSPEND 54
-FAIL 0
-```
+| Measurement | Recorded value |
+|---|---:|
+| Correct answers | 40 / 198 |
+| Overall score | 20.2020202020202% |
+| Answered | 144 / 198 |
+| SUSPEND | 54 |
+| FAIL | 0 |
+| Correct before inherited-core transition | 36 |
+| Correct after transition | 40 |
+| Gains | 4 |
+| Regressions | 0 |
+| Newly answered items | 19 |
+| Problem bundles formed | One per question, all 198 |
+| Final candidate coverage | 198 / 198 |
 
-同一実行内の初期継承状態から最終中核状態への遷移:
+The original record describes direct measurement of `HDS駆動コア.選択実行`, **excluding attached modules**. The historical full evidence path is `評価/GPQA_Diamond_MINIDORA_中核_正本_2026-09-27.md` in the upstream lineage; it is **not part of the isolated beta checkout**.
 
-```text
-初期継承正答 36
-最終正答     40
-改善          4
-退行          0
-新規回答     19
-```
+Do **not** present this result as a measured score for engine beta `0.6.0b1`.
 
-問題束形成と候補被覆:
+## Public implementation touchpoints
 
-```text
-198問すべてで問題束を各1回形成
-初期Rと中核で同一問題束を再利用
-最終全候補被覆 198 / 198
-```
-
-これはモジュール込み性能ではなく、`HDS駆動コア.選択実行` 直測定の現行中核性能である。
-
-詳細は `評価/GPQA_Diamond_MINIDORA_中核_正本_2026-09-27.md` を正とする。
-
-## 公開する実装境界
-
-主要実装入口:
+Representative established filenames (not a private theory mapping):
 
 - `src/minidora/HDS構文化器_v1.py`
 - `src/minidora/HDS構文化処理系列_v1_4.py`
@@ -60,26 +48,21 @@ FAIL 0
 - `src/minidora/HDS選択継承循環.py`
 - `src/minidora/HDS観測計画.py`
 
-局所実装契約の互換参照:
+Historical local contract filenames (the isolated beta may contain public compatibility stubs rather than full source design documents):
 
 - `設計/60_MINIDORA_HDS自律接続_v3.md`
 - `設計/61_MINIDORA_HDS原子的更新非退行_v1.md`
 - `設計/62_MINIDORA_HDS非退行包絡_v1.md`
 
-## 公開上の不変条件
+## Public non-regression and evidence rules
 
-- 原文の意味決定はHDS構文化器Kernelで一度だけ行う。
-- 下流は形成済み問題束を消費し、同じ入力を独自に意味決定しない。
-- 個別部品の局所成功をシステム全体の最終成功へ読み替えない。
-- 既存成立出力を無証明で破壊しない。
-- benchmark gold、問題ID、固定正解表を実行時の判断根拠にしない。
-- 依存が変化した成果は再検証する。
-- 旧評価系列の性能値を現行値へ無言転記しない。
-- 公開文書から内部理論の完全定義を復元できる対応表を作らない。
+- Resolve original input meaning once in the established input/structuring path.
+- Downstream consumers must use the resulting problem bundle; they do not independently reinterpret the same input.
+- A local component's success is not the final success of the whole system.
+- Do not break an already accepted output without evidence.
+- Runtime decisions must not use benchmark gold labels, problem IDs or fixed answer tables as hidden evidence.
+- Revalidate output when its dependencies change.
+- Never carry historical performance numbers forward as current measurements without an actual new run.
+- Do not reconstruct complete private theory definitions in public documentation.
 
-## 評価境界
-
-評価条件、実測値、再現条件は `評価/評価契約_v3.md` と現行正本成果物を正とする。
-実装説明から性能値を推定しない。
-
-公開方針は `PUBLICATION_BOUNDARY.md` を正とする。
+Historical evaluation rules were documented upstream under `評価/評価契約_v3.md`; they are not a substitute for testing this beta. Current isolated beta evidence is `BETA_READINESS.md`. Public publication policy is `PUBLICATION_BOUNDARY.md`.

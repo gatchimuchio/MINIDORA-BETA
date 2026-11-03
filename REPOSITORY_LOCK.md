@@ -1,11 +1,30 @@
-# MINIDORA-BETA GitHub移植固定記録
+# MINIDORA-BETA — GitHub Import and Repository Lock
 
-- 元のソース正本: `gatchimuchio/NOTNN-LLM-MINIDORA`, `9307d7e2b1799750ecef1957d85128fcbe403d02`
-- 移植元の配布物: `MINIDORA_Engine_Beta_0.6.0b1_20261103.zip`
-- 移植元アーカイブ SHA256: `60e48b2a54c953166b9f8625a08bcd9573b13cee19fd69794e767f0aa921c7db`
-- 配布物の範囲: 元公開ソース414ファイル全数 + 変更1ファイル + 新規入口2ファイル + 選定回帰試験 + 受入文書。
-- GitHubの`main`にはソース・仕様・試験・保守文書を移植する。wheelバイナリは`dist/`に追跡せず、`python -m pip wheel --no-deps .`で再ビルド可能。
-- 元の`RELEASE_MANIFEST.json`と`checksums.sha256`は**配布ZIPの固定記録**であり、`dist/`を除外したGitHubのチェックアウト全体を直接検証するものではない。
-- このリポジトリのソース範囲は`checksums.repo.sha256`で検証する。追加のリポ体裁ファイルはGit commitで履歴管理する。
-- GitHub側で追加したREADME英語版、変更履歴、変更規律、手動受入ワークフロー等は、β1エンジンの実装内容を変更しない。
-- 2026-11-03、Linux/Python3.12で313件の関連試験を通過。全公開テストの合格や性能値の新規測定とは区別する。
+## Frozen upstream and distribution
+
+- Original source repository: `gatchimuchio/NOTNN-LLM-MINIDORA`
+- Upstream source commit: `9307d7e2b1799750ecef1957d85128fcbe403d02`
+- Original beta archive: `MINIDORA_Engine_Beta_0.6.0b1_20261103.zip`
+- Original ZIP SHA256: `60e48b2a54c953166b9f8625a08bcd9573b13cee19fd69794e767f0aa921c7db`
+- Import baseline commit (Japanese documentation): `fe5822de63644bdaea9208a98046f71684dffae2`
+
+The original distribution includes all 414 upstream public source files (with 1 documented source modification), 2 added entry points, selected regression tests, acceptance documentation and a prebuilt wheel. The GitHub repository imports the source, tests and explanatory text but **does not commit the original `dist/` wheel binary**. A wheel can be built from source with:
+
+```bash
+python -m pip wheel --no-deps .
+```
+
+## Two distinct integrity scopes
+
+1. **Original beta archive:** `RELEASE_MANIFEST.json` and `checksums.sha256` describe the **frozen original ZIP distribution**. The wheel digest recorded there belongs to the original wheel; they must not be treated as hashes of the current GitHub checkout.
+2. **Imported GitHub files:** `checksums.repo.sha256` covers the 581 text files imported from the beta ZIP. Its entries reflect the **current repository's documentation localization**, while the engine source files remain unchanged. Additional GitHub-only documentation and workflow files are tracked by Git history.
+
+English localization changes the bytes of `README.md` and other public text files. Consequently, a newly built wheel can have a **different byte hash** (README is package metadata) even though the Python engine implementation has not been changed. Use `DOCS_REVISION.md` and the previous Git commit to audit this difference.
+
+## What was actually verified
+
+On 2026-11-03, **313 selected regression cases passed on Linux/Python 3.12**, and the original wheel's build and isolated install/smoke succeeded. This is **not** proof that all upstream public tests passed, that new performance was measured, or that the manually dispatched cross-platform workflow has run.
+
+## Change rule
+
+Keep original `0.6.0b1` release artifacts immutable. Separate documentation-only changes, new executable releases, external environment acceptance and benchmark evidence; never silently promote one to another. Do not push changes to the upstream source repository without explicit authorization.

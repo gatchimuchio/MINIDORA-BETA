@@ -1,37 +1,40 @@
-# 現行正本の互換案内
+# Historical Canonical-Lineage Reference (Imported Compatibility Note)
 
-現行正本は単一ファイルで全評価系列を上書きしない。
+**This is a historical reference from the upstream MINIDORA project, not the current beta release's acceptance certificate.** It retains the original version boundaries and evidence labels. There is no single historical file that supersedes every implementation and evaluation lineage.
 
-- 現行実装正本: 2026-10-01 三系統統合・目的依存駆動実装。コード復元点 `9bb8238bf6afb307ca04ff0c8a419ecbcd29e060`
-- 現行性能正本: 2026-09-27 GPQA Diamond LIVE 40/198。現行実装では未再測定
+## Historical reference points
 
-- 評価系列の案内: [正本系統.md](正本系統.md)
-- 現行評価値: [現行正本.md](現行正本.md)
-- 統合実行系の互換案内: [HDS_MINIDORA_現行正本.md](HDS_MINIDORA_現行正本.md)
-- 開発正本の復元点: [開発正本履歴.md](開発正本履歴.md)
-- 基本チャット追加実装（2026-10-11、受入前）の復元点: `5f80cd8eb16995a48cc187a3f81cf7f2fda9f5a7`。未使用題材の品質受入と新MVPのCloud Run実機受入は未成立。中核実装・性能正本は上記を維持する。
+- **Implementation lineage:** 2026-10-01, three-system integration and goal-dependent execution; source reconstruction point `9bb8238bf6afb307ca04ff0c8a419ecbcd29e060`.
+- **Performance lineage:** 2026-09-27, GPQA Diamond LIVE **40/198**; not remeasured on the 2026-10-01 implementation or this isolated beta.
 
-- Google取得・公開送信条件・資料継続・Cloud Run固定設定の追加実装（2026-10-13、受入前）の復元点: `f9906b7e6818404adc8fc6f7f4c8f7c0000dc44f`。局所検査を確認。固定版での未使用題材の品質受入と実行SAによるCloud Run実機受入は未成立。
+Former upstream reference documents (some **not included** in this beta checkout): `正本系統.md` (lineages), `現行正本.md` (performance), `HDS_MINIDORA_現行正本.md` (public integrated implementation), `開発正本履歴.md` (development history).
 
-- 原資料の定義標識と直後説明の接続（2026-10-13、受入前）の復元点: `6a3b3faff1eae805f18872dc50961da816fcf8ea`。説明内部の原格・修飾・主体を保持し、定義対象への主体補完を禁止。関連局所検査113件PASS。未使用題材の品質受入と新MVPのCloud Run実機受入は未成立。
+## Later upstream development checkpoints (historical status at the stated date)
 
-- 既知形状詞と名詞の直接連接の保持（2026-10-13、受入前）の復元点: `bf23d2c2b65709caa7b2522f31362bb33e575498`。主題の原範囲を保持する共通判定を追加。関連局所検査91件PASS。未使用題材の品質受入と新MVPのCloud Run実機受入は未成立。
+| Date | Reconstruction commit | Recorded local observation / limitation |
+|---|---|---|
+| 2026-10-11 | `5f80cd8eb16995a48cc187a3f81cf7f2fda9f5a7` | Added basic chat work, **not yet accepted**. Novel-topic quality acceptance and Cloud Run acceptance for a new MVP were incomplete; earlier implementation/performance references remained in force. |
+| 2026-10-13 | `f9906b7e6818404adc8fc6f7f4c8f7c0000dc44f` | Added Google retrieval, conditional public transmission, document continuation and Cloud Run configuration. Local checks only; novel-topic and deployed service-account acceptance remained incomplete. |
+| 2026-10-13 | `6a3b3faff1eae805f18872dc50961da816fcf8ea` | Connected definition markers in source material with the immediately following explanation; preserved grammatical agency/scope and prohibited filling in the subject of the defined term. **113** related checks passed; wider acceptance remained incomplete. |
+| 2026-10-13 | `bf23d2c2b65709caa7b2522f31362bb33e575498` | Preserved direct adjective-like modifier + noun connection without expanding the source topic. **91** related checks passed; novel-topic and cloud acceptance incomplete. |
+| 2026-10-13 | `81119451c290c3b7b1f4f06563cb3ce958d838fb` | Added bounded PDF-text acquisition via Google with pinned dependencies, document fingerprints, page links and parsing-warning rejection. **43** related checks passed; one older HTTP test failure also reproduced on the starting `main`. Novel quality/cloud acceptance incomplete. |
+| 2026-10-13 | `fe567ba9b9d9ca087a360e7f0d0a05076428a216` | Limited diagnostics for invisible characters in conversation source text, retaining source characters, positions and content fingerprints; rejected ambiguous word-internal and evidence-crossing cases. **107** related checks passed; wider acceptance incomplete. |
+| 2026-10-13 | `324919514ceba0202a3edaf8fb922d7ef3ce543f` | Restored document page records after JSON exchange, old HTML compatibility and rejection of uninterpreted PDFs. **141** related checks passed. Two known prompts reached HDS but were suspended for insufficient content; novel/cloud acceptance incomplete. |
+| 2026-10-13 | `d63a9a472042a128521038865077528aac85281d` | Bounded extra retrieval from typed document insufficiency, preserving original request/evidence and auditing resource usage. **55** related checks plus **1** adjusted-expectation check passed; expanded a finite initial 6-candidate set to a 12-candidate bound. Wider acceptance incomplete. |
+| 2026-10-13 | `45a383943df8fc58666689ee8e1e8f90de1c26be` | Bounded extra retrieval after a previous candidate's actual failure; retained earlier source/failure/resource information. **58** related plus **3** reinforcement and **3** final-impact checks passed. Re-evaluated up to 12 texts (2 searches × 6 texts). Wider acceptance incomplete. |
 
-- Google取得の有限PDF文字供給（2026-10-13、受入前）の復元点: `81119451c290c3b7b1f4f06563cb3ce958d838fb`。固定依存・原本指紋・頁対応・警告拒否を追加。関連43件PASS。既存HTTP試験1件の失敗は開始mainでも再現。既知PDFの解析警告拒否を保存し、初見品質受入とCloud Run実機受入は未成立。
+Each row is a **historical observation**, not a new test of `MINIDORA-BETA 0.6.0b1`. Past unaccepted states have intentionally not been rewritten based on later work.
 
-- 会話原本の不可視文字診断（2026-10-13、受入前）の復元点: `fe567ba9b9d9ca087a360e7f0d0a05076428a216`。原字・位置・本文印を保持した限定診断と可視表示を接続。語中・条件・根拠交差は拒否。関連107件PASS。初見品質受入と新MVPのCloud Run実機受入は未成立。
+## Historical deployed demonstrations (not beta acceptance)
 
-- 取得本文の頁記録復元（2026-10-13、受入前）の復元点: `324919514ceba0202a3edaf8fb922d7ef3ce543f`。JSON交換後の列復元、旧HTMLの省略欄互換、PDF未解釈の両資料入口での拒否を接続。関連141件PASS。既知2問はHDSへ到達したが内容不足で留保。初見品質受入と新MVPのCloud Run実機受入は未成立。
+- **D03, 2026-10-13:** upstream `main` `a38b793250c1dfa96e49af028fae58235324ddab`, HDS core `45a383943df8fc58666689ee8e1e8f90de1c26be`, Cloud Run revision `minidora-adk-verify-v4-a38b793250c1-80e504`. A single authenticated observation covered a web-content answer, citation-style follow-up, arithmetic-input change, suspension and refusal; the record describes 5 responses with 11 technical checks each and an independent v2 audit. Independent judge access, full general quality questions, completed public listing/video and formal submission were **not** established at that checkpoint.
+- **D04, 2026-10-13:** upstream `main` `d2397cc3fc08330c9be59eb76211299c65f8e0ee`, Cloud Run revision `minidora-adk-verify-judge-d2397cc3fc08-7234f7`, same HDS core reconstruction point. Following user-authorized public invoker access, the record reports 19 HTTPS checks using Basic authentication only (0 owner OIDC token uses), 3 live responses with 11 checks each, and an independent v2 audit. It did **not** establish direct-browser credential entry to answer display, full general quality questions or formal submission.
 
-- 型付き資料不足からの有限追加検索（2026-10-13、受入前）の復元点: `d63a9a472042a128521038865077528aac85281d`。旧取得・原要求を保持し、定義・種別不足から別の取得工程を形成。資源計上と新規原本文を終端照合。関連55件PASSと試験期待訂正後1件PASSを確認。初回6候補を維持しMVP候補総数12へ有限再評価。初見品質受入と新MVPのCloud Run実機受入は未成立。
+Historical service URL: https://minidora-adk-verify-qp5ojmzmyq-an.a.run.app  
+Historical 180-second D03 demonstration: https://youtu.be/q7hF26QBabI
 
-- 旧候補の実不成立からの有限追加検索（2026-10-13、受入前）の復元点: `45a383943df8fc58666689ee8e1e8f90de1c26be`。実不成立・旧本文・原不足・資源消費を保持し、候補原順序と実重複を照合。関連58件PASSと追加補強3件PASS、最終影響3件PASSを確認。MVP本文総数を2検索×各6本文の12へ有限再評価。初見品質受入と新MVPのCloud Run実機受入は未成立。
+**Neither historical Cloud Run demonstration updates the GPQA performance reference or constitutes acceptance of the newly isolated beta.** Service availability today has not been reverified.
 
-- 旧a38のCloud実演状態（2026-10-13、限定D03の記録）：main `a38b793250c1dfa96e49af028fae58235324ddab`、本体復元点 `45a383943df8fc58666689ee8e1e8f90de1c26be`。本人認証の[実URL](https://minidora-adk-verify-qp5ojmzmyq-an.a.run.app)、revision `minidora-adk-verify-v4-a38b793250c1-80e504`でWeb本文に対応する回答・引用形式の追質問・算術入力変更・保留・拒否を一回観測。5応答の各11技術項目と独立v2監査が成立。審査主体アクセス、一般品質Q全数、完成動画・掲載、応募受付は未成立。GPQA性能正本は更新しない。過去の節目の「未受入」は当時の状態として保持する。
+## Compatibility and publication
 
-- 現在の審査用Cloud入口（2026-10-13、限定D04）：main `d2397cc3fc08330c9be59eb76211299c65f8e0ee`、revision `minidora-adk-verify-judge-d2397cc3fc08-7234f7`、[実URL](https://minidora-adk-verify-qp5ojmzmyq-an.a.run.app)。HDS本体復元点は`45a383943df8fc58666689ee8e1e8f90de1c26be`のままHTTP認証境界を追加。本人承認に基づく対象サービスのallUsers invoker一付与後、Basicのみ・本人OIDC取得使用0でHTTPS検査19件、実応答3件、各11技術照合と独立v2監査を確認。180秒の[YouTube動画](https://youtu.be/q7hF26QBabI)は旧a38の本人認証付き実画面・図を収録して公開した。直接ブラウザの資格入力から回答表示、一般品質Q全数、応募受付は、この限定受入だけでは成立としない。GPQA性能正本は未更新。
-
-最後のファイル名は既存リンク互換のため保持する。
-内部理論の定義は公開しない。
-
-公開境界は `PUBLICATION_BOUNDARY.md` を正とする。
+The historical filename `HDS_MINIDORA_現行正本.md` is retained for existing links. No private internal theory is published; `PUBLICATION_BOUNDARY.md` governs public documentation. For the **current isolated beta**, use `BETA_READINESS.md`, `SOURCE_LOCK.md`, `RELEASE_MANIFEST.json`, and `DOCS_REVISION.md`, not the dates above.

@@ -1,15 +1,21 @@
-# 変更履歴
+# Changelog
 
-## 0.6.0b1 — 2026-11-03
+## Documentation revision — 2026-11-03
 
-- 元リポ `gatchimuchio/NOTNN-LLM-MINIDORA` の `9307d7e2...` から公開ソース414個を抽出。
-- 入力機・HDS駆動本体・出力機を結ぶ `ミニドラβ実行機` を追加。既存責任を重複実装しない。
-- 外部入力の更新後に必要な再検証枠を政策上限内で保持し、目的進展を捏造しない。
-- 既存段階作用の限定的な互換再実行を通常予算内で維持。
-- 入力版単位の再駆動を受付前に拒否。
-- 防御コピー契約と矛盾していた旧試験の参照同一性期待を調整。
-- 関連313試験合格、wheelビルドと独立インストール合格。
+- Made English the primary public documentation language of `MINIDORA-BETA`.
+- Translated the repository overview, maintenance contract, beta acceptance, source and repository locks, publication boundary, license/attribution explanations, historical canonical notes, and legacy public design stubs.
+- Added English onboarding, API glossary, and a controlled copy-and-run example.
+- Preserved Japanese executable implementation, public identifiers, upstream provenance, and the original frozen ZIP/release manifest.
+- Updated repository-source checksums for changed **documentation bytes**. This revision does **not** claim a new engine or benchmark result. See `DOCS_REVISION.md`.
 
-本版の受入範囲は `BETA_READINESS.md` に限定する。未実測の一般性能や全テスト合格は主張しない。
+## Engine 0.6.0b1 — 2026-11-03
 
-GitHub側の体裁整理はソース管理のための追加文書・手動受入手順に限る。β1コードのハッシュを変更しない。
+- Isolated all 414 public source files from `gatchimuchio/NOTNN-LLM-MINIDORA` at upstream `9307d7e2...`.
+- Added `ミニドラβ実行機` to wire the existing input machine, HDS execution core and output machine without duplicating their ownership.
+- Bounded revalidation after explicit external-input updates, without fabricating goal progress.
+- Preserved a narrowly scoped stage continuation inside the established action budget.
+- Rejected repeat execution of the same input version.
+- Aligned a legacy test assertion with the defensive-copy contract.
+- Passed 313 selected regressions, built a wheel and verified an isolated installation.
+
+The acceptance statement covers only the conditions in `BETA_READINESS.md`. Neither general capability scores nor full upstream test-suite conformance were remeasured. The source-history record for the original beta remains in `RELEASE_MANIFEST.json`.

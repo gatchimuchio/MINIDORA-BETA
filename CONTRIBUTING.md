@@ -1,12 +1,30 @@
-# MINIDORA-BETA 変更・監査規律
+# Contributing and reviewing MINIDORA-BETA
 
-本リポジトリはMINIDORA駆動エンジンβ1の独立した固定点である。
+MINIDORA-BETA is an independent, historically pinned **engine beta**, not an invitation to silently rewrite the upstream implementation.
 
-- `0.6.0b1` の既存成立コードを無言で変更しない。変更が必要なら別の版と変更根拠・ハッシュ・回帰証拠を明記する。
-- 原著者は **がっちむち♂**。本リポジトリは元のMINIDORA正本へ無断反映しない。
-- 入力機、本体、出力機の責任を越境させず、既存の学習・採否の所有主体を二重化しない。
-- 局所成功を全体成功へ昇格させず、無関係な性能・安全性を試験通過から推測しない。
-- 新しい実装変更は目的、期待挙動、失敗条件、非退行試験を添える。
-- 公開境界は `PUBLICATION_BOUNDARY.md` に従い、非公開理論の実装対応表や大量の内部派生データを持ち込まない。
-- 受入試験は `python tools/beta_acceptance.py`。全公開リポのテストを完走したことにはしない。
-- Github Actionsは手動起動の環境差受入に限定する。
+## Ground rules
+
+1. Read [AGENTS.md](AGENTS.md), [PUBLICATION_BOUNDARY.md](PUBLICATION_BOUNDARY.md), and [DOCS_REVISION.md](DOCS_REVISION.md) before proposing changes.
+2. Treat the `0.6.0b1` **engine release** as immutable. Implementation changes must be proposed as a new version, with a reproducible diff, new hashes, explicit acceptance criteria, and regression evidence.
+3. Preserve all public API/identifier compatibility unless a separately approved versioned migration justifies a change. Japanese names are intentional; add English explanation, not speculative aliases that break Python contracts.
+4. Do not create competing learning, adoption or execution loops outside the MINIDORA core.
+5. State each change's purpose, expected behavior, failure conditions, and test/regression evidence.
+6. Report test outcomes only for the modules, platform, dependency versions, and date actually observed. Do not convert a controlled smoke test into a general-intelligence claim.
+7. Never add private HDS theory, complete private theory-to-code mappings, or large derived semantic datasets to this public repository.
+8. Preserve original attribution: **がっちむち♂**. Do not push changes back into the upstream repository without a separate instruction.
+
+## Validate an implementation change
+
+```bash
+python -m pip install .
+python tools/beta_acceptance.py
+python -X utf8 examples/controlled_smoke.py
+```
+
+`tools/beta_acceptance.py` covers the **selected 313-case beta regression set**; it does not stand for all upstream test files. The optional multi-OS GitHub Actions workflow is manually triggered and must be assessed separately.
+
+## Documentation changes
+
+Write external-facing prose in **English**. Preserve original Japanese file paths, API keywords and exact output values in code examples. In the change record, identify whether you modified only explanatory files or changed package/runtime behavior. Update relevant checksum records; do not change the original frozen `RELEASE_MANIFEST.json` or `checksums.sha256` to make a new checkout appear identical to the original distribution.
+
+See [English onboarding](docs/ENGLISH_ONBOARDING.md) and [API guide](docs/API_GUIDE.md) for reviewer-friendly context.

@@ -1,44 +1,69 @@
-# MINIDORA Engine β1 — 受入記録（2026-11-03）
+# MINIDORA Engine Beta 1 — Scoped Acceptance Record (2026-11-03)
 
-## 結論
+## Decision and scope
 
-**汎用駆動エンジンのβ配布範囲として受入合格。** この判定は下記の限定された機構・試験・環境に対するもので、全性能・全機能の成立を意味しない。
+**Accepted as a beta distribution of a general-purpose execution-engine architecture**, within the finite mechanism, test and environment boundaries below. This is **not** acceptance of every ability, every source module, production readiness or universal reasoning performance.
 
-- 対象版: `minidora-notnn==0.6.0b1`
-- 元版: `gatchimuchio/NOTNN-LLM-MINIDORA` `main` `9307d7e2b1799750ecef1957d85128fcbe403d02`（作成時と最終観測時に同一）
-- 実装: 入力機 `HDS入力系`、本体 `HDS駆動コア`、出力機 `HDS出力系`、β入口 `ミニドラβ実行機`
-- 元ソース414ファイルのうち413個Git blob同一、1個変更、2個追加。元ソース欠落ゼロ。
+- Package: `minidora-notnn==0.6.0b1`
+- Upstream source: `gatchimuchio/NOTNN-LLM-MINIDORA`, `main` at `9307d7e2b1799750ecef1957d85128fcbe403d02` (same at initial and final observation)
+- Machines: input `HDS入力系`, core `HDS駆動コア`, output `HDS出力系`, public beta facade `ミニドラβ実行機`
+- Upstream public source: **414 files present**; 413 byte-identical Git blobs; 1 deliberately modified file; 2 new entry-point files; **0 missing original source files**.
 
-## 確認済み
+## Observed evidence
 
-1. 関連回帰 **313件、失敗0、エラー0**（2026-11-03、Python 3.12、Linux）
-2. `minidora_notnn-0.6.0b1-py3-none-any.whl` ビルド成功。
-3. wheelを独立した一時導入先へインストール成功。配布版番号 `0.6.0b1` 確認。
-4. インストール済みwheelから制御作用の三機接続: `COMMIT`、出力「成立」、表現合格、暗黙送達0。
-5. Git blob照合: 元414ファイルの所在を全数確認。差分は意図した1ファイルと新規2ファイル。
+1. **313 selected regression cases passed, 0 failures, 0 errors** — 2026-11-03, Linux, Python 3.12.
+2. Wheel `minidora_notnn-0.6.0b1-py3-none-any.whl` built successfully from the **original beta distribution**.
+3. That wheel installed in an isolated temporary target; package version verified as `0.6.0b1`.
+4. A controlled installed-wheel input → core → output test resulted in terminal `COMMIT`, the output state `成立`, successful rendering and **zero implicit external deliveries**.
+5. Git blob comparison confirmed all original 414 source paths: the sole deliberate change and two new sources are recorded in `RELEASE_MANIFEST.json`.
 
-### 試験対象モジュール
+### Regression modules included
 
-`test_HDS学習機械循環_v2`, `test_HDS内包統合_v2`, `test_HDS内包統合_v2追加`, `test_HDS原子的更新非退行`, `test_HDS非退行包絡`, `test_HDS実行主体_v1`, `test_HDS目的保持_v1`, `test_HDS形成隔離復帰_v1`, `test_MINIDORAコア閉包_v3`, `test_MINIDORAコア完成_v2`, `test_HDSコア入力優先_v1`, `test_HDS正本継承循環_v1`, `test_HDS配線境界_v3`, `test_HDS自律接続_v3`, `test_実行系_HDS_v1`, `test_β三機駆動`, `目的関係修正_v1.test_実行契約`, `目的関係修正_v1.test_循環回帰`, `目的関係修正_v1.test_有限探索`, `目的関係修正_v1.test_目的証拠`, `目的関係修正_v1.test_計画契約`
+These are Python module names, deliberately kept in their exact Japanese source spelling:
 
-作業領域に復元した試験ファイルは147（追加β試験を含む）。**元公開リポジトリ全359テストファイルの実行合格を意味しない。**
+```text
+test_HDS学習機械循環_v2
+test_HDS内包統合_v2
+test_HDS内包統合_v2追加
+test_HDS原子的更新非退行
+test_HDS非退行包絡
+test_HDS実行主体_v1
+test_HDS目的保持_v1
+test_HDS形成隔離復帰_v1
+test_MINIDORAコア閉包_v3
+test_MINIDORAコア完成_v2
+test_HDSコア入力優先_v1
+test_HDS正本継承循環_v1
+test_HDS配線境界_v3
+test_HDS自律接続_v3
+test_実行系_HDS_v1
+test_β三機駆動
+目的関係修正_v1.test_実行契約
+目的関係修正_v1.test_循環回帰
+目的関係修正_v1.test_有限探索
+目的関係修正_v1.test_目的証拠
+目的関係修正_v1.test_計画契約
+```
 
-## 固定した変更
+The beta bundle includes **147 test files** (including the additional beta test). This is **not** a claim that all **359 upstream public test files** were restored or passed. Reproduce the selected suite with `python tools/beta_acceptance.py`.
 
-- 外部入力の明示更新後に再開する場合、元運用政策の初期作用予算と増分の合計の範囲内で再読取・最終検証に枠を与える。目的進展の判定は変更しない。
-- 同一作用が契約に宣言した中間状態を新規形成し、要求状態の産出も宣言しているときだけ、既存通常予算内で追加一回の段階実行を検討する。無関係な内部カウンタ変化だけでの無限反復は抑止する。
-- 旧試験の参照同一性期待を、現行`主体辞書()`の防御コピー仕様に合わせて値一致・非共有へ更新。
-- β入口は入力機受理の前に同じ案件・入力ID・入力版の再駆動を拒否する。
+## Deliberate changes in the frozen engine beta
 
-## 非保証・受入対象外
+- When resuming after an explicit external-input update, bounded re-reading and final revalidation can use the existing initial action budget plus its policy-defined increment. The goal-progress decision is unchanged.
+- A single extra finite stage of an action may be considered **within the existing normal budget** only when the action newly forms a declared intermediate state and declares production of a required state. Irrelevant internal-counter changes do not cause unbounded repetition.
+- A legacy test's reference-identity assertion was aligned to the current `主体辞書()` defensive-copy contract: equal value, distinct object identity.
+- The beta facade rejects a repeated `(案件ID, 入力ID, 入力版)` before input acceptance.
 
-- 未収録テスト、旧保存fixture、Cloud Run等の実環境、長時間全数評価はこの受入判定の対象外。
-- この版で一般推論・日本語能力の新たな数値評価やGPQA再測定は行っていない。
-- β統合入口は一般テキスト向け。専門的な選択・関係入力は既存コアAPI経路を継承している。
-- 結果参照・重複抑止は実行機インスタンス内の契約。プロセス間永続化は未実装。
-- 外部送達、クラウド接続・外部検索、あらゆるタスクの自律解法を保証しない。
-- 制御された人工作用の成立を自律的な算術能力や汎用知能の証拠へ拡張しない。
+## Exclusions and unverified areas
 
-## 固定規律
+- Unincluded tests, old saved fixtures, a Cloud Run deployment, full-duration evaluations and entire upstream acceptance are **outside this acceptance**.
+- No new numerical measurement of general inference, Japanese language quality or GPQA was made for this beta.
+- The beta facade accepts general text; specialized selection/relation input continues through inherited core APIs.
+- Result lookup and duplicate suppression are **per-process, per-instance in-memory contracts**, not durable persistence across restarts.
+- External delivery, deployed cloud/search access, and autonomous success on arbitrary tasks are **not guaranteed**.
+- Successful execution of a **supplied test action** is not evidence of autonomous arithmetic or general intelligence.
+- Multi-OS acceptance via the repository's manually dispatched GitHub Actions workflow has **not been claimed**.
 
-配布した`0.6.0b1`はimmutableとし、今後の修正は新しい版番号とハッシュを発行する。元リポジトリのmainへ反映・pushはしていない。公開境界は`PUBLICATION_BOUNDARY.md`に従い、非公開内部理論や大量の意味変換派生成果物を含まない。
+## Release discipline
+
+The original `0.6.0b1` engine distribution is immutable; future **implementation changes** require new versioning, diffs and hashes. The upstream repository was not modified. The publication boundary in `PUBLICATION_BOUNDARY.md` excludes internal/private theory and large derived semantic datasets. English documentation localization is a **separately tracked, documentation-only revision**, explained in `DOCS_REVISION.md`; it does not revise this dated acceptance evidence.
