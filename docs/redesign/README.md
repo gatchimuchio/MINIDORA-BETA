@@ -1,28 +1,26 @@
 # MINIDORA — Whole-System Redesign Register
 
-**Status:** Design candidate, 2026-11-09 (JST)  
+**Status:** Concrete successor design; not yet implemented, 2026-11-09 (JST)  
 **Target:** The next independently versioned MINIDORA implementation, developed in `MINIDORA-BETA`  
 **Starting evidence:** Frozen engine `minidora-notnn==0.6.0b1` and the read-only upstream public repository  
 **Change class:** Documentation only. No engine code, test, benchmark, distribution, deployment or upstream repository was modified by creating this register.
 
 ## Decision
 
-Reconsider MINIDORA **from first principles as one system**, integrating every observed existing capability and every relevant capability proposed in the development history. Do not make the present module tree, a chatbot feature list or a previous implementation order into an unquestionable design premise.
+MINIDORA has been **redesigned from first principles as one system**, integrating every observed existing capability and every relevant capability proposed in the development history at the contract level. The architecture, responsibility boundaries, storage, language/learning core and execution semantics are decided in one specification. The present module tree, chatbot feature list and previous implementation order are not binding premises.
 
 The redesign is a *candidate* for a future version. The historical beta distribution, its tests, source lock, integrity records and earlier evaluations remain separate and recoverable. A documented capability is not automatically an implemented, connected, accepted or independently demonstrated capability.
 
-## Authoritative reading order
+## Normative specification and supporting annexes
 
 | File | Purpose | Owner of decision |
 |---|---|---|
-| [01 — System specification](01_SYSTEM_SPECIFICATION.md) | Whole-product purpose, invariants, operational contracts, lifecycle and responsibility boundaries | Product/architecture |
-| [02 — Capability register](02_CAPABILITY_REGISTER.md) | Inclusive inventory of inherited, historically reported and emerging abilities; explicit status and verification obligation | Capability coverage |
-| [03 — Integrated construction plan](03_INTEGRATED_CONSTRUCTION_PLAN.md) | Full-system-first assembly, inspection and acceptance sequence | Execution order |
-| [04 — Agent work order](04_AGENT_WORK_ORDER.md) | Instructions, actor/authority separation, acceptance and stop conditions for a future implementation agent | Implementation control |
-| [05 — Verification and evidence](05_VERIFICATION_AND_EVIDENCE.md) | E2E, learning, reference, regression, quality and performance contracts | Acceptance judgment |
-| [06 — Lineage and decisions](06_LINEAGE_AND_DECISIONS.md) | Actual reference scope, historic observations, supersession, open decisions and non-claims | Provenance |
+| [01 — Unified engine specification](01_SYSTEM_SPECIFICATION.md) | **Sole normative design:** complete core/port/store/API/effect architecture and acceptance boundary | Architecture |
+| [02 — Capability register](02_CAPABILITY_REGISTER.md) | Inclusive inventory of 93 inherited, historically reported and emerging abilities; explicit status and verification obligation | Coverage annex |
+| [05 — Verification and evidence](05_VERIFICATION_AND_EVIDENCE.md) | E2E, learning, reference, regression, quality and performance contracts | Evidence annex |
+| [06 — Lineage and decisions](06_LINEAGE_AND_DECISIONS.md) | Actual reference scope, historic observations, supersession, resolved design decisions and non-claims | Lineage annex |
 
-The **specification, plan and work order** are one coordinated set, not separate feature backlogs. The capability register and verification contract supply their complete acceptance population.
+The former construction-plan and agent-work-order documents were retired from the current design in favor of direct architectural decisions in `01`. Their earlier content remains recoverable in Git history, not current design authority.
 
 ## Authority and precedence
 
@@ -37,7 +35,7 @@ Public documents describe **observable contracts**, not private HDS theory. Do n
 
 - Reviewed: accessible repository metadata, beta entry points and maintenance/lock/acceptance documents; upstream README, repository rules, public design index, capability-specification filenames, evaluation contract and canonical history; selected historical failure and improvement reports.
 - Not completed: full byte-level source review of all 414 imported public source files, recovery of every old specification version, runtime connectivity tracing for every public capability, restoration of 359 upstream public test files, or fresh general-chat/GPQA/multi-OS/Cloud acceptance.
-- Consequently, `source present`, `historically measured`, `candidate` and `current E2E accepted` must never be treated as equivalent. The work order begins with a **full census** and keeps discrepancies visible.
+- Consequently, `source present`, `historically measured`, `candidate` and `current E2E accepted` must never be treated as equivalent. The future implementation must complete the unobserved **full census** before claiming total feature coverage and keep discrepancies visible.
 
 ## Release and storage policy
 

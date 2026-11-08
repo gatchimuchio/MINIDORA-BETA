@@ -28,6 +28,7 @@
 | 2026-10-13 | Conversation-quality specification targeted novel Q&A, writing, multistep memory/follow-up | An acceptance population proposal, not its pass result |
 | 2026-11-03 | Beta1 extracted and documented in English, selected regressions passed | No new general performance, universal translation or multi-OS claim |
 | 2026-11-09 | Fresh design register collects prior and emerging requirements | Documents only; engine implementation/evaluation remains untouched |
+| 2026-11-09 (architecture amendment) | One concrete normative architecture replaces an outline plus construction-plan/agent-order bundle | Architecture design decisions are fixed, **not** implemented or performance-verified |
 
 The upstream [`CURRENT_CANONICAL.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/CURRENT_CANONICAL.md), [`README.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/README.md), [`設計/README.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/%E8%A8%AD%E8%A8%88/README.md), [`評価/評価契約_v3.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/%E8%A9%95%E4%BE%A1/%E8%A9%95%E4%BE%A1%E5%A5%91%E7%B4%84_v3.md) and beta [`CURRENT_CANONICAL.md`](../../CURRENT_CANONICAL.md) preserve the public record. Historical private reports were used as investigative leads but are **not copied or linked** in this public repository.
 
@@ -42,20 +43,23 @@ The upstream [`CURRENT_CANONICAL.md`](https://github.com/gatchimuchio/NOTNN-LLM-
 7. **Evaluation:** Historic core-only, module-enabled, Cloud demo, beta regression and new target versions are separate objects. The existing public v3 GPQA acceptance population and no-gold/LIVE contracts cannot be revised for convenience.
 8. **Public boundary:** All public descriptions stay at interface, capability, evidence and risk level. The private theory, full mapping and large transformed datasets stay excluded even when a design would be easier to explain with them.
 
-## Open design decisions — to resolve by observation, not guesswork
+## Decisions settled by the normative specification
 
-| Decision | What must be observed first | Owner/decision gate |
-|---|---|---|
-| Exact next package/version label | Chosen executable scope, migration and release requirements | User approves new implementation/release identity |
-| Keep vs replace present 3-machine internals | Whole-system state/authority/cost graph and compatibility tests | Architecture, then user for semantic change |
-| Language, storage and runtime target | Target platforms and resources, measured cost and safe reuse of existing code | Architecture; no preselected rewrite |
-| Memory persistence backend | Isolation, restart, performance, retention and security needs | Architecture + consumer acceptance |
-| Specialization vs generalized learning | Measured effect through real general inputs and independent future tasks | Capability acceptance |
-| Multimodal and translation providers | Concrete user-app contracts and approved third-party dependencies | Application/port boundary; not a claim of built-in perception |
-| Publication/demo deployment | Service, cost, credentials, IAM, audience, exact artifact | Separate owner authorization |
-| Completion claim and release scope | Complete register dispositions and test evidence | Independent acceptance + owner |
+`01_SYSTEM_SPECIFICATION.md` fixes the three machine responsibilities, the sole core authority, Python 3.11+ initial runtime, SQLite WAL/event journal/immutable blobs, core memory→inference→adaptation, typed relation and non-neural generation contracts, artifact-based scheduling, evidence packets, versioned capability ports, effect ledger, deterministic replay and Windows/8 GB resource **targets**. These are no longer deferred to a construction schedule or an implementation agent. A future contradictory measurement requires a recorded specification revision, not an implicit substitution.
+
+## Remaining observations and external decisions
+
+| Open item | Observable requirement or actual owner decision |
+|---|---|
+| Exact successor package/release label | User confirms independent version/release scope once executable changes are authorized |
+| Exhaustive compatibility map | Inspect all 414 inherited public files and connected entry routes; test old Japanese public APIs and evidence persistence |
+| Local storage and resource viability | Measure atomic replay, crash recovery, process RSS and latency on actual Windows CPU/8 GB hardware; adjust the specification explicitly if targets conflict |
+| Generalized learning and language quality | Run natural unseen inputs, future-use/invalidations, memory-long-history and compare intrinsic core vs connected-port outcomes |
+| External ports | Select and authorize actual providers/dependencies for speech, image, video, translation, Web, compiler and application operations; inspect license/privacy/cost and distinguish unavailable ports |
+| Publication/demo deployment | User authorizes service, cost, credentials, IAM, audience and target artifact independently from design publication |
+| Completion/acceptance claim | Evidence satisfies the entire declared register population and full-route tests; reduced scope requires explicit owner approval |
 
 ## Remaining source-verification work
 
-This register is grounded in source listings, public contracts and selected implementations. It is **not a completed 414-file code audit or a new full-coverage test result**. The future agent must finish F0's exhaustive tree/entry-route/test census and update [02_CAPABILITY_REGISTER.md](02_CAPABILITY_REGISTER.md) before claiming total functional coverage. Preserve discoverable new requirements rather than restricting the target to only the names currently listed.
+This register is grounded in source listings, public contracts and selected implementations. It is **not a completed 414-file code audit or a new full-coverage test result**. An authorized implementation must finish the exhaustive tree/entry-route/test census and update [02_CAPABILITY_REGISTER.md](02_CAPABILITY_REGISTER.md) before claiming total functional coverage. Preserve discoverable new requirements rather than restricting the target to only the names currently listed.
 

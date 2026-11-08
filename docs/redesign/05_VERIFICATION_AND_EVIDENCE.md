@@ -41,7 +41,7 @@ Every case must start at the entrance it purports to validate. Tests that direct
 
 ## 3. Independent conversation quality population
 
-Use the historical quality specification as a proposed population; reconstruct its exact source and evaluator contract during F0 before replacing or adopting test data:
+Use the historical quality specification as a proposed population; reconstruct its exact source and evaluator contract before replacing or adopting test data. This is an observational prerequisite, not a separately delegated architecture/design phase:
 
 - **24 unseen natural general questions** across definitions, causal explanation, mechanism, comparison and bounded uncertainty.
 - **12 unseen writing/editing tasks** including revisions with explicit target, voice, length, formatting and prohibited content.

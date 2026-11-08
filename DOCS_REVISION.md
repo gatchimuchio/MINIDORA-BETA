@@ -1,5 +1,11 @@
 # Documentation Revision — English Accessibility Layer
 
+## Architecture-specification amendment — 2026-11-09
+
+Following the preliminary multi-document planning revision below, the owner required ChatGPT to **make the architecture decisions directly** and publish a **single executable-level specification**, not a specification/schedule/agent-instruction set. The former `docs/redesign/03_INTEGRATED_CONSTRUCTION_PLAN.md` and `docs/redesign/04_AGENT_WORK_ORDER.md` were removed from the current tree (recoverable from the earlier Git commit). `docs/redesign/01_SYSTEM_SPECIFICATION.md` was rewritten as a concrete sole architectural authority; its capability, verification and lineage annexes remain. Root navigation and review guidance were aligned to this decision.
+
+This amendment changes **documentation only**. No executable code, tests, model/benchmark outcomes, upstream state, original beta ZIP or wheel, release manifest, or archived hash was changed. Modified imported documentation receives new **repository-local** checksums, distinct from the original distribution's checksum evidence.
+
 ## Subsequent documentation-only revision — 2026-11-09
 
 The next-generation **whole-system redesign** is documented in `docs/redesign/`. Its six linked files are a design/verification/work-order *candidate*, not an implementation or performance acceptance. This revision updates the root README and maintenance contract to point to that register, adds a documentation index, and records the changes in `CHANGELOG.md` and `CONTRIBUTING.md`. The imported-file index `checksums.repo.sha256` is updated **only** for edited imported documentation bytes (`README.md`, `AGENTS.md`). New GitHub-only design files are Git-tracked but are not added to the historical imported-ZIP checksum population. The original beta ZIP, engine Python files, wheel, historical manifests and upstream repository are unchanged.

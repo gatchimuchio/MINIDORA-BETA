@@ -1,5 +1,12 @@
 # Changelog
 
+## Architectural specification correction — 2026-11-09
+
+- Replaced the preliminary architecture outline with **one concrete, normative unified-engine specification**. It decides the three-machine ownership, state/storage schema, non-neural language and relation core, memory/learning, goal scheduler, capability ports, authorization/effects, deterministic replay and acceptance gates.
+- Retired the construction plan and implementation-agent work order from the current documentation tree. Their previous content remains available in Git history; implementation/design choices are not delegated to an agent.
+- Preserved the inclusive capability, verification and lineage annexes. Corrected public links and described formerly unresolved decisions as resolved by the specification, with unverified implementation facts still labeled.
+- Documentation changes only: no modifications to the frozen engine, its tests, benchmark results, archived distribution or read-only upstream.
+
 ## Design-only revision — 2026-11-09
 
 - Added a **from-first-principles, whole-system next-generation design** under `docs/redesign/`, with a specification, inclusive capability register, integrated construction plan, future agent work order, verification contract and provenance/decision register.

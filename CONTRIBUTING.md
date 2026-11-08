@@ -1,6 +1,6 @@
 # Contributing and reviewing MINIDORA-BETA
 
-For future engine architecture work, start with the [whole-system redesign register](docs/redesign/README.md). Its specification, complete capability and evidence population, construction plan and agent work order jointly define a **proposal** for a separately versioned successor. Do not infer permission to implement, release or deploy from the existence of those documents.
+For future engine architecture work, start with the single decided [unified engine specification](docs/redesign/01_SYSTEM_SPECIFICATION.md). The [capability register](docs/redesign/02_CAPABILITY_REGISTER.md), [verification contract](docs/redesign/05_VERIFICATION_AND_EVIDENCE.md) and [lineage](docs/redesign/06_LINEAGE_AND_DECISIONS.md) are coverage/evidence annexes, not separate plans or directions to an agent. This is a design for a separately versioned successor; its existence does not authorize implementation, release or deployment.
 
 MINIDORA-BETA is an independent, historically pinned **engine beta**, not an invitation to silently rewrite the upstream implementation.
 

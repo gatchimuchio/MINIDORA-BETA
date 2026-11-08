@@ -8,7 +8,7 @@ This directory is the English public navigation layer. Runtime implementation an
 | Japanese public API names and external use | [API and terminology](API_GUIDE.md) | Explanatory mapping, not translated runtime symbols |
 | Entire future redesign from first principles | [Whole-system redesign](redesign/README.md) | Design candidate, not implemented release |
 | Every capability and missing acceptance route | [Capability register](redesign/02_CAPABILITY_REGISTER.md) | Status labels do not imply general E2E success |
-| Implementation specification, plan and instructions | [System specification](redesign/01_SYSTEM_SPECIFICATION.md), [construction plan](redesign/03_INTEGRATED_CONSTRUCTION_PLAN.md), [agent work order](redesign/04_AGENT_WORK_ORDER.md) | Work starts only on separate authorization |
+| Decided successor architecture | [Single normative system specification](redesign/01_SYSTEM_SPECIFICATION.md) | Concrete design; no successor engine implemented or authorized by this document |
 | Independent evidence and dated history | [Verification contract](redesign/05_VERIFICATION_AND_EVIDENCE.md), [lineage](redesign/06_LINEAGE_AND_DECISIONS.md) | Historical results not promoted to beta/future scores |
 | Release preservation, publication and contribution | [Source lock](../SOURCE_LOCK.md), [acceptance](../BETA_READINESS.md), [docs revision](../DOCS_REVISION.md), [publication boundary](../PUBLICATION_BOUNDARY.md), [contributing](../CONTRIBUTING.md) | Original frozen artifacts unaffected by documentation |
 
