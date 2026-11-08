@@ -1,5 +1,11 @@
 # Documentation Revision — English Accessibility Layer
 
+## Subsequent documentation-only revision — 2026-11-09
+
+The next-generation **whole-system redesign** is documented in `docs/redesign/`. Its six linked files are a design/verification/work-order *candidate*, not an implementation or performance acceptance. This revision updates the root README and maintenance contract to point to that register, adds a documentation index, and records the changes in `CHANGELOG.md` and `CONTRIBUTING.md`. The imported-file index `checksums.repo.sha256` is updated **only** for edited imported documentation bytes (`README.md`, `AGENTS.md`). New GitHub-only design files are Git-tracked but are not added to the historical imported-ZIP checksum population. The original beta ZIP, engine Python files, wheel, historical manifests and upstream repository are unchanged.
+
+The 2026-11-03 English accessibility revision below remains the dated origin of the English documentation baseline. It is **not** rewritten into a new engine version or a new test result.
+
 **Revision:** `docs-en-2026-11-03`  
 **Applies to:** GitHub repository documentation and controlled example only  
 **Underlying engine:** `minidora-notnn==0.6.0b1` (unchanged)

@@ -6,6 +6,8 @@ Treat MINIDORA as an **HDS-driven execution engine**, not as an LLM-only or chat
 
 ## Change and version discipline
 
+- The **whole-system next-version design candidate** is maintained under `docs/redesign/`. Read its six-part specification/plan/work-order/evidence set and complete capability register before proposing a next-version engine edit. It describes a **future** version, not permission to alter the frozen beta. Keep the original repository strictly **read-only** under the current instruction.
+- The new design starts from the full task, identity/authority/evidence and actual user-facing acceptance; do not assume existing implementation placement is the only possible solution. Preserve verified public behavior, and resolve any material ownership/compatibility change explicitly rather than creating a second execution/judgment authority.
 - `0.6.0b1` is a frozen **engine/distribution snapshot**. Do not silently change executable implementation, public API contracts, saved formats, or the upstream repository. An implementation change requires a separately identified release with its diff, evidence, and new hashes.
 - Documentation localization may be revised separately **only** when it is explicitly identified as a documentation-only revision, with the original release evidence and historical bytes recoverable. See `DOCS_REVISION.md`.
 - Maintain auditable provenance for all 414 inherited public source files and the isolated beta changes. Do not confuse GitHub documentation hashes with the original frozen ZIP/wheel hashes.
@@ -25,6 +27,8 @@ Treat MINIDORA as an **HDS-driven execution engine**, not as an LLM-only or chat
 
 ## Acceptance and publication
 
+- Separate `source present`, `local test passed`, `normal-route integrated`, `independent user-task accepted` and `external platform accepted` per capability. A new-version completion claim requires the population and observable evidence in `docs/redesign/02_CAPABILITY_REGISTER.md` and `docs/redesign/05_VERIFICATION_AND_EVIDENCE.md`.
+- For the full redesign, connect the required whole-system routes in one coordinated implementation pass, inspect real input-to-output behavior, repair defects at their actual owner, and then run affected local and full acceptance. Do not treat a series of isolated component tests as product completion.
 - Before accepting a new version, check affected tests, interface boundaries, regressions, version/dependency changes, provenance and hashes.
 - The selected beta regression command is `python tools/beta_acceptance.py`; it is **not** a full upstream test suite or benchmark.
 - The GitHub Actions acceptance workflow is **manually dispatched only**. Do not assert cross-platform results unless runs were actually performed and inspected.

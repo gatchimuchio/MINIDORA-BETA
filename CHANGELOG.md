@@ -1,5 +1,12 @@
 # Changelog
 
+## Design-only revision — 2026-11-09
+
+- Added a **from-first-principles, whole-system next-generation design** under `docs/redesign/`, with a specification, inclusive capability register, integrated construction plan, future agent work order, verification contract and provenance/decision register.
+- Integrated known existing capability families, historically reported failure modes, learning and memory requirements, current general-chat quality targets and emerging typed external-platform/translation/multimodal ports **as requirements**, not fabricated new implementation claims.
+- Linked the new design from the main README, documentation guide and maintenance/contribution rules.
+- Preserved the `0.6.0b1` executable snapshot, historical distribution hashes, selected beta acceptance results, source provenance, and read-only upstream repository. Updated the repository-local checksums for edited imported documentation files only.
+
 ## Documentation revision — 2026-11-03
 
 - Made English the primary public documentation language of `MINIDORA-BETA`.

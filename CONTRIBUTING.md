@@ -1,5 +1,7 @@
 # Contributing and reviewing MINIDORA-BETA
 
+For future engine architecture work, start with the [whole-system redesign register](docs/redesign/README.md). Its specification, complete capability and evidence population, construction plan and agent work order jointly define a **proposal** for a separately versioned successor. Do not infer permission to implement, release or deploy from the existence of those documents.
+
 MINIDORA-BETA is an independent, historically pinned **engine beta**, not an invitation to silently rewrite the upstream implementation.
 
 ## Ground rules

@@ -12,12 +12,28 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 
 | If you want to… | Read |
 |---|---|
+| Explore the **complete next-version redesign** and its evidence/implementation obligations | [Whole-system redesign register](docs/redesign/README.md) |
 | Understand the engine without reading Japanese | [English onboarding guide](docs/ENGLISH_ONBOARDING.md) |
 | See the public interface and Japanese-to-English API glossary | [API and terminology guide](docs/API_GUIDE.md) |
 | Check what passed, under what conditions | [Beta acceptance evidence](BETA_READINESS.md) |
 | Understand the immutable beta distribution vs. later documentation | [Repository lock](REPOSITORY_LOCK.md) and [Documentation revision](DOCS_REVISION.md) |
 | Contribute without altering the baseline | [Contributing](CONTRIBUTING.md) and [Agent instructions](AGENTS.md) |
 | Review publication and licensing restrictions | [Publication boundary](PUBLICATION_BOUNDARY.md), [LICENSE](LICENSE), [NOTICE](NOTICE) |
+
+## Future architecture: comprehensive redesign (design only)
+
+The next proposed MINIDORA generation is being specified **from first principles** across existing public capabilities and emerging requirements. The objective is a single connected execution system, not a chatbot-only feature backlog or an assumption that the current module tree is final.
+
+- [System specification](docs/redesign/01_SYSTEM_SPECIFICATION.md): purpose, real end-to-end behavior, responsibility, evidence, state, learning and failure semantics.
+- [Complete capability/gap register](docs/redesign/02_CAPABILITY_REGISTER.md): language, reasoning, reference, memory, learning, effects, product interfaces, future modality ports and acceptance scope.
+- [Integrated construction plan](docs/redesign/03_INTEGRATED_CONSTRUCTION_PLAN.md) and [future agent work order](docs/redesign/04_AGENT_WORK_ORDER.md): build the full system once, then inspect defects and verify the whole.
+- [Verification contract](docs/redesign/05_VERIFICATION_AND_EVIDENCE.md) and [historical decision record](docs/redesign/06_LINEAGE_AND_DECISIONS.md): keep observed baseline, old experiments, proposals and current results distinct.
+
+**This is a documentation-only design candidate**, not a change to the frozen `0.6.0b1` runtime or a claim that every listed ability is implemented or accepted. The upstream repository is used for read-only evidence and is not changed by this work. New executable behavior requires a new, independently evidenced version.
+
+### Broader source capability inventory
+
+The inherited public source contains named implementations/interfaces for language processing, calculation, relations, structured documents, browser/reference acquisition, scientific capabilities, code, writing, conversation, memory, goal execution, trace and replay. **Source presence is not the same as verified availability through a general user request.** The redesign register accounts for those areas and for external speech, image, video, translation, software and tool adapters without attributing provider performance to the beta engine.
 
 ## Three machines, three responsibilities
 
