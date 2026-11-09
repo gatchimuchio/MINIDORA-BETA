@@ -1,6 +1,6 @@
 # 05 — Verification and Evidence Contract
 
-**Object:** Next-version behavior under actual user inputs, separately from the frozen beta's documented 313 selected regressions. The current document adds **test requirements**, not observed passing results.
+**Object:** Next-version behavior under actual user inputs, separately from the frozen beta's documented 313 selected regressions. This R2 annex adds **test and falsification requirements**, not observed passing results. The [source census](04_SOURCE_CENSUS.tsv), [93-capability trace](03_REQUIREMENT_TRACE.tsv), [upstream-test census](09_TEST_CENSUS.tsv) and [22-finding correction ledger](07_R1_AUDIT_CLOSURE.md) are distinct evidence levels.
 
 ## 1. Evidence classification and immutable record
 
@@ -34,6 +34,7 @@ Evidence at one level must not be promoted to another. In particular, a determin
 | Counterexample | New evidence contradicts previously accepted rule | Inference invalidated with source preserved and dependent results updated |
 | Durable memory | Same task after clean process/instance restart | Correct recovery, versioned dedup and accurate prior-result references |
 | Budget/stop | No-progress loops, partial completion, blocked permission, cancellation | Correct finite terminal state and actual resource/effect accounting |
+| Render/goal identity | Adopted report with actual file write failure, invalid semantic rendering and safe reconciliation | `ADOPTED` is **not** goal `COMMIT` until physical output and receipts satisfy the original goal |
 | Streaming/adapters | Multiple chunks, revisions and two distinct external consumers | Stable identity, typed intermediate/final state and authorized effects only |
 | UI/API | Human uses CLI, HTTP and browser via installed target | Authentic answers displayed, trace/citation and error handling visible |
 
@@ -93,9 +94,9 @@ Historical score series are distinct: **2026-09-09** optional specialist-module 
 
 ## 7. Regression and compatibility population
 
-- Reconstruct exact beta source baseline: **414 inherited public files** (413 identical, one documented change), plus two beta entry points. Preserve historical hashes.
+- Reconstruct exact **historical extraction** baseline: **414 inherited public files** (413 identical, one documented code modification), plus two beta entry points. In the **current GitHub tree**, the later localized `src/README.md` also differs: **412 identical, one engine-modified, one documentation-modified and two beta additions**. Preserve dated identity rather than conflating snapshots.
 - Re-run the declared beta selected regression procedure when a new implementation affects it. Historic **313 passed** does not imply the new version passed.
-- Account for all applicable upstream tests: historically **359 public** tests versus **147** included in the beta bundle. Document every exclusion and return path before claiming full upstream inheritance.
+- Account for **359 upstream test paths** and **147 beta test paths**: 146 shared paths, 213 upstream-only paths and one beta-only path in [09_TEST_CENSUS.tsv](09_TEST_CENSUS.tsv). Applicability, exclusions and actual test behavior remain **unreviewed** by the path/hash census.
 - Test both public beta facade identity/version/dedup and existing CLI/API/consumer routes. Account for Japanese method names, serialization and saved-data migration.
 - Check original successful cases, known historical failures, new capability effects, security and no unauthorized external deliveries. Record regressions as **item-level changes**.
 
@@ -109,4 +110,35 @@ Historical score series are distinct: **2026-09-09** optional specialist-module 
 | `UNVERIFIED` | Missing code-path observation, test run, dataset, provider access, platform or reproducibility evidence |
 
 Publish percentages only if numerator, denominator, selection rules and what a "pass" means are fixed and inspectable. Evidence from a future external deployment or run must carry its own date, revision and permissions record. No test may rewrite the meaning of an older result.
+
+## 9. R2 contract-falsification matrix
+
+These are required **future** tests, not executed results. Passing SQL syntax or documentation review provides static evidence only, not a completed engine. Each future case must preserve real input, actual outputs/receipts, environment, release SHA and failure signatures.
+
+| ID | Counterexample / adversarial setup | Required observable invariant |
+|---|---|---|
+| `R2-01` | Core adopts report text; requested file creation fails | Content may be `ADOPTED`; user-goal cannot `COMMIT` |
+| `R2-02` | Repeated input identity changes actor/body/permission | `RECEIVED → REJECT` with original collision evidence |
+| `R2-03` | Suspended request receives a new input/goal version | `SUSPEND → RECEIVED → SEALED`; no bypass |
+| `R2-04` | Crash/restart at `RECEIVED` before goal binding | Legitimate nullable pre-goal revision; goal immutable after binding |
+| `R2-05` | Join architectural `ARCH-D04` with capability `CAP-D04` | No ambiguous identifier or disposition collision |
+| `R2-06` | Insert absent referenced case/artifact into reference DB | FK/CHECKs reject invalid reference when enabled |
+| `R2-07` | Crash between staging/publishing blobs and DB commit | Orphans recognized; missing references block; no phantom commit |
+| `R2-08` | Remote effect times out after submission; restart | Saved request/authority/idempotency identity; `UNKNOWN` until reconciliation; no duplicate |
+| `R2-09` | Actor B knows Actor A's `case_id` and artifact digest | Read/replay/export denied through all derived references |
+| `R2-10` | Renderer changes negation, scope, number or role | Core refuses semantic-equivalence claim and goal completion |
+| `R2-11` | Two valid incomparable candidates yield distinct answers | Alternatives/typed suspense; no arbitrary ID-based selection |
+| `R2-12` | Duplicate citations, quotations or incorrect initial formalization | Provenance retained; no unlicensed factual promotion |
+| `R2-13` | Induced pattern has examples but no scoped empirical rule | Remains hypothesis, never universal fact |
+| `R2-14` | Cyclic dependency, no progress, budget exhaustion | Typed bounded stop and real unmet nodes |
+| `R2-15` | Concurrent external effects complete in distinct orders | Logical replay limited to recorded observations; actual effects serialized if needed |
+| `R2-16` | Same abstract program on two different target backends | Measured semantic/effect equivalence or failed adapter, never assumed |
+| `R2-17` | Inherited native language model versus sparse/beam candidate | Comparable novelty, meaning, coverage, resource and regressions before selecting |
+| `R2-18` | Windows CPU/8 GB workload; original GPQA 90-minute contract | Measured task-bound budget, not arbitrary 120-second/64-step universal default |
+| `R2-19` | Turn external translation OFF/ON; swap core compiler/memory backend | Peripheral versus core backend attribution remains distinct |
+| `R2-20` | Compare upstream 414 sources / 359 tests with current beta | File/blob census plus separate **semantic-route** and applicability review |
+| `R2-21` | Trace 93 current capabilities and all source-discovered ones | No `UNMAPPED` required route in full-version acceptance |
+| `R2-22` | Introduce pure logical contradiction without new measurement | Explicit versioned architecture correction permitted |
+
+**Two closure levels:** `SPEC_CORRECTED` requires one coherent normative rule and a falsifiable condition. `PRODUCT_ACCEPTED` requires actual test observation of the intended version. A historical frozen-beta pass does not satisfy the latter for R2. Validate wire structure against [08_WIRE_SCHEMA.json](08_WIRE_SCHEMA.json) as one narrow check; passing that syntax/schema check does **not** satisfy effect, equivalence, permission, semantic or end-to-end tests.
 

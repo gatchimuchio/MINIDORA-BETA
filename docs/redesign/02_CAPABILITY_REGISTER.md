@@ -1,6 +1,8 @@
 # 02 — Integrated Capability and Gap Register
 
-**Population:** Historical capabilities + frozen beta's observable public surface + newly requested capabilities + future integration ports. Nothing is removed merely because it is not on the beta's primary smoke-test path.
+**Population:** **93 current named obligations**, from historical capabilities + frozen beta's observable public surface + newly requested capabilities + future integration ports. This is **not an established exhaustive list** until every source and previously required route is semantically traced. Nothing is removed merely because it is not on the beta's primary smoke-test path.
+**Machine-readable record:** [03_REQUIREMENT_TRACE.tsv](03_REQUIREMENT_TRACE.tsv) preserves the 93 exact IDs, requirements, observable acceptance obligations, planned primary contract owners and **explicitly unobserved** inherited source/actual-entry/test fields. [04_SOURCE_CENSUS.tsv](04_SOURCE_CENSUS.tsv) and [09_TEST_CENSUS.tsv](09_TEST_CENSUS.tsv) ground the source/test file **population and blob identity**, not functional equivalence.
+**Namespace:** Here `D01–D14` refer exclusively to **capability IDs** (`CAP-D01–CAP-D14` when used outside this register, including the machine-readable 03 trace); architectural decisions are independently named `ARCH-D01–ARCH-D14` in the normative R2 specification. The 03 trace explicitly normalizes these 14 keys to `CAP-Dxx`; all other public capability keys remain their original `Axx/Bxx/...` form. Do not join records on an unqualified `D01`.
 
 ## Evidence and status semantics
 
@@ -145,14 +147,17 @@ Rows list the **best available evidence type**, not an exclusive status; `B/H/?`
 
 ## Mandatory population closure
 
-For **every row** record these columns in a machine-readable implementation inventory before claiming completion:
+For **every row** populate the [machine-readable trace](03_REQUIREMENT_TRACE.tsv) with a **separate** source/actual-entry route, named responsible owner, input/observable-output contract, implementation handling and acceptance proof. Planned owners are **design assignments**, not proof that the current source connects to that owner. The current `UNMAPPED` and `NOT_RUN` values are honest outstanding gates, not an excuse to certify completeness.
 
-`id | requirement_revision | baseline_presence | source_ref | entry_route | ownership | implementation_choice | test_id | observed_result | limits | disposition | release_revision`.
-
-- `baseline_presence` is not a pass/fail judgment; exact source presence and execution connectivity are separate fields.
-- `disposition` is one of `RETAIN`, `REWIRE`, `REPLACE`, `NEW`, `EXTERNAL_PORT`, `REJECT_WITH_REASON`, `UNVERIFIED`. For all required behavior, `REJECT_WITH_REASON` needs the user's explicit scope decision.
+- `baseline_evidence` is not a pass/fail result; file identity, actual source-to-entry connectivity and full-route observable acceptance are separate objects.
+- `implementation_disposition`: one of `RETAIN`, `REWIRE`, `REPLACE`, `NEW`, `EXTERNAL_PORT`, `REJECT_WITH_REASON`, `UNVERIFIED`. This answers **what engineering disposition occurred**. Any required `REJECT_WITH_REASON` needs the owner's explicit release-scope decision.
+- `acceptance_status`: `NATIVE_AND_ACCEPTED`, `CONNECTED_PORT_AND_ACCEPTED`, `EXPLICITLY_UNAVAILABLE`, `NOT_IN_AUTHORIZED_RELEASE_SCOPE`, `FAILED`, or `UNVERIFIED`. This answers **what has been demonstrated**, independently from the method.
+- A required `UNMAPPED` source or route is a blocker for declaring *fully inherited functionality*; `EXPLICITLY_UNAVAILABLE` is honest evidence, **not full integration**.
+- Test spec IDs beginning `PROPOSED_` are obligations, not executed test IDs. `NOT_RUN` must remain until linked to actual result bytes, version and environment.
 - Do not silently cut rows that appear difficult or duplicate another feature. Show the equivalence proof if merging entries.
 - The register is **inclusive but provisional**: the complete source census may discover additional capabilities. Add them before engineering closes; do not claim the historical set is literally exhaustive from filenames alone.
+
+**Cross-document closure:** The R2 §19 uses exactly these two dispositions as distinct fields. No other document may re-use `disposition` alone with another enum. A completed **file census** does not complete a **semantic capability audit**; later findings add IDs with original evidence, not retroactive modifications of existing IDs.
 
 ## Reference groups (not a theory-to-code crosswalk)
 

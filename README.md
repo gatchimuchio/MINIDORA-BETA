@@ -12,7 +12,7 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 
 | If you want to… | Read |
 |---|---|
-| Explore the **complete next-version redesign** and its evidence/implementation obligations | [Whole-system redesign register](docs/redesign/README.md) |
+| Explore the **R2 logical successor design, rejected R1 audit and remaining source/evidence gates** | [Whole-system redesign register](docs/redesign/README.md) |
 | Understand the engine without reading Japanese | [English onboarding guide](docs/ENGLISH_ONBOARDING.md) |
 | See the public interface and Japanese-to-English API glossary | [API and terminology guide](docs/API_GUIDE.md) |
 | Check what passed, under what conditions | [Beta acceptance evidence](BETA_READINESS.md) |
@@ -22,11 +22,12 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 
 ## Future architecture: comprehensive redesign (design only)
 
-The next proposed MINIDORA generation has a **single concrete architecture specification**, reconsidered from first principles across existing public capabilities and emerging requirements. The objective is a single connected execution system, not a chatbot-only feature backlog or an assumption that the current module tree is final.
+The next proposed MINIDORA generation has a **single normative logical architecture specification**, reconsidered from first principles across inherited public capabilities and emerging requirements. **R1 failed independent design review**; R2 addresses its 22 identified contract flaws. A requirement trace and source/file metadata census now accompany R2, but semantic routes, algorithm alternatives and full acceptance are **not yet closed**. The objective is one connected execution system, not a chatbot-only feature backlog or an assumption that the current module tree is final.
 
-- [Unified engine specification](docs/redesign/01_SYSTEM_SPECIFICATION.md): decided three-machine architecture, typed records, core non-neural language/relation/learning, SQLite/event-state persistence, capability ports, effects, deterministic replay and acceptance contracts.
-- [Complete capability/gap register](docs/redesign/02_CAPABILITY_REGISTER.md): language, reasoning, reference, memory, learning, effects, product interfaces, future modality ports and acceptance scope.
+- [Unified engine specification R2](docs/redesign/01_SYSTEM_SPECIFICATION.md): three-machine responsibility, **OS/CPU/format-independent abstract execution semantics**, typed records, native non-neural language/relation/learning, logical durable revisions, actual rendering/effect receipts, and scope-limited deterministic replay. **Python, SQLite, JSON, model implementation and numeric resource targets are not logical necessities**.
+- [Provisional capability/gap register](docs/redesign/02_CAPABILITY_REGISTER.md), [93-item machine-readable trace](docs/redesign/03_REQUIREMENT_TRACE.tsv) and [414-source file census](docs/redesign/04_SOURCE_CENSUS.tsv): planned owners, exact source identity and explicit unknown actual routes/acceptance.
 - [Verification contract](docs/redesign/05_VERIFICATION_AND_EVIDENCE.md) and [historical decision record](docs/redesign/06_LINEAGE_AND_DECISIONS.md): keep observed baseline, old experiments, proposals and current results distinct.
+- [R1 audit correction ledger](docs/redesign/07_R1_AUDIT_CLOSURE.md) and [test-file census](docs/redesign/09_TEST_CENSUS.tsv): 22 named findings with correction/evidence separation and 359 upstream/147 beta test path identities.
 
 **This is a documentation-only design candidate**, not a change to the frozen `0.6.0b1` runtime or a claim that every listed ability is implemented or accepted. The upstream repository is used for read-only evidence and is not changed by this work. New executable behavior requires a new, independently evidenced version.
 
@@ -103,7 +104,7 @@ The logical input key is `(案件ID, 入力ID, 入力版)` — case ID, input ID
 
 ## Preservation and verification
 
-- **414/414 upstream public source files preserved:** 413 Git blobs byte-identical, one documented modification, plus two new beta entry-point files.
+- **414/414 upstream public source paths preserved.** At historical beta extraction: 413 byte-identical, one modified engine source, plus two beta entry points. In the **current GitHub English-documentation tree**, `src/README.md` also differs from the upstream blob: **412 byte-identical + one modified engine file + one translated documentation file + two beta entry points**. These are distinct snapshot comparisons, not contradictory engine-change counts.
 - **313 selected regression tests passed** (Linux/Python 3.12, 2026-11-03). This is not a claim that all upstream tests passed; 147 test files were included in the beta bundle.
 - The original wheel build, isolated installation and controlled input → core → output smoke test passed.
 - The immutable original beta ZIP and its release manifest remain historical distribution evidence. This repository's **English documentation revision changes documentation bytes**, not the underlying engine source. Rebuilding a wheel from the revised checkout can therefore yield a **different distribution hash** from the original ZIP's wheel.

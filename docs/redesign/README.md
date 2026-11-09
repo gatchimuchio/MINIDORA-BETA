@@ -1,13 +1,13 @@
-# MINIDORA — Whole-System Redesign Register
+# MINIDORA — Whole-System Redesign R2 Register
 
-**Status:** Concrete successor design; not yet implemented, 2026-11-09 (JST)  
+**Status:** R2 logical design corrected after R1 rejection; **source-route and implementation acceptance pending**, 2026-11-09 (JST)  
 **Target:** The next independently versioned MINIDORA implementation, developed in `MINIDORA-BETA`  
 **Starting evidence:** Frozen engine `minidora-notnn==0.6.0b1` and the read-only upstream public repository  
 **Change class:** Documentation only. No engine code, test, benchmark, distribution, deployment or upstream repository was modified by creating this register.
 
-## Decision
+## Decision and scope
 
-MINIDORA has been **redesigned from first principles as one system**, integrating every observed existing capability and every relevant capability proposed in the development history at the contract level. The architecture, responsibility boundaries, storage, language/learning core and execution semantics are decided in one specification. The present module tree, chatbot feature list and previous implementation order are not binding premises.
+The **R1 architecture-completion claim was rejected** by a 22-finding audit. R2 now defines one versioned **OS/CPU/representation-independent logical machine** and repairs the known goal/receipt, state-transition, language, persistence, identity and decision conflicts in the **sole normative specification**. This is not a claim that all current source routes have been semantically inspected or that every proposed capability is implementable under a chosen runtime. Concrete programming language/compiler, model transition algorithm, storage adapter, serialization and numeric operating budgets require comparison against actual requirements and inherited behavior.
 
 The redesign is a *candidate* for a future version. The historical beta distribution, its tests, source lock, integrity records and earlier evaluations remain separate and recoverable. A documented capability is not automatically an implemented, connected, accepted or independently demonstrated capability.
 
@@ -15,10 +15,15 @@ The redesign is a *candidate* for a future version. The historical beta distribu
 
 | File | Purpose | Owner of decision |
 |---|---|---|
-| [01 — Unified engine specification](01_SYSTEM_SPECIFICATION.md) | **Sole normative design:** complete core/port/store/API/effect architecture and acceptance boundary | Architecture |
-| [02 — Capability register](02_CAPABILITY_REGISTER.md) | Inclusive inventory of 93 inherited, historically reported and emerging abilities; explicit status and verification obligation | Coverage annex |
+| [01 — Unified engine specification](01_SYSTEM_SPECIFICATION.md) | **Sole normative R2 logical design:** core/port/state/effect semantics, guarantee bounds and acceptance conditions | Architecture |
+| [02 — Capability register](02_CAPABILITY_REGISTER.md) | **Provisional** 93 named inherited, historical and emerging obligations; status and test obligation | Coverage annex |
+| [03 — 93-item machine-readable requirement trace](03_REQUIREMENT_TRACE.tsv) | One row per current obligation, planned owner, actual route unknown, separate implementation/acceptance status | Coverage annex |
+| [04 — Source blob census](04_SOURCE_CENSUS.tsv) | All 414 fixed-upstream source paths plus 2 beta-specific paths, SHA comparison and honest semantic-review gaps | Source identity annex |
 | [05 — Verification and evidence](05_VERIFICATION_AND_EVIDENCE.md) | E2E, learning, reference, regression, quality and performance contracts | Evidence annex |
-| [06 — Lineage and decisions](06_LINEAGE_AND_DECISIONS.md) | Actual reference scope, historic observations, supersession, resolved design decisions and non-claims | Lineage annex |
+| [06 — Lineage and decisions](06_LINEAGE_AND_DECISIONS.md) | Dated reference scope, historical evidence, rejected R1 decisions and outstanding observations | Lineage annex |
+| [07 — R1 audit correction ledger](07_R1_AUDIT_CLOSURE.md) | Trace all 22 findings to R2 clauses, distinguish fixed text from unmet empirical/source gates | Audit annex |
+| [08 — Wire-schema projection](08_WIRE_SCHEMA.json) | JSON Schema 2020-12 example representation of principal records, without claiming runtime or semantic equivalence | Contract-format annex |
+| [09 — Upstream/beta test census](09_TEST_CENSUS.tsv) | All 359 upstream test paths, 147 beta test paths, source identities and coverage-unreviewed status | Test-population annex |
 
 The former construction-plan and agent-work-order documents were retired from the current design in favor of direct architectural decisions in `01`. Their earlier content remains recoverable in Git history, not current design authority.
 
@@ -33,9 +38,10 @@ Public documents describe **observable contracts**, not private HDS theory. Do n
 
 ## Initial observation limits
 
-- Reviewed: accessible repository metadata, beta entry points and maintenance/lock/acceptance documents; upstream README, repository rules, public design index, capability-specification filenames, evaluation contract and canonical history; selected historical failure and improvement reports.
-- Not completed: full byte-level source review of all 414 imported public source files, recovery of every old specification version, runtime connectivity tracing for every public capability, restoration of 359 upstream public test files, or fresh general-chat/GPQA/multi-OS/Cloud acceptance.
-- Consequently, `source present`, `historically measured`, `candidate` and `current E2E accepted` must never be treated as equivalent. The future implementation must complete the unobserved **full census** before claiming total feature coverage and keep discrepancies visible.
+- Reviewed: current beta and fixed-upstream **entire public source/test metadata trees** (SHA/path counts), beta entry points and maintenance/lock/acceptance contracts; relevant upstream design/evaluation/canonical material; the full R1 specification and three annexes; 22 findings.
+- **Precise source distinction:** At beta extraction, the historical source lock reports 413 identical and 1 modified. **Current GitHub** comparison shows 412 identical, **1 modified engine source + 1 later-translated `src/README.md`**, and 2 beta additions. This is not an implementation regression.
+- Not completed: semantic/code-level inspection of every inherited path, source→capability→public route equivalence, applicability/execution of all 359 upstream test paths, executable successor, model comparison, or fresh general-chat/GPQA/Windows/multi-OS/Cloud acceptance.
+- Consequently, `source present`, `historically measured`, `candidate` and `current E2E accepted` must never be treated as equivalent. The **file census is complete, capability/semantic-route census is not**. No `UNMAPPED` required capability may be concealed to manufacture a “specification complete” or “fully integrated” result.
 
 ## Release and storage policy
 

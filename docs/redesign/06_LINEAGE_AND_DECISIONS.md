@@ -29,6 +29,8 @@
 | 2026-11-03 | Beta1 extracted and documented in English, selected regressions passed | No new general performance, universal translation or multi-OS claim |
 | 2026-11-09 | Fresh design register collects prior and emerging requirements | Documents only; engine implementation/evaluation remains untouched |
 | 2026-11-09 (architecture amendment) | One concrete normative architecture replaces an outline plus construction-plan/agent-order bundle | Architecture design decisions are fixed, **not** implemented or performance-verified |
+| 2026-11-09 (independent review) | R1 fails 22 design/contract/evidence checks; the earlier “design complete” assertion is **retracted** | Does not establish that original frozen beta runtime has these new R1 design defects |
+| 2026-11-09 (R2 correction) | R2 defines source/abstract execution semantics separately from Python/compiler/OS/format, fixes goal/render/receipt state transitions and DDL contract, disambiguates requirement IDs and statuses | The corrected contract is **not yet a fully source-mapped or executable accepted successor** |
 
 The upstream [`CURRENT_CANONICAL.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/CURRENT_CANONICAL.md), [`README.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/README.md), [`設計/README.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/%E8%A8%AD%E8%A8%88/README.md), [`評価/評価契約_v3.md`](https://github.com/gatchimuchio/NOTNN-LLM-MINIDORA/blob/main/%E8%A9%95%E4%BE%A1/%E8%A9%95%E4%BE%A1%E5%A5%91%E7%B4%84_v3.md) and beta [`CURRENT_CANONICAL.md`](../../CURRENT_CANONICAL.md) preserve the public record. Historical private reports were used as investigative leads but are **not copied or linked** in this public repository.
 
@@ -43,9 +45,11 @@ The upstream [`CURRENT_CANONICAL.md`](https://github.com/gatchimuchio/NOTNN-LLM-
 7. **Evaluation:** Historic core-only, module-enabled, Cloud demo, beta regression and new target versions are separate objects. The existing public v3 GPQA acceptance population and no-gold/LIVE contracts cannot be revised for convenience.
 8. **Public boundary:** All public descriptions stay at interface, capability, evidence and risk level. The private theory, full mapping and large transformed datasets stay excluded even when a design would be easier to explain with them.
 
-## Decisions settled by the normative specification
+## Current architectural contract versus historical R1 selections
 
-`01_SYSTEM_SPECIFICATION.md` fixes the three machine responsibilities, the sole core authority, Python 3.11+ initial runtime, SQLite WAL/event journal/immutable blobs, core memory→inference→adaptation, typed relation and non-neural generation contracts, artifact-based scheduling, evidence packets, versioned capability ports, effect ledger, deterministic replay and Windows/8 GB resource **targets**. These are no longer deferred to a construction schedule or an implementation agent. A future contradictory measurement requires a recorded specification revision, not an implicit substitution.
+`01_SYSTEM_SPECIFICATION.md` **R2** fixes three machine responsibilities, Core's sole final-goal and logical-state authority, an **OS/CPU/format-independent abstract execution contract**, persistent evidence/revision semantics, Core memory→inference→adaptation, scoped proof/evidence, the six Layer-0 non-neural requirements, actual goal/artifact/effect completion, capability ports and Core backend distinctions, deterministic recorded-evidence replay, and target-resource **measurement requirements**. It **does not fix Python/SQLite/JSON/sparse-trie/beam/120-second budgets as deduced necessities**: these were selected prematurely in R1 and must be comparatively justified. The historical Python beta remains a source/equivalence candidate; executable successor choices cannot be silently delegated to a construction work order.
+
+The [R1 audit correction ledger](07_R1_AUDIT_CLOSURE.md) records all 22 findings, their R2 fixes and the different remaining empirical gates. A logical contradiction, requirement/identity conflict, new authorized constraint or observed failure **all** permit an explicit versioned architecture correction; a new physical measurement is not the sole acceptable cause.
 
 ## Remaining observations and external decisions
 
@@ -53,7 +57,8 @@ The upstream [`CURRENT_CANONICAL.md`](https://github.com/gatchimuchio/NOTNN-LLM-
 |---|---|
 | Exact successor package/release label | User confirms independent version/release scope once executable changes are authorized |
 | Exhaustive compatibility map | Inspect all 414 inherited public files and connected entry routes; test old Japanese public APIs and evidence persistence |
-| Local storage and resource viability | Measure atomic replay, crash recovery, process RSS and latency on actual Windows CPU/8 GB hardware; adjust the specification explicitly if targets conflict |
+| Runtime/compiler semantic equivalence | Define observable operation/effect semantics and compare implementations across CPU, OS, encodings, exceptions and side-effect receipts; do not claim a high-level language is intrinsically platform-free |
+| Local storage and resource viability | Select/justify physical adapter by alternatives; measure SQLite WAL reference DB+blob crash recovery, actor access, process RSS and latency on actual Windows CPU/8 GB |
 | Generalized learning and language quality | Run natural unseen inputs, future-use/invalidations, memory-long-history and compare intrinsic core vs connected-port outcomes |
 | External ports | Select and authorize actual providers/dependencies for speech, image, video, translation, Web, compiler and application operations; inspect license/privacy/cost and distinguish unavailable ports |
 | Publication/demo deployment | User authorizes service, cost, credentials, IAM, audience and target artifact independently from design publication |
@@ -61,5 +66,5 @@ The upstream [`CURRENT_CANONICAL.md`](https://github.com/gatchimuchio/NOTNN-LLM-
 
 ## Remaining source-verification work
 
-This register is grounded in source listings, public contracts and selected implementations. It is **not a completed 414-file code audit or a new full-coverage test result**. An authorized implementation must finish the exhaustive tree/entry-route/test census and update [02_CAPABILITY_REGISTER.md](02_CAPABILITY_REGISTER.md) before claiming total functional coverage. Preserve discoverable new requirements rather than restricting the target to only the names currently listed.
+**File/blob metadata is now enumerated, but semantic linkage is not.** [04_SOURCE_CENSUS.tsv](04_SOURCE_CENSUS.tsv) compares **all 414 original source paths** and two beta-only entries to the current GitHub tree, while [09_TEST_CENSUS.tsv](09_TEST_CENSUS.tsv) accounts for upstream **359** and beta **147** test paths. At the 2026-11-09 R1 tree the file identity differs from the original frozen extraction because **`src/README.md` was translated later**; engine source still differs in only one inherited implementation file. The [93-row trace](03_REQUIREMENT_TRACE.tsv) records **UNMAPPED** existing execution paths and **NOT_RUN** new-version acceptance accurately. This **does not** constitute exhaustive semantic code inspection, an E2E run or a new performance score. Finish the source-to-capability-to-test audit before claiming total functional inheritance; add discovered requirements without erasing prior IDs.
 

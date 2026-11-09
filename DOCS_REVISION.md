@@ -1,5 +1,13 @@
 # Documentation Revision — English Accessibility Layer
 
+## Independent R1 audit and R2 logical-contract correction — 2026-11-09
+
+An independent audit rejected the previous successor “architecture complete” judgment with **22 distinct specification/traceability findings**. R2 repairs the documented logical contracts (including early `COMMIT`, state transitions, source/goal identity, storage/permissions, ID/status collisions, non-neural model inference and platform independence). It explicitly **does not claim full 414-source semantic inspection, actual successor integration, new test results, or a finalized physical runtime/model/storage choice**. Review the normative `docs/redesign/01_SYSTEM_SPECIFICATION.md`, immutable R1 commit, and `docs/redesign/07_R1_AUDIT_CLOSURE.md`.
+
+New GitHub-only annexes include the source SHA census, 93-item capability trace, audit correction ledger and upstream-test SHA census. The frozen original beta archive, Python engine implementation, old tests and old acceptance records remain untouched. In the **current GitHub** tree, one inherited source documentation file (`src/README.md`, localized earlier) and one inherited Python implementation differ from upstream; the original beta extraction's historical “413 identical, 1 changed” statement remains dated and true of its original source snapshot.
+
+This correction updates the imported root `README.md` and updates **its single entry** in `checksums.repo.sha256`. The GitHub-only `DOCS_REVISION.md` and redesign annexes are tracked by Git, outside the original 581-file imported-ZIP checksum population. It does not rewrite `RELEASE_MANIFEST.json` or the frozen distribution's `checksums.sha256`, and it does not change the upstream repository.
+
 ## Architecture-specification amendment — 2026-11-09
 
 Following the preliminary multi-document planning revision below, the owner required ChatGPT to **make the architecture decisions directly** and publish a **single executable-level specification**, not a specification/schedule/agent-instruction set. The former `docs/redesign/03_INTEGRATED_CONSTRUCTION_PLAN.md` and `docs/redesign/04_AGENT_WORK_ORDER.md` were removed from the current tree (recoverable from the earlier Git commit). `docs/redesign/01_SYSTEM_SPECIFICATION.md` was rewritten as a concrete sole architectural authority; its capability, verification and lineage annexes remain. Root navigation and review guidance were aligned to this decision.
