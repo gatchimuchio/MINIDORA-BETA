@@ -109,6 +109,29 @@ fn meaning_comparison_variants_reach_cli_and_compound_effects_suspend() {
     assert!(comparison["text"].as_str().unwrap().contains("肯否"));
     assert!(comparison["text"].as_str().unwrap().contains("書類"));
 
+    let numeric_comparison = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "numeric-comparison",
+            "次の2文を比較してください。\nA: 参加者は三人以上だった。\nB: 参加者は４人以上だった。",
+        ],
+    ));
+    assert_eq!(numeric_comparison["lifecycle"], "COMMIT");
+    assert!(
+        numeric_comparison["text"]
+            .as_str()
+            .unwrap()
+            .contains("3人以上")
+    );
+    assert!(
+        numeric_comparison["text"]
+            .as_str()
+            .unwrap()
+            .contains("4人以上")
+    );
+
     let compound = execute(
         &scratch.0,
         "owner",

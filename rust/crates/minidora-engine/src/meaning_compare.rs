@@ -5,6 +5,7 @@
 //! score/model preference to resolve ambiguous scope.
 use minidora_domain::{Result, failure};
 use std::collections::BTreeMap;
+use unicode_normalization::UnicodeNormalization;
 
 type Features = BTreeMap<&'static str, String>;
 
@@ -419,20 +420,27 @@ fn topic(text: &str) -> Option<&str> {
 }
 
 fn nearby_count(text: &str) -> String {
-    let Some(start) = text.find(|character: char| character.is_ascii_digit()) else {
+    let normalized = text.nfkc().collect::<String>();
+    for unit in ['人', '回'] {
+        for (position, _) in normalized
+            .match_indices(unit)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            if let Some(value) = numeric_suffix(&normalized[..position]) {
+                return format!("{value}{unit}");
+            }
+        }
+    }
+    let Some(suffix) = normalized
+        .char_indices()
+        .find(|(_, character)| is_numeric_character(*character))
+        .map(|(position, _)| &normalized[position..])
+    else {
         return "指定値".into();
     };
-    let suffix = &text[start..];
-    let value = suffix
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    let after = &suffix[value.len()..];
-    if let Some(unit @ ('人' | '回')) = after.chars().next() {
-        format!("{value}{unit}")
-    } else {
-        value
-    }
+    numeric_suffix(suffix).unwrap_or_else(|| "指定値".into())
 }
 
 fn number_and_unit(text: &str, unit: &str) -> Option<(String, &'static str)> {
@@ -443,27 +451,112 @@ fn number_and_unit(text: &str, unit: &str) -> Option<(String, &'static str)> {
         "月" => "月",
         _ => return None,
     };
-    for (position, _) in text
+    let normalized = text.nfkc().collect::<String>();
+    for (position, _) in normalized
         .match_indices(unit)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
     {
-        let prefix = &text[..position];
-        let number = prefix
-            .char_indices()
-            .rev()
-            .take_while(|(_, character)| character.is_ascii_digit() || *character == '.')
-            .map(|(_, character)| character)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>();
-        if !number.is_empty() {
+        if let Some(number) = numeric_suffix(&normalized[..position]) {
             return Some((number, label));
         }
     }
     None
+}
+
+fn numeric_suffix(text: &str) -> Option<String> {
+    let normalized = text.nfkc().collect::<String>();
+    let suffix = normalized
+        .chars()
+        .rev()
+        .take_while(|character| is_numeric_character(*character))
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    if suffix.is_empty() {
+        return None;
+    }
+    if suffix
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.')
+    {
+        if !suffix.chars().any(|character| character.is_ascii_digit())
+            || suffix.matches('.').count() > 1
+            || suffix
+                .split_once('.')
+                .is_some_and(|(whole, fraction)| whole.is_empty() && fraction.is_empty())
+        {
+            return None;
+        }
+        return Some(suffix);
+    }
+    if suffix.contains('.') {
+        return None;
+    }
+    kanji_integer(&suffix).map(|value| value.to_string())
+}
+
+fn is_numeric_character(character: char) -> bool {
+    character.is_ascii_digit()
+        || character == '.'
+        || digit_value(character).is_some()
+        || matches!(character, '十' | '百' | '千' | '万' | '億' | '兆')
+}
+
+fn digit_value(character: char) -> Option<u64> {
+    character.to_digit(10).map(u64::from).or(match character {
+        '〇' | '零' => Some(0),
+        '一' => Some(1),
+        '二' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    })
+}
+
+fn kanji_integer(text: &str) -> Option<u64> {
+    let mut total = 0u64;
+    let mut section = 0u64;
+    let mut number = 0u64;
+    let mut saw_number = false;
+    for character in text.chars() {
+        if let Some(digit) = digit_value(character) {
+            number = number.checked_mul(10)?.checked_add(digit)?;
+            saw_number = true;
+            continue;
+        }
+        let unit = match character {
+            '十' => 10,
+            '百' => 100,
+            '千' => 1_000,
+            '万' => 10_000,
+            '億' => 100_000_000,
+            '兆' => 1_000_000_000_000,
+            _ => return None,
+        };
+        saw_number = true;
+        if unit < 10_000 {
+            let multiplier = if number == 0 { 1 } else { number };
+            section = section.checked_add(multiplier.checked_mul(unit)?)?;
+            number = 0;
+        } else {
+            let multiplier = section.checked_add(number)?;
+            total = total
+                .checked_add((if multiplier == 0 { 1 } else { multiplier }).checked_mul(unit)?)?;
+            section = 0;
+            number = 0;
+        }
+    }
+    saw_number
+        .then(|| total.checked_add(section)?.checked_add(number))
+        .flatten()
 }
 
 fn last_role_before<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
@@ -641,6 +734,25 @@ mod tests {
                 .unwrap()
                 .contains("相対変化")
         );
+    }
+
+    #[test]
+    fn compares_ascii_fullwidth_and_kanji_counts_as_the_same_numeric_scale() {
+        assert_eq!(nearby_count("参加者は三人以上だった。"), "3人");
+        assert_eq!(nearby_count("参加者は３人以上だった。"), "3人");
+        assert_eq!(
+            nearby_count("参加者は一万二千三百四十五人だった。"),
+            "12345人"
+        );
+        assert_eq!(nearby_count("参加者は1.5万人以上だった。"), "指定値");
+        assert_eq!(
+            number_and_unit("得点が１０点上がった。", "点").unwrap().0,
+            "10"
+        );
+
+        let report = compare("参加者は三人以上だった。", "参加者は４人以上だった。").unwrap();
+        assert!(report.contains("文Aは「3人以上"));
+        assert!(report.contains("文Bは「4人以上"));
     }
 
     #[test]

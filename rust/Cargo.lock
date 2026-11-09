@@ -554,7 +554,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "minidora-cli"
-version = "0.7.0-alpha.5"
+version = "0.7.0-alpha.6"
 dependencies = [
  "minidora-domain",
  "minidora-engine",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "minidora-domain"
-version = "0.7.0-alpha.5"
+version = "0.7.0-alpha.6"
 dependencies = [
  "serde",
  "serde-value",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "minidora-engine"
-version = "0.7.0-alpha.5"
+version = "0.7.0-alpha.6"
 dependencies = [
  "minidora-domain",
  "num-bigint",

@@ -25,11 +25,11 @@
     "meaning_transformations": 120
   },
   "diagnostic_observations": {
-    "latest_artifact": "diagnostic-alpha5-observations.jsonl",
+    "latest_artifact": "diagnostic-alpha6-observations.jsonl",
     "scored": false,
     "cumulative_terminal_state_counts": {
-      "COMMIT": 120,
-      "SUSPEND": 460
+      "COMMIT": 150,
+      "SUSPEND": 546
     },
     "runs": [
       {
@@ -95,11 +95,24 @@
           "COMMIT": 30,
           "SUSPEND": 86
         }
+      },
+      {
+        "artifact": "diagnostic-alpha6-observations.jsonl",
+        "score_sheet": "scoring-sheet-alpha6.tsv",
+        "source_commit": "af7c2a034ad78cc3d40810950fefc9787842e2d6",
+        "source_snapshot_sha256": "4553e8d06957ce965366c0a5a51298c9fac4bd5917a562c94bff192d4d743c32",
+        "binary_sha256": "4a7bd71c343406fca9180760219830b4c41e53098d9c763d373d1a16b8a5eff9",
+        "observed_items": 116,
+        "scored": false,
+        "terminal_state_counts": {
+          "COMMIT": 30,
+          "SUSPEND": 86
+        }
       }
     ]
   },
   "file_sha256": {
-    "README.md": "b17f10000ff8e81b2b52e0a60016a3c8b707488775b29c4b60f040beae77b057",
+    "README.md": "8ffadda1a1de106e6907c738b988e5c27f6bb2dd84d8c70c51b99ad5e28dcecc",
     "questions-24.md": "468dcf3954956d844bb2bd1a6615cb59ff75c4ad37b81206c0dcec1208058101",
     "writing-12.md": "e098908be2d6e7f7e1151fb9b7ade75c5d6566ec97d47e6304a0fe06eadeb884",
     "conversations-10.md": "76edf864653ef69d454fcab07c9dff7eaa07d196da9be7b2203ab9e10332e63a",
@@ -116,6 +129,8 @@
     "diagnostic-alpha4-observations.jsonl": "64c7cba726ee56b85b663c1fa27adf5b241ff6774d51aefb1489f413cf2fa964",
     "scoring-sheet-alpha4.tsv": "5871d101d75744f372f8a23d034028fdc5c207c4175b13cabc1411138dd7f032",
     "diagnostic-alpha5-observations.jsonl": "a0da2f955ebff9e5d5d548db23f38e047cd04c66283db378b3d4981c9456c040",
-    "scoring-sheet-alpha5.tsv": "60df79d5aee6048b33c8c24722f27dade80ec14d176e3dfb335e9f73578be8bc"
+    "scoring-sheet-alpha5.tsv": "60df79d5aee6048b33c8c24722f27dade80ec14d176e3dfb335e9f73578be8bc",
+    "diagnostic-alpha6-observations.jsonl": "5097f700116531a3d615f71c5db83b3174c04cf0d67529cbc1fe24fdff6d968b",
+    "scoring-sheet-alpha6.tsv": "8c63871dc2ac993a253e2aed56ee4b1799aa12ad6c19d85fddd148e2c99296ee"
   }
 }

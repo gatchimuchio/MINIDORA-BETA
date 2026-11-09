@@ -1,14 +1,14 @@
 {
   "snapshot_kind": "first-party code/tests/tools plus manifests/lock/toolchain",
-  "sha256": "6d40440c3d40164fba9144a02e7700121776714c1e8128a2c0303d72b7ad9aa2",
+  "sha256": "4553e8d06957ce965366c0a5a51298c9fac4bd5917a562c94bff192d4d743c32",
   "files": [
     {
       "path": "Cargo.lock",
-      "sha256": "75fc18100cefb06eb99274b85284e574259ea18080c3ad5a3c1c79b6f33b0409"
+      "sha256": "b48ccffb8402d0b8ad1125ee9d673914ef90d17b387e1ebb08cc86a5018cf97b"
     },
     {
       "path": "Cargo.toml",
-      "sha256": "7bef74bd74d30ad5c32e19af3c3e94c324dc701dea7b6b61abe890067e1a1c7e"
+      "sha256": "6921daa2cbcb866e99251c0c1f97a04f94ad868607f99a8664784bd6578bd75d"
     },
     {
       "path": "apps/cli/Cargo.toml",
@@ -16,11 +16,11 @@
     },
     {
       "path": "apps/cli/src/main.rs",
-      "sha256": "5a85a1052de6ee7bdacde3d8d6091cec13c4b2a3fd745123aaa31ee1de672a37"
+      "sha256": "4743707d91281c1e28942a3612e2aff33236b273f0106554fa5b14f69df3e284"
     },
     {
       "path": "apps/cli/tests/normal_route.rs",
-      "sha256": "087aef489c1bc139a16bc4aa1597d33d056a0bb02cf9c9df8f29985b940947ea"
+      "sha256": "aade759ea4c60922e8398c2de8212d08f3d29c7044ed0b492bfa2acd1b3d2369"
     },
     {
       "path": "crates/minidora-domain/Cargo.toml",
@@ -32,7 +32,7 @@
     },
     {
       "path": "crates/minidora-domain/src/lib.rs",
-      "sha256": "bd2c8ea86d0788ba0393a72b115e58a6bd86179dace521327e8eb1a1696237b6"
+      "sha256": "461651d7624cd117a3e783100a52d2f4f1f6c2f2a6bd79b3e5f1df1e70fcc1f2"
     },
     {
       "path": "crates/minidora-engine/Cargo.toml",
@@ -64,7 +64,7 @@
     },
     {
       "path": "crates/minidora-engine/src/meaning_compare.rs",
-      "sha256": "5ceb68bddb69a8c39d00cb0c277e04fd529fbd4efb45ae1396ef533be730b12f"
+      "sha256": "2872d8119ad359a6f912cee8896fd5365fd924c2b7700c1141a6b936fff67d83"
     },
     {
       "path": "crates/minidora-engine/src/output.rs",
@@ -104,7 +104,7 @@
     },
     {
       "path": "tools/cloud-start.md",
-      "sha256": "dc937b51011bc7fbf37c26521a41a45d6891b3b500075e51ed2cf13e495dd44b"
+      "sha256": "432a754d4a3884ede1cce628f93c58e35971e7303d5b91661310dc2c03e5d7cf"
     },
     {
       "path": "tools/local_tls_observer_test.py",

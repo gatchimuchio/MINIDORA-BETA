@@ -1,5 +1,5 @@
 {
-  "source_snapshot": "6d40440c3d40164fba9144a02e7700121776714c1e8128a2c0303d72b7ad9aa2",
+  "source_snapshot": "4553e8d06957ce965366c0a5a51298c9fac4bd5917a562c94bff192d4d743c32",
   "command": "cargo test --workspace --all-features --locked",
   "suites": [
     {
@@ -18,7 +18,7 @@
       "ignored": 0
     },
     {
-      "passed": 97,
+      "passed": 98,
       "failed": 0,
       "ignored": 0
     },
@@ -39,7 +39,7 @@
       "outcome": "ok"
     },
     {
-      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
+      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
       "outcome": "ok"
     },
     {
@@ -47,11 +47,11 @@
       "outcome": "ok"
     },
     {
-      "test": "tests::transport_enforces_bounded_headers_and_body",
+      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
       "outcome": "ok"
     },
     {
-      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
+      "test": "tests::terminal_codes_are_distinct_and_nonterminal_is_failure",
       "outcome": "ok"
     },
     {
@@ -59,7 +59,7 @@
       "outcome": "ok"
     },
     {
-      "test": "tests::terminal_codes_are_distinct_and_nonterminal_is_failure",
+      "test": "tests::transport_enforces_bounded_headers_and_body",
       "outcome": "ok"
     },
     {
@@ -127,7 +127,7 @@
       "outcome": "ok"
     },
     {
-      "test": "metadata_search_without_read_grant_is_a_typed_stop_without_an_answer",
+      "test": "agreeing_examples_do_not_promote_a_universal_empirical_rule",
       "outcome": "ok"
     },
     {
@@ -139,15 +139,15 @@
       "outcome": "ok"
     },
     {
-      "test": "agreeing_examples_do_not_promote_a_universal_empirical_rule",
-      "outcome": "ok"
-    },
-    {
-      "test": "requested_file_needs_separate_exact_permission_and_real_receipt",
+      "test": "metadata_search_without_read_grant_is_a_typed_stop_without_an_answer",
       "outcome": "ok"
     },
     {
       "test": "unsupported_input_is_suspension_and_not_an_empty_success",
+      "outcome": "ok"
+    },
+    {
+      "test": "requested_file_needs_separate_exact_permission_and_real_receipt",
       "outcome": "ok"
     },
     {
@@ -167,15 +167,11 @@
       "outcome": "ok"
     },
     {
-      "test": "tests::nonexact_numbers_cannot_silently_become_null_or_facts",
-      "outcome": "ok"
-    },
-    {
       "test": "tests::canonical_records_preserve_sources_and_use_stable_key_order",
       "outcome": "ok"
     },
     {
-      "test": "document::tests::csv_json_roundtrip_preserves_string_types_and_source",
+      "test": "tests::nonexact_numbers_cannot_silently_become_null_or_facts",
       "outcome": "ok"
     },
     {
@@ -191,7 +187,11 @@
       "outcome": "ok"
     },
     {
-      "test": "document::tests::formula_export_is_withheld_without_changing_original",
+      "test": "document::tests::csv_json_roundtrip_preserves_string_types_and_source",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::json_cells_are_strict_strings_with_exact_token_spans",
       "outcome": "ok"
     },
     {
@@ -199,7 +199,7 @@
       "outcome": "ok"
     },
     {
-      "test": "document::tests::json_cells_are_strict_strings_with_exact_token_spans",
+      "test": "document::tests::formula_export_is_withheld_without_changing_original",
       "outcome": "ok"
     },
     {
@@ -215,11 +215,11 @@
       "outcome": "ok"
     },
     {
-      "test": "input::mathematics_and_source_tests::compound_research_request_cannot_commit_as_a_body_quote",
+      "test": "input::structured_document_tests::metadata_query_has_explicit_provider_and_data_boundary",
       "outcome": "ok"
     },
     {
-      "test": "input::structured_document_tests::metadata_query_has_explicit_provider_and_data_boundary",
+      "test": "input::mathematics_and_source_tests::compound_research_request_cannot_commit_as_a_body_quote",
       "outcome": "ok"
     },
     {
@@ -227,11 +227,11 @@
       "outcome": "ok"
     },
     {
-      "test": "input::mathematics_and_source_tests::matrix_parser_does_not_discard_residuals_or_malformed_arrays",
+      "test": "input::symbolic_and_clause_tests::symbolic_grammar_has_explicit_operation_and_variable",
       "outcome": "ok"
     },
     {
-      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
+      "test": "input::mathematics_and_source_tests::matrix_parser_does_not_discard_residuals_or_malformed_arrays",
       "outcome": "ok"
     },
     {
@@ -239,7 +239,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::symbolic_and_clause_tests::symbolic_grammar_has_explicit_operation_and_variable",
+      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
       "outcome": "ok"
     },
     {
@@ -263,7 +263,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::tests::labelled_meaning_comparison_accepts_bounded_japanese_and_english_directives",
+      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
       "outcome": "ok"
     },
     {
@@ -283,10 +283,6 @@
       "outcome": "ok"
     },
     {
-      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
-      "outcome": "ok"
-    },
-    {
       "test": "language::tests::parser_rejects_partial_or_unbounded_execution",
       "outcome": "ok"
     },
@@ -296,6 +292,10 @@
     },
     {
       "test": "math::polynomial_tests::exact_derivative_and_antiderivative",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::tests::labelled_meaning_comparison_accepts_bounded_japanese_and_english_directives",
       "outcome": "ok"
     },
     {
@@ -331,11 +331,15 @@
       "outcome": "ok"
     },
     {
-      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
+      "test": "input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved",
       "outcome": "ok"
     },
     {
       "test": "math::tests::units_empty_population_and_single_observation",
+      "outcome": "ok"
+    },
+    {
+      "test": "meaning_compare::tests::compares_ascii_fullwidth_and_kanji_counts_as_the_same_numeric_scale",
       "outcome": "ok"
     },
     {
@@ -363,11 +367,11 @@
       "outcome": "ok"
     },
     {
-      "test": "input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved",
+      "test": "meaning_compare::tests::reports_common_topics_and_objects_without_duplicating_subject_differences",
       "outcome": "ok"
     },
     {
-      "test": "meaning_compare::tests::reports_common_topics_and_objects_without_duplicating_subject_differences",
+      "test": "output::tests::actual_bytes_are_exclusive_and_idempotent",
       "outcome": "ok"
     },
     {
@@ -395,10 +399,6 @@
       "outcome": "ok"
     },
     {
-      "test": "output::tests::actual_bytes_are_exclusive_and_idempotent",
-      "outcome": "ok"
-    },
-    {
       "test": "ports::tests::unsupported_interpretations_are_not_body_success",
       "outcome": "ok"
     },
@@ -407,11 +407,11 @@
       "outcome": "ok"
     },
     {
-      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
+      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::authorized_cancel_stops_pending_goal_and_retains_unknown_effect_identity",
+      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
       "outcome": "ok"
     },
     {
@@ -419,15 +419,15 @@
       "outcome": "ok"
     },
     {
-      "test": "math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit",
-      "outcome": "ok"
-    },
-    {
       "test": "recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects",
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::interrupted_actual_write_reconciles_same_identity_without_resending",
+      "test": "recovery::tests::authorized_cancel_stops_pending_goal_and_retains_unknown_effect_identity",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit",
       "outcome": "ok"
     },
     {
@@ -435,7 +435,11 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
+      "test": "recovery::tests::interrupted_actual_write_reconciles_same_identity_without_resending",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed",
       "outcome": "ok"
     },
     {
@@ -507,11 +511,11 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed",
+      "test": "store::tests::bound_goal_is_immutable_but_pre_goal_received_is_restorable",
       "outcome": "ok"
     },
     {
-      "test": "store::tests::bound_goal_is_immutable_but_pre_goal_received_is_restorable",
+      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
       "outcome": "ok"
     },
     {
@@ -519,15 +523,7 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
-      "outcome": "ok"
-    },
-    {
       "test": "store::tests::compare_and_swap_prevents_stale_writer",
-      "outcome": "ok"
-    },
-    {
-      "test": "store::tests::crash_before_database_commit_leaves_orphan_and_no_case",
       "outcome": "ok"
     },
     {
@@ -535,11 +531,19 @@
       "outcome": "ok"
     },
     {
-      "test": "store::tests::exact_input_tombstone_survives_restart_and_rejects_collision",
+      "test": "store::tests::crash_before_database_commit_leaves_orphan_and_no_case",
       "outcome": "ok"
     },
     {
       "test": "store::tests::corrupt_or_missing_referenced_blob_blocks_restart",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::exact_input_tombstone_survives_restart_and_rejects_collision",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
       "outcome": "ok"
     },
     {
