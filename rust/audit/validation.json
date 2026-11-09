@@ -1,7 +1,7 @@
 {
   "status": "DEVELOPMENT_ALPHA_NOT_FULL_ACCEPTANCE",
   "version": "0.7.0-alpha.6",
-  "recorded_at": "2026-11-10T00:32:54+09:00",
+  "recorded_at": "2026-11-10T01:50:36+09:00",
   "base_commit": "1c546e77007afa0a9eeb3a44f07da99d84c383eb",
   "source_snapshot_sha256": "4553e8d06957ce965366c0a5a51298c9fac4bd5917a562c94bff192d4d743c32",
   "binary_sha256": "4a7bd71c343406fca9180760219830b4c41e53098d9c763d373d1a16b8a5eff9",
@@ -81,7 +81,7 @@
   },
   "external_blocks": {
     "public_search_hosts": "CONNECT403 on en.wikipedia.org, api.crossref.org, www.ebi.ac.uk; ja.wikipedia.org absent from effective policy",
-    "environment_config_draft": "INVALID_ARGUMENT; install_script/start_skill persistence unconfirmed; tested copies retained under tools/"
+    "environment_config_draft": "INVALID_ARGUMENT from both read_environment_config_draft and update_environment_config_draft; read says the current draft could not be verified and update could not confirm saving; diagnostic history is not_found with no legacy snapshot. Current runtime remains running, connected, and restricted egress is enforced. The local fallback payload was synchronized from rust/tools; backend draft persistence and application remain unconfirmed."
   },
   "material_implementation_gaps": [
     "General unrestricted language understanding, novel writing/code/science/research are not fully implemented by the limited declarative grammar",
