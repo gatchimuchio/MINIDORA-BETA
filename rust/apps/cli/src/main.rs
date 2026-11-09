@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.3 — local execution frontend
+const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.4 — local execution frontend
 
 Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...

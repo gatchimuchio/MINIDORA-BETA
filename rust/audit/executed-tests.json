@@ -1,5 +1,5 @@
 {
-  "source_snapshot": "c61918bb938faab484676b5d90bd65d4a204d7e63765b3ac7b9e5540032fb73b",
+  "source_snapshot": "9b644595d9b986d28c77739f4d4347ced03fbe2a9f1bd6b8e3cab12e89414dfa",
   "command": "cargo test --workspace --all-features --locked",
   "suites": [
     {
@@ -18,7 +18,7 @@
       "ignored": 0
     },
     {
-      "passed": 95,
+      "passed": 96,
       "failed": 0,
       "ignored": 0
     },
@@ -35,11 +35,15 @@
   ],
   "executed": [
     {
+      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
+      "outcome": "ok"
+    },
+    {
       "test": "tests::output_path_does_not_grant_write_authority",
       "outcome": "ok"
     },
     {
-      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
+      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
       "outcome": "ok"
     },
     {
@@ -51,15 +55,11 @@
       "outcome": "ok"
     },
     {
-      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
-      "outcome": "ok"
-    },
-    {
       "test": "tests::terminal_codes_are_distinct_and_nonterminal_is_failure",
       "outcome": "ok"
     },
     {
-      "test": "tests::transport_rejects_wrong_host_origin_and_token",
+      "test": "tests::transport_enforces_bounded_headers_and_body",
       "outcome": "ok"
     },
     {
@@ -67,7 +67,7 @@
       "outcome": "ok"
     },
     {
-      "test": "tests::transport_enforces_bounded_headers_and_body",
+      "test": "tests::transport_rejects_wrong_host_origin_and_token",
       "outcome": "ok"
     },
     {
@@ -103,10 +103,6 @@
       "outcome": "ok"
     },
     {
-      "test": "identity_collision_does_not_overwrite_original_result",
-      "outcome": "ok"
-    },
-    {
       "test": "decimal_statistics_are_exact_and_retain_actual_observations",
       "outcome": "ok"
     },
@@ -116,6 +112,10 @@
     },
     {
       "test": "insufficient_action_budget_cannot_reach_a_requested_file_effect",
+      "outcome": "ok"
+    },
+    {
+      "test": "identity_collision_does_not_overwrite_original_result",
       "outcome": "ok"
     },
     {
@@ -131,11 +131,11 @@
       "outcome": "ok"
     },
     {
-      "test": "agreeing_examples_do_not_promote_a_universal_empirical_rule",
+      "test": "reconcile_of_committed_file_reuses_original_result_without_writing_again",
       "outcome": "ok"
     },
     {
-      "test": "reconcile_of_committed_file_reuses_original_result_without_writing_again",
+      "test": "agreeing_examples_do_not_promote_a_universal_empirical_rule",
       "outcome": "ok"
     },
     {
@@ -159,15 +159,19 @@
       "outcome": "ok"
     },
     {
-      "test": "envelope_tests::unrepresented_requested_effects_are_not_ignored_by_frontends",
-      "outcome": "ok"
-    },
-    {
       "test": "tests::nonexact_numbers_cannot_silently_become_null_or_facts",
       "outcome": "ok"
     },
     {
       "test": "tests::canonical_records_preserve_sources_and_use_stable_key_order",
+      "outcome": "ok"
+    },
+    {
+      "test": "envelope_tests::unrepresented_requested_effects_are_not_ignored_by_frontends",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::absent_noop_empty_or_expanding_edits_stop",
       "outcome": "ok"
     },
     {
@@ -187,19 +191,15 @@
       "outcome": "ok"
     },
     {
+      "test": "document::tests::formula_export_is_withheld_without_changing_original",
+      "outcome": "ok"
+    },
+    {
       "test": "document::tests::json_cells_are_strict_strings_with_exact_token_spans",
       "outcome": "ok"
     },
     {
-      "test": "document::tests::absent_noop_empty_or_expanding_edits_stop",
-      "outcome": "ok"
-    },
-    {
       "test": "document::tests::rfc_quote_and_source_byte_spans",
-      "outcome": "ok"
-    },
-    {
-      "test": "document::tests::formula_export_is_withheld_without_changing_original",
       "outcome": "ok"
     },
     {
@@ -211,7 +211,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
+      "test": "input::mathematics_and_source_tests::compound_research_request_cannot_commit_as_a_body_quote",
       "outcome": "ok"
     },
     {
@@ -219,7 +219,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::mathematics_and_source_tests::compound_research_request_cannot_commit_as_a_body_quote",
+      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
       "outcome": "ok"
     },
     {
@@ -247,7 +247,7 @@
       "outcome": "ok"
     },
     {
-      "test": "language::lossless_tests::successor_projection_preserves_unknown_unicode_and_invalid_utf8",
+      "test": "language::lossless_tests::successor_distribution_is_exact_and_comparison_boundary_is_explicit",
       "outcome": "ok"
     },
     {
@@ -255,7 +255,7 @@
       "outcome": "ok"
     },
     {
-      "test": "language::lossless_tests::successor_distribution_is_exact_and_comparison_boundary_is_explicit",
+      "test": "language::lossless_tests::successor_projection_preserves_unknown_unicode_and_invalid_utf8",
       "outcome": "ok"
     },
     {
@@ -287,7 +287,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
+      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
       "outcome": "ok"
     },
     {
@@ -323,7 +323,7 @@
       "outcome": "ok"
     },
     {
-      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
+      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
       "outcome": "ok"
     },
     {
@@ -348,6 +348,10 @@
     },
     {
       "test": "meaning_compare::tests::refuses_unrecognized_semantic_differences_and_oversized_inputs",
+      "outcome": "ok"
+    },
+    {
+      "test": "meaning_compare::tests::reports_absent_markers_and_avoids_duplicate_annual_frequency",
       "outcome": "ok"
     },
     {
@@ -391,15 +395,15 @@
       "outcome": "ok"
     },
     {
-      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
-      "outcome": "ok"
-    },
-    {
       "test": "input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved",
       "outcome": "ok"
     },
     {
-      "test": "math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit",
+      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects",
       "outcome": "ok"
     },
     {
@@ -411,7 +415,11 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects",
+      "test": "math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::interrupted_actual_write_reconciles_same_identity_without_resending",
       "outcome": "ok"
     },
     {
@@ -420,10 +428,6 @@
     },
     {
       "test": "recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed",
-      "outcome": "ok"
-    },
-    {
-      "test": "recovery::tests::interrupted_actual_write_reconciles_same_identity_without_resending",
       "outcome": "ok"
     },
     {
@@ -495,10 +499,6 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
-      "outcome": "ok"
-    },
-    {
       "test": "store::tests::bound_goal_is_immutable_but_pre_goal_received_is_restorable",
       "outcome": "ok"
     },
@@ -507,7 +507,15 @@
       "outcome": "ok"
     },
     {
+      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
+      "outcome": "ok"
+    },
+    {
       "test": "store::tests::compare_and_swap_prevents_stale_writer",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
       "outcome": "ok"
     },
     {
@@ -519,15 +527,11 @@
       "outcome": "ok"
     },
     {
-      "test": "store::tests::corrupt_or_missing_referenced_blob_blocks_restart",
-      "outcome": "ok"
-    },
-    {
       "test": "store::tests::exact_input_tombstone_survives_restart_and_rejects_collision",
       "outcome": "ok"
     },
     {
-      "test": "store::tests::memory_is_actor_scoped_and_retains_revision_history",
+      "test": "store::tests::corrupt_or_missing_referenced_blob_blocks_restart",
       "outcome": "ok"
     },
     {
@@ -535,7 +539,7 @@
       "outcome": "ok"
     },
     {
-      "test": "store::tests::new_input_version_must_reenter_received_before_new_seal",
+      "test": "store::tests::memory_is_actor_scoped_and_retains_revision_history",
       "outcome": "ok"
     },
     {
@@ -543,11 +547,11 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
+      "test": "recovery::tests::unknown_original_blocks_new_effect_until_same_identity_reconciliation",
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::unknown_original_blocks_new_effect_until_same_identity_reconciliation",
+      "test": "store::tests::new_input_version_must_reenter_received_before_new_seal",
       "outcome": "ok"
     }
   ]

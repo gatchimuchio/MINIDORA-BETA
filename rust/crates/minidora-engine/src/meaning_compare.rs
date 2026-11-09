@@ -54,8 +54,8 @@ pub fn compare(a: &str, b: &str) -> Result<String> {
         .iter()
         .filter_map(|key| match (left.get(key), right.get(key)) {
             (Some(av), Some(bv)) if av != bv => Some((*key, av.clone(), bv.clone())),
-            (None, Some(bv)) => Some((*key, "該当する特徴を検出せず".into(), bv.clone())),
-            (Some(av), None) => Some((*key, av.clone(), "該当する特徴を検出せず".into())),
+            (None, Some(bv)) => Some((*key, absent_feature(key).into(), bv.clone())),
+            (Some(av), None) => Some((*key, av.clone(), absent_feature(key).into())),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -155,8 +155,6 @@ fn features(text: &str) -> Features {
         map.insert("quantifier", "全員・全対象に及ぶ全称".into());
     } else if text.contains("毎回") {
         map.insert("quantifier", "各回で反復する".into());
-    } else if text.contains("毎年") {
-        map.insert("quantifier", "毎年反復する".into());
     } else if text.contains("一部") || (text.contains("商品がある") || text.contains("人がいる"))
     {
         map.insert("quantifier", "少なくとも一部・一つの存在を述べる".into());
@@ -558,6 +556,30 @@ fn label(key: &str) -> &'static str {
     }
 }
 
+fn absent_feature(key: &str) -> &'static str {
+    match key {
+        "scope" => "明示的な否定・例外表現なし",
+        "quantifier" => "明示的な数量限定なし",
+        "polarity" => "否定表現なし（肯定形）",
+        "modality" => "義務・許可・可能性の表現なし",
+        "condition" => "条件表現なし",
+        "agent" => "行為者は明示されない",
+        "recipient" => "相手役割は明示されない",
+        "voice" => "対応する行為の形を特定できない",
+        "tense" => "明示的な時制・反復表現なし",
+        "aspect" => "完了・進行表現なし",
+        "time" => "時刻表現なし",
+        "validity" => "有効期間表現なし",
+        "sequence" => "動作順序表現なし",
+        "attribution" => "明示的な引用・帰属表現なし",
+        "causality" => "因果・時間順序表現なし",
+        "quantity" => "比較可能な数値表現なし",
+        "deadline" => "期限表現なし",
+        "action" => "対応する行為を特定できない",
+        _ => "明示的な特徴なし",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,5 +695,16 @@ mod tests {
 
         let active_passive = compare("事務局が申請を承認した。", "申請が承認された。").unwrap();
         assert!(active_passive.contains("申請"));
+    }
+
+    #[test]
+    fn reports_absent_markers_and_avoids_duplicate_annual_frequency() {
+        let condition =
+            compare("合格すれば入場できる。", "入場できるのは合格した人だけだ。").unwrap();
+        assert!(condition.contains("明示的な数量限定なし"));
+
+        let annual = compare("去年、桜が咲いた。", "毎年、桜が咲く。").unwrap();
+        assert!(annual.contains("時制・反復"));
+        assert!(!annual.contains("量化・数量範囲"));
     }
 }
