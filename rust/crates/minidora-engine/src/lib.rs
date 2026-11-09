@@ -6,6 +6,7 @@ pub mod document;
 pub mod input;
 pub mod language;
 pub mod math;
+pub mod meaning_compare;
 pub mod output;
 pub mod ports;
 pub mod recovery;

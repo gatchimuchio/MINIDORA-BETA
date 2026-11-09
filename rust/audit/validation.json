@@ -1,10 +1,10 @@
 {
   "status": "DEVELOPMENT_ALPHA_NOT_FULL_ACCEPTANCE",
-  "version": "0.7.0-alpha.1",
-  "recorded_at": "2026-11-09T16:46:03.706367+09:00",
+  "version": "0.7.0-alpha.2",
+  "recorded_at": "2026-11-09T17:50:45+09:00",
   "base_commit": "1c546e77007afa0a9eeb3a44f07da99d84c383eb",
-  "source_snapshot_sha256": "14036e4be1837fe4bcd3de05c4e4ef757ed247c542d69c8a03bbbef0900842ee",
-  "binary_sha256": "12f410eb52c3ce8aac53dce21ca0ed2c506263fbe35696e9a5f723bc78de87b4",
+  "source_snapshot_sha256": "a80f6bbdf516e1446bf81651de440d5f55810f98a1fe2c7726caa81d7d036946",
+  "binary_sha256": "6287e22de4546a748062931acfd656de5363b4edbbcf2b29e36ef385206f7a45",
   "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
   "rust_toolchain": "1.99.1",
   "commands": {
@@ -33,7 +33,7 @@
       "ignored": 0
     },
     {
-      "passed": 89,
+      "passed": 93,
       "failed": 0,
       "ignored": 0
     },
@@ -48,7 +48,7 @@
       "ignored": 0
     }
   ],
-  "rust_tests_passed": 123,
+  "rust_tests_passed": 127,
   "rust_tests_failed": 0,
   "rust_tests_ignored": 0,
   "zero_test_doc_suites": 2,
@@ -75,7 +75,7 @@
     "current_capability_obligations": 93,
     "full_acceptance": "UNVERIFIED",
     "semantic_route_inventory": "INCOMPLETE; baseline metadata alone is not semantic audit",
-    "quality_24_12_10_30": "individual cases and rubric not located; clarification pending",
+    "quality_24_12_10_30": "AUTHOR_CREATED_DIAGNOSTIC; ALPHA1 116/116 SUSPEND; ALPHA2 30/30 TRANSFORMATIONS COMMIT AND 86/86 OTHER RESPONSE UNITS SUSPEND; NOT SCORED; historical source/rubric unrecovered; no owner-approved threshold",
     "GPQA198_LIVE_ONLY": "NOT_RUN; public provider connectivity blocked and full benchmark prerequisites not established",
     "all_upstream359_test_paths": "identity accounted for, full semantic applicability/migration not complete"
   },
@@ -90,5 +90,75 @@
     "Long-history bounded working memory, protected-data encryption and full power-loss matrix not accepted",
     "Full Core cross-backend equivalence and Windows/macOS/8GB physical validation not performed"
   ],
-  "publication": "No remote push, release, deployment or environment publication performed"
+  "publication": "No remote push, release, deployment or environment publication performed",
+  "quality_diagnostic_v0_1_0": {
+    "status": "DIAGNOSTIC_RUNS_NOT_SCORED",
+    "manifest": "quality-v0.1.0/manifest.json",
+    "historical_reconstruction": false,
+    "owner_approved_acceptance_threshold": null,
+    "counts": {
+      "questions": 24,
+      "writing_tasks": 12,
+      "conversation_sessions": 10,
+      "turns_per_session": 5,
+      "meaning_transformations": 30,
+      "scored_response_units": 116,
+      "maximum_points": 536
+    },
+    "alpha1": {
+      "observations": "quality-v0.1.0/diagnostic-alpha1-observations.jsonl",
+      "source_commit": "66ec59dfd797905d54f43852542980f173bd2a29",
+      "source_snapshot_sha256": "14036e4be1837fe4bcd3de05c4e4ef757ed247c542d69c8a03bbbef0900842ee",
+      "binary_sha256": "12f410eb52c3ce8aac53dce21ca0ed2c506263fbe35696e9a5f723bc78de87b4",
+      "observed": 116,
+      "terminal_state_counts": {
+        "SUSPEND": 116
+      },
+      "terminal_states_by_suite": {
+        "conversation": {
+          "SUSPEND": 50
+        },
+        "meaning_transformation": {
+          "SUSPEND": 30
+        },
+        "questions": {
+          "SUSPEND": 24
+        },
+        "writing": {
+          "SUSPEND": 12
+        }
+      }
+    },
+    "alpha2": {
+      "observations": "quality-v0.1.0/diagnostic-alpha2-observations.jsonl",
+      "source_commit": "66ec59dfd797905d54f43852542980f173bd2a29",
+      "source_snapshot_sha256": "a80f6bbdf516e1446bf81651de440d5f55810f98a1fe2c7726caa81d7d036946",
+      "binary_sha256": "6287e22de4546a748062931acfd656de5363b4edbbcf2b29e36ef385206f7a45",
+      "working_tree_dirty": true,
+      "observed": 116,
+      "terminal_state_counts": {
+        "COMMIT": 30,
+        "SUSPEND": 86
+      },
+      "terminal_states_by_suite": {
+        "conversation": {
+          "SUSPEND": 50
+        },
+        "meaning_transformation": {
+          "COMMIT": 30
+        },
+        "questions": {
+          "SUSPEND": 24
+        },
+        "writing": {
+          "SUSPEND": 12
+        }
+      }
+    },
+    "measured_scores": null
+  },
+  "evidence_logs": {
+    "cargo_test": "/workspace/.minidora-cloud/rust-setup/test-alpha2.log",
+    "cargo_build": "/workspace/.minidora-cloud/rust-setup/build-alpha2.log"
+  }
 }

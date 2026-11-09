@@ -14,6 +14,12 @@ Alternatives include fixed-width integers, fixed-point decimals and floating poi
 
 A later [native Linux/Node-WASI vector comparison](../audit/target-conformance.json) observed matching canonical Unicode/exact-string records, digests and lifecycle predicates, with an independent Python hash check. This narrow vector does not establish full Core/storage/effect or independently implemented-backend equivalence and does not establish physical Windows/8GB behavior.
 
+## Bounded meaning comparison instead of inferred equivalence
+
+The Japanese A/B comparison path emits only explicitly recognized features: negation and scope, quantifier bounds, modality, conditional direction, participant roles, voice, time/aspect, attribution, causality, and selected numeric/deadline units. It retains both source statements, names the detected difference, lists shared extracted roles where available, and states that unrecognized material was not checked. If it finds no comparable change, it suspends instead of declaring equivalence. The markers provide a useful inspectable slice of semantic comparison, not a general Japanese parser or an entailment proof.
+
+An open-vocabulary neural model, dictionary-backed parser, or formal grammar is a possible alternative only if it preserves uncertainty, role/scope, source spans, bounded execution, and the same normal-route contracts. This alpha does not compare those alternatives or claim full meaning-transform coverage from marker recognition alone.
+
 ## Inspected character-ngram family instead of an assumed universal model
 
 The predecessor model and calculation routes were inspected before selecting the Rust model family. The current `SequenceModel` carries character vocabulary/counts/context, non-neural parameter transformation, exact conditional distribution, sequence scoring and deterministic constrained decoding. Core supplies authorized content units; linguistic scores cannot authorize a proposition or create another final judge.

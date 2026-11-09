@@ -4,7 +4,7 @@ use minidora_domain::*;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v1";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v2-meaning-compare";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -199,6 +199,9 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = structured_intent(text)? {
         return Ok(intent);
     }
+    if let Some(intent) = meaning_comparison_intent(text)? {
+        return Ok(intent);
+    }
     let body = terminal_trim(text);
     if matches!(
         body.to_lowercase().as_str(),
@@ -369,6 +372,36 @@ fn interpret(text: &str) -> Result<Intent> {
         });
     }
     Ok(Intent::Unknown { reason: "no unambiguous interpretation in the supported arithmetic, copular relation, context, source or JSON grammar".into() })
+}
+
+fn meaning_comparison_intent(text: &str) -> Result<Option<Intent>> {
+    let Some((instruction, labelled)) =
+        text.split_once("\nA:").or_else(|| text.split_once("\nA："))
+    else {
+        return Ok(None);
+    };
+    if !regex(r"(?s)^(?:文)?Aと(?:文)?B.*(?:違い|比較|差)")?.is_match(instruction.trim()) {
+        return Ok(None);
+    }
+    let Some((a, b)) = labelled
+        .split_once("\nB:")
+        .or_else(|| labelled.split_once("\nB："))
+    else {
+        return Ok(Some(Intent::Unknown {
+            reason: "meaning comparison requires exactly labelled A and B statements".into(),
+        }));
+    };
+    let a = a.trim();
+    let b = b.trim();
+    if a.is_empty() || b.is_empty() || b.contains("\nA:") || b.contains("\nB:") {
+        return Ok(Some(Intent::Unknown {
+            reason: "meaning comparison has empty or repeated labelled statements".into(),
+        }));
+    }
+    Ok(Some(Intent::MeaningCompare {
+        a: a.into(),
+        b: b.into(),
+    }))
 }
 
 #[derive(Debug)]

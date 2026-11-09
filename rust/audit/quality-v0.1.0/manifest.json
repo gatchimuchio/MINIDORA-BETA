@@ -1,0 +1,76 @@
+{
+  "suite_id": "minidora-japanese-quality-diagnostic",
+  "version": "0.1.0",
+  "created_date": "2026-11-09",
+  "provenance": "Newly authored at the owner's request; not a reconstruction of the historical population or its unknown rubric.",
+  "historical_population_recovered": false,
+  "status": "DIAGNOSTIC_RUN_NOT_SCORED",
+  "public_fixed_diagnostic": true,
+  "owner_approved_acceptance_threshold": null,
+  "counts": {
+    "natural_questions": 24,
+    "writing_tasks": 12,
+    "conversation_sessions": 10,
+    "turns_per_conversation": 5,
+    "scored_conversation_turns": 50,
+    "meaning_transformations": 30,
+    "top_level_items": 76,
+    "scored_responses": 116,
+    "maximum_points": 536
+  },
+  "category_maximum_points": {
+    "questions": 96,
+    "writing": 120,
+    "conversation_turns": 200,
+    "meaning_transformations": 120
+  },
+  "diagnostic_observations": {
+    "latest_artifact": "diagnostic-alpha2-observations.jsonl",
+    "scored": false,
+    "cumulative_terminal_state_counts": {
+      "COMMIT": 30,
+      "SUSPEND": 202
+    },
+    "runs": [
+      {
+        "artifact": "diagnostic-alpha1-observations.jsonl",
+        "score_sheet": "scoring-sheet-alpha1.tsv",
+        "source_commit": "66ec59dfd797905d54f43852542980f173bd2a29",
+        "source_snapshot_sha256": "14036e4be1837fe4bcd3de05c4e4ef757ed247c542d69c8a03bbbef0900842ee",
+        "binary_sha256": "12f410eb52c3ce8aac53dce21ca0ed2c506263fbe35696e9a5f723bc78de87b4",
+        "observed_items": 116,
+        "scored": false,
+        "terminal_state_counts": {
+          "SUSPEND": 116
+        }
+      },
+      {
+        "artifact": "diagnostic-alpha2-observations.jsonl",
+        "score_sheet": "scoring-sheet-alpha2.tsv",
+        "source_commit": "66ec59dfd797905d54f43852542980f173bd2a29",
+        "source_snapshot_sha256": "a80f6bbdf516e1446bf81651de440d5f55810f98a1fe2c7726caa81d7d036946",
+        "binary_sha256": "6287e22de4546a748062931acfd656de5363b4edbbcf2b29e36ef385206f7a45",
+        "observed_items": 116,
+        "scored": false,
+        "terminal_state_counts": {
+          "COMMIT": 30,
+          "SUSPEND": 86
+        }
+      }
+    ]
+  },
+  "file_sha256": {
+    "README.md": "4ffd4a6ce2d5743a0ef96f36b4b7a89cf94a804ef72c1bfc0a70243557583074",
+    "questions-24.md": "468dcf3954956d844bb2bd1a6615cb59ff75c4ad37b81206c0dcec1208058101",
+    "writing-12.md": "e098908be2d6e7f7e1151fb9b7ade75c5d6566ec97d47e6304a0fe06eadeb884",
+    "conversations-10.md": "76edf864653ef69d454fcab07c9dff7eaa07d196da9be7b2203ab9e10332e63a",
+    "meaning-transformations-30.md": "19f10917828bc1e12cf065583e3a213ff05c47bd3e0697804b52666074cd1c6e",
+    "scoring-sheet-template.tsv": "ef939394725f1bb3bf21fecdec171bc0ceb250a4a94879bfaf3f678094e8e04f",
+    "build_assets.py": "4149927ea3c2558039a4a3d043c37b4133ae877a9a9e9339d0830e10e6f40510",
+    "run_diagnostic.py": "8ca2092942ba6933ea85128274052f80bc17546595e535f317a37caabee1bdee",
+    "diagnostic-alpha1-observations.jsonl": "8dabb5aef2727a72a1c87ca05d0cda4f5fca1d500edf1b6004a797836936d34b",
+    "scoring-sheet-alpha1.tsv": "3fb1be7aed026dbd2231fc6c843dfe7c838b02fced2b8df74de4eac1d5927b78",
+    "diagnostic-alpha2-observations.jsonl": "406178dfe302bcd1b9608cbe6046ab65c3ae12867a223bf95b41b166e9fd9919",
+    "scoring-sheet-alpha2.tsv": "99298b16856b088f2925abf2927eaa0b2489ad2513c752766a8006c1f43a64d6"
+  }
+}

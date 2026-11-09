@@ -686,12 +686,26 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Computed;
             }
-            Intent::Unknown { reason } => {
+            Intent::MeaningCompare { a, b } => match crate::meaning_compare::compare(a, b) {
+                Ok(report) => {
+                    units.push(report);
+                    result.guarantee = Guarantee::Computed;
+                }
+                Err(error) => {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MEANING_COMPARE_UNRESOLVED",
+                        &error.to_string(),
+                    );
+                }
+            },
+            Intent::Unknown { .. } => {
                 return self.stop(
                     &mut state,
                     Lifecycle::Suspend,
                     "CAPABILITY_UNAVAILABLE",
-                    reason,
+                    "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
                 );
             }
             Intent::Cancel => unreachable!("handled before computation"),
