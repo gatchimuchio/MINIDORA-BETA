@@ -16,7 +16,6 @@ const ORDER: &[&str] = &[
     "condition",
     "agent",
     "recipient",
-    "subject",
     "voice",
     "tense",
     "aspect",
@@ -89,28 +88,35 @@ pub fn compare(a: &str, b: &str) -> Result<String> {
 
 fn features(text: &str) -> Features {
     let mut map = Features::new();
-    let has_negative = [
-        "わけではない",
-        "とは限らない",
-        "なかった",
-        "しない",
-        "ない",
-        "ません",
+    let modal_negation = [
+        "必要はない",
+        "必要がない",
+        "必要ではない",
+        "なければならない",
     ]
     .iter()
     .any(|needle| text.contains(needle));
+    let has_negative = !modal_negation
+        && [
+            "わけではない",
+            "とは限らない",
+            "なかった",
+            "しない",
+            "ない",
+            "ません",
+        ]
+        .iter()
+        .any(|needle| text.contains(needle));
     map.insert(
         "polarity",
         if has_negative { "否定" } else { "肯定形" }.into(),
     );
 
-    let scope = if text.contains("わけではない") {
-        Some("全称命題を否定（少なくとも一人は当てはまらない。誰も当てはまらないとは限らない）")
-    } else if text.contains("とは限らない") {
+    let scope = if text.contains("とは限らない") {
         Some("必ずそうだという断定を否定")
     } else if (text.contains("誰も") || text.contains("だれも")) && has_negative {
         Some("該当者が一人もいない")
-    } else if text.contains("全員") && has_negative {
+    } else if text.contains("全員") && has_negative && !text.contains("わけではない") {
         Some("全員についての否定だが、否定の作用域は文脈なしでは曖昧")
     } else {
         None
@@ -119,7 +125,12 @@ fn features(text: &str) -> Features {
         map.insert("scope", scope.into());
     }
 
-    if text.contains("最大") || text.contains("多くても") {
+    if text.contains("わけではない") && text.contains("全員") {
+        map.insert(
+            "quantifier",
+            "全員とは限らない（少なくとも一人は例外で、誰も回答しないとは限らない）".into(),
+        );
+    } else if text.contains("最大") || text.contains("多くても") {
         map.insert("quantifier", format!("{}（上限）", nearby_count(text)));
     } else if text.contains("より多") {
         map.insert(
@@ -169,11 +180,13 @@ fn features(text: &str) -> Features {
         map.insert("condition", "この条件が成立に必要（逆向きの条件）".into());
     } else if text.contains("できるのは") && text.contains("だけ") {
         map.insert("condition", "条件を満たすことが許可の必要条件".into());
-    } else if text.contains("なければ") {
+    } else if text.contains("なければ") && !text.contains("なければならない") {
         map.insert("condition", "連絡がない場合を条件とする".into());
     } else if text.contains("あれば") {
         map.insert("condition", "連絡がある場合を条件とする".into());
-    } else if text.contains("なら") || text.contains("すれば") || text.contains("であれば")
+    } else if (text.contains("なら") && !text.contains("ならない"))
+        || text.contains("すれば")
+        || text.contains("であれば")
     {
         map.insert("condition", "前件が後件の十分条件（前件なら後件）".into());
     }
@@ -204,11 +217,11 @@ fn features(text: &str) -> Features {
             );
             if let Some(patient) = last_role_before(text, "は") {
                 map.insert("patient", patient.into());
+            } else if let Some(patient) = last_role_before(text, "が") {
+                map.insert("patient", patient.into());
             }
         } else {
-            if let Some(agent) = text.split_once('が').map(|(before, _)| trim_focus(before))
-                && !agent.is_empty()
-            {
+            if let Some(agent) = active_agent(text) {
                 map.insert("agent", agent.into());
             }
             if let Some(recipient) = text
@@ -217,10 +230,10 @@ fn features(text: &str) -> Features {
             {
                 map.insert("recipient", recipient.into());
             }
-            if let Some(object) = last_role_before(text, "を") {
-                map.insert("object", object.into());
-            }
         }
+    }
+    if let Some(object) = object(text) {
+        map.insert("object", object.into());
     }
 
     if text.contains("去年") {
@@ -291,7 +304,8 @@ fn features(text: &str) -> Features {
         map.insert("deadline", "営業日とは指定されていない日数期限".into());
     }
 
-    // A simple topic is retained even when no action frame is recognized.
+    // A simple explicit topic is retained for common-element reporting only.
+    // It is not treated as a semantic difference from grammatical subject.
     let subject_source = if text.contains("と述べた") || text.contains("と報告した") {
         text.split_once('「')
             .and_then(|(_, rest)| rest.split_once('」').map(|(quoted, _)| quoted))
@@ -299,16 +313,17 @@ fn features(text: &str) -> Features {
     } else {
         text
     };
-    if !subject_source.contains("できるのは")
-        && let Some(subject) = last_role_before(subject_source, "が")
-            .or_else(|| last_role_before(subject_source, "は"))
-    {
-        map.entry("subject").or_insert_with(|| subject.into());
+    if let Some(topic) = topic(subject_source) {
+        map.insert("topic", topic.into());
     }
     map
 }
 
 fn action(text: &str) -> Option<&'static str> {
+    action_frame(text).map(|(_, label)| label)
+}
+
+fn action_frame(text: &str) -> Option<(usize, &'static str)> {
     [
         ("承認", "承認"),
         ("設置", "設置"),
@@ -321,9 +336,88 @@ fn action(text: &str) -> Option<&'static str> {
         ("転倒", "転倒"),
         ("開始", "開始"),
         ("運ん", "運搬"),
+        ("読み", "読書"),
+        ("読ん", "読書"),
     ]
     .into_iter()
-    .find_map(|(needle, label)| text.contains(needle).then_some(label))
+    .filter_map(|(needle, label)| text.find(needle).map(|position| (position, label)))
+    .min_by_key(|(position, _)| *position)
+}
+
+fn action_position(text: &str) -> Option<usize> {
+    action_frame(text).map(|(position, _)| position)
+}
+
+fn active_agent(text: &str) -> Option<&str> {
+    if text.contains("誰も") {
+        return Some("誰も");
+    }
+    let prefix = &text[..action_position(text)?];
+    let before_object = prefix.split_once('を').map_or(prefix, |(before, _)| before);
+    let marker = ["が", "は"]
+        .into_iter()
+        .filter_map(|particle| {
+            before_object
+                .match_indices(particle)
+                .map(|(position, _)| (position, particle))
+                .last()
+        })
+        .max_by_key(|(position, _)| *position)?;
+    let actor = before_object[..marker.0]
+        .rsplit(['。', '、'])
+        .next()
+        .map(str::trim)?;
+    (!actor.is_empty()).then_some(actor)
+}
+
+fn object(text: &str) -> Option<&str> {
+    let prefix = &text[..action_position(text)?];
+    if let Some((before, _)) = prefix.split_once('を') {
+        let value = before
+            .rsplit(['。', '、'])
+            .next()
+            .map(trim_condition_prefix)
+            .and_then(|phrase| last_role(phrase, &["は", "が", "に", "へ", "と", "で"]))?;
+        return (!value.is_empty()).then_some(value);
+    }
+    for particle in ["だけ", "のみ", "も"] {
+        if let Some(position) = prefix.rfind(particle) {
+            let value = prefix[..position]
+                .rsplit(['。', '、', 'は', 'が', 'に', 'へ', 'と'])
+                .next()
+                .map(trim_focus)?
+                .trim();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn trim_condition_prefix(value: &str) -> &str {
+    [
+        "なければ",
+        "あれば",
+        "すれば",
+        "ならば",
+        "なら",
+        "たら",
+        "れば",
+    ]
+    .into_iter()
+    .filter_map(|marker| value.rfind(marker).map(|position| position + marker.len()))
+    .max()
+    .map_or(value, |position| &value[position..])
+}
+
+fn topic(text: &str) -> Option<&str> {
+    let position = text.match_indices('は').find_map(|(position, _)| {
+        let previous = text[..position].chars().next_back()?;
+        (!matches!(previous, 'で' | '要')).then_some(position)
+    })?;
+    let value = text[..position].rsplit(['。', '、']).next()?.trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn nearby_count(text: &str) -> String {
@@ -394,8 +488,6 @@ fn last_role_before<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
             "に",
             "へ",
             "と",
-            "も",
-            "だけ",
         ],
     )
 }
@@ -422,7 +514,7 @@ fn trim_focus(value: &str) -> &str {
 
 fn common_roles(left: &Features, right: &Features) -> Vec<String> {
     let mut values = std::collections::BTreeSet::new();
-    for key in ["agent", "recipient", "subject", "action"] {
+    for key in ["agent", "recipient", "topic", "action"] {
         if let (Some(a), Some(b)) = (left.get(key), right.get(key))
             && a == b
             && !a.contains("明示されない")
@@ -449,7 +541,7 @@ fn label(key: &str) -> &'static str {
         "condition" => "条件の向き",
         "agent" => "行為者",
         "recipient" => "相手役割",
-        "subject" => "話題・主語",
+        "topic" => "話題",
         "patient" | "object" => "対象",
         "voice" => "能動・受動",
         "tense" => "時制・反復",
@@ -473,7 +565,8 @@ mod tests {
     #[test]
     fn distinguishes_partial_negation_from_none_and_preserves_ambiguity() {
         let not_all = compare("全員が回答した。", "全員が回答したわけではない。").unwrap();
-        assert!(not_all.contains("少なくとも一人は当てはまらない"));
+        assert!(not_all.contains("全員とは限らない"));
+        assert!(not_all.contains("文Aは「全員・全対象に及ぶ全称」"));
         let ambiguity = compare("誰も回答しなかった。", "全員が回答しなかった。").unwrap();
         assert!(ambiguity.contains("作用域は文脈なしでは曖昧"));
     }
@@ -532,5 +625,53 @@ mod tests {
     fn refuses_unrecognized_semantic_differences_and_oversized_inputs() {
         assert!(compare("これは適切です。", "これは妥当です。").is_err());
         assert!(compare(&"あ".repeat(3_000), "A").is_err());
+    }
+
+    #[test]
+    fn keeps_modality_negation_separate_from_clause_polarity_and_conditions() {
+        let obligation =
+            compare("資料を提出してもよい。", "資料を提出しなければならない。").unwrap();
+        assert!(obligation.contains("許可されている"));
+        assert!(obligation.contains("義務・必要がある"));
+        assert!(!obligation.contains("肯否"));
+        assert!(!obligation.contains("条件の向き"));
+        assert!(obligation.contains("資料"));
+        assert!(obligation.contains("提出"));
+
+        let requirement = compare(
+            "利用者は申請書を再提出する必要がある。",
+            "利用者は申請書を再提出する必要はない。",
+        )
+        .unwrap();
+        assert!(requirement.contains("義務・必要がある"));
+        assert!(requirement.contains("義務・必要はない"));
+        assert!(!requirement.contains("行為者: 文Aは「利用者は申請書を再提出する必要」"));
+        assert!(requirement.contains("利用者"));
+        assert!(requirement.contains("申請書"));
+    }
+
+    #[test]
+    fn reports_common_topics_and_objects_without_duplicating_subject_differences() {
+        let not_all = compare(
+            "すべての会議で議事録が必要だ。",
+            "一部の会議では議事録が必要だ。",
+        )
+        .unwrap();
+        assert!(not_all.contains("全称"));
+        assert!(not_all.contains("存在を述べる"));
+        assert!(!not_all.contains("話題・主語"));
+
+        let exclusive_additive = compare("赤い箱だけを運んだ。", "赤い箱も運んだ。").unwrap();
+        assert!(exclusive_additive.contains("赤い箱"));
+
+        let conditional = compare(
+            "連絡がなければ作業を開始する。",
+            "連絡があれば作業を開始する。",
+        )
+        .unwrap();
+        assert!(conditional.contains("作業"));
+
+        let active_passive = compare("事務局が申請を承認した。", "申請が承認された。").unwrap();
+        assert!(active_passive.contains("申請"));
     }
 }

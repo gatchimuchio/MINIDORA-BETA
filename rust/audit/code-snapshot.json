@@ -1,14 +1,14 @@
 {
   "snapshot_kind": "first-party code/tests/tools plus manifests/lock/toolchain",
-  "sha256": "a80f6bbdf516e1446bf81651de440d5f55810f98a1fe2c7726caa81d7d036946",
+  "sha256": "c61918bb938faab484676b5d90bd65d4a204d7e63765b3ac7b9e5540032fb73b",
   "files": [
     {
       "path": "Cargo.lock",
-      "sha256": "ad24c6cd0207604e202441caf2f5967a744bbc88a9cb02c1f0ff929d7ceaa766"
+      "sha256": "e9a70929e6174971c67aa539397829ece48578677e7a60d79d84b68404cda037"
     },
     {
       "path": "Cargo.toml",
-      "sha256": "8a6f8a01d79f4b2e8a18eabf5da34d4915462b6c9a1e1b3b3dca94132461ba71"
+      "sha256": "406eea8b7fb24ea087c43a563fff85163b44a21c71048eb09fb0786d0c940cbd"
     },
     {
       "path": "apps/cli/Cargo.toml",
@@ -16,7 +16,7 @@
     },
     {
       "path": "apps/cli/src/main.rs",
-      "sha256": "b32a834eff85042a9bea1ef0703d51645a7c2866fb961408d760a9561cd86c95"
+      "sha256": "b7268ea54fa07380375cc1f899cc25b4ad5dec2e86645467bd1417a8181a1a3f"
     },
     {
       "path": "apps/cli/tests/normal_route.rs",
@@ -32,7 +32,7 @@
     },
     {
       "path": "crates/minidora-domain/src/lib.rs",
-      "sha256": "944fb2ca0328deb725809d9d5ff9705a9bf664c7f1beeb1a72a6b77883cd9bf4"
+      "sha256": "e82545eb00a892740adc25413620a2bc3851c3048e226a1b2701a69bdafc2843"
     },
     {
       "path": "crates/minidora-engine/Cargo.toml",
@@ -64,7 +64,7 @@
     },
     {
       "path": "crates/minidora-engine/src/meaning_compare.rs",
-      "sha256": "be9f724723c6768e75dc04a0185b122bf6754912f4da028ec1081b7c6d348498"
+      "sha256": "943f30bf60c7f7a5123774340db2bef70d2fc91dd66bbf1bc2b6c96b7904aa1a"
     },
     {
       "path": "crates/minidora-engine/src/output.rs",
@@ -104,7 +104,7 @@
     },
     {
       "path": "tools/cloud-start.md",
-      "sha256": "dab908aa7c591b19dea9475c843bb21daaec4ce43d32e8373e28ea3c657149d5"
+      "sha256": "a3648bde86486aa9ee41efc49616255e6b79743d4f969c7419a025d326293401"
     },
     {
       "path": "tools/local_tls_observer_test.py",

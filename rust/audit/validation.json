@@ -1,10 +1,10 @@
 {
   "status": "DEVELOPMENT_ALPHA_NOT_FULL_ACCEPTANCE",
-  "version": "0.7.0-alpha.2",
-  "recorded_at": "2026-11-09T17:50:45+09:00",
+  "version": "0.7.0-alpha.3",
+  "recorded_at": "2026-11-09T18:22:09+09:00",
   "base_commit": "1c546e77007afa0a9eeb3a44f07da99d84c383eb",
-  "source_snapshot_sha256": "a80f6bbdf516e1446bf81651de440d5f55810f98a1fe2c7726caa81d7d036946",
-  "binary_sha256": "6287e22de4546a748062931acfd656de5363b4edbbcf2b29e36ef385206f7a45",
+  "source_snapshot_sha256": "c61918bb938faab484676b5d90bd65d4a204d7e63765b3ac7b9e5540032fb73b",
+  "binary_sha256": "666b2c0924beef57667be74b44e923288496a5534b1f2117ddb2d1a441adba31",
   "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
   "rust_toolchain": "1.99.1",
   "commands": {
@@ -33,7 +33,7 @@
       "ignored": 0
     },
     {
-      "passed": 93,
+      "passed": 95,
       "failed": 0,
       "ignored": 0
     },
@@ -48,7 +48,7 @@
       "ignored": 0
     }
   ],
-  "rust_tests_passed": 127,
+  "rust_tests_passed": 129,
   "rust_tests_failed": 0,
   "rust_tests_ignored": 0,
   "zero_test_doc_suites": 2,
@@ -75,7 +75,7 @@
     "current_capability_obligations": 93,
     "full_acceptance": "UNVERIFIED",
     "semantic_route_inventory": "INCOMPLETE; baseline metadata alone is not semantic audit",
-    "quality_24_12_10_30": "AUTHOR_CREATED_DIAGNOSTIC; ALPHA1 116/116 SUSPEND; ALPHA2 30/30 TRANSFORMATIONS COMMIT AND 86/86 OTHER RESPONSE UNITS SUSPEND; NOT SCORED; historical source/rubric unrecovered; no owner-approved threshold",
+    "quality_24_12_10_30": "AUTHOR_CREATED_DIAGNOSTIC; ALPHA1 116/116 SUSPEND; ALPHA2 AND ALPHA3 30/30 MEANING TRANSFORMATIONS COMMIT AND 86/86 OTHER RESPONSE UNITS SUSPEND; ALL RUNS NOT SCORED; historical source/rubric unrecovered; no owner-approved threshold",
     "GPQA198_LIVE_ONLY": "NOT_RUN; public provider connectivity blocked and full benchmark prerequisites not established",
     "all_upstream359_test_paths": "identity accounted for, full semantic applicability/migration not complete"
   },
@@ -90,7 +90,7 @@
     "Long-history bounded working memory, protected-data encryption and full power-loss matrix not accepted",
     "Full Core cross-backend equivalence and Windows/macOS/8GB physical validation not performed"
   ],
-  "publication": "No remote push, release, deployment or environment publication performed",
+  "publication": "Alpha 2 commits were pushed to public origin/main through 1d67049; alpha 3 is a local validation snapshot at recorded_at. No GitHub Release or deployment has been performed.",
   "quality_diagnostic_v0_1_0": {
     "status": "DIAGNOSTIC_RUNS_NOT_SCORED",
     "manifest": "quality-v0.1.0/manifest.json",
@@ -155,10 +155,36 @@
         }
       }
     },
-    "measured_scores": null
+    "measured_scores": null,
+    "alpha3": {
+      "observations": "quality-v0.1.0/diagnostic-alpha3-observations.jsonl",
+      "source_commit": "1d67049c290e988c939ac155ca7cded05c24f08f",
+      "source_snapshot_sha256": "c61918bb938faab484676b5d90bd65d4a204d7e63765b3ac7b9e5540032fb73b",
+      "binary_sha256": "666b2c0924beef57667be74b44e923288496a5534b1f2117ddb2d1a441adba31",
+      "working_tree_dirty": true,
+      "observed": 116,
+      "terminal_state_counts": {
+        "COMMIT": 30,
+        "SUSPEND": 86
+      },
+      "terminal_states_by_suite": {
+        "conversation": {
+          "SUSPEND": 50
+        },
+        "meaning_transformation": {
+          "COMMIT": 30
+        },
+        "questions": {
+          "SUSPEND": 24
+        },
+        "writing": {
+          "SUSPEND": 12
+        }
+      }
+    }
   },
   "evidence_logs": {
-    "cargo_test": "/workspace/.minidora-cloud/rust-setup/test-alpha2.log",
-    "cargo_build": "/workspace/.minidora-cloud/rust-setup/build-alpha2.log"
+    "cargo_test": "/workspace/.minidora-cloud/rust-setup/test-alpha3.log",
+    "cargo_build": "/workspace/.minidora-cloud/rust-setup/build-alpha3.log"
   }
 }
