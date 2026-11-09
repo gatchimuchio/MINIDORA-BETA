@@ -1,0 +1,24 @@
+{
+  "test_id": "domain-canonical-lifecycle-host-wasi",
+  "native_target": "x86_64-unknown-linux-gnu",
+  "other_target": "wasm32-wasip1",
+  "other_execution": "Node24 WASI virtual execution",
+  "observed_equal": true,
+  "independent_python_canonical_hash_check": true,
+  "vector": {
+    "adopted_commit": true,
+    "canonical": "{\"negative\":true,\"object\":\"決定論的\",\"predicate\":\"is\",\"scope\":\"仮定2026\",\"subject\":\"ミニドラ\"}",
+    "early_commit": false,
+    "identity": "1282d26e1a16f02f9e70c52914befcb5553285b4a7016a6c7b5cf7bb1fe81446",
+    "record": {
+      "negative": true,
+      "object": "決定論的",
+      "predicate": "is",
+      "scope": "仮定2026",
+      "subject": "ミニドラ"
+    },
+    "sha256": "ad3a13d3aea93d29fd95efbc8db852741cc05aabe7b96675508257c9a7ac44d3"
+  },
+  "coverage": "domain canonical Unicode/exact-string record and lifecycle predicates only; not entire Core/storage/effect/backend equivalence",
+  "windows_physical_run": false
+}

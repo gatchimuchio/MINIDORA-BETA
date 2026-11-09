@@ -1,0 +1,4804 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "MINIDORA Rust",
+      "version": "0.7.0-alpha.1"
+    },
+    "properties": [
+      {
+        "name": "minidora:evidence-scope",
+        "value": "locked Cargo metadata inventory and declared licenses/checksums; no legal or vulnerability clearance claim"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "aho-corasick@1.1.5",
+      "name": "aho-corasick",
+      "version": "1.1.5",
+      "purl": "pkg:cargo/aho-corasick@1.1.5",
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "atomic-waker@1.1.2",
+      "name": "atomic-waker",
+      "version": "1.1.2",
+      "purl": "pkg:cargo/atomic-waker@1.1.2",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "autocfg@1.5.1",
+      "name": "autocfg",
+      "version": "1.5.1",
+      "purl": "pkg:cargo/autocfg@1.5.1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "base64@0.22.1",
+      "name": "base64",
+      "version": "0.22.1",
+      "purl": "pkg:cargo/base64@0.22.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "base64@0.23.1",
+      "name": "base64",
+      "version": "0.23.1",
+      "purl": "pkg:cargo/base64@0.23.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "bitflags@2.13.2",
+      "name": "bitflags",
+      "version": "2.13.2",
+      "purl": "pkg:cargo/bitflags@2.13.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "block-buffer@0.10.4",
+      "name": "block-buffer",
+      "version": "0.10.4",
+      "purl": "pkg:cargo/block-buffer@0.10.4",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "bumpalo@3.20.3",
+      "name": "bumpalo",
+      "version": "3.20.3",
+      "purl": "pkg:cargo/bumpalo@3.20.3",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "bytes@1.12.1",
+      "name": "bytes",
+      "version": "1.12.1",
+      "purl": "pkg:cargo/bytes@1.12.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "cc@1.11.1",
+      "name": "cc",
+      "version": "1.11.1",
+      "purl": "pkg:cargo/cc@1.11.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "cfg-if@1.0.5",
+      "name": "cfg-if",
+      "version": "1.0.5",
+      "purl": "pkg:cargo/cfg-if@1.0.5",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "core-foundation@0.10.1",
+      "name": "core-foundation",
+      "version": "0.10.1",
+      "purl": "pkg:cargo/core-foundation@0.10.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "core-foundation-sys@0.8.7",
+      "name": "core-foundation-sys",
+      "version": "0.8.7",
+      "purl": "pkg:cargo/core-foundation-sys@0.8.7",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "cpufeatures@0.2.17",
+      "name": "cpufeatures",
+      "version": "0.2.17",
+      "purl": "pkg:cargo/cpufeatures@0.2.17",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crypto-common@0.1.7",
+      "name": "crypto-common",
+      "version": "0.1.7",
+      "purl": "pkg:cargo/crypto-common@0.1.7",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "digest@0.10.7",
+      "name": "digest",
+      "version": "0.10.7",
+      "purl": "pkg:cargo/digest@0.10.7",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "displaydoc@0.2.7",
+      "name": "displaydoc",
+      "version": "0.2.7",
+      "purl": "pkg:cargo/displaydoc@0.2.7",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "errno@0.3.14",
+      "name": "errno",
+      "version": "0.3.14",
+      "purl": "pkg:cargo/errno@0.3.14",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "fallible-iterator@0.3.0",
+      "name": "fallible-iterator",
+      "version": "0.3.0",
+      "purl": "pkg:cargo/fallible-iterator@0.3.0",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "fallible-streaming-iterator@0.1.9",
+      "name": "fallible-streaming-iterator",
+      "version": "0.1.9",
+      "purl": "pkg:cargo/fallible-streaming-iterator@0.1.9",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "fastrand@2.5.0",
+      "name": "fastrand",
+      "version": "2.5.0",
+      "purl": "pkg:cargo/fastrand@2.5.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "find-msvc-tools@0.1.15",
+      "name": "find-msvc-tools",
+      "version": "0.1.15",
+      "purl": "pkg:cargo/find-msvc-tools@0.1.15",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "foldhash@0.2.0",
+      "name": "foldhash",
+      "version": "0.2.0",
+      "purl": "pkg:cargo/foldhash@0.2.0",
+      "licenses": [
+        {
+          "expression": "Zlib"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "foreign-types@0.3.2",
+      "name": "foreign-types",
+      "version": "0.3.2",
+      "purl": "pkg:cargo/foreign-types@0.3.2",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "foreign-types-shared@0.1.1",
+      "name": "foreign-types-shared",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/foreign-types-shared@0.1.1",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "form_urlencoded@1.2.2",
+      "name": "form_urlencoded",
+      "version": "1.2.2",
+      "purl": "pkg:cargo/form_urlencoded@1.2.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "futures-channel@0.3.34",
+      "name": "futures-channel",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-channel@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b1f9e3d69d39e4862ffed03ed071a76f9a13ba1d9109d355b0f0aa6b15e393c4"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "futures-core@0.3.34",
+      "name": "futures-core",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-core@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "futures-io@0.3.34",
+      "name": "futures-io",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-io@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "futures-sink@0.3.34",
+      "name": "futures-sink",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-sink@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "futures-task@0.3.34",
+      "name": "futures-task",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-task@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "futures-util@0.3.34",
+      "name": "futures-util",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/futures-util@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "generic-array@0.14.7",
+      "name": "generic-array",
+      "version": "0.14.7",
+      "purl": "pkg:cargo/generic-array@0.14.7",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "getrandom@0.4.3",
+      "name": "getrandom",
+      "version": "0.4.3",
+      "purl": "pkg:cargo/getrandom@0.4.3",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "hashbrown@0.16.1",
+      "name": "hashbrown",
+      "version": "0.16.1",
+      "purl": "pkg:cargo/hashbrown@0.16.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "hashlink@0.11.1",
+      "name": "hashlink",
+      "version": "0.11.1",
+      "purl": "pkg:cargo/hashlink@0.11.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "824e001ac4f3012dd16a264bec811403a67ca9deb6c102fc5049b32c4574b35f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "http@1.5.0",
+      "name": "http",
+      "version": "1.5.0",
+      "purl": "pkg:cargo/http@1.5.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "http-body@1.1.0",
+      "name": "http-body",
+      "version": "1.1.0",
+      "purl": "pkg:cargo/http-body@1.1.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "http-body-util@0.1.5",
+      "name": "http-body-util",
+      "version": "0.1.5",
+      "purl": "pkg:cargo/http-body-util@0.1.5",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "httparse@1.10.1",
+      "name": "httparse",
+      "version": "1.10.1",
+      "purl": "pkg:cargo/httparse@1.10.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "hyper@1.12.0",
+      "name": "hyper",
+      "version": "1.12.0",
+      "purl": "pkg:cargo/hyper@1.12.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "hyper-tls@0.6.0",
+      "name": "hyper-tls",
+      "version": "0.6.0",
+      "purl": "pkg:cargo/hyper-tls@0.6.0",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "hyper-util@0.1.21",
+      "name": "hyper-util",
+      "version": "0.1.21",
+      "purl": "pkg:cargo/hyper-util@0.1.21",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ddc03d96684f9226b8a787cdb71488417b53ab5ea8fdb1dac946cb9431cc8bff"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_collections@2.4.0",
+      "name": "icu_collections",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_collections@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fe090a42a0d3140fed8c63263ed1fecc02422cb2f4bfe55cd8de2de1b8e105dd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_locale_core@2.4.0",
+      "name": "icu_locale_core",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_locale_core@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "25d29b57c17c6528d0dc4c2141cfa2d08200465acb537a3909c8b9b8a4a984c0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_normalizer@2.4.0",
+      "name": "icu_normalizer",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_normalizer@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "404a3b8c486f205c87fe7f23ab6894d84a4ad76d6e4671ae1981ba7def87c599"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_normalizer_data@2.4.0",
+      "name": "icu_normalizer_data",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_normalizer_data@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "20f0088bfb7441f7a37fa0c9e20cb1e9cba1cac6b9ce8cd2a6dc44294f8e8cbc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_properties@2.4.0",
+      "name": "icu_properties",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_properties@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2ea83d991c56158f7cf898bf86436c1dfe7c07ee82fe88951f2695c9f37a379f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_properties_data@2.4.0",
+      "name": "icu_properties_data",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_properties_data@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b98f29af82d02b163fe50161388350e743bb3107cc8e8c2f7314cb505faddfcf"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "icu_provider@2.4.0",
+      "name": "icu_provider",
+      "version": "2.4.0",
+      "purl": "pkg:cargo/icu_provider@2.4.0",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "413099315636c588ee8f011190b329b971a09a8fae9d157e01dcae8379468514"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "idna@1.1.0",
+      "name": "idna",
+      "version": "1.1.0",
+      "purl": "pkg:cargo/idna@1.1.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "idna_adapter@1.2.2",
+      "name": "idna_adapter",
+      "version": "1.2.2",
+      "purl": "pkg:cargo/idna_adapter@1.2.2",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "ipnet@2.12.2",
+      "name": "ipnet",
+      "version": "2.12.2",
+      "purl": "pkg:cargo/ipnet@2.12.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "itoa@1.0.19",
+      "name": "itoa",
+      "version": "1.0.19",
+      "purl": "pkg:cargo/itoa@1.0.19",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "js-sys@0.3.107",
+      "name": "js-sys",
+      "version": "0.3.107",
+      "purl": "pkg:cargo/js-sys@0.3.107",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "libc@0.2.191",
+      "name": "libc",
+      "version": "0.2.191",
+      "purl": "pkg:cargo/libc@0.2.191",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "libsqlite3-sys@0.36.0",
+      "name": "libsqlite3-sys",
+      "version": "0.36.0",
+      "purl": "pkg:cargo/libsqlite3-sys@0.36.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "95b4103cffefa72eb8428cb6b47d6627161e51c2739fc5e3b734584157bc642a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "linux-raw-sys@0.12.1",
+      "name": "linux-raw-sys",
+      "version": "0.12.1",
+      "purl": "pkg:cargo/linux-raw-sys@0.12.1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "litemap@0.8.3",
+      "name": "litemap",
+      "version": "0.8.3",
+      "purl": "pkg:cargo/litemap@0.8.3",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "log@0.4.35",
+      "name": "log",
+      "version": "0.4.35",
+      "purl": "pkg:cargo/log@0.4.35",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "memchr@2.8.3",
+      "name": "memchr",
+      "version": "2.8.3",
+      "purl": "pkg:cargo/memchr@2.8.3",
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "minidora-cli@0.7.0-alpha.1",
+      "name": "minidora-cli",
+      "version": "0.7.0-alpha.1",
+      "purl": "pkg:cargo/minidora-cli@0.7.0-alpha.1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "local-workspace"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "minidora-domain@0.7.0-alpha.1",
+      "name": "minidora-domain",
+      "version": "0.7.0-alpha.1",
+      "purl": "pkg:cargo/minidora-domain@0.7.0-alpha.1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "local-workspace"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "bom-ref": "minidora-engine@0.7.0-alpha.1",
+      "name": "minidora-engine",
+      "version": "0.7.0-alpha.1",
+      "purl": "pkg:cargo/minidora-engine@0.7.0-alpha.1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "local-workspace"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "mio@1.2.4",
+      "name": "mio",
+      "version": "1.2.4",
+      "purl": "pkg:cargo/mio@1.2.4",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1788edb87fdc09c7e26304471e2f5be8cdefb1b6930d6e3985fc02ff53bf86ee"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "native-tls@0.2.18",
+      "name": "native-tls",
+      "version": "0.2.18",
+      "purl": "pkg:cargo/native-tls@0.2.18",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "465500e14ea162429d264d44189adc38b199b62b1c21eea9f69e4b73cb03bbf2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "num-bigint@0.4.8",
+      "name": "num-bigint",
+      "version": "0.4.8",
+      "purl": "pkg:cargo/num-bigint@0.4.8",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "num-integer@0.1.47",
+      "name": "num-integer",
+      "version": "0.1.47",
+      "purl": "pkg:cargo/num-integer@0.1.47",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "num-rational@0.4.2",
+      "name": "num-rational",
+      "version": "0.4.2",
+      "purl": "pkg:cargo/num-rational@0.4.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "num-traits@0.2.19",
+      "name": "num-traits",
+      "version": "0.2.19",
+      "purl": "pkg:cargo/num-traits@0.2.19",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "once_cell@1.21.4",
+      "name": "once_cell",
+      "version": "1.21.4",
+      "purl": "pkg:cargo/once_cell@1.21.4",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "openssl@0.10.82",
+      "name": "openssl",
+      "version": "0.10.82",
+      "purl": "pkg:cargo/openssl@0.10.82",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4de8111e94a56adca7ebfe6c365b6d42f99deb69b74b6becacd4204e2f193aa2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "openssl-macros@0.1.1",
+      "name": "openssl-macros",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/openssl-macros@0.1.1",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "openssl-probe@0.2.2",
+      "name": "openssl-probe",
+      "version": "0.2.2",
+      "purl": "pkg:cargo/openssl-probe@0.2.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "openssl-sys@0.9.118",
+      "name": "openssl-sys",
+      "version": "0.9.118",
+      "purl": "pkg:cargo/openssl-sys@0.9.118",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "19c413d6ec9ebaf5e1c829d355cb3e9f783778d700f135be0921d52fce3c60ae"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "ordered-float@2.10.1",
+      "name": "ordered-float",
+      "version": "2.10.1",
+      "purl": "pkg:cargo/ordered-float@2.10.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "68f19d67e5a2795c94e73e0bb1cc1a7edeb2e28efd39e2e1c9b7a40c1108b11c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "percent-encoding@2.3.2",
+      "name": "percent-encoding",
+      "version": "2.3.2",
+      "purl": "pkg:cargo/percent-encoding@2.3.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pin-project-lite@0.2.17",
+      "name": "pin-project-lite",
+      "version": "0.2.17",
+      "purl": "pkg:cargo/pin-project-lite@0.2.17",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg-config@0.3.34",
+      "name": "pkg-config",
+      "version": "0.3.34",
+      "purl": "pkg:cargo/pkg-config@0.3.34",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "potential_utf@0.1.6",
+      "name": "potential_utf",
+      "version": "0.1.6",
+      "purl": "pkg:cargo/potential_utf@0.1.6",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "proc-macro2@1.0.107",
+      "name": "proc-macro2",
+      "version": "1.0.107",
+      "purl": "pkg:cargo/proc-macro2@1.0.107",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "quote@1.0.47",
+      "name": "quote",
+      "version": "1.0.47",
+      "purl": "pkg:cargo/quote@1.0.47",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "r-efi@6.0.0",
+      "name": "r-efi",
+      "version": "6.0.0",
+      "purl": "pkg:cargo/r-efi@6.0.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "regex@1.13.1",
+      "name": "regex",
+      "version": "1.13.1",
+      "purl": "pkg:cargo/regex@1.13.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "regex-automata@0.4.18",
+      "name": "regex-automata",
+      "version": "0.4.18",
+      "purl": "pkg:cargo/regex-automata@0.4.18",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "regex-syntax@0.8.11",
+      "name": "regex-syntax",
+      "version": "0.8.11",
+      "purl": "pkg:cargo/regex-syntax@0.8.11",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "reqwest@0.12.28",
+      "name": "reqwest",
+      "version": "0.12.28",
+      "purl": "pkg:cargo/reqwest@0.12.28",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "rsqlite-vfs@0.1.1",
+      "name": "rsqlite-vfs",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/rsqlite-vfs@0.1.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "rusqlite@0.38.0",
+      "name": "rusqlite",
+      "version": "0.38.0",
+      "purl": "pkg:cargo/rusqlite@0.38.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f1c93dd1c9683b438c392c492109cb702b8090b2bfc8fed6f6e4eb4523f17af3"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "rustix@1.1.6",
+      "name": "rustix",
+      "version": "1.1.6",
+      "purl": "pkg:cargo/rustix@1.1.6",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "rustls-pki-types@1.15.1",
+      "name": "rustls-pki-types",
+      "version": "1.15.1",
+      "purl": "pkg:cargo/rustls-pki-types@1.15.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2f4925028c7eb5d1fcdaf196971378ed9d2c1c4efc7dc5d011256f76c99c0a96"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "rustversion@1.0.23",
+      "name": "rustversion",
+      "version": "1.0.23",
+      "purl": "pkg:cargo/rustversion@1.0.23",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "ryu@1.0.23",
+      "name": "ryu",
+      "version": "1.0.23",
+      "purl": "pkg:cargo/ryu@1.0.23",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR BSL-1.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "schannel@0.1.30",
+      "name": "schannel",
+      "version": "0.1.30",
+      "purl": "pkg:cargo/schannel@0.1.30",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9cb23c424d8ee841bb4d813677ca237e2a610067d594fec130f87d6093495ab5"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "security-framework@3.7.0",
+      "name": "security-framework",
+      "version": "3.7.0",
+      "purl": "pkg:cargo/security-framework@3.7.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "security-framework-sys@2.17.0",
+      "name": "security-framework-sys",
+      "version": "2.17.0",
+      "purl": "pkg:cargo/security-framework-sys@2.17.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "serde@1.0.229",
+      "name": "serde",
+      "version": "1.0.229",
+      "purl": "pkg:cargo/serde@1.0.229",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "serde-value@0.7.0",
+      "name": "serde-value",
+      "version": "0.7.0",
+      "purl": "pkg:cargo/serde-value@0.7.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "serde_core@1.0.229",
+      "name": "serde_core",
+      "version": "1.0.229",
+      "purl": "pkg:cargo/serde_core@1.0.229",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "serde_derive@1.0.229",
+      "name": "serde_derive",
+      "version": "1.0.229",
+      "purl": "pkg:cargo/serde_derive@1.0.229",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "serde_json@1.0.154",
+      "name": "serde_json",
+      "version": "1.0.154",
+      "purl": "pkg:cargo/serde_json@1.0.154",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "serde_urlencoded@0.7.1",
+      "name": "serde_urlencoded",
+      "version": "0.7.1",
+      "purl": "pkg:cargo/serde_urlencoded@0.7.1",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "sha2@0.10.9",
+      "name": "sha2",
+      "version": "0.10.9",
+      "purl": "pkg:cargo/sha2@0.10.9",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "shlex@2.0.1",
+      "name": "shlex",
+      "version": "2.0.1",
+      "purl": "pkg:cargo/shlex@2.0.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "slab@0.4.12",
+      "name": "slab",
+      "version": "0.4.12",
+      "purl": "pkg:cargo/slab@0.4.12",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "smallvec@1.16.5",
+      "name": "smallvec",
+      "version": "1.16.5",
+      "purl": "pkg:cargo/smallvec@1.16.5",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "socket2@0.6.5",
+      "name": "socket2",
+      "version": "0.6.5",
+      "purl": "pkg:cargo/socket2@0.6.5",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "sqlite-wasm-rs@0.5.5",
+      "name": "sqlite-wasm-rs",
+      "version": "0.5.5",
+      "purl": "pkg:cargo/sqlite-wasm-rs@0.5.5",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "stable_deref_trait@1.2.1",
+      "name": "stable_deref_trait",
+      "version": "1.2.1",
+      "purl": "pkg:cargo/stable_deref_trait@1.2.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "syn@2.0.119",
+      "name": "syn",
+      "version": "2.0.119",
+      "purl": "pkg:cargo/syn@2.0.119",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "syn@3.0.10",
+      "name": "syn",
+      "version": "3.0.10",
+      "purl": "pkg:cargo/syn@3.0.10",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "sync_wrapper@1.0.2",
+      "name": "sync_wrapper",
+      "version": "1.0.2",
+      "purl": "pkg:cargo/sync_wrapper@1.0.2",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "synstructure@0.14.0",
+      "name": "synstructure",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/synstructure@0.14.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tempfile@3.27.0",
+      "name": "tempfile",
+      "version": "3.27.0",
+      "purl": "pkg:cargo/tempfile@3.27.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "thiserror@2.0.21",
+      "name": "thiserror",
+      "version": "2.0.21",
+      "purl": "pkg:cargo/thiserror@2.0.21",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "thiserror-impl@2.0.21",
+      "name": "thiserror-impl",
+      "version": "2.0.21",
+      "purl": "pkg:cargo/thiserror-impl@2.0.21",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tinystr@0.8.5",
+      "name": "tinystr",
+      "version": "0.8.5",
+      "purl": "pkg:cargo/tinystr@0.8.5",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "abc840c238154d58f9e86b2792261edfde565a17696e1cda1a449de27979801a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tinyvec@1.13.3",
+      "name": "tinyvec",
+      "version": "1.13.3",
+      "purl": "pkg:cargo/tinyvec@1.13.3",
+      "licenses": [
+        {
+          "expression": "Zlib OR Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tokio@1.54.1",
+      "name": "tokio",
+      "version": "1.54.1",
+      "purl": "pkg:cargo/tokio@1.54.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tokio-native-tls@0.3.1",
+      "name": "tokio-native-tls",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/tokio-native-tls@0.3.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tower@0.5.3",
+      "name": "tower",
+      "version": "0.5.3",
+      "purl": "pkg:cargo/tower@0.5.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tower-http@0.6.11",
+      "name": "tower-http",
+      "version": "0.6.11",
+      "purl": "pkg:cargo/tower-http@0.6.11",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tower-layer@0.3.3",
+      "name": "tower-layer",
+      "version": "0.3.3",
+      "purl": "pkg:cargo/tower-layer@0.3.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tower-service@0.3.3",
+      "name": "tower-service",
+      "version": "0.3.3",
+      "purl": "pkg:cargo/tower-service@0.3.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tracing@0.1.44",
+      "name": "tracing",
+      "version": "0.1.44",
+      "purl": "pkg:cargo/tracing@0.1.44",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "tracing-core@0.1.36",
+      "name": "tracing-core",
+      "version": "0.1.36",
+      "purl": "pkg:cargo/tracing-core@0.1.36",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "try-lock@0.2.5",
+      "name": "try-lock",
+      "version": "0.2.5",
+      "purl": "pkg:cargo/try-lock@0.2.5",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "typenum@1.20.1",
+      "name": "typenum",
+      "version": "1.20.1",
+      "purl": "pkg:cargo/typenum@1.20.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "unicode-ident@1.0.27",
+      "name": "unicode-ident",
+      "version": "1.0.27",
+      "purl": "pkg:cargo/unicode-ident@1.0.27",
+      "licenses": [
+        {
+          "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "unicode-normalization@0.1.26",
+      "name": "unicode-normalization",
+      "version": "0.1.26",
+      "purl": "pkg:cargo/unicode-normalization@0.1.26",
+      "licenses": [
+        {
+          "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "url@2.5.8",
+      "name": "url",
+      "version": "2.5.8",
+      "purl": "pkg:cargo/url@2.5.8",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "utf8_iter@1.1.0",
+      "name": "utf8_iter",
+      "version": "1.1.0",
+      "purl": "pkg:cargo/utf8_iter@1.1.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "af3bd9d3e571c26fcce9d033b87ea5ab061b8d2ffe9b7a5675d810d68f03edf0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "utf_types@1.0.0",
+      "name": "utf_types",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/utf_types@1.0.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "vcpkg@0.2.15",
+      "name": "vcpkg",
+      "version": "0.2.15",
+      "purl": "pkg:cargo/vcpkg@0.2.15",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "version_check@0.9.5",
+      "name": "version_check",
+      "version": "0.9.5",
+      "purl": "pkg:cargo/version_check@0.9.5",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "want@0.3.2",
+      "name": "want",
+      "version": "0.3.2",
+      "purl": "pkg:cargo/want@0.3.2",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ec4cdd0dd910afe868b7ef477227d8d538b46b3075031afee8a9f2acb0a2ed0b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "wasi@0.11.1+wasi-snapshot-preview1",
+      "name": "wasi",
+      "version": "0.11.1+wasi-snapshot-preview1",
+      "purl": "pkg:cargo/wasi@0.11.1+wasi-snapshot-preview1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "wasm-bindgen@0.2.130",
+      "name": "wasm-bindgen",
+      "version": "0.2.130",
+      "purl": "pkg:cargo/wasm-bindgen@0.2.130",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a0181c14ddd6c7b8b0b0132a5f1ea2f32be0d893cd3ea97b6e3b28886b8a3d1c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "wasm-bindgen-futures@0.4.80",
+      "name": "wasm-bindgen-futures",
+      "version": "0.4.80",
+      "purl": "pkg:cargo/wasm-bindgen-futures@0.4.80",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5e14e0327cb5368ad60ccb22d04a9827a693c95a926d8d125e9fa39e0baec501"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "wasm-bindgen-macro@0.2.130",
+      "name": "wasm-bindgen-macro",
+      "version": "0.2.130",
+      "purl": "pkg:cargo/wasm-bindgen-macro@0.2.130",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6e931a02a39abdbf66966fc35902b5ed58344750a70885bed4ebb3d8eaf28ed9"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "wasm-bindgen-macro-support@0.2.130",
+      "name": "wasm-bindgen-macro-support",
+      "version": "0.2.130",
+      "purl": "pkg:cargo/wasm-bindgen-macro-support@0.2.130",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2ca4b54280e455bd831e33a6b8e734baf432fe63fbc35c42ac14ce67a043a53a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "wasm-bindgen-shared@0.2.130",
+      "name": "wasm-bindgen-shared",
+      "version": "0.2.130",
+      "purl": "pkg:cargo/wasm-bindgen-shared@0.2.130",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3b1f9c3798725016c6ee5f2f57869ec0831e8bbc0ab0310a86e787e97f41389e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "web-sys@0.3.107",
+      "name": "web-sys",
+      "version": "0.3.107",
+      "purl": "pkg:cargo/web-sys@0.3.107",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d7d179596ff5ec0f6de4db64d54011bde6289cc49603d3a6e4ce3f329207ab88"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "windows-link@0.2.1",
+      "name": "windows-link",
+      "version": "0.2.1",
+      "purl": "pkg:cargo/windows-link@0.2.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "windows-sys@0.61.2",
+      "name": "windows-sys",
+      "version": "0.61.2",
+      "purl": "pkg:cargo/windows-sys@0.61.2",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "writeable@0.6.4",
+      "name": "writeable",
+      "version": "0.6.4",
+      "purl": "pkg:cargo/writeable@0.6.4",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "yoke@0.8.4",
+      "name": "yoke",
+      "version": "0.8.4",
+      "purl": "pkg:cargo/yoke@0.8.4",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "417ef3fcf6c300b7dbd25c85531a746931c02ad536f3cf4786ed1e88223340b3"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "yoke-derive@0.8.4",
+      "name": "yoke-derive",
+      "version": "0.8.4",
+      "purl": "pkg:cargo/yoke-derive@0.8.4",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zerofrom@0.1.8",
+      "name": "zerofrom",
+      "version": "0.1.8",
+      "purl": "pkg:cargo/zerofrom@0.1.8",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zerofrom-derive@0.1.8",
+      "name": "zerofrom-derive",
+      "version": "0.1.8",
+      "purl": "pkg:cargo/zerofrom-derive@0.1.8",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zeroize@1.9.1",
+      "name": "zeroize",
+      "version": "1.9.1",
+      "purl": "pkg:cargo/zeroize@1.9.1",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zerotrie@0.2.5",
+      "name": "zerotrie",
+      "version": "0.2.5",
+      "purl": "pkg:cargo/zerotrie@0.2.5",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4ea269c3bd32f0a32c321907a2ae912ba6f4649bb0fc764a15627e99a7095a3f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zerovec@0.11.9",
+      "name": "zerovec",
+      "version": "0.11.9",
+      "purl": "pkg:cargo/zerovec@0.11.9",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f58a2799cfe9a1670c7ea8edbd52ef8edb93cb37a7f83bf31ba9e35d9dae6a40"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zerovec-derive@0.11.7",
+      "name": "zerovec-derive",
+      "version": "0.11.7",
+      "purl": "pkg:cargo/zerovec-derive@0.11.7",
+      "licenses": [
+        {
+          "expression": "Unicode-3.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c3743ddbf47738d929cd1ae2e199d40d0162979dfe31aef8ae646d2bf00bf97a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zmij@1.0.23",
+      "name": "zmij",
+      "version": "1.0.23",
+      "purl": "pkg:cargo/zmij@1.0.23",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+        }
+      ],
+      "properties": [
+        {
+          "name": "minidora:source-kind",
+          "value": "registry"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "aho-corasick@1.1.5",
+      "dependsOn": [
+        "memchr@2.8.3"
+      ]
+    },
+    {
+      "ref": "atomic-waker@1.1.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "autocfg@1.5.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "base64@0.22.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "base64@0.23.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "bitflags@2.13.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "block-buffer@0.10.4",
+      "dependsOn": [
+        "generic-array@0.14.7"
+      ]
+    },
+    {
+      "ref": "bumpalo@3.20.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "bytes@1.12.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "cc@1.11.1",
+      "dependsOn": [
+        "find-msvc-tools@0.1.15",
+        "shlex@2.0.1"
+      ]
+    },
+    {
+      "ref": "cfg-if@1.0.5",
+      "dependsOn": []
+    },
+    {
+      "ref": "core-foundation-sys@0.8.7",
+      "dependsOn": []
+    },
+    {
+      "ref": "core-foundation@0.10.1",
+      "dependsOn": [
+        "core-foundation-sys@0.8.7",
+        "libc@0.2.191"
+      ]
+    },
+    {
+      "ref": "cpufeatures@0.2.17",
+      "dependsOn": [
+        "libc@0.2.191"
+      ]
+    },
+    {
+      "ref": "crypto-common@0.1.7",
+      "dependsOn": [
+        "generic-array@0.14.7",
+        "typenum@1.20.1"
+      ]
+    },
+    {
+      "ref": "digest@0.10.7",
+      "dependsOn": [
+        "block-buffer@0.10.4",
+        "crypto-common@0.1.7"
+      ]
+    },
+    {
+      "ref": "displaydoc@0.2.7",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10"
+      ]
+    },
+    {
+      "ref": "errno@0.3.14",
+      "dependsOn": [
+        "libc@0.2.191",
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "fallible-iterator@0.3.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "fallible-streaming-iterator@0.1.9",
+      "dependsOn": []
+    },
+    {
+      "ref": "fastrand@2.5.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "find-msvc-tools@0.1.15",
+      "dependsOn": []
+    },
+    {
+      "ref": "foldhash@0.2.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "foreign-types-shared@0.1.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "foreign-types@0.3.2",
+      "dependsOn": [
+        "foreign-types-shared@0.1.1"
+      ]
+    },
+    {
+      "ref": "form_urlencoded@1.2.2",
+      "dependsOn": [
+        "percent-encoding@2.3.2"
+      ]
+    },
+    {
+      "ref": "futures-channel@0.3.34",
+      "dependsOn": [
+        "futures-core@0.3.34",
+        "futures-sink@0.3.34"
+      ]
+    },
+    {
+      "ref": "futures-core@0.3.34",
+      "dependsOn": []
+    },
+    {
+      "ref": "futures-io@0.3.34",
+      "dependsOn": []
+    },
+    {
+      "ref": "futures-sink@0.3.34",
+      "dependsOn": []
+    },
+    {
+      "ref": "futures-task@0.3.34",
+      "dependsOn": []
+    },
+    {
+      "ref": "futures-util@0.3.34",
+      "dependsOn": [
+        "futures-core@0.3.34",
+        "futures-io@0.3.34",
+        "futures-sink@0.3.34",
+        "futures-task@0.3.34",
+        "memchr@2.8.3",
+        "pin-project-lite@0.2.17",
+        "slab@0.4.12"
+      ]
+    },
+    {
+      "ref": "generic-array@0.14.7",
+      "dependsOn": [
+        "typenum@1.20.1",
+        "version_check@0.9.5"
+      ]
+    },
+    {
+      "ref": "getrandom@0.4.3",
+      "dependsOn": [
+        "cfg-if@1.0.5",
+        "libc@0.2.191",
+        "r-efi@6.0.0"
+      ]
+    },
+    {
+      "ref": "hashbrown@0.16.1",
+      "dependsOn": [
+        "foldhash@0.2.0"
+      ]
+    },
+    {
+      "ref": "hashlink@0.11.1",
+      "dependsOn": [
+        "hashbrown@0.16.1"
+      ]
+    },
+    {
+      "ref": "http-body-util@0.1.5",
+      "dependsOn": [
+        "bytes@1.12.1",
+        "futures-core@0.3.34",
+        "http-body@1.1.0",
+        "http@1.5.0",
+        "pin-project-lite@0.2.17"
+      ]
+    },
+    {
+      "ref": "http-body@1.1.0",
+      "dependsOn": [
+        "bytes@1.12.1",
+        "http@1.5.0"
+      ]
+    },
+    {
+      "ref": "http@1.5.0",
+      "dependsOn": [
+        "bytes@1.12.1",
+        "itoa@1.0.19"
+      ]
+    },
+    {
+      "ref": "httparse@1.10.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "hyper-tls@0.6.0",
+      "dependsOn": [
+        "bytes@1.12.1",
+        "http-body-util@0.1.5",
+        "hyper-util@0.1.21",
+        "hyper@1.12.0",
+        "native-tls@0.2.18",
+        "tokio-native-tls@0.3.1",
+        "tokio@1.54.1",
+        "tower-service@0.3.3"
+      ]
+    },
+    {
+      "ref": "hyper-util@0.1.21",
+      "dependsOn": [
+        "base64@0.23.1",
+        "bytes@1.12.1",
+        "futures-channel@0.3.34",
+        "futures-util@0.3.34",
+        "http-body@1.1.0",
+        "http@1.5.0",
+        "httparse@1.10.1",
+        "hyper@1.12.0",
+        "ipnet@2.12.2",
+        "libc@0.2.191",
+        "percent-encoding@2.3.2",
+        "pin-project-lite@0.2.17",
+        "socket2@0.6.5",
+        "tokio@1.54.1",
+        "tower-service@0.3.3",
+        "tracing@0.1.44"
+      ]
+    },
+    {
+      "ref": "hyper@1.12.0",
+      "dependsOn": [
+        "atomic-waker@1.1.2",
+        "bytes@1.12.1",
+        "futures-core@0.3.34",
+        "http-body@1.1.0",
+        "http@1.5.0",
+        "httparse@1.10.1",
+        "itoa@1.0.19",
+        "pin-project-lite@0.2.17",
+        "smallvec@1.16.5",
+        "tokio@1.54.1",
+        "want@0.3.2"
+      ]
+    },
+    {
+      "ref": "icu_collections@2.4.0",
+      "dependsOn": [
+        "displaydoc@0.2.7",
+        "potential_utf@0.1.6",
+        "utf8_iter@1.1.0",
+        "yoke@0.8.4",
+        "zerofrom@0.1.8",
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "icu_locale_core@2.4.0",
+      "dependsOn": [
+        "displaydoc@0.2.7",
+        "litemap@0.8.3",
+        "tinystr@0.8.5",
+        "writeable@0.6.4",
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "icu_normalizer@2.4.0",
+      "dependsOn": [
+        "icu_collections@2.4.0",
+        "icu_normalizer_data@2.4.0",
+        "icu_properties@2.4.0",
+        "icu_provider@2.4.0",
+        "smallvec@1.16.5",
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "icu_normalizer_data@2.4.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "icu_properties@2.4.0",
+      "dependsOn": [
+        "displaydoc@0.2.7",
+        "icu_collections@2.4.0",
+        "icu_locale_core@2.4.0",
+        "icu_properties_data@2.4.0",
+        "icu_provider@2.4.0",
+        "zerotrie@0.2.5",
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "icu_properties_data@2.4.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "icu_provider@2.4.0",
+      "dependsOn": [
+        "displaydoc@0.2.7",
+        "icu_locale_core@2.4.0",
+        "writeable@0.6.4",
+        "yoke@0.8.4",
+        "zerofrom@0.1.8",
+        "zerotrie@0.2.5",
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "idna@1.1.0",
+      "dependsOn": [
+        "idna_adapter@1.2.2",
+        "smallvec@1.16.5",
+        "utf8_iter@1.1.0"
+      ]
+    },
+    {
+      "ref": "idna_adapter@1.2.2",
+      "dependsOn": [
+        "icu_normalizer@2.4.0",
+        "icu_properties@2.4.0"
+      ]
+    },
+    {
+      "ref": "ipnet@2.12.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "itoa@1.0.19",
+      "dependsOn": []
+    },
+    {
+      "ref": "js-sys@0.3.107",
+      "dependsOn": [
+        "cfg-if@1.0.5",
+        "futures-util@0.3.34",
+        "wasm-bindgen@0.2.130"
+      ]
+    },
+    {
+      "ref": "libc@0.2.191",
+      "dependsOn": []
+    },
+    {
+      "ref": "libsqlite3-sys@0.36.0",
+      "dependsOn": [
+        "cc@1.11.1",
+        "pkg-config@0.3.34",
+        "vcpkg@0.2.15"
+      ]
+    },
+    {
+      "ref": "linux-raw-sys@0.12.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "litemap@0.8.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "log@0.4.35",
+      "dependsOn": []
+    },
+    {
+      "ref": "memchr@2.8.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "minidora-cli@0.7.0-alpha.1",
+      "dependsOn": [
+        "minidora-domain@0.7.0-alpha.1",
+        "minidora-engine@0.7.0-alpha.1",
+        "serde@1.0.229",
+        "serde_json@1.0.154"
+      ]
+    },
+    {
+      "ref": "minidora-domain@0.7.0-alpha.1",
+      "dependsOn": [
+        "serde-value@0.7.0",
+        "serde@1.0.229",
+        "serde_json@1.0.154",
+        "sha2@0.10.9",
+        "thiserror@2.0.21"
+      ]
+    },
+    {
+      "ref": "minidora-engine@0.7.0-alpha.1",
+      "dependsOn": [
+        "minidora-domain@0.7.0-alpha.1",
+        "num-bigint@0.4.8",
+        "num-rational@0.4.2",
+        "num-traits@0.2.19",
+        "regex@1.13.1",
+        "reqwest@0.12.28",
+        "rusqlite@0.38.0",
+        "serde@1.0.229",
+        "serde_json@1.0.154",
+        "sha2@0.10.9",
+        "thiserror@2.0.21",
+        "unicode-normalization@0.1.26",
+        "url@2.5.8"
+      ]
+    },
+    {
+      "ref": "mio@1.2.4",
+      "dependsOn": [
+        "libc@0.2.191",
+        "wasi@0.11.1+wasi-snapshot-preview1",
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "native-tls@0.2.18",
+      "dependsOn": [
+        "libc@0.2.191",
+        "log@0.4.35",
+        "openssl-probe@0.2.2",
+        "openssl-sys@0.9.118",
+        "openssl@0.10.82",
+        "schannel@0.1.30",
+        "security-framework-sys@2.17.0",
+        "security-framework@3.7.0",
+        "tempfile@3.27.0"
+      ]
+    },
+    {
+      "ref": "num-bigint@0.4.8",
+      "dependsOn": [
+        "num-integer@0.1.47",
+        "num-traits@0.2.19",
+        "serde@1.0.229"
+      ]
+    },
+    {
+      "ref": "num-integer@0.1.47",
+      "dependsOn": [
+        "num-traits@0.2.19"
+      ]
+    },
+    {
+      "ref": "num-rational@0.4.2",
+      "dependsOn": [
+        "num-bigint@0.4.8",
+        "num-integer@0.1.47",
+        "num-traits@0.2.19",
+        "serde@1.0.229"
+      ]
+    },
+    {
+      "ref": "num-traits@0.2.19",
+      "dependsOn": [
+        "autocfg@1.5.1"
+      ]
+    },
+    {
+      "ref": "once_cell@1.21.4",
+      "dependsOn": []
+    },
+    {
+      "ref": "openssl-macros@0.1.1",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@2.0.119"
+      ]
+    },
+    {
+      "ref": "openssl-probe@0.2.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "openssl-sys@0.9.118",
+      "dependsOn": [
+        "cc@1.11.1",
+        "libc@0.2.191",
+        "pkg-config@0.3.34",
+        "vcpkg@0.2.15"
+      ]
+    },
+    {
+      "ref": "openssl@0.10.82",
+      "dependsOn": [
+        "bitflags@2.13.2",
+        "cfg-if@1.0.5",
+        "foreign-types@0.3.2",
+        "libc@0.2.191",
+        "openssl-macros@0.1.1",
+        "openssl-sys@0.9.118"
+      ]
+    },
+    {
+      "ref": "ordered-float@2.10.1",
+      "dependsOn": [
+        "num-traits@0.2.19"
+      ]
+    },
+    {
+      "ref": "percent-encoding@2.3.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "pin-project-lite@0.2.17",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg-config@0.3.34",
+      "dependsOn": []
+    },
+    {
+      "ref": "potential_utf@0.1.6",
+      "dependsOn": [
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "proc-macro2@1.0.107",
+      "dependsOn": [
+        "unicode-ident@1.0.27"
+      ]
+    },
+    {
+      "ref": "quote@1.0.47",
+      "dependsOn": [
+        "proc-macro2@1.0.107"
+      ]
+    },
+    {
+      "ref": "r-efi@6.0.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "regex-automata@0.4.18",
+      "dependsOn": [
+        "aho-corasick@1.1.5",
+        "memchr@2.8.3",
+        "regex-syntax@0.8.11"
+      ]
+    },
+    {
+      "ref": "regex-syntax@0.8.11",
+      "dependsOn": []
+    },
+    {
+      "ref": "regex@1.13.1",
+      "dependsOn": [
+        "aho-corasick@1.1.5",
+        "memchr@2.8.3",
+        "regex-automata@0.4.18",
+        "regex-syntax@0.8.11"
+      ]
+    },
+    {
+      "ref": "reqwest@0.12.28",
+      "dependsOn": [
+        "base64@0.22.1",
+        "bytes@1.12.1",
+        "futures-channel@0.3.34",
+        "futures-core@0.3.34",
+        "futures-util@0.3.34",
+        "http-body-util@0.1.5",
+        "http-body@1.1.0",
+        "http@1.5.0",
+        "hyper-tls@0.6.0",
+        "hyper-util@0.1.21",
+        "hyper@1.12.0",
+        "js-sys@0.3.107",
+        "log@0.4.35",
+        "native-tls@0.2.18",
+        "percent-encoding@2.3.2",
+        "pin-project-lite@0.2.17",
+        "rustls-pki-types@1.15.1",
+        "serde@1.0.229",
+        "serde_json@1.0.154",
+        "serde_urlencoded@0.7.1",
+        "sync_wrapper@1.0.2",
+        "tokio-native-tls@0.3.1",
+        "tokio@1.54.1",
+        "tower-http@0.6.11",
+        "tower-service@0.3.3",
+        "tower@0.5.3",
+        "url@2.5.8",
+        "wasm-bindgen-futures@0.4.80",
+        "wasm-bindgen@0.2.130",
+        "web-sys@0.3.107"
+      ]
+    },
+    {
+      "ref": "rsqlite-vfs@0.1.1",
+      "dependsOn": [
+        "hashbrown@0.16.1",
+        "thiserror@2.0.21"
+      ]
+    },
+    {
+      "ref": "rusqlite@0.38.0",
+      "dependsOn": [
+        "bitflags@2.13.2",
+        "fallible-iterator@0.3.0",
+        "fallible-streaming-iterator@0.1.9",
+        "hashlink@0.11.1",
+        "libsqlite3-sys@0.36.0",
+        "smallvec@1.16.5",
+        "sqlite-wasm-rs@0.5.5"
+      ]
+    },
+    {
+      "ref": "rustix@1.1.6",
+      "dependsOn": [
+        "bitflags@2.13.2",
+        "errno@0.3.14",
+        "libc@0.2.191",
+        "linux-raw-sys@0.12.1",
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "rustls-pki-types@1.15.1",
+      "dependsOn": [
+        "zeroize@1.9.1"
+      ]
+    },
+    {
+      "ref": "rustversion@1.0.23",
+      "dependsOn": []
+    },
+    {
+      "ref": "ryu@1.0.23",
+      "dependsOn": []
+    },
+    {
+      "ref": "schannel@0.1.30",
+      "dependsOn": [
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "security-framework-sys@2.17.0",
+      "dependsOn": [
+        "core-foundation-sys@0.8.7",
+        "libc@0.2.191"
+      ]
+    },
+    {
+      "ref": "security-framework@3.7.0",
+      "dependsOn": [
+        "bitflags@2.13.2",
+        "core-foundation-sys@0.8.7",
+        "core-foundation@0.10.1",
+        "libc@0.2.191",
+        "security-framework-sys@2.17.0"
+      ]
+    },
+    {
+      "ref": "serde-value@0.7.0",
+      "dependsOn": [
+        "ordered-float@2.10.1",
+        "serde@1.0.229"
+      ]
+    },
+    {
+      "ref": "serde@1.0.229",
+      "dependsOn": [
+        "serde_core@1.0.229",
+        "serde_derive@1.0.229"
+      ]
+    },
+    {
+      "ref": "serde_core@1.0.229",
+      "dependsOn": [
+        "serde_derive@1.0.229"
+      ]
+    },
+    {
+      "ref": "serde_derive@1.0.229",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10"
+      ]
+    },
+    {
+      "ref": "serde_json@1.0.154",
+      "dependsOn": [
+        "itoa@1.0.19",
+        "memchr@2.8.3",
+        "serde@1.0.229",
+        "serde_core@1.0.229",
+        "zmij@1.0.23"
+      ]
+    },
+    {
+      "ref": "serde_urlencoded@0.7.1",
+      "dependsOn": [
+        "form_urlencoded@1.2.2",
+        "itoa@1.0.19",
+        "ryu@1.0.23",
+        "serde@1.0.229"
+      ]
+    },
+    {
+      "ref": "sha2@0.10.9",
+      "dependsOn": [
+        "cfg-if@1.0.5",
+        "cpufeatures@0.2.17",
+        "digest@0.10.7"
+      ]
+    },
+    {
+      "ref": "shlex@2.0.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "slab@0.4.12",
+      "dependsOn": []
+    },
+    {
+      "ref": "smallvec@1.16.5",
+      "dependsOn": []
+    },
+    {
+      "ref": "socket2@0.6.5",
+      "dependsOn": [
+        "libc@0.2.191",
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "sqlite-wasm-rs@0.5.5",
+      "dependsOn": [
+        "cc@1.11.1",
+        "js-sys@0.3.107",
+        "rsqlite-vfs@0.1.1",
+        "wasm-bindgen@0.2.130"
+      ]
+    },
+    {
+      "ref": "stable_deref_trait@1.2.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "syn@2.0.119",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "unicode-ident@1.0.27"
+      ]
+    },
+    {
+      "ref": "syn@3.0.10",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "unicode-ident@1.0.27"
+      ]
+    },
+    {
+      "ref": "sync_wrapper@1.0.2",
+      "dependsOn": [
+        "futures-core@0.3.34"
+      ]
+    },
+    {
+      "ref": "synstructure@0.14.0",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10"
+      ]
+    },
+    {
+      "ref": "tempfile@3.27.0",
+      "dependsOn": [
+        "fastrand@2.5.0",
+        "getrandom@0.4.3",
+        "once_cell@1.21.4",
+        "rustix@1.1.6",
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "thiserror-impl@2.0.21",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10"
+      ]
+    },
+    {
+      "ref": "thiserror@2.0.21",
+      "dependsOn": [
+        "thiserror-impl@2.0.21"
+      ]
+    },
+    {
+      "ref": "tinystr@0.8.5",
+      "dependsOn": [
+        "displaydoc@0.2.7",
+        "zerovec@0.11.9"
+      ]
+    },
+    {
+      "ref": "tinyvec@1.13.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "tokio-native-tls@0.3.1",
+      "dependsOn": [
+        "native-tls@0.2.18",
+        "tokio@1.54.1"
+      ]
+    },
+    {
+      "ref": "tokio@1.54.1",
+      "dependsOn": [
+        "bytes@1.12.1",
+        "libc@0.2.191",
+        "mio@1.2.4",
+        "pin-project-lite@0.2.17",
+        "socket2@0.6.5",
+        "windows-sys@0.61.2"
+      ]
+    },
+    {
+      "ref": "tower-http@0.6.11",
+      "dependsOn": [
+        "bitflags@2.13.2",
+        "bytes@1.12.1",
+        "futures-util@0.3.34",
+        "http-body@1.1.0",
+        "http@1.5.0",
+        "pin-project-lite@0.2.17",
+        "tower-layer@0.3.3",
+        "tower-service@0.3.3",
+        "tower@0.5.3",
+        "url@2.5.8"
+      ]
+    },
+    {
+      "ref": "tower-layer@0.3.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "tower-service@0.3.3",
+      "dependsOn": []
+    },
+    {
+      "ref": "tower@0.5.3",
+      "dependsOn": [
+        "futures-core@0.3.34",
+        "futures-util@0.3.34",
+        "pin-project-lite@0.2.17",
+        "sync_wrapper@1.0.2",
+        "tokio@1.54.1",
+        "tower-layer@0.3.3",
+        "tower-service@0.3.3"
+      ]
+    },
+    {
+      "ref": "tracing-core@0.1.36",
+      "dependsOn": [
+        "once_cell@1.21.4"
+      ]
+    },
+    {
+      "ref": "tracing@0.1.44",
+      "dependsOn": [
+        "pin-project-lite@0.2.17",
+        "tracing-core@0.1.36"
+      ]
+    },
+    {
+      "ref": "try-lock@0.2.5",
+      "dependsOn": []
+    },
+    {
+      "ref": "typenum@1.20.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "unicode-ident@1.0.27",
+      "dependsOn": []
+    },
+    {
+      "ref": "unicode-normalization@0.1.26",
+      "dependsOn": [
+        "tinyvec@1.13.3"
+      ]
+    },
+    {
+      "ref": "url@2.5.8",
+      "dependsOn": [
+        "form_urlencoded@1.2.2",
+        "idna@1.1.0",
+        "percent-encoding@2.3.2",
+        "serde@1.0.229"
+      ]
+    },
+    {
+      "ref": "utf8_iter@1.1.0",
+      "dependsOn": [
+        "utf_types@1.0.0"
+      ]
+    },
+    {
+      "ref": "utf_types@1.0.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "vcpkg@0.2.15",
+      "dependsOn": []
+    },
+    {
+      "ref": "version_check@0.9.5",
+      "dependsOn": []
+    },
+    {
+      "ref": "want@0.3.2",
+      "dependsOn": [
+        "try-lock@0.2.5"
+      ]
+    },
+    {
+      "ref": "wasi@0.11.1+wasi-snapshot-preview1",
+      "dependsOn": []
+    },
+    {
+      "ref": "wasm-bindgen-futures@0.4.80",
+      "dependsOn": [
+        "js-sys@0.3.107",
+        "tokio@1.54.1",
+        "wasm-bindgen@0.2.130"
+      ]
+    },
+    {
+      "ref": "wasm-bindgen-macro-support@0.2.130",
+      "dependsOn": [
+        "bumpalo@3.20.3",
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10",
+        "wasm-bindgen-shared@0.2.130"
+      ]
+    },
+    {
+      "ref": "wasm-bindgen-macro@0.2.130",
+      "dependsOn": [
+        "quote@1.0.47",
+        "wasm-bindgen-macro-support@0.2.130"
+      ]
+    },
+    {
+      "ref": "wasm-bindgen-shared@0.2.130",
+      "dependsOn": [
+        "unicode-ident@1.0.27"
+      ]
+    },
+    {
+      "ref": "wasm-bindgen@0.2.130",
+      "dependsOn": [
+        "cfg-if@1.0.5",
+        "rustversion@1.0.23",
+        "wasm-bindgen-macro@0.2.130",
+        "wasm-bindgen-shared@0.2.130"
+      ]
+    },
+    {
+      "ref": "web-sys@0.3.107",
+      "dependsOn": [
+        "js-sys@0.3.107",
+        "wasm-bindgen@0.2.130"
+      ]
+    },
+    {
+      "ref": "windows-link@0.2.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "windows-sys@0.61.2",
+      "dependsOn": [
+        "windows-link@0.2.1"
+      ]
+    },
+    {
+      "ref": "writeable@0.6.4",
+      "dependsOn": []
+    },
+    {
+      "ref": "yoke-derive@0.8.4",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10",
+        "synstructure@0.14.0"
+      ]
+    },
+    {
+      "ref": "yoke@0.8.4",
+      "dependsOn": [
+        "stable_deref_trait@1.2.1",
+        "yoke-derive@0.8.4",
+        "zerofrom@0.1.8"
+      ]
+    },
+    {
+      "ref": "zerofrom-derive@0.1.8",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10",
+        "synstructure@0.14.0"
+      ]
+    },
+    {
+      "ref": "zerofrom@0.1.8",
+      "dependsOn": [
+        "zerofrom-derive@0.1.8"
+      ]
+    },
+    {
+      "ref": "zeroize@1.9.1",
+      "dependsOn": []
+    },
+    {
+      "ref": "zerotrie@0.2.5",
+      "dependsOn": [
+        "displaydoc@0.2.7",
+        "yoke@0.8.4",
+        "zerofrom@0.1.8"
+      ]
+    },
+    {
+      "ref": "zerovec-derive@0.11.7",
+      "dependsOn": [
+        "proc-macro2@1.0.107",
+        "quote@1.0.47",
+        "syn@3.0.10"
+      ]
+    },
+    {
+      "ref": "zerovec@0.11.9",
+      "dependsOn": [
+        "yoke@0.8.4",
+        "zerofrom@0.1.8",
+        "zerovec-derive@0.11.7"
+      ]
+    },
+    {
+      "ref": "zmij@1.0.23",
+      "dependsOn": []
+    }
+  ]
+}

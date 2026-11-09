@@ -1,0 +1,16 @@
+[package]
+name = "minidora-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "minidora-rust"
+path = "src/main.rs"
+
+[dependencies]
+minidora-domain.workspace = true
+minidora-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true

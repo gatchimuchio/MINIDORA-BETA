@@ -1,0 +1,94 @@
+{
+  "status": "DEVELOPMENT_ALPHA_NOT_FULL_ACCEPTANCE",
+  "version": "0.7.0-alpha.1",
+  "recorded_at": "2026-11-09T16:46:03.706367+09:00",
+  "base_commit": "1c546e77007afa0a9eeb3a44f07da99d84c383eb",
+  "source_snapshot_sha256": "14036e4be1837fe4bcd3de05c4e4ef757ed247c542d69c8a03bbbef0900842ee",
+  "binary_sha256": "12f410eb52c3ce8aac53dce21ca0ed2c506263fbe35696e9a5f723bc78de87b4",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "rust_toolchain": "1.99.1",
+  "commands": {
+    "cargo_metadata_locked": "PASS; 155 locked packages with declared licenses",
+    "cargo_fmt_all_check": "PASS",
+    "cargo_check_workspace_all_targets_locked": "PASS",
+    "cargo_clippy_workspace_all_targets_locked_D_warnings": "PASS",
+    "cargo_test_workspace_all_features_locked": "PASS",
+    "cargo_build_workspace_locked": "PASS",
+    "combined_python_and_rust_install_script": "PASS"
+  },
+  "rust_test_suites": [
+    {
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 89,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "rust_tests_passed": 123,
+  "rust_tests_failed": 0,
+  "rust_tests_ignored": 0,
+  "zero_test_doc_suites": 2,
+  "frozen_beta_selected_tests": {
+    "passed": 313,
+    "failed": 0,
+    "separate_predecessor_not_rust_acceptance": true
+  },
+  "local_tls_fixture": {
+    "passed": 8,
+    "external_forwarding": false,
+    "live_benchmark": false,
+    "evidence": "TLS_LOCAL_FIXTURE_FINAL.json"
+  },
+  "domain_target_vector": {
+    "native": "x86_64-unknown-linux-gnu",
+    "virtual": "wasm32-wasip1 Node24 WASI",
+    "result": "equal; independent Python canonical/hash check passed",
+    "coverage": "domain canonical record and lifecycle only",
+    "evidence": "target-conformance.json"
+  },
+  "original_files_changed": false,
+  "broad_required_populations": {
+    "current_capability_obligations": 93,
+    "full_acceptance": "UNVERIFIED",
+    "semantic_route_inventory": "INCOMPLETE; baseline metadata alone is not semantic audit",
+    "quality_24_12_10_30": "individual cases and rubric not located; clarification pending",
+    "GPQA198_LIVE_ONLY": "NOT_RUN; public provider connectivity blocked and full benchmark prerequisites not established",
+    "all_upstream359_test_paths": "identity accounted for, full semantic applicability/migration not complete"
+  },
+  "external_blocks": {
+    "public_search_hosts": "CONNECT403 on en.wikipedia.org, api.crossref.org, www.ebi.ac.uk; ja.wikipedia.org absent from effective policy",
+    "environment_config_draft": "INVALID_ARGUMENT; install_script/start_skill persistence unconfirmed; tested copies retained under tools/"
+  },
+  "material_implementation_gaps": [
+    "General unrestricted language understanding, novel writing/code/science/research are not fully implemented by the limited declarative grammar",
+    "Full source-to-Rust semantic/compatibility review and equivalent regression population incomplete",
+    "Remote delivery/modality/translation/application providers not connected",
+    "Long-history bounded working memory, protected-data encryption and full power-loss matrix not accepted",
+    "Full Core cross-backend equivalence and Windows/macOS/8GB physical validation not performed"
+  ],
+  "publication": "No remote push, release, deployment or environment publication performed"
+}

@@ -1,0 +1,530 @@
+{
+  "source_snapshot": "14036e4be1837fe4bcd3de05c4e4ef757ed247c542d69c8a03bbbef0900842ee",
+  "command": "cargo test --workspace --all-features --locked",
+  "suites": [
+    {
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 89,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "executed": [
+    {
+      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::request_flags_can_be_escaped",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::output_path_does_not_grant_write_authority",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::server_actor_and_grants_cannot_be_claimed_by_request",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::terminal_codes_are_distinct_and_nonterminal_is_failure",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::transport_enforces_bounded_headers_and_body",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::transport_rejects_duplicate_length_and_transfer_encoding",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::transport_rejects_wrong_host_origin_and_token",
+      "outcome": "ok"
+    },
+    {
+      "test": "another_actor_cannot_inspect_known_case_identity",
+      "outcome": "ok"
+    },
+    {
+      "test": "cancelled_effect_reconciliation_preserves_case_cancel_with_no_new_goal",
+      "outcome": "ok"
+    },
+    {
+      "test": "authenticated_http_and_cli_share_actual_case_result",
+      "outcome": "ok"
+    },
+    {
+      "test": "calculation_followup_and_explicit_retry_survive_process_restarts",
+      "outcome": "ok"
+    },
+    {
+      "test": "csv_selection_retains_exact_source_newlines_and_decoded_cell_content",
+      "outcome": "ok"
+    },
+    {
+      "test": "compound_conditions_and_extra_deliveries_are_not_partially_committed",
+      "outcome": "ok"
+    },
+    {
+      "test": "exact_replace_count_failure_does_not_create_a_partial_file",
+      "outcome": "ok"
+    },
+    {
+      "test": "decimal_statistics_are_exact_and_retain_actual_observations",
+      "outcome": "ok"
+    },
+    {
+      "test": "existing_file_conflict_preserves_bytes_and_does_not_close_adopted_goal",
+      "outcome": "ok"
+    },
+    {
+      "test": "input_limit_failure_retains_original_identity_and_durable_terminal_result",
+      "outcome": "ok"
+    },
+    {
+      "test": "identity_collision_does_not_overwrite_original_result",
+      "outcome": "ok"
+    },
+    {
+      "test": "insufficient_action_budget_cannot_reach_a_requested_file_effect",
+      "outcome": "ok"
+    },
+    {
+      "test": "invalid_relation_stops_durably_without_wedging_later_inputs",
+      "outcome": "ok"
+    },
+    {
+      "test": "metadata_search_without_read_grant_is_a_typed_stop_without_an_answer",
+      "outcome": "ok"
+    },
+    {
+      "test": "public_bind_is_rejected_before_service_start",
+      "outcome": "ok"
+    },
+    {
+      "test": "reconcile_of_committed_file_reuses_original_result_without_writing_again",
+      "outcome": "ok"
+    },
+    {
+      "test": "agreeing_examples_do_not_promote_a_universal_empirical_rule",
+      "outcome": "ok"
+    },
+    {
+      "test": "unsupported_input_is_suspension_and_not_an_empty_success",
+      "outcome": "ok"
+    },
+    {
+      "test": "requested_file_needs_separate_exact_permission_and_real_receipt",
+      "outcome": "ok"
+    },
+    {
+      "test": "linear_equation_result_preserves_matrix_and_exact_solution",
+      "outcome": "ok"
+    },
+    {
+      "test": "conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::completion_and_effect_transitions_require_intermediate_observations",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::nonexact_numbers_cannot_silently_become_null_or_facts",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::canonical_records_preserve_sources_and_use_stable_key_order",
+      "outcome": "ok"
+    },
+    {
+      "test": "envelope_tests::unrepresented_requested_effects_are_not_ignored_by_frontends",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::absent_noop_empty_or_expanding_edits_stop",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::exact_edit_count_and_unicode_unchanged_regions",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::explicit_headerless_index_and_final_empty_cell",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::malformed_csv_never_uses_a_valid_prefix",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::csv_json_roundtrip_preserves_string_types_and_source",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::json_cells_are_strict_strings_with_exact_token_spans",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::formula_export_is_withheld_without_changing_original",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::rfc_quote_and_source_byte_spans",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::structured_document_tests::document_body_retains_crlf_trailing_newline_and_instruction_like_text",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::structured_document_tests::document_headers_never_discard_extra_effects",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::mathematics_and_source_tests::compound_research_request_cannot_commit_as_a_body_quote",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::structured_document_tests::metadata_query_has_explicit_provider_and_data_boundary",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::symbolic_and_clause_tests::english_copula_capture_groups_preserve_subject_object_and_polarity",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::mathematics_and_source_tests::matrix_parser_does_not_discard_residuals_or_malformed_arrays",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::tests::context_reference_requires_real_result",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::tests::relations_preserve_negation_scope_and_variables",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::symbolic_and_clause_tests::symbolic_grammar_has_explicit_operation_and_variable",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::lossless_tests::successor_distribution_is_exact_and_comparison_boundary_is_explicit",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::lossless_tests::successor_projection_preserves_unknown_unicode_and_invalid_utf8",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::model_resource_tests::deadline_is_checked_inside_training_and_scoring",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::tests::arithmetic_and_one_time_source_capture",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::model_resource_tests::shared_byte_admission_and_failed_learning_preserve_model_state",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::tests::exact_arithmetic_and_precedence",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::tests::finite_supported_decoding_preserves_admitted_content",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::tests::inherited_ngram_exact_vector",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::tests::parser_rejects_partial_or_unbounded_execution",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::polynomial_tests::domain_guards_do_not_cancel_away_variable_denominators",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::polynomial_tests::exact_derivative_and_antiderivative",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::polynomial_tests::normalization_and_full_roundtrip",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::polynomial_tests::unicode_names_rational_coefficients_and_limits",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::certificate_tampering_and_missing_rows_fail",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::dimensions_zero_equations_and_numeric_limits",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::exact_linear_unique_and_fractional_substitution",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::exact_statistics_even_median_and_variances",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::free_parameters_and_inconsistent_certificates_are_distinct",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::independent_known_solutions_and_row_order_perturbation",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::units_empty_population_and_single_observation",
+      "outcome": "ok"
+    },
+    {
+      "test": "output::tests::actual_bytes_are_exclusive_and_idempotent",
+      "outcome": "ok"
+    },
+    {
+      "test": "output::tests::authority_and_traversal_are_checked_before_creation",
+      "outcome": "ok"
+    },
+    {
+      "test": "output::tests::symlink_ancestors_and_leaf_are_rejected",
+      "outcome": "ok"
+    },
+    {
+      "test": "ports::tests::direct_private_and_transition_addresses_are_rejected",
+      "outcome": "ok"
+    },
+    {
+      "test": "ports::tests::duplicates_nonfinite_and_malformed_documents_fail",
+      "outcome": "ok"
+    },
+    {
+      "test": "ports::tests::exact_json_numbers_and_spans_are_preserved",
+      "outcome": "ok"
+    },
+    {
+      "test": "ports::tests::inherited_proxy_bypass_patterns_are_conservatively_recognized",
+      "outcome": "ok"
+    },
+    {
+      "test": "ports::tests::unsupported_interpretations_are_not_body_success",
+      "outcome": "ok"
+    },
+    {
+      "test": "ports::tests::url_authority_and_exact_host_scope_precede_network",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::a_replaced_symlink_is_not_an_actual_original_file_receipt",
+      "outcome": "ok"
+    },
+    {
+      "test": "math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::authorized_cancel_stops_pending_goal_and_retains_unknown_effect_identity",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::interrupted_actual_write_reconciles_same_identity_without_resending",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::cancelled_missing_effect_stays_unknown_and_new_cancel_permissions_do_not_apply",
+      "outcome": "ok"
+    },
+    {
+      "test": "relations::contrary_evidence_tests::contradicted_answer_retains_actual_negative_fact_and_proof",
+      "outcome": "ok"
+    },
+    {
+      "test": "relations::tests::contradictory_premises_cannot_drive_descendants",
+      "outcome": "ok"
+    },
+    {
+      "test": "relations::tests::unseen_entity_uses_proof_composition_and_retains_dependency",
+      "outcome": "ok"
+    },
+    {
+      "test": "relations::tests::wrong_scope_and_unbound_conclusions_are_rejected",
+      "outcome": "ok"
+    },
+    {
+      "test": "scheduler::tests::cycles_missing_nodes_and_duplicate_contracts_are_rejected",
+      "outcome": "ok"
+    },
+    {
+      "test": "scheduler::tests::downstream_nodes_consume_actual_predecessor_artifacts",
+      "outcome": "ok"
+    },
+    {
+      "test": "scheduler::tests::exact_prerequisites_and_canonical_references_are_required",
+      "outcome": "ok"
+    },
+    {
+      "test": "scheduler::tests::no_progress_and_exhaustion_do_not_manufacture_completion",
+      "outcome": "ok"
+    },
+    {
+      "test": "scheduler::tests::ready_list_retains_explicit_goal_order_not_lexical_identity",
+      "outcome": "ok"
+    },
+    {
+      "test": "scheduler::tests::stale_and_unobserved_dependencies_never_advance_the_graph",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::changed_candidate_and_unapproved_provider_require_no_network",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::crossref_uses_returned_title_doi_and_uri_not_abstract_text",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::europe_pmc_distinguishes_source_id_and_actual_fulltext_uri",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::malformed_duplicate_and_failed_lists_retain_original_packet",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::query_encoding_cannot_inject_provider_parameters",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::source_hash_and_query_identity_cannot_be_substituted",
+      "outcome": "ok"
+    },
+    {
+      "test": "search::tests::wikipedia_listing_preserves_rank_raw_source_and_separates_snippets",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::bound_goal_is_immutable_but_pre_goal_received_is_restorable",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::case_and_action_access_are_scoped_to_persisted_actor",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::compare_and_swap_prevents_stale_writer",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::confirmation_requires_matching_receipt",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::corrupt_or_missing_referenced_blob_blocks_restart",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::crash_before_database_commit_leaves_orphan_and_no_case",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::exact_input_tombstone_survives_restart_and_rejects_collision",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::memory_is_actor_scoped_and_retains_revision_history",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::interrupted_attempt_is_unknown_and_cannot_be_reissued",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::sqlite_foreign_keys_and_immutable_revision_triggers_are_effective",
+      "outcome": "ok"
+    },
+    {
+      "test": "store::tests::new_input_version_must_reenter_received_before_new_seal",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::unknown_original_blocks_new_effect_until_same_identity_reconciliation",
+      "outcome": "ok"
+    }
+  ]
+}

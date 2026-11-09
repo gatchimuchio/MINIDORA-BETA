@@ -1,0 +1,54 @@
+{
+  "observation": "FAILED_DEADLINE_OR_RESOURCE_BOUND_DURING_LARGE_SOURCE_RENDER",
+  "recorded_at_utc": "2026-11-09T07:26:14.253651+00:00",
+  "case_id": "source",
+  "actor_id": "demo",
+  "state_directory": "/workspace/.minidora-cloud/docs-check-ox0lzx1h/state",
+  "configured_deadline_ms": 30000,
+  "pid": 17247,
+  "observed_process_elapsed_minimum_seconds": 62,
+  "observed_cpu_percent": 99.3,
+  "termination": "SIGTERM sent only to validation child; shell exit143",
+  "actual_source_packets": [
+    {
+      "artifact_blob_sha256": "11a40df5127ffc1daeb62e79dc3910706c4c7dd2c322323291d52b66181d3bc5",
+      "packet_id": "82f27d2a6c53273effa0928a4207775394615d6b9700336d16c00cad94623737",
+      "request_uri": "https://raw.githubusercontent.com/gatchimuchio/MINIDORA-BETA/1c546e77007afa0a9eeb3a44f07da99d84c383eb/README.md",
+      "http_status": 200,
+      "observed_at_unix_ms": 1794209016708,
+      "raw_body_bytes": 10452,
+      "raw_sha256": "5c7c93a8c5d98613b8971b5815843ccd6a1667bcc044e76e71e737987578f719",
+      "extracted_text_utf8_bytes": 10452,
+      "failure": null
+    }
+  ],
+  "stdout_log": "/workspace/.minidora-cloud/docs-source-check.log",
+  "failure_binary_sha256": null,
+  "failure_binary_sha256_note": "Not captured before launch; current binary may have been replaced by ongoing builds. Do not infer exact failure binary from later source/hash.",
+  "diagnosis": "Sustained CPU after successful source observation; expensive exact model/composition work suspected. Original deadline and inner arithmetic guard correction pending owner validation.",
+  "replacement_short_example": "Separate support check only; does not close this failed large-body observation.",
+  "status": "DIAGNOSED_FIX_AND_FRESH_REPRODUCTION_PENDING",
+  "retained_case_revisions": [
+    {
+      "revision": 0,
+      "lifecycle": "RECEIVED",
+      "artifact_blob_sha256": "7139ed851a9b0e48eb0d4a409c905eb68af14e2df2aa79d443d82b4c8dbfab7a",
+      "goal_sha256": null,
+      "result_present": false
+    },
+    {
+      "revision": 1,
+      "lifecycle": "SEALED",
+      "artifact_blob_sha256": "ec719548e77044869a261c154d4ce4658220232f2535c7df5ca8ee845ebe9f0e",
+      "goal_sha256": null,
+      "result_present": false
+    },
+    {
+      "revision": 2,
+      "lifecycle": "RUNNING",
+      "artifact_blob_sha256": "dbebb138d03d2286b69168ff944aa3fb890de1d78d185c17a6a495f717621d76",
+      "goal_sha256": "c70953d8a502f0f3809da1d77224eecb363fbf28daa9e32d44b02fe3051bd6b0",
+      "result_present": false
+    }
+  ]
+}

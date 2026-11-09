@@ -1,0 +1,10 @@
+{
+  "schema": "MINIDORA_PUBLIC_STATIC_AST_INDEX_V1",
+  "file_counts": {
+    "non_python": 18,
+    "parsed": 758
+  },
+  "import_syntax_rows": 9148,
+  "callable_rows": 10278,
+  "warning": "Lexical references may be conditional, shadowed, dynamically replaced, or unreachable. This index is not a call graph proof, semantic audit or acceptance result. It contains no evaluated input/output dataset."
+}

@@ -1,0 +1,78 @@
+# Rust implementation status — development alpha
+
+The current development identity is `0.7.0-alpha.1`, schema `minidora-rust/0.7.0-alpha.1`, pinned Rust `1.99.1`, edition 2024. The frozen predecessor baseline remains `1c546e77007afa0a9eeb3a44f07da99d84c383eb`; the upstream extraction reference remains `9307d7e2b1799750ecef1957d85128fcbe403d02`.
+
+**Full requested successor acceptance: not established.** This is an implementation inventory for ongoing work, not permission to exclude requirements, a release acceptance certificate, a deployment claim or independent third-party audit. The [93-row baseline requirements](requirements.tsv) remain baseline observations; actual successor evidence must be recorded separately. The [full implementation obligations](implementation-obligations.md) remain controlling for coverage.
+
+## Implemented mechanisms and current evidence boundary
+
+| Mechanism | Actual implementation | What this establishes from source inspection | Remaining acceptance boundary |
+|---|---|---|---|
+| Versioned records and identity | `minidora-domain` | Separate input, lifecycle, goal, memory, result, render, evidence and effect records; explicit fingerprints and schema identity; canonicalization rejects binary floats before JSON projection | Complete R2 wire/semantic refinement, all compatibility mappings and cross-encoding equivalence |
+| Input machine | `input.rs` | Original UTF-8 bytes/spans retained; one finite grammar lowers actual arithmetic, copular, mathematical, document, metadata-search, source and JSON requests into typed intents | Full subject/negation/condition/time/quantifier/quotation coverage, ambiguity populations and general-language quality |
+| Core and scheduler | `core.rs`, `scheduler.rs` | Core binds goals, schedules observed prerequisites, adopts content, checks rendering and required write receipts before goal completion; typed terminal states | All required capability paths, complex goal composition, complete R2 negative cases and task-bound resource validation |
+| Arithmetic and context | `language.rs`, Core | Exact rational calculations with steps; follow-up resolves a saved actual result across process restarts | All inherited quantities/units/numeric edge contracts and independently evaluated multi-turn quality |
+| Symbolic and linear mathematics | `math.rs` | Exact bounded polynomial normalization/derivative/representative integral; exact linear systems with invertible-operation/source-substitution certificates | Broader mathematical language, all predecessor equivalent tests and general scientific reasoning |
+| Descriptive statistics | `math.rs` | Exact supplied-value sum/mean/median/extrema/variance; explicit identical-unit checks | Unit conversion, source-table extraction/aggregation and real-world population interpretation |
+| Declared relations and learning | `relations.rs` | Copular user premises, typed polarity/scope, bounded rule application, proof-preserving composition, dependencies and invalidation | Generalized learning from genuine new observations, empirical admission, out-of-domain/counterexample quality and large memory experiments |
+| Non-neural sequence model | `language.rs`, Core | Character-ngram counts, exact conditional distribution, sequence objective and deterministic constrained decoding; model scores do not grant factual authority | Full unseen-language quality and inherited-versus-alternative model comparison under R2-17; no open-domain-generation acceptance |
+| Durable store | `store.rs` | SQLite WAL/FULL/FK reference adapter, immutable digest-addressed blobs, actor checks, revision CAS, event chain and saved input/action identities | Physical power-loss guarantees on each target, complete fault-injection matrix, every read/export access path and measured long-history bounds |
+| Output and local file effect | `output.rs`, Core | Actual UTF-8 render observations; exact-target grant; exclusive/non-overwriting byte write; retained ambiguous outcome and reconciliation identity | Hostile concurrent filesystem isolation, remote-delivery providers, once-only remote reconciliation and full receipt semantics |
+| Direct source observation | `ports.rs` | Bounded permitted HTTPS:443 text/Markdown/JSON observations using inherited TLS/proxy trust; exact byte/status/URI/failure provenance | Supported HTML/PDF/browser/source connectors, claim-to-body synthesis and LIVE benchmark conditions |
+| Provider metadata search | `search.rs`, Core | Explicit Wikipedia/Crossref/Europe PMC metadata listing with ranked candidate/source identities, rejection/failure accounting and separate body-observer boundary | Actual provider reachability/quality, full article body acquisition, source synthesis and unchanged GPQA provider contract |
+| CSV and literal editing | `document.rs`, Core | Strict quoted CSV/source byte spans, named column strings, pure string-table conversion APIs and exact count-guarded nonoverlapping replacement; original retained | General document/schema/table aggregation and arbitrary writing/editing-intent/quality acceptance |
+| Local effect reconciliation | `recovery.rs`, CLI | Observes an original pending local file without resend/new authority; cancelled-effect mode updates the action ledger while preserving case CANCEL | Remote provider-specific idempotency, complete crash/fault population and general exactly-once effects |
+| Structured JSON selection | `ports.rs` | Strict complete-document validation, duplicate-key rejection, pointer validation and exact selected source lexemes | General schema transformations and complete structured-document capability inheritance |
+| Narrow target comparison | Domain conformance example and `target-conformance.json` | One canonical Unicode/exact-string record and lifecycle predicates match native Linux and Node WASI, with an independent Python hash check | Full Core/storage/effect/backend semantic equivalence and physical Windows/8GB acceptance |
+| CLI and local HTTP | `apps/cli` | Thin frontends share the same durable engine; distinct terminal exits; token-bound loopback HTTP actor/grants/budgets | Human browser UI, independent consumer apps, deployed multi-user authentication and external platform acceptance |
+| Provenance and obligations | `rust/audit/` | Complete declared source/test file identity populations, explicit unknown semantic routes and every current requirement preserved | Exhaustive semantic-entry review, all applicable test translations and all actual observed requirement outcomes |
+
+These rows describe source-visible mechanisms. Unit tests and route tests are different evidence levels; final command results must be linked to their actual current code and execution artifacts. No test counts are inferred from definitions, loops or historical passes.
+
+## Current-run validation
+
+The repository contains component and end-to-end test definitions. Final whole-workspace build, formatting, lint, test, CLI/HTTP, functional-output and integrity results are being recorded by the primary implementation task. Until that run's report is present, the table above must not be read as a blanket pass. Reproduce the [documented commands](../README.md) rather than substituting a zero-test run or successful compilation for task acceptance.
+
+Earlier scoped actual-source checks of mathematical components are component evidence only. They do not close the 93-requirement population, count as independent evaluation or replace ordinary-route execution of the current workspace.
+
+## Resource defect, correction and exact observation boundaries
+
+The original failed observation remains unchanged in [resource-failure.json](resource-failure.json). An immutable predecessor README was fetched successfully (HTTP200, 10,452 bytes), then sustained CPU work exceeded the default 30-second deadline; the validation process was terminated after more than a minute. Its original RUNNING state remains retained.
+
+The [same-source retest](resource-same-source-retest.json) verifies the **same original URI, 10,452-byte body and SHA-256** `5c7c93a8c5d98613b8971b5815843ccd6a1667bcc044e76e71e737987578f719`. The corrected binary returned `SUSPEND` in **6.699 seconds**, exit2, at the explicit **8192-bit exact-probability operation cap**, without triggering the protective subprocess timeout. This is successful observation of a finite typed resource stop, **not successful rendering or acceptance of the long document**. Original source/effect evidence was retained.
+
+The [separate admission test](resource-failure-retest.json) used a different upstream README with **22,888 bytes** and a different digest. It stopped at a **16,384-byte model source/sequence admission limit**. This larger-source check is not a same-input causal reproduction and does not replace the exact-source retest. The shorter README example is another independent support check.
+
+These observations do not close long-history resource, all-deadline, physical Windows/8GB, throughput/latency or full source-workflow requirements. Explicit inner polling and mathematical representation guards remain implementation contracts whose limits and target-specific behavior must stay visible.
+
+## Source and test accounting
+
+The [identity inventory](README.md) independently checks **416 beta source files** (414 upstream plus two beta additions) and the **360-path union of upstream/beta tests and fixtures** (359 upstream paths plus one beta-only path). The beta contains 147 of those paths; the other 213 upstream paths are available in a separate read-only upstream reference. Those are file counts, not executed test-case counts.
+
+`source_contract_reviews.tsv` records scoped full-source contract inspection for 96 files by the population audit worker. Other workers' separately recorded inspections are not silently added to that count. `static_imports.tsv` and `static_callables.tsv` describe syntax-level references across all available Python modules; they do not prove runtime reachability or complete semantic inspection. Unreviewed semantic paths remain unknown.
+
+The predecessor's 313 selected regression cases and any newly run frozen-beta checks are compatibility/non-mutation evidence for that exact predecessor. They are not Rust regressions until actual equivalent contracts are executed against the Rust route.
+
+## Open full acceptance gates
+
+The complete list and exact IDs are in [implementation-obligations.md](implementation-obligations.md). Material open gates include:
+
+- All 93 obligations and source-discovered additions need actual routes and separate implementation/acceptance outcomes. Unmapped or unsupported obligations remain required.
+- S01–S12 and R2-01–R2-22 require actual intended-version observations. A local negative test cannot stand in for a remote effect, second backend or physical host observation.
+- The historical 24-question, 12-writing-task, ten-session and 30-transformation populations need exact item/rubric reconstruction before measurement. General Q&A, editing/writing/code/science/research are not replaced by this finite command grammar.
+- Memory → inference → adaptation must be demonstrated on genuinely new subsequent tasks, including counterexample invalidation, restarts and bounded long-history computation. Retaining rules or composing a declared proof is only part of that requirement.
+- Search-list and fetched-body packets, contradictions, source-span grounding and changing LIVE sources need real connector/evidence acceptance. A plain body quotation is a narrower implemented operation.
+- GPQA retains all 198 questions, its exact dataset identity, LIVE-only/no-gold-learning boundary, paired parallel/serial contracts and 90-minute limits. No new GPQA score is claimed.
+- Full independently implemented target/backend projections and the physical Windows CPU/8GB resource profile require actual measurements. The recorded Linux/Node-WASI domain-vector comparison is narrow evidence only; it does not establish whole-Core, storage, effects or physical-target equivalence.
+- Remote effects, modalities, translation/application consumers, browser/deployed authentication and any required protected-data encryption need their actual provider, authorization, failure, privacy and resource evidence.
+
+No current omission is an accepted scope reduction. This development version remains inspectable while work toward the complete requested successor continues.
+
+
+## Final current-instance validation record
+
+[validation.json](validation.json) and [executed-tests.json](executed-tests.json) record the exact code snapshot and executed suite outcomes: **123 Rust tests passed, 0 failed, 0 ignored**, plus **8 separate local TLS fixture cases**. The frozen Python beta separately passed its selected **313** tests during the combined installation rehearsal. These predecessor/fixture counts are not added to the Rust suite or presented as full-capability acceptance. Formatting, whole-workspace/all-target checking, Clippy with warnings denied, all-feature tests, build and the complete reusable install script succeeded.
+
+[dependencies.cdx.json](dependencies.cdx.json) now contains the actual locked metadata inventory (155 packages and declared licenses); it is not a legal or advisory clearance. [rust-requirement-observations.json](rust-requirement-observations.json) retains all93 obligations with actual partial implementation locations where established, separate full acceptance gaps and explicit unimplemented/unverified rows. No required scope was removed.
+
+The optional search-provider LIVE probes were rejected by the current Cloud proxy with CONNECT403; the required destinations and unconfirmed environment-draft persistence are recorded in [runtime-requirements.json](runtime-requirements.json). The tested install/start instructions are retained under `../tools/cloud-install.sh` and `../tools/cloud-start.md`; saving their draft through the environment API returned INVALID_ARGUMENT, so reusable backend configuration persistence and publication are not established.

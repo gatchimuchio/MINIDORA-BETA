@@ -1,0 +1,21 @@
+{
+  "workflow": "MINIDORA Rust independent candidate",
+  "missing_network_destinations": [
+    "ja.wikipedia.org",
+    "en.wikipedia.org",
+    "api.crossref.org",
+    "www.ebi.ac.uk"
+  ],
+  "observed_probes": {
+    "en.wikipedia.org": "CONNECT403",
+    "api.crossref.org": "CONNECT403",
+    "www.ebi.ac.uk": "CONNECT403"
+  },
+  "ja_wikipedia_status": "not probed; absent from current effective allowlist",
+  "existing_saved_custom_allowlist": "unavailable from draft read; do not replace an unknown list",
+  "credentials_required_for_current_public_metadata_endpoints": false,
+  "other_external_ports": "not connected; exact providers/credentials/permission contracts need separate requirements",
+  "quality_individual_case_specs": "historical24/12/10/30 item-level source and rubric not established; clarification pending, no invented pass",
+  "configuration_draft_persistence": "unconfirmed; earlier read/update INVALID_ARGUMENT",
+  "publication": "not performed"
+}

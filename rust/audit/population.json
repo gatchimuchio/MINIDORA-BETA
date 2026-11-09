@@ -1,0 +1,40 @@
+{
+  "schema": "MINIDORA_RUST_PUBLIC_IDENTITY_AUDIT_V1",
+  "observed_date_jst": "2026-11-09",
+  "baseline_commit": "1c546e77007afa0a9eeb3a44f07da99d84c383eb",
+  "observed_beta_head": "1c546e77007afa0a9eeb3a44f07da99d84c383eb",
+  "upstream_commit": "9307d7e2b1799750ecef1957d85128fcbe403d02",
+  "upstream_available": true,
+  "source_population": 416,
+  "upstream_source_population": 414,
+  "beta_source_identity": {
+    "MATCH": 416
+  },
+  "upstream_source_identity": {
+    "MATCH": 414,
+    "NOT_APPLICABLE": 2
+  },
+  "test_population_union": 360,
+  "upstream_test_population": 359,
+  "beta_test_identity": {
+    "MATCH": 147,
+    "NOT_APPLICABLE": 213
+  },
+  "upstream_test_identity": {
+    "MATCH": 359,
+    "NOT_APPLICABLE": 1
+  },
+  "test_presence_in_baseline_census": {
+    "BETA_ONLY": 1,
+    "BOTH": 146,
+    "UPSTREAM_ONLY": 213
+  },
+  "requirements": 93,
+  "requirement_ids_unique": true,
+  "requirement_baseline_acceptance": {
+    "UNVERIFIED": 93
+  },
+  "test_results": "NOT_RUN_BY_IDENTITY_INVENTORY",
+  "semantic_route_review": "NOT_ESTABLISHED_BY_FILE_PRESENCE_AST_OR_HASH",
+  "complete_rust_acceptance": false
+}

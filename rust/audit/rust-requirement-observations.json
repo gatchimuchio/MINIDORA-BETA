@@ -1,0 +1,1268 @@
+{
+  "population": 93,
+  "full_successor_acceptance": "UNVERIFIED",
+  "records": [
+    {
+      "capability_id": "A01",
+      "requirement": "Non-neural/non-Transformer language-model computation; no implicit neural-model substitution",
+      "required_observable": "Controlled distribution/decoding outputs, repeatability, actual user-facing consequence",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/language.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Controlled distribution/decoding outputs, repeatability, actual user-facing consequence",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A02",
+      "requirement": "Finite token/sequence/context handling without arbitrary prompt-specific templates",
+      "required_observable": "Novel phrase variants preserve scope and compose a useful result",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/language.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Novel phrase variants preserve scope and compose a useful result",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A03",
+      "requirement": "Conditional language distribution, deterministic tie/selection ordering, explicit state",
+      "required_observable": "Fixed state+inputs reproducible; external variation separately explained",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/language.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Fixed state+inputs reproducible; external variation separately explained",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A04",
+      "requirement": "Japanese word, clause and subject/object attribution, including omitted subjects only when context supports restoration",
+      "required_observable": "Ambiguous and omitted subjects handled without inventing ownership",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/input.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Ambiguous and omitted subjects handled without inventing ownership",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A05",
+      "requirement": "Negation, exception, quantifier, modality, temporal and scope fidelity",
+      "required_observable": "Meaning-preserving and polarity-flipping metamorphic pairs remain distinguishable",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/input.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Meaning-preserving and polarity-flipping metamorphic pairs remain distinguishable",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A06",
+      "requirement": "Definition target, explanatory predicate, modifier attachment and relative clause boundaries",
+      "required_observable": "Unknown real article definitions and predicate scopes traced to source spans",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Unknown real article definitions and predicate scopes traced to source spans",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A07",
+      "requirement": "Referential/co-reference continuity across turns, output artifacts and corrections",
+      "required_observable": "`2+3` → `Explain that in detail` explains **the actual 5 and procedure**, not unjustified suspension",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "`2+3` → `Explain that in detail` explains **the actual 5 and procedure**, not unjustified suspension",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A08",
+      "requirement": "Persistent topic, goal, requested format, style and previous evidence under conversation changes",
+      "required_observable": "Multi-turn corrections, topic switches and return-to-topic obey latest authorized request",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Multi-turn corrections, topic switches and return-to-topic obey latest authorized request",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A09",
+      "requirement": "Typed relation constraints, direct vs inferred links, dependency and contradiction",
+      "required_observable": "Cross-document relation tests do not turn lexical overlap into factual implication",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Cross-document relation tests do not turn lexical overlap into factual implication",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A10",
+      "requirement": "Proposition/discussion audit: claim, target, premises, reasons, inference, conclusion and valid scope",
+      "required_observable": "Identify invalid premise shifts, scope changes and argument-to-counterargument alignment",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Identify invalid premise shifts, scope changes and argument-to-counterargument alignment",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A11",
+      "requirement": "Multi-language Japanese/English/Chinese source-meaning fidelity with loss reports",
+      "required_observable": "Back/parallel translations preserve agency, polarity and conditionality",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Back/parallel translations preserve agency, polarity and conditionality",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A12",
+      "requirement": "Unknown/insufficient input recognized explicitly, without filling unsupported details",
+      "required_observable": "Insufficient claims return typed residuals; enough evidence yields a substantive answer",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/input.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Insufficient claims return typed residuals; enough evidence yields a substantive answer",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A13",
+      "requirement": "Natural, useful answers to unseen what/why/how/compare questions",
+      "required_observable": "Novel independent chat-quality matrix, not greeting/keyword-only matches",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Novel independent chat-quality matrix, not greeting/keyword-only matches",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A14",
+      "requirement": "Directed explanation, paraphrase, examples, citations, depth and format changes",
+      "required_observable": "Reformat earlier actual answer using its recorded evidence, with no irrelevant retrieval",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Reformat earlier actual answer using its recorded evidence, with no irrelevant retrieval",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "A15",
+      "requirement": "Meaning representation stays one authoritative object across parsing, reasoning, execution and output",
+      "required_observable": "Repeated input is not reinterpreted by downstream stages into a different premise",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/input.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Repeated input is not reinterpreted by downstream stages into a different premise",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B01",
+      "requirement": "Interpret task type, required output, restrictions and measurable completion",
+      "required_observable": "Unseen requests dispatch to correct capability through ordinary entry point",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/input.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Unseen requests dispatch to correct capability through ordinary entry point",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B02",
+      "requirement": "Exact arithmetic and unit/quantity relations; safe symbolic representations",
+      "required_observable": "Computation plus follow-up explanation and correction preserve operands and units",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Computation plus follow-up explanation and correction preserve operands and units",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B03",
+      "requirement": "Algebra, linear equations, statistics, probability and mathematical notation",
+      "required_observable": "Independent structured and natural-language cases with verified intermediate values",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/math.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Independent structured and natural-language cases with verified intermediate values",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B04",
+      "requirement": "Tables, JSON, CSV and structured-document comparison/aggregation/transformation",
+      "required_observable": "Real input documents yield schema-valid results, source-location and error records",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/document.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Real input documents yield schema-valid results, source-location and error records",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B05",
+      "requirement": "Multi-document evidence synthesis and explicit inference chains",
+      "required_observable": "Distinguish agreement, independence, contradiction and inferred claims",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Distinguish agreement, independence, contradiction and inferred claims",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B06",
+      "requirement": "Multi-step problem solving with intermediate outputs consumed by later steps",
+      "required_observable": "A downstream action actually uses an upstream result; no artificial progress credit",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "A downstream action actually uses an upstream result; no artificial progress credit",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B07",
+      "requirement": "Coding, code explanation, revision and bounded executable checks",
+      "required_observable": "Novel code request produces usable output and scoped diagnostics; never asserts unrun tests",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Novel code request produces usable output and scoped diagnostics; never asserts unrun tests",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B08",
+      "requirement": "Writing, editing, rewriting, summaries and constrained-format composition",
+      "required_observable": "Twelve previously unseen writing tasks satisfy length, content, purpose and format",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/document.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Twelve previously unseen writing tasks satisfy length, content, purpose and format",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B09",
+      "requirement": "Source-grounded science, domain specialists and mathematical knowledge",
+      "required_observable": "Core alone vs named capability variants, same questions and actual evidence",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Core alone vs named capability variants, same questions and actual evidence",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B10",
+      "requirement": "Candidate generation, comparison, selection, deferred decision and correction",
+      "required_observable": "Alternative support/rejection is inspectable; correct answer never injected by evaluator",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Alternative support/rejection is inspectable; correct answer never injected by evaluator",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B11",
+      "requirement": "Causal, hypothetical and analogy-based reasoning with premise tracking",
+      "required_observable": "Counterfactual change alters only dependent claims, not unrelated facts",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Counterfactual change alters only dependent claims, not unrelated facts",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B12",
+      "requirement": "Planning a goal with permissible actions, dependencies and limited resources",
+      "required_observable": "Executed plan moves actual goal state and stops at correct boundary",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Executed plan moves actual goal state and stops at correct boundary",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "B13",
+      "requirement": "Cross-capability composition with one responsible core",
+      "required_observable": "Same request uses retrieval+computation+writing without a hidden secondary judge",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Same request uses retrieval+computation+writing without a hidden secondary judge",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C01",
+      "requirement": "Public web/search and local reference access, with explicit deployment policy",
+      "required_observable": "Authorized search reaches actual retrieved **body**, not only title/snippet",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/ports.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Authorized search reaches actual retrieved **body**, not only title/snippet",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C02",
+      "requirement": "Provider-specific failure, timeout, rate limit and alternative-path accounting",
+      "required_observable": "HTTP errors/retries preserve original request, resource costs and failure position",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/ports.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "HTTP errors/retries preserve original request, resource costs and failure position",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C03",
+      "requirement": "Exact source time, version, URL, hash, title, page and content lineage",
+      "required_observable": "Two different retrieval bytes never masquerade as identical evidence",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/ports.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Two different retrieval bytes never masquerade as identical evidence",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C04",
+      "requirement": "Immutable retrieved **search-list** and **body** packets for diagnosis",
+      "required_observable": "Capture provider/order/status/retry and independently replay both stages",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/search.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Capture provider/order/status/retry and independently replay both stages",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C05",
+      "requirement": "Strict separation of fixed-packet regression and official `LIVE_ONLY` benchmarks",
+      "required_observable": "Diagnostic replay is never used to inflate a LIVE performance claim",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Diagnostic replay is never used to inflate a LIVE performance claim",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C06",
+      "requirement": "Source-independent positive support vs overlap, contradiction and negative evidence",
+      "required_observable": "Candidate scoring identifies unique supported difference; rejects generic lexical hits",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Candidate scoring identifies unique supported difference; rejects generic lexical hits",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C07",
+      "requirement": "Wikipedia, scholarly references (e.g., Crossref, Europe PMC), specialist and local sources",
+      "required_observable": "Real connector reachability and attribution measured per configured provider",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/search.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Real connector reachability and attribution measured per configured provider",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C08",
+      "requirement": "HTML article main-text parsing, headings, ruby/hidden character boundaries",
+      "required_observable": "Source text, warnings and indices survive parsing without invented corrections",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Source text, warnings and indices survive parsing without invented corrections",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C09",
+      "requirement": "Bounded PDF **text** extraction, page retention and warning rejection",
+      "required_observable": "PDFs with extraction errors are not silently treated as understood; OCR is distinct",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "PDFs with extraction errors are not silently treated as understood; OCR is distinct",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C10",
+      "requirement": "Source-change invalidation; cached earlier evidence and old conclusions retained",
+      "required_observable": "Changed source triggers targeted dependent re-evaluation, not historical erasure",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Changed source triggers targeted dependent re-evaluation, not historical erasure",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C11",
+      "requirement": "Evidence-backed quotations/citations and explicit absence of supporting text",
+      "required_observable": "Each factual sentence or quotation maps to the actually used versioned source",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/ports.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Each factual sentence or quotation maps to the actually used versioned source",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C12",
+      "requirement": "Bounded targeted re-retrieval when actual evidence is insufficient",
+      "required_observable": "Search expansion happens for a measured gap, within allowance, without self-feeding",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Search expansion happens for a measured gap, within allowance, without self-feeding",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "C13",
+      "requirement": "Real-data input lineage through both candidate and final answer formation",
+      "required_observable": "A replay pinpoints whether change came from source, code, state or provider",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/ports.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "A replay pinpoints whether change came from source, code, state or provider",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D01",
+      "requirement": "Immutable primary record of instructions, observations, failures and corrected views",
+      "required_observable": "Original and corrected records both recoverable with independent identities",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/store.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Original and corrected records both recoverable with independent identities",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D02",
+      "requirement": "Working memory limited to current goal and relevant causal dependencies",
+      "required_observable": "Long history increases storage without causing unbounded active computation",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Long history increases storage without causing unbounded active computation",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D03",
+      "requirement": "Core-lifetime retained cognition, references and adaptation state",
+      "required_observable": "Multiple actual requests reuse permitted earlier evidence in same process",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Multiple actual requests reuse permitted earlier evidence in same process",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D04",
+      "requirement": "Durable session and task state across process/revision restarts",
+      "required_observable": "Explicit restore, dedup, correction and identity tests across fresh instances",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/store.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Explicit restore, dedup, correction and identity tests across fresh instances",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D05",
+      "requirement": "General learning cycle: memory → inference → adaptation in normal execution",
+      "required_observable": "Pre/post difference on a genuinely new task, via normal public route",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Pre/post difference on a genuinely new task, via normal public route",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D06",
+      "requirement": "Reusable relation/procedure formation with generalization restrictions",
+      "required_observable": "New relation applies to new subjects without over-generalized rule adoption",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "New relation applies to new subjects without over-generalized rule adoption",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D07",
+      "requirement": "Original source, conditions and counterexamples attached to learned records",
+      "required_observable": "False rule revoked/limited; downstream dependent conclusions invalidated",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "False rule revoked/limited; downstream dependent conclusions invalidated",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D08",
+      "requirement": "Formation and inherited capability reconciliation with no duplicate computation",
+      "required_observable": "Added shortcut does not increase full-cost repeat evaluations for same task",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Added shortcut does not increase full-cost repeat evaluations for same task",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D09",
+      "requirement": "Structured semantic memory/indices separate from full original observations",
+      "required_observable": "Archived 140-observation-type workloads retrieve relevant subgraph, retaining origin",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Archived 140-observation-type workloads retrieve relevant subgraph, retaining origin",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D10",
+      "requirement": "Reversible compression and evidence replay rather than irreversible summaries",
+      "required_observable": "Compressed entry reopens to exact relevant original evidence",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Compressed entry reopens to exact relevant original evidence",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D11",
+      "requirement": "Cross-session goal/purpose/reference/previous actual output continuity",
+      "required_observable": "Session restore supports multi-turn content edits and justified refusal",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/store.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Session restore supports multi-turn content edits and justified refusal",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D12",
+      "requirement": "Learning adoption controlled by the same core as action execution",
+      "required_observable": "No external module self-commits new rules or creates another success authority",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "No external module self-commits new rules or creates another success authority",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D13",
+      "requirement": "Explicit forgetting/invalidation of inferences, never silent deletion of evidence",
+      "required_observable": "Counterexample changes active conclusion while preserving lineage",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/relations.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Counterexample changes active conclusion while preserving lineage",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "CAP-D14",
+      "requirement": "Evaluation-label leakage and training/evaluation boundary control",
+      "required_observable": "Gold unavailable before final scoring; tests detect contaminated input path",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Gold unavailable before final scoring; tests detect contaminated input path",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E01",
+      "requirement": "Case/input/version identity, one-time acceptance and duplicate prevention",
+      "required_observable": "Repeated version rejected; new version and result lookup behave as contracted",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/store.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Repeated version rejected; new version and result lookup behave as contracted",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E02",
+      "requirement": "Original goal, required states, permissions, forbidden effects and success predicate retained",
+      "required_observable": "Goal contract cannot mutate as a byproduct of learning or a retrieved page",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Goal contract cannot mutate as a byproduct of learning or a retrieved page",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E03",
+      "requirement": "Executable operation chain with actual observed state deltas",
+      "required_observable": "Internal state churn alone cannot mark user goal as achieved",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Internal state churn alone cannot mark user goal as achieved",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E04",
+      "requirement": "Finite action/time/cost budgets and progress-sensitive continuation",
+      "required_observable": "Irrelevant loop stops; valid multistep progress has bounded continuation",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Irrelevant loop stops; valid multistep progress has bounded continuation",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E05",
+      "requirement": "Distinct terminal success, suspension, rejection, failure and cancellation",
+      "required_observable": "Distinct signatures, retained evidence and resumability conditions exposed",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Distinct signatures, retained evidence and resumability conditions exposed",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E06",
+      "requirement": "Permissioned external effects, explicit output delivery and rollback/compensation",
+      "required_observable": "Controlled allow/deny tests; no implicit sending on rendering alone",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/output.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Controlled allow/deny tests; no implicit sending on rendering alone",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E07",
+      "requirement": "Capability versioning, typed inputs/outputs, substitution and composition",
+      "required_observable": "Toggle capability with same goal, log changed behavior and regressions",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Toggle capability with same goal, log changed behavior and regressions",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E08",
+      "requirement": "Source/result/failure causal trace, independent replay and linked hashes",
+      "required_observable": "Replay shows actual decision inputs; hash alone never asserted as truth proof",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/store.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Replay shows actual decision inputs; hash alone never asserted as truth proof",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E09",
+      "requirement": "Input → core → output responsibilities without duplicate decisions",
+      "required_observable": "Complete behavior from real request through terminal rendering and explicit delivery",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Complete behavior from real request through terminal rendering and explicit delivery",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E10",
+      "requirement": "External platform/tool boundary with cancellation, retry and cost policy",
+      "required_observable": "Two independent consumer applications share the same port contract",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Two independent consumer applications share the same port contract",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E11",
+      "requirement": "Security, input trust, prompt-content isolation, data release and privacy",
+      "required_observable": "Retrieved text cannot grant its own authority; forbidden writes/sends blocked",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Retrieved text cannot grant its own authority; forbidden writes/sends blocked",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "E12",
+      "requirement": "Failure recovery, partial rollback and continuation from real result state",
+      "required_observable": "Retry consumes existing evidence and budget; does not invent a new goal",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/recovery.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Retry consumes existing evidence and budget; does not invent a new goal",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F01",
+      "requirement": "Existing Python package, CLI and controlled beta facade",
+      "required_observable": "Reproduce declared public entrance and exact Japanese API without renaming",
+      "implementation_disposition": "RETAIN",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "../src/minidora/engine_beta.py",
+        "../tools/beta_acceptance.py"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Reproduce declared public entrance and exact Japanese API without renaming",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F02",
+      "requirement": "Product local HTTP chat/trace/capabilities/health entry points",
+      "required_observable": "Exercise real API from an installed runnable version, auth and error cases",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Exercise real API from an installed runnable version, auth and error cases",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F03",
+      "requirement": "Usable browser chat, real answer visibility, source and trace inspection",
+      "required_observable": "New browser session answers previously unseen multi-turn requests",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "New browser session answers previously unseen multi-turn requests",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F04",
+      "requirement": "Explanation/format refinement of the **actual** previous response",
+      "required_observable": "New instruction edits/reasons over stored output even after math or source task",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "New instruction edits/reasons over stored output even after math or source task",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F05",
+      "requirement": "General search, document, calculation, code and writing experiences",
+      "required_observable": "Representative unseen workflows from one normal user surface",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Representative unseen workflows from one normal user surface",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F06",
+      "requirement": "Explicit multilingual text API and separate output localization",
+      "required_observable": "Japanese semantics, English-facing integration and language-fidelity tests",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Japanese semantics, English-facing integration and language-fidelity tests",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F07",
+      "requirement": "Streaming/chunked input and output, provisional/revoked/final state",
+      "required_observable": "Cancel, revise, finalize and replay a stream without multiple adoption authorities",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Cancel, revise, finalize and replay a stream without multiple adoption authorities",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F08",
+      "requirement": "Audio/speech interfaces via replaceable input/output adapters",
+      "required_observable": "Typed transcript/voice output retains speaker, time and evidence boundaries",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Typed transcript/voice output retains speaker, time and evidence boundaries",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F09",
+      "requirement": "Image/document/video interfaces via replaceable modality adapters",
+      "required_observable": "Unknown perception is reported; no claim that text-only PDF handles images",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Unknown perception is reported; no claim that text-only PDF handles images",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F10",
+      "requirement": "Calls, messaging, external software and device interactions through controlled ports",
+      "required_observable": "Effect audit and permissions carried from intake to actual transmission",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Effect audit and permissions carried from intake to actual transmission",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F11",
+      "requirement": "`konjac-Translation` as independent multilingual/multimodal consumer",
+      "required_observable": "End-to-end typed translation handoff, but external model quality remains separate",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "End-to-end typed translation handoff, but external model quality remains separate",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F12",
+      "requirement": "Independent runtime integrations (e.g., D4Pocket/BLUE-TANUKI) without control inversion",
+      "required_observable": "Two heterogeneous consumers keep one goal/authority boundary and trace",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Two heterogeneous consumers keep one goal/authority boundary and trace",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F13",
+      "requirement": "Compiler/IR, alternative memory/compute layouts and model-analysis research",
+      "required_observable": "Compared behind a public port by measured effect; not silently declared inherited",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Compared behind a public port by measured effect; not silently declared inherited",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "F14",
+      "requirement": "Reviewer-ready real demo, English guide, concrete tasks, and reproducible evidence",
+      "required_observable": "Live interactive response plus trace and non-claim statement; GIF/video supplementary",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "apps/cli/src/main.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Live interactive response plus trace and non-claim statement; GIF/video supplementary",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G01",
+      "requirement": "Exact source/test/requirement census before new code",
+      "required_observable": "Every relevant inherited public item dispositioned: retain, merge, revise or reject",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Every relevant inherited public item dispositioned: retain, merge, revise or reject",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G02",
+      "requirement": "Whole-engine E2E closure on a real input, before treating local modules as proof",
+      "required_observable": "Request → evidence → capability → goal → answer and replay demonstrated",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Request → evidence → capability → goal → answer and replay demonstrated",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G03",
+      "requirement": "All applicable upstream and beta regressions, negative tests and version compatibility",
+      "required_observable": "No unexamined 147-vs-359 test population gap; known exclusions explicit",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "No unexamined 147-vs-359 test population gap; known exclusions explicit",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G04",
+      "requirement": "Independent first-seen Japanese chat, document and multi-turn quality",
+      "required_observable": "Fixed rubric, individual examples, misses and no training-set contamination",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Fixed rubric, individual examples, misses and no training-set contamination",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G05",
+      "requirement": "Separate controlled capability ON/OFF vs current core-only benchmark comparisons",
+      "required_observable": "Same snapshot/conditions with individual correct→incorrect transitions reported",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Same snapshot/conditions with individual correct→incorrect transitions reported",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G06",
+      "requirement": "GPQA 198-question current core contract: LIVE-only; parallel inheritance and serial learning",
+      "required_observable": "Same revision, declared exact conditions, 90-minute acceptance and no gold leakage",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Same revision, declared exact conditions, 90-minute acceptance and no gold leakage",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G07",
+      "requirement": "Fixed source packet crossover as *diagnosis*, not official performance claim",
+      "required_observable": "Code × packet factorial comparison isolates observable cause of outcome change",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Code × packet factorial comparison isolates observable cause of outcome change",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G08",
+      "requirement": "Determinism, trace integrity and authentic evidence-vs-simulation tests",
+      "required_observable": "Exact-repeat internal behaviors and explicit divergence from changing Web/state",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Exact-repeat internal behaviors and explicit divergence from changing Web/state",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G09",
+      "requirement": "CPU/8GB resource envelope, scaling, p50/p95 latency, active memory and cost",
+      "required_observable": "Measured on real target hardware/config; no assumed zero-cost reasoning",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Measured on real target hardware/config; no assumed zero-cost reasoning",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G10",
+      "requirement": "Windows/Linux/macOS and installation/package portability",
+      "required_observable": "Installed binaries and actual runs on each claimed target environment",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "Installed binaries and actual runs on each claimed target environment",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G11",
+      "requirement": "Cloud deployment, access control, browser acceptance and public reliability",
+      "required_observable": "Authenticated and unauthenticated UI/API flows observed independently",
+      "implementation_disposition": "UNVERIFIED",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "full_acceptance_gap": "Authenticated and unauthenticated UI/API flows observed independently",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    },
+    {
+      "capability_id": "G12",
+      "requirement": "Publication, license, source/asset provenance, immutable releases and English docs",
+      "required_observable": "New version hashes, human-visible limitations, secret/large-data boundary audit",
+      "implementation_disposition": "NEW",
+      "acceptance_status": "UNVERIFIED",
+      "current_rust_paths": [
+        "audit/population.json",
+        "audit/validation.json",
+        "audit/target-conformance.json"
+      ],
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "full_acceptance_gap": "New version hashes, human-visible limitations, secret/large-data boundary audit",
+      "baseline_source_route_status": "UNMAPPED",
+      "scope_decision": "No scope reduction approved; requirement retained"
+    }
+  ]
+}

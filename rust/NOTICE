@@ -1,0 +1,21 @@
+MINIDORA / NOTNN-LLM-MINIDORA
+Copyright 2026 がっちむち♂
+
+LICENSE AND ATTRIBUTION NOTICE
+
+This repository applies different licenses to different artifact types:
+
+- Source code, runtime, compiler, libraries, tests, tools, build/CI/packaging configuration and other software components: Apache License 2.0 (Apache-2.0).
+- Specifications, designs, theory, papers, explanations, diagrams, structuring/evaluation documents, README and other descriptive documentation: Creative Commons Attribution 4.0 International (CC-BY-4.0).
+
+This is NOT a choice-of-license dual license for the entire repository. See LICENSE for assignment by artifact type and LICENSE-APACHE-2.0 / LICENSE-CC-BY-4.0 for the applicable formal terms.
+
+Third-party sources, materials, public datasets and model-related works remain governed by their respective original authors' rights, licenses and terms. Consult relevant source locks, manifests, provenance and audit records.
+
+Pinned lexical-observation dependencies for the public implementation:
+
+- SudachiPy 0.6.11 — Works Applications; Apache-2.0. Official sources: https://github.com/WorksApplications/sudachi.rs/tree/develop/python and https://pypi.org/project/SudachiPy/0.6.11/.
+- SudachiDict-core 20260723 (dictionary format V0) — Works Applications; Apache-2.0. Official sources: https://github.com/WorksApplications/SudachiDict and https://pypi.org/project/SudachiDict-core/20260723/.
+- SudachiDict includes portions of UniDic and NEologd. Respect the original attribution and legal terms at https://github.com/WorksApplications/SudachiDict/blob/develop/LEGAL. Do not present the redistributed dictionary as a dataset authored by MINIDORA.
+
+These dependencies are used without altering their public distributions. MINIDORA's own additional lexical-observation and HDS-connection software remains covered by the software terms specified above.

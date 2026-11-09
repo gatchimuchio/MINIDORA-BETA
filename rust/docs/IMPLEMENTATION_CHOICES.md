@@ -1,0 +1,53 @@
+# Implementation choices and alternatives
+
+These are concrete choices for the Rust development alpha. They implement bounded public operations under the normative [R2 architecture](../../docs/redesign/01_SYSTEM_SPECIFICATION.md); they do not redefine the engine's logical meaning or certify the full successor. Every choice remains subject to observed compatibility, resource and acceptance evidence.
+
+## Exact numbers instead of binary floating point
+
+`num-bigint` and `num-rational` provide arbitrary-precision integers and normalized exact fractions. They support reproducible decimal parsing, polynomial coefficients, linear transformations, rational probabilities and descriptive statistics without converting a supplied decimal through binary `f64`.
+
+Alternatives include fixed-width integers, fixed-point decimals and floating point. Fixed-width arithmetic has useful speed/space bounds but requires explicit overflow handling; a single fixed scale does not represent every fraction; floating point requires target-specific rounding/error semantics and would not preserve the inherited exact-rational contracts. Arbitrary precision also has costs: expression/bit/term/depth/operation limits are explicit admission guards, not a claim of unlimited resources. Unsupported sizes stop rather than silently round or trim. Each operation's mathematical domain and numeral syntax are recorded separately.
+
+## Strict numeric canonicalization before JSON projection
+
+`serde-value` exposes the typed serialization tree before canonical JSON encoding. The domain adapter rejects binary floating-point values, including finite floats, NaN and infinities, instead of letting JSON conversion silently round or collapse them to null. Exact rational/decimal content uses explicit strings; integer record counters retain their declared integer types. Sorted JSON is one versioned wire projection, not an authority or factual-truth proof.
+
+A later [native Linux/Node-WASI vector comparison](../audit/target-conformance.json) observed matching canonical Unicode/exact-string records, digests and lifecycle predicates, with an independent Python hash check. This narrow vector does not establish full Core/storage/effect or independently implemented-backend equivalence and does not establish physical Windows/8GB behavior.
+
+## Inspected character-ngram family instead of an assumed universal model
+
+The predecessor model and calculation routes were inspected before selecting the Rust model family. The current `SequenceModel` carries character vocabulary/counts/context, non-neural parameter transformation, exact conditional distribution, sequence scoring and deterministic constrained decoding. Core supplies authorized content units; linguistic scores cannot authorize a proposition or create another final judge.
+
+A sparse context trie, beam decoder, grammar model or another non-neural architecture is a candidate alternative. The six public model components do not logically imply any one of them. Retaining an inspected ngram family is a compatibility-oriented implementation choice, not a completed comparison against all alternatives. R2-17 and A01–A03 still require the same unseen meaning, quality, learning and resource obligations. The alpha's constrained output construction does not establish general natural-language generation, multilingual fidelity or open-domain answer quality. No external neural response is substituted for native Core results.
+
+## SQLite reference adapter and immutable blobs instead of an ad hoc state log
+
+The store uses SQLite with verified foreign keys, WAL, full synchronization, bounded lock waiting and explicit immediate transactions. Case revisions, input identity, action phases and event references have checked relationships. Content-addressed immutable blobs are written and flushed before their logical references commit. A pre-transaction published orphan is different from a committed revision pointing to a missing blob.
+
+A single custom append-only journal could reduce dependency count but would require independently implementing crash-tail validation, locking, revision CAS, authenticated joins, index recovery and migration semantics. Another database or blob store is valid only if it satisfies the same abstract contracts. Observing a previously attempted exact local file can reconcile the original pending goal; after cancellation the separate effect-ledger observation path cannot restart or commit that cancelled goal. SQLite is selected as an inspectable local reference adapter, not the engine's definition. A database transaction does not atomically deliver a separate file or external message.
+
+Filesystem and power-loss guarantees depend on the actual host/VFS. Directory synchronization and immutable publication must succeed or produce typed failures/unknowns. Full Windows/macOS/other-target durability, interruption matrices and resource measurements remain open gates. No SQLite choice alone supplies encryption or protection against a host principal that can directly read the state directory.
+
+## Native TLS and inherited proxy policy instead of bypasses
+
+`reqwest` uses its blocking client with `native-tls`, preserved inherited proxy settings and ordinary certificate validation. This matches the cloud environment's supplied trust chain and keeps destination policy at its intended boundary. URL grants, HTTPS:443, redirects, bounded bodies, MIME/charset checks and private-address guards remain application-level checks. Source bodies remain evidence data.
+
+A custom socket/HTTP/TLS implementation would require a substantially larger audit surface. A TLS backend with its own trust store could be viable only after explicit CA/proxy conformance; disabling certificate verification is not an alternative. The local loopback HTTP frontend uses Rust standard-library TCP, bounded parsing and a configured token; it is not used to bypass outbound policy or claim deployed HTTPS security.
+
+## FFI in dependencies and the Rust-source boundary
+
+All first-party Rust crates forbid `unsafe` source. This does **not** mean the full dependency graph is pure Rust or free of FFI. `rusqlite`'s bundled SQLite feature compiles SQLite C through its transitive bindings; native TLS uses the host TLS implementation and associated bindings. Their source, versions, licenses and native toolchain requirements belong in the dependency inventory.
+
+Bundled SQLite favors a reproducible SQLite source version over whichever system library happens to be installed; using a system SQLite would reduce compiled bundled code but change provenance/version/feature assumptions. A pure-Rust SQL/storage alternative would need the same relational, crash, migration and resource tests before replacement. Transitive native dependencies are isolated behind typed storage/TLS adapters; they are not permission to introduce undocumented first-party `unsafe`, native calls or target-dependent semantics. Whole-graph supply-chain and platform acceptance remain distinct from first-party compiler lint success.
+
+## Narrow grammar with truthful stops instead of invented understanding
+
+The input machine seals explicit, source-preserving intents for the currently implemented public grammar. Supported mathematical/relation/source tasks use real algorithms and actual data. An unsupported trailing constraint, quoted instruction, language structure, format or provider produces an unresolved intent or typed failure rather than discarding part of the request.
+
+This is a current implementation limitation, not an approved replacement for the required general-language system. General Q&A, writing/code/research quality and all source-discovered capabilities stay in the [full obligations](../audit/implementation-obligations.md). Expanding the grammar must preserve original role, scope, polarity, conditions, permissions and measurable results; adding keyword-specific answers is not a valid substitute.
+
+## Effects and frontend authority
+
+The local file writer receives a persisted authorized `ATTEMPTED` record binding exact target/bytes/action identity. It reports actual observations. Core alone validates content/render/write outcomes and changes the goal state. Existing different files are not overwritten; uncertain physical outcomes remain unknown rather than generating a fresh action identity.
+
+An atomic external transaction or a general exactly-once claim is not inferred from local SQLite or stable hashes. Remote delivery needs a provider-specific reconciliation/idempotency contract. CLI actor configuration is trusted host input; HTTP binds request identity to a configured authenticated local actor and caps grants/budgets. A public multi-user service requires its own deployment and access-control design and tests.

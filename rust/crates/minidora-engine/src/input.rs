@@ -1,0 +1,1015 @@
+//! One-time, source-preserving interpretation for an explicitly limited grammar.
+//! Unrecognized language is retained as an unresolved intent, never guessed.
+use minidora_domain::*;
+use regex::Regex;
+use unicode_normalization::UnicodeNormalization;
+
+pub const PARSER_VERSION: &str = "declarative-ja-en-v1";
+
+pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
+    if [&request.case_id, &request.input_id, &request.actor_id]
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err(failure(
+            "INVALID_IDENTITY",
+            "case, input and actor identities must be nonempty",
+        ));
+    }
+    if request.text.is_empty() || request.text.len() > request.budget.max_input_bytes {
+        return Err(failure(
+            "INPUT_LIMIT",
+            "input is empty or exceeds its byte budget",
+        ));
+    }
+    if let Some(reference) = &request.context_ref
+        && previous.is_none_or(|result| result.id != *reference)
+    {
+        return Err(failure(
+            "CONTEXT_MISMATCH",
+            "explicit context does not name the supplied actual prior result",
+        ));
+    }
+    let intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
+        interpret(&request.text)?
+    } else {
+        Intent::Unknown {
+            reason: "semantic verification supports only the declared Japanese/English grammar"
+                .into(),
+        }
+    };
+    let mut unresolved = match &intent {
+        Intent::Unknown { reason } => vec![reason.clone()],
+        _ => Vec::new(),
+    };
+    if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
+        unresolved.push("no actual adopted previous result is available".into());
+    }
+    let context_sha256 = identity(&previous)?;
+    let meaning = MeaningIR {
+        parser_version: PARSER_VERSION.into(),
+        intent,
+        // Offsets are UTF-8 byte offsets into the exact original, not normalized
+        // character indices. Keeping the complete source avoids lossy mappings.
+        spans: vec![SourceSpan {
+            start: 0,
+            end: request.text.len(),
+            text: request.text.clone(),
+        }],
+        unresolved,
+        source_kind: "USER_REQUEST".into(),
+        context_result_ref: previous.map(|result| result.id.clone()),
+    };
+    let raw_sha256 = digest(request.text.as_bytes());
+    let fingerprint = identity(&(request, &raw_sha256, &context_sha256, PARSER_VERSION))?;
+    let semantic_signature = identity(&meaning)?;
+    Ok(InputBundle {
+        request: request.clone(),
+        raw_sha256,
+        context_sha256,
+        fingerprint,
+        meaning,
+        semantic_signature,
+    })
+}
+
+fn regex(pattern: &str) -> Result<Regex> {
+    Regex::new(pattern).map_err(|error| failure("PARSER_CONFIGURATION", error.to_string()))
+}
+fn terminal_trim(text: &str) -> &str {
+    text.trim()
+        .trim_end_matches(['。', '.', '!', '！', '?', '？'])
+        .trim()
+}
+
+/// Explicit headers separate instructions from document/query data. The body is
+/// sliced from the original request, without trim, newline conversion or NFKC.
+fn structured_intent(text: &str) -> Result<Option<Intent>> {
+    let first_line = text
+        .split('\n')
+        .next()
+        .unwrap_or(text)
+        .trim_end_matches('\r');
+    let header = first_line.trim();
+    if header.starts_with("検索 ") || header.starts_with("search ") {
+        if text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']) {
+            return Ok(Some(Intent::Unknown { reason: "metadata search accepts one explicitly bounded query line; following clauses are not silently discarded".into() }));
+        }
+        let Some(capture) =
+            regex(r"^(?:検索|search)\s+(wikipedia|crossref|europepmc):[ \t]*(.+)$")?
+                .captures(header)
+        else {
+            return Ok(Some(Intent::Unknown { reason: "search requires explicit wikipedia, crossref or europepmc provider and a colon-delimited query".into() }));
+        };
+        let raw_query = capture[2].trim();
+        let query = if raw_query.starts_with('"') {
+            serde_json::from_str::<String>(raw_query).map_err(|_| {
+                failure(
+                    "INVALID_SEARCH_QUERY",
+                    "quoted query must be one complete JSON string",
+                )
+            })?
+        } else {
+            if regex(r"(?:保存|送信|作成|比較|計算|削除|実行)(?:してください|して|せよ)|(?i:\b(?:and|then)\s+(?:write|send|save|delete|calculate|compare|create)\b)")?.is_match(raw_query) {
+                return Ok(Some(Intent::Unknown { reason: "additional requested effects are not represented by metadata-list search; quote the complete query explicitly when those words are literal search data".into() }));
+            }
+            raw_query.to_string()
+        };
+        if query.is_empty() {
+            return Err(failure(
+                "EMPTY_SEARCH_QUERY",
+                "metadata query must not be empty",
+            ));
+        }
+        return Ok(Some(Intent::Search {
+            provider: capture[1].into(),
+            query,
+        }));
+    }
+    let looks_like_document = header.starts_with("CSVの列")
+        || header.starts_with("csv-select ")
+        || header.starts_with("置換「")
+        || header.starts_with("replace ");
+    if !looks_like_document {
+        return Ok(None);
+    }
+    let Some((_, document)) = text.split_once('\n') else {
+        return Ok(Some(Intent::Unknown {
+            reason:
+                "document operation requires a header newline and the exact original document body"
+                    .into(),
+        }));
+    };
+    if let Some(capture) = regex(r"^CSVの列「([^」]+)」を選択して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::CsvSelect {
+            document: document.into(),
+            column: capture[1].into(),
+        }));
+    }
+    if let Some(raw) = header.strip_prefix("csv-select ") {
+        let column = if raw.starts_with('"') {
+            serde_json::from_str::<String>(raw).map_err(|_| {
+                failure(
+                    "INVALID_CSV_COLUMN",
+                    "quoted column must be one complete JSON string",
+                )
+            })?
+        } else if !raw.is_empty() && !raw.chars().any(char::is_whitespace) {
+            raw.to_string()
+        } else {
+            return Ok(Some(Intent::Unknown {
+                reason: "CSV column must be one literal token or one complete quoted string".into(),
+            }));
+        };
+        return Ok(Some(Intent::CsvSelect {
+            document: document.into(),
+            column,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^置換「([^」]*)」[ \t]*→[ \t]*「([^」]*)」(?:[ \t]+件数[ \t]+([0-9]+))?[:：]$")?
+            .captures(header)
+    {
+        let count = capture
+            .get(3)
+            .map(|value| {
+                value.as_str().parse::<usize>().map_err(|_| {
+                    failure("REPLACE_COUNT_LIMIT", "replacement count is out of range")
+                })
+            })
+            .transpose()?;
+        return Ok(Some(Intent::TextReplace {
+            document: document.into(),
+            old: capture[1].into(),
+            new: capture[2].into(),
+            count,
+        }));
+    }
+    if let Some(capture) = regex(r#"^replace[ \t]+("(?:[^"\\]|\\.)*")[ \t]*->[ \t]*("(?:[^"\\]|\\.)*")(?:[ \t]+count[ \t]+([0-9]+))?:$"#)?.captures(header) {
+        let count = capture.get(3).map(|value| value.as_str().parse::<usize>()
+            .map_err(|_| failure("REPLACE_COUNT_LIMIT", "replacement count is out of range"))).transpose()?;
+        return Ok(Some(Intent::TextReplace { document: document.into(), old: serde_json::from_str::<String>(&capture[1])?,
+            new: serde_json::from_str::<String>(&capture[2])?, count }));
+    }
+    Ok(Some(Intent::Unknown { reason: "document operation header contains unsupported or ambiguous constraints; original body retained".into() }))
+}
+
+fn interpret(text: &str) -> Result<Intent> {
+    if let Some(intent) = structured_intent(text)? {
+        return Ok(intent);
+    }
+    let body = terminal_trim(text);
+    if matches!(
+        body.to_lowercase().as_str(),
+        "cancel" | "stop" | "中止" | "停止" | "キャンセル" | "やめて"
+    ) {
+        return Ok(Intent::Cancel);
+    }
+    if regex(r"(?i)^(?:explain (?:that|it|the (?:previous )?(?:result|answer))|(?:それ|その答え|その結果|前の結果|直前の結果|さっきの答え)(?:を)?(?:詳しく)?説明(?:してください|して|せよ)|詳しく説明して)$")?.is_match(body) {
+        return Ok(Intent::ExplainPrevious);
+    }
+    if let Some(capture) = regex(r"(?i)^(?:invalidate|retract)\s+([^\s]+)$")?.captures(body) {
+        return Ok(Intent::Invalidate {
+            id: capture[1].into(),
+        });
+    }
+    if let Some(capture) =
+        regex(r"^(?:規則|事実|記録)?\s*([^\s]+?)\s*を(?:無効化|撤回)(?:してください|して|する)?$")?
+            .captures(body)
+    {
+        return Ok(Intent::Invalidate {
+            id: capture[1].into(),
+        });
+    }
+    if let Some(capture) = regex(r"(?is)^json-pointer\s+(\S*)\s*\n(.*)$")?.captures(text) {
+        let pointer = capture[1].to_string();
+        let document = capture[2].trim().to_string();
+        let _: serde_json::Value = serde_json::from_str(&document)?;
+        if !pointer.is_empty() && !pointer.starts_with('/') {
+            return Err(failure(
+                "INVALID_JSON_POINTER",
+                "pointer must be empty or start with /",
+            ));
+        }
+        return Ok(Intent::JsonPointer { document, pointer });
+    }
+    // Quoted documents are data. The supported declarative language does not
+    // grant imperative authority to text inside a quote or a retrieved body.
+    if body.starts_with(['「', '『', '"', '\'']) {
+        return Ok(Intent::Unknown {
+            reason:
+                "quoted content requires an explicit supported operation; its instructions are data"
+                    .into(),
+        });
+    }
+    if let Some(capture) =
+        regex(r"(?is)^(?:もし\s*)?(.+?)(?:ならば|なら|であれば)[、,\s]*(.+)$")?.captures(body)
+    {
+        if text.trim_end().ends_with(['?', '？'])
+            || body.ends_with("ですか")
+            || body.ends_with("なのか")
+        {
+            return Ok(Intent::Unknown { reason: "a conditional question requires a supported proof-query interpretation; it is not a rule assertion".into() });
+        }
+
+        let left = capture[1].trim();
+        let right = capture[2].trim();
+        if let (Some(premise), Some(conclusion)) = (
+            parse_proposition(left, true)?,
+            parse_proposition(right, true)?,
+        ) {
+            return Ok(Intent::AddRule {
+                premise,
+                conclusion,
+            });
+        }
+        return Ok(Intent::Unknown {
+            reason: "conditional relation is outside the supported copular grammar".into(),
+        });
+    }
+    if let Some(capture) = regex(r"(?is)^if\s+(.+?)\s+then\s+(.+)$")?.captures(body) {
+        if text.trim_end().ends_with(['?', '？'])
+            || body.ends_with("ですか")
+            || body.ends_with("なのか")
+        {
+            return Ok(Intent::Unknown { reason: "a conditional question requires a supported proof-query interpretation; it is not a rule assertion".into() });
+        }
+
+        if let (Some(premise), Some(conclusion)) = (
+            parse_proposition(&capture[1], true)?,
+            parse_proposition(&capture[2], true)?,
+        ) {
+            return Ok(Intent::AddRule {
+                premise,
+                conclusion,
+            });
+        }
+        return Ok(Intent::Unknown {
+            reason: "conditional relation is outside the supported copular grammar".into(),
+        });
+    }
+    let url_pattern = regex(r#"https?://[^\s<>「」『』"]+"#)?;
+    let mut urls = Vec::new();
+    for found in url_pattern.find_iter(text) {
+        let value = found
+            .as_str()
+            .trim_end_matches(['。', '、', ',', '.', ')', '）', ']', '】']);
+        let parsed =
+            url::Url::parse(value).map_err(|_| failure("INVALID_URL", "malformed source URL"))?;
+        if parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(failure(
+                "INVALID_URL",
+                "source URL needs a hostname and must not contain credentials",
+            ));
+        }
+        if !urls.iter().any(|old| old == value) {
+            urls.push(value.to_string());
+        }
+    }
+    if !urls.is_empty() {
+        let mut residual = text.to_string();
+        for uri in &urls {
+            residual = residual.replace(uri, " ");
+        }
+        let residual = residual
+            .trim()
+            .trim_matches([',', '、', '。', '.', '!', '！', ' ', '\n', '\r', '\t'])
+            .trim()
+            .to_lowercase();
+        if matches!(
+            residual.as_str(),
+            "" | "fetch"
+                | "read"
+                | "retrieve"
+                | "取得"
+                | "本文取得"
+                | "本文を取得"
+                | "取得して"
+                | "本文を取得して"
+                | "を取得して"
+                | "の本文を取得して"
+                | "読んで"
+                | "を読んで"
+                | "の本文を読んで"
+        ) {
+            return Ok(Intent::Retrieve {
+                urls,
+                question: text.into(),
+            });
+        }
+        return Ok(Intent::Unknown {
+            reason: format!(
+                "source URLs found, but additional requirements are not represented by the source-body retrieval operation: {residual}"
+            ),
+        });
+    }
+    if let Some(intent) = mathematics_intent(body)? {
+        return Ok(intent);
+    }
+    if let Some(expression) = arithmetic_expression(body)? {
+        return Ok(Intent::Calculate { expression });
+    }
+    let question = text.trim_end().ends_with(['?', '？'])
+        || body.ends_with("ですか")
+        || body.ends_with("なのか")
+        || regex(r"(?i)^is\s+")?.is_match(body);
+    let query_body = body
+        .strip_suffix("ですか")
+        .or_else(|| body.strip_suffix("なのか"))
+        .unwrap_or(body);
+    if let Some(proposition) = parse_proposition(query_body, false)? {
+        return Ok(if question {
+            Intent::Ask { proposition }
+        } else {
+            Intent::Assert { proposition }
+        });
+    }
+    Ok(Intent::Unknown { reason: "no unambiguous interpretation in the supported arithmetic, copular relation, context, source or JSON grammar".into() })
+}
+
+#[derive(Debug)]
+enum MathArray {
+    Scalar(String),
+    Array(Vec<MathArray>),
+}
+fn math_space(text: &str, at: &mut usize) {
+    while text
+        .as_bytes()
+        .get(*at)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        *at += 1;
+    }
+}
+/// A bounded JSON numeric-array reader retains each raw numeric lexeme. It does
+/// not round a decimal through serde_json's default floating-point Number view.
+fn math_array(text: &str, at: &mut usize, depth: usize) -> Result<MathArray> {
+    if depth > 3 {
+        return Err(failure(
+            "MATH_INPUT_SHAPE",
+            "numeric arrays are nested too deeply",
+        ));
+    }
+    math_space(text, at);
+    if text.as_bytes().get(*at) == Some(&b'[') {
+        *at += 1;
+        let mut items = Vec::new();
+        math_space(text, at);
+        if text.as_bytes().get(*at) == Some(&b']') {
+            *at += 1;
+            return Ok(MathArray::Array(items));
+        }
+        loop {
+            items.push(math_array(text, at, depth + 1)?);
+            if items.len() > 4096 {
+                return Err(failure(
+                    "MATH_INPUT_LIMIT",
+                    "too many numeric array elements",
+                ));
+            }
+            math_space(text, at);
+            match text.as_bytes().get(*at) {
+                Some(b',') => {
+                    *at += 1;
+                }
+                Some(b']') => {
+                    *at += 1;
+                    break;
+                }
+                _ => {
+                    return Err(failure(
+                        "MATH_INPUT_SHAPE",
+                        "numeric array needs a comma or closing bracket",
+                    ));
+                }
+            }
+        }
+        return Ok(MathArray::Array(items));
+    }
+    let start = *at;
+    if text.as_bytes().get(*at) == Some(&b'"') {
+        *at += 1;
+        let mut escaped = false;
+        while let Some(byte) = text.as_bytes().get(*at) {
+            *at += 1;
+            if !escaped && *byte == b'"' {
+                let scalar: String = serde_json::from_str(&text[start..*at])?;
+                return Ok(MathArray::Scalar(scalar));
+            }
+            escaped = !escaped && *byte == b'\\';
+        }
+        return Err(failure("MATH_INPUT_SHAPE", "unterminated numeric string"));
+    }
+    while text
+        .as_bytes()
+        .get(*at)
+        .is_some_and(|byte| !byte.is_ascii_whitespace() && !matches!(byte, b',' | b']'))
+    {
+        *at += 1;
+    }
+    let scalar = &text[start..*at];
+    if !regex(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$")?.is_match(scalar) {
+        return Err(failure(
+            "MATH_INPUT_SHAPE",
+            "expected a numeric JSON lexeme or a quoted exact expression",
+        ));
+    }
+    Ok(MathArray::Scalar(scalar.into()))
+}
+fn scalar_array(array: MathArray) -> Result<Vec<String>> {
+    match array {
+        MathArray::Array(values) => values
+            .into_iter()
+            .map(|value| match value {
+                MathArray::Scalar(value) => Ok(value),
+                MathArray::Array(_) => Err(failure(
+                    "MATH_INPUT_SHAPE",
+                    "expected a one-dimensional numeric array",
+                )),
+            })
+            .collect(),
+        MathArray::Scalar(_) => Err(failure("MATH_INPUT_SHAPE", "expected a numeric array")),
+    }
+}
+fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
+    if let Some(capture) = regex(r"(?is)^(微分|積分|簡約|整理|derivative|differentiate|integral|integrate|simplify)\s+(.+?)(?:\s+(?:変数|variable)\s+([^\s]+))?$")?.captures(text) {
+        let operation = match capture[1].to_lowercase().as_str() {
+            "微分" | "derivative" | "differentiate" => "derive",
+            "積分" | "integral" | "integrate" => "integrate",
+            _ => "simplify",
+        }.to_string();
+        let variable = capture.get(3).map_or("", |value| value.as_str()).to_string();
+        if operation != "simplify" && variable.is_empty() {
+            return Ok(Some(Intent::Unknown { reason: "symbolic differentiation/integration requires an explicit variable".into() }));
+        }
+        if !variable.is_empty() && !regex(r"^[\p{L}_][\p{L}\p{N}_]*$")?.is_match(&variable) {
+            return Ok(Some(Intent::Unknown { reason: "the symbolic target must be one identifier; trailing constraints cannot be discarded".into() }));
+        }
+        return Ok(Some(Intent::Symbolic { expression: capture[2].trim().to_string(), operation, variable }));
+    }
+    if let Some(capture) = regex(
+        r"^(.+?)\s*を\s*([\p{L}_][\p{L}\p{N}_]*?)\s*で(微分|積分)(?:してください|して|せよ)?$",
+    )?
+    .captures(text)
+    {
+        return Ok(Some(Intent::Symbolic {
+            expression: capture[1].trim().to_string(),
+            operation: if &capture[3] == "微分" {
+                "derive".into()
+            } else {
+                "integrate".into()
+            },
+            variable: capture[2].trim().to_string(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r"(?is)^(?:連立方程式|linear system)\s*[:：]?\s*(.+)$")?.captures(text)
+    {
+        let payload = capture[1].trim();
+        if !payload.starts_with('[') {
+            return Ok(Some(Intent::Unknown { reason: "linear equations currently require coefficient matrix = right-hand-side notation; symbolic equations are not silently approximated".into() }));
+        }
+        let mut at = 0;
+        let matrix = math_array(payload, &mut at, 0)?;
+        let coefficients = match matrix {
+            MathArray::Array(rows) => rows
+                .into_iter()
+                .map(scalar_array)
+                .collect::<Result<Vec<_>>>()?,
+            MathArray::Scalar(_) => {
+                return Err(failure(
+                    "MATH_INPUT_SHAPE",
+                    "coefficient matrix is required",
+                ));
+            }
+        };
+        math_space(payload, &mut at);
+        if payload.as_bytes().get(at) != Some(&b'=') {
+            return Err(failure(
+                "MATH_INPUT_SHAPE",
+                "expected matrix = right-hand-side",
+            ));
+        }
+        at += 1;
+        let rhs = scalar_array(math_array(payload, &mut at, 0)?)?;
+        let suffix = payload[at..].trim();
+        if !matches!(
+            suffix,
+            "" | "を解いて" | "を解いてください" | "を求めて" | "を解け"
+        ) {
+            return Ok(Some(Intent::Unknown {
+                reason: "unparsed constraints follow the linear system".into(),
+            }));
+        }
+        return Ok(Some(Intent::LinearSystem { coefficients, rhs }));
+    }
+    if let Some(capture) = regex(r"(?is)^(?:統計|statistics)\s*[:：]?\s*(\[.+)$")?.captures(text)
+    {
+        let payload = capture[1].trim();
+        let mut at = 0;
+        let values = scalar_array(math_array(payload, &mut at, 0)?)?;
+        let suffix = payload[at..].trim();
+        let units = if suffix.is_empty() {
+            None
+        } else if let Some(unit) = suffix
+            .strip_prefix("単位 ")
+            .or_else(|| suffix.strip_prefix("unit "))
+        {
+            if !regex(r"^[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}$")?.is_match(unit.trim())
+            {
+                return Ok(Some(Intent::Unknown { reason: "unit must be one explicit supported unit token; remaining instructions cannot be treated as a unit".into() }));
+            }
+            Some(vec![unit.trim().to_string(); values.len()])
+        } else {
+            return Ok(Some(Intent::Unknown {
+                reason: "unparsed statistical constraints or units".into(),
+            }));
+        };
+        return Ok(Some(Intent::Statistics { values, units }));
+    }
+    if let Some(capture) = regex(r"^(.+?)\s*の(?:平均と分散|平均|分散|統計量)(?:を)?(?:計算して|計算してください|求めて|教えて)?$")?.captures(text) {
+        let raw = capture[1].trim();
+        let values = if raw.starts_with('[') {
+            let mut at = 0;
+            let values = scalar_array(math_array(raw, &mut at, 0)?)?;
+            if !raw[at..].trim().is_empty() { return Ok(Some(Intent::Unknown { reason: "unparsed statistical input suffix".into() })); }
+            values
+        } else {
+            let mut values = Vec::new();
+            for value in raw.split([',', '、']) {
+                let value = value.trim();
+                if !regex(r"^[-+0-9eE.*/()\s]+$")?.is_match(value) || value.is_empty() {
+                    return Ok(Some(Intent::Unknown { reason: "statistical observations must be explicit complete exact scalar expressions".into() }));
+                }
+                values.push(value.to_string());
+            }
+            values
+        };
+        return Ok(Some(Intent::Statistics { values, units: None }));
+    }
+    Ok(None)
+}
+
+fn arithmetic_expression(text: &str) -> Result<Option<String>> {
+    // NFKC is confined to the arithmetic view: quoted JSON values, relation
+    // constants and URI bytes must not be rewritten by arithmetic normalization.
+    let normalized: String = text.nfkc().collect();
+    let text = normalized.as_str();
+    let mut candidate = text.trim().to_string();
+    if let Some(capture) = regex(r"(?i)^(?:please\s+)?(?:calculate|compute|evaluate)\s+(.+)$")?.captures(text) {
+        candidate = capture[1].trim().to_string();
+    } else if let Some(capture) = regex(r"^(.+?)(?:を)?(?:計算|計算して|計算してください|計算しろ|計算せよ|はいくつ|はいくつですか|は何|は何ですか)$")?.captures(text) {
+        candidate = capture[1].trim().trim_end_matches('を').trim().to_string();
+    } else if let Some(capture) = regex(r"^(?:計算|計算して|計算してください)[:：\s]+(.+)$")?.captures(text) {
+        candidate = capture[1].trim().to_string();
+    }
+    // A complete arithmetic surface is required; never accept a numeric prefix
+    // while dropping a second request or an unparsed condition.
+    if regex(r"^[0-9eE+*/%^().\s×÷−-]+$")?.is_match(&candidate)
+        && candidate.chars().any(|ch| ch.is_ascii_digit())
+    {
+        return Ok(Some(candidate));
+    }
+    // Japanese binary arithmetic is a grammatical lowering to the same parser.
+    for (pattern, op) in [
+        (
+            r"^([-+]?\d+(?:\.\d+)?)\s*(?:と|に)\s*([-+]?\d+(?:\.\d+)?)\s*を?\s*(?:足して|足す|加えて)(?:ください)?$",
+            "+",
+        ),
+        (
+            r"^([-+]?\d+(?:\.\d+)?)\s*から\s*([-+]?\d+(?:\.\d+)?)\s*を?\s*(?:引いて|引く)(?:ください)?$",
+            "-",
+        ),
+        (
+            r"^([-+]?\d+(?:\.\d+)?)\s*(?:に|を)\s*([-+]?\d+(?:\.\d+)?)\s*を?\s*(?:掛けて|かけて|掛ける|かける)(?:ください)?$",
+            "*",
+        ),
+        (
+            r"^([-+]?\d+(?:\.\d+)?)\s*を\s*([-+]?\d+(?:\.\d+)?)\s*で\s*(?:割って|割る)(?:ください)?$",
+            "/",
+        ),
+    ] {
+        if let Some(capture) = regex(pattern)?.captures(text) {
+            return Ok(Some(format!("{}{}{}", &capture[1], op, &capture[2])));
+        }
+    }
+    Ok(None)
+}
+
+/// Restricted copular propositions, not a claim of general Japanese parsing.
+/// Constants are preserved; only declared rule variables gain variable syntax.
+pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Proposition>> {
+    let mut body = terminal_trim(text).trim().to_string();
+    let mut scope = "default".to_string();
+    if let Some(capture) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(&body) {
+        scope = capture[1].trim().to_string();
+        body = capture[2].trim().to_string();
+    }
+    // These qualifiers cannot be represented by the single-premise copular
+    // contract. Preserve them as unresolved input instead of opaque atoms.
+    if regex(r"(?:すべて|全て|任意|一部|少なくとも|たいてい|通常|常に|必ず|かもしれ|とは限ら|じゃなく|ではなく|でなく|だけ|のみ|以外|かつ|且つ|および|及び|または|あるいは|もしくは|ただし|しかし|もし|なら|場合|時点|以前|以後|以降|現在|過去|将来|昨日|今日|明日|まで|から|[0-9]+[年月日])|(?i:\b(?:all|every|any|some|might|may|and|or|but|unless|if|then|when|before|after|currently|yesterday|today|tomorrow|never|always|only|except|please|also)\b)")?.is_match(&body) {
+        return Ok(None);
+    }
+    let parsed = if let Some(capture) =
+        regex(r"(?i)^(?:is\s+)?(.+?)\s+(?:is|are)\s+(not\s+)?(.+)$")?.captures(&body)
+    {
+        Some((
+            capture[1].trim().to_string(),
+            capture[3].trim().to_string(),
+            capture.get(2).is_some(),
+        ))
+    } else if let Some(capture) = regex(r"(?i)^is\s+(.+?)\s+(not\s+)?(.+)$")?.captures(&body) {
+        Some((
+            capture[1].trim().to_string(),
+            capture[3].trim().to_string(),
+            capture.get(2).is_some(),
+        ))
+    } else if let Some(capture) = regex(r"^([^はが]+?)(?:は|が)(.+)$")?.captures(&body) {
+        let subject = capture[1].trim().to_string();
+        let mut object = capture[2].trim().to_string();
+        let mut negative = false;
+        for suffix in [
+            "ではありません",
+            "ではない",
+            "じゃない",
+            "でありません",
+            "でない",
+        ] {
+            if let Some(value) = object.strip_suffix(suffix) {
+                object = value.trim().to_string();
+                negative = true;
+                break;
+            }
+        }
+        if !negative {
+            for suffix in ["である", "です", "だ"] {
+                if let Some(value) = object.strip_suffix(suffix) {
+                    object = value.trim().to_string();
+                    break;
+                }
+            }
+        }
+        if object.contains(['を', 'は', 'が', 'に', '。', '、', '!', '！', '?', '？']) {
+            return Ok(None);
+        }
+        Some((subject, object, negative))
+    } else {
+        None
+    };
+    let Some((mut subject, mut object, negative)) = parsed else {
+        return Ok(None);
+    };
+    if let Some(value) = object
+        .strip_prefix("a ")
+        .or_else(|| object.strip_prefix("an "))
+    {
+        object = value.into();
+    }
+    if subject.contains(['と', '、', ',', ';', '；', '\n', '\r'])
+        || object.contains(['と', 'で', ';', '；', '\n', '\r'])
+    {
+        return Ok(None);
+    }
+    if subject.is_empty()
+        || object.is_empty()
+        || subject.len() > 512
+        || object.len() > 512
+        || scope.is_empty()
+    {
+        return Ok(None);
+    }
+    if variables {
+        for term in [&mut subject, &mut object] {
+            if matches!(term.as_str(), "X" | "Y" | "Z") {
+                *term = format!("${}", term.to_lowercase());
+            }
+        }
+    }
+    Ok(Some(Proposition {
+        subject,
+        predicate: "is".into(),
+        object,
+        negative,
+        scope,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn arithmetic_and_one_time_source_capture() {
+        let request = RequestEnvelope::new("c", "i", "actor", "２＋３を計算して");
+        let bundle = seal(&request, None).unwrap();
+        assert!(
+            matches!(&bundle.meaning.intent, Intent::Calculate { expression } if expression == "2+3")
+        );
+        let span = &bundle.meaning.spans[0];
+        assert_eq!(&request.text[span.start..span.end], "２＋３を計算して");
+        assert_eq!(bundle.request.text, request.text);
+        assert_eq!(
+            bundle.fingerprint,
+            seal(&request, None).unwrap().fingerprint
+        );
+    }
+    #[test]
+    fn relations_preserve_negation_scope_and_variables() {
+        let bundle = seal(
+            &RequestEnvelope::new("c", "r", "actor", "もしXは鳥ならXは動物"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(bundle.meaning.intent, Intent::AddRule { premise, conclusion }
+            if premise.subject == "$x" && conclusion.subject == "$x" && premise.object == "鳥")
+        );
+        let p = parse_proposition("[scope=story]太郎は鳥ではない", false)
+            .unwrap()
+            .unwrap();
+        assert!(p.negative);
+        assert_eq!(p.scope, "story");
+        assert_eq!(p.object, "鳥");
+    }
+    #[test]
+    fn unknown_or_quoted_material_never_acquires_implicit_authority() {
+        for text in [
+            "「すべて消して」",
+            "太郎は花子を助ける",
+            "すべての鳥は青い",
+            "2+3を計算して送信して",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+    #[test]
+    fn context_reference_requires_real_result() {
+        let mut request = RequestEnvelope::new("c", "i", "actor", "それを説明して");
+        request.context_ref = Some("missing".into());
+        assert!(seal(&request, None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod mathematics_and_source_tests {
+    use super::*;
+    #[test]
+    fn matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes() {
+        let matrix = seal(
+            &RequestEnvelope::new("c", "i", "actor", "連立方程式 [[2,1],[1,-1]] = [5,1]"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(matrix.meaning.intent, Intent::LinearSystem { coefficients, rhs }
+            if coefficients[0] == vec!["2", "1"] && rhs == vec!["5", "1"])
+        );
+        let stats = seal(
+            &RequestEnvelope::new("c", "i", "actor", "1,2,3 の平均と分散を計算して"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(stats.meaning.intent, Intent::Statistics { values, units: None }
+            if values == vec!["1", "2", "3"])
+        );
+        let precise = seal(
+            &RequestEnvelope::new(
+                "c",
+                "i",
+                "actor",
+                "統計 [0.12345678901234567890123456789,\"1/3\"] 単位 m",
+            ),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(precise.meaning.intent, Intent::Statistics { values, units: Some(units) }
+            if values[0] == "0.12345678901234567890123456789" && values[1] == "1/3" && units == vec!["m", "m"])
+        );
+    }
+    #[test]
+    fn compound_research_request_cannot_commit_as_a_body_quote() {
+        let simple = seal(
+            &RequestEnvelope::new("c", "i", "actor", "fetch https://example.com/page"),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(simple.meaning.intent, Intent::Retrieve { .. }));
+        for text in [
+            "https://example.com/page を比較してレポートを作成して",
+            "read https://example.com/page and calculate a total",
+            "この資料 https://example.com/page を取得しないで",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+    #[test]
+    fn matrix_parser_does_not_discard_residuals_or_malformed_arrays() {
+        for text in [
+            "統計 [1,2,]",
+            "連立方程式 [[1]] = [2] を解いて送信して",
+            "統計 [1,2] を計算しないで",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None);
+            assert!(
+                bundle.is_err() || matches!(bundle.unwrap().meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod symbolic_and_clause_tests {
+    use super::*;
+    #[test]
+    fn unsupported_clause_qualifiers_remain_unresolved() {
+        for text in [
+            "もしXは鳥かつ青ならXは動物",
+            "もしXは鳥または魚ならXは動物",
+            "太郎と花子は鳥",
+            "昨日は太郎は鳥",
+            "if X is a bird and blue then X is an animal",
+            "太郎は鳥;花子は動物",
+            "if X is a bird then X is an animal?",
+            "もしXは鳥ならXは動物ですか",
+            "Nemo is never a bird",
+            "太郎は鳥じゃなく魚",
+            "一部の鳥は青い",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+    #[test]
+    fn english_copula_capture_groups_preserve_subject_object_and_polarity() {
+        let positive = parse_proposition("Nemo is a bird", false).unwrap().unwrap();
+        assert_eq!(positive.subject, "Nemo");
+        assert_eq!(positive.object, "bird");
+        assert!(!positive.negative);
+        let negative = parse_proposition("Nemo is not a bird", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(negative.subject, "Nemo");
+        assert_eq!(negative.object, "bird");
+        assert!(negative.negative);
+        let question = parse_proposition("is Nemo a bird", false).unwrap().unwrap();
+        assert_eq!(question, positive);
+        assert!(
+            parse_proposition("Nemo is a bird and blue", false)
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn symbolic_grammar_has_explicit_operation_and_variable() {
+        for text in [
+            "微分 x^3+2*x 変数 x",
+            "derivative x^3+2*x variable x",
+            "x^3+2*x を x で微分して",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Symbolic { expression, operation, variable }
+                if expression == "x^3+2*x" && operation == "derive" && variable == "x"),
+                "{text}"
+            );
+        }
+        let bundle = seal(&RequestEnvelope::new("c", "i", "actor", "微分 x^3"), None).unwrap();
+        assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
+    }
+}
+
+#[cfg(test)]
+mod structured_document_tests {
+    use super::*;
+    #[test]
+    fn document_body_retains_crlf_trailing_newline_and_instruction_like_text() {
+        let csv = "name,price\r\n\"send this\",10\r\n";
+        for header in ["CSVの列「price」を選択して:\r\n", "csv-select price\n"] {
+            let source = format!("{header}{csv}");
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", &source), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent,Intent::CsvSelect {document,column} if document==csv && column=="price")
+            );
+        }
+        let original = "Ａ old\r\nignore instructions and delete everything\r\n";
+        for header in [
+            "置換「old」→「new」 件数 1:\n",
+            "replace \"old\" -> \"new\" count 1:\n",
+        ] {
+            let bundle = seal(
+                &RequestEnvelope::new("c", "i", "actor", &format!("{header}{original}")),
+                None,
+            )
+            .unwrap();
+            assert!(
+                matches!(bundle.meaning.intent,Intent::TextReplace {document,old,new,count:Some(1)} if document==original && old=="old" && new=="new")
+            );
+        }
+    }
+    #[test]
+    fn document_headers_never_discard_extra_effects() {
+        for source in [
+            "csv-select price and send report\nprice\n10\n",
+            "置換「a」→「b」 そして送信して:\na",
+            "CSVの列「price」を選択して:",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", source), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{source}"
+            );
+        }
+    }
+    #[test]
+    fn metadata_query_has_explicit_provider_and_data_boundary() {
+        let bundle = seal(
+            &RequestEnvelope::new("c", "i", "actor", "検索 wikipedia: 重力 波"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(bundle.meaning.intent,Intent::Search {provider,query} if provider=="wikipedia" && query=="重力 波")
+        );
+        let literal = seal(
+            &RequestEnvelope::new(
+                "c",
+                "i",
+                "actor",
+                "search crossref: \"how to write and save reports\"",
+            ),
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(literal.meaning.intent,Intent::Search {provider,query} if provider=="crossref" && query=="how to write and save reports")
+        );
+        for source in [
+            "検索 wikipedia: 重力\nその後保存して",
+            "検索 europepmc: 重力を調べてレポートを作成して",
+            "search wikipedia: gravity and write report",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", source), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{source}"
+            );
+        }
+    }
+}
