@@ -1,6 +1,6 @@
 # Rust implementation status — development alpha
 
-The current development identity is `0.7.0-alpha.6`, schema `minidora-rust/0.7.0-alpha.6`, pinned Rust `1.99.1`, edition 2024. The frozen predecessor baseline remains `1c546e77007afa0a9eeb3a44f07da99d84c383eb`; the upstream extraction reference remains `9307d7e2b1799750ecef1957d85128fcbe403d02`.
+The current development identity is `0.7.0-alpha.7`, schema `minidora-rust/0.7.0-alpha.7`, pinned Rust `1.99.1`, edition 2024. The frozen predecessor baseline remains `1c546e77007afa0a9eeb3a44f07da99d84c383eb`; the upstream extraction reference remains `9307d7e2b1799750ecef1957d85128fcbe403d02`.
 
 **Full requested successor acceptance: not established.** This is an implementation inventory for ongoing work, not permission to exclude requirements, a release acceptance certificate, a deployment claim or independent third-party audit. The [93-row baseline requirements](requirements.tsv) remain baseline observations; actual successor evidence must be recorded separately. The [full implementation obligations](implementation-obligations.md) remain controlling for coverage.
 
@@ -10,7 +10,7 @@ The current development identity is `0.7.0-alpha.6`, schema `minidora-rust/0.7.0
 |---|---|---|---|
 | Versioned records and identity | `minidora-domain` | Separate input, lifecycle, goal, memory, result, render, evidence and effect records; explicit fingerprints and schema identity; canonicalization rejects binary floats before JSON projection | Complete R2 wire/semantic refinement, all compatibility mappings and cross-encoding equivalence |
 | Input machine | `input.rs` | Original UTF-8 bytes/spans retained; one finite grammar lowers actual arithmetic, copular, mathematical, document, metadata-search, source and JSON requests into typed intents | Full subject/negation/condition/time/quantifier/quotation coverage, ambiguity populations and general-language quality |
-| Bounded Japanese meaning comparison | `meaning_compare.rs`, Core | Explicit A/B requests produce a typed report over recognized polarity, scope, quantification, modality, condition direction, agent/recipient roles, voice, time/aspect, attribution, causality, numeric/deadline units and normalized Arabic, fullwidth and Kanji counts; unsupported differences suspend | Finite surface markers only; not general sentence entailment, unrestricted translation, or a first-seen holdout result |
+| Bounded Japanese meaning comparison | `meaning_compare.rs`, Core | Explicit A/B requests produce a typed report over recognized polarity, scope, quantification, modality, condition direction, agent/recipient roles, voice, time/aspect, attribution, causality, numeric/deadline units and normalized Arabic, fullwidth and Kanji counts, including exact decimal coefficients with Japanese scale units; unsupported differences suspend | Finite surface markers only; not general sentence entailment, unrestricted translation, or a first-seen holdout result |
 | Core and scheduler | `core.rs`, `scheduler.rs` | Core binds goals, schedules observed prerequisites, adopts content, checks rendering and required write receipts before goal completion; typed terminal states | All required capability paths, complex goal composition, complete R2 negative cases and task-bound resource validation |
 | Arithmetic and context | `language.rs`, Core | Exact rational calculations with steps; follow-up resolves a saved actual result across process restarts | All inherited quantities/units/numeric edge contracts and independently evaluated multi-turn quality |
 | Symbolic and linear mathematics | `math.rs` | Exact bounded polynomial normalization/derivative/representative integral; exact linear systems with invertible-operation/source-substitution certificates | Broader mathematical language, all predecessor equivalent tests and general scientific reasoning |
@@ -32,7 +32,7 @@ These rows describe source-visible mechanisms. Unit tests and route tests are di
 
 ## Current-run validation
 
-The alpha 6 Linux development run passed formatting, whole-workspace/all-target checking, Clippy with warnings denied, all-feature tests (133 passed, 0 failed, 0 ignored) and build. See [validation.json](validation.json) and [executed-tests.json](executed-tests.json) for the exact source snapshot and outcomes. These checks do not establish full successor acceptance.
+The alpha 7 Linux development run passed formatting, whole-workspace/all-target checking, Clippy with warnings denied, all-feature tests (134 passed, 0 failed, 0 ignored) and build. See [validation.json](validation.json) and [executed-tests.json](executed-tests.json) for the exact source snapshot and outcomes. These checks do not establish full successor acceptance.
 
 Earlier scoped actual-source checks of mathematical components are component evidence only. They do not close the 93-requirement population, count as independent evaluation or replace ordinary-route execution of the current workspace.
 
@@ -72,7 +72,7 @@ No current omission is an accepted scope reduction. This development version rem
 
 ## Final current-instance validation record
 
-[validation.json](validation.json) and [executed-tests.json](executed-tests.json) record the exact code snapshot and executed suite outcomes: **133 Rust tests passed, 0 failed, 0 ignored**, plus **8 separate local TLS fixture cases**. The frozen Python beta separately passed its selected **313** tests during the combined installation rehearsal. These predecessor/fixture counts are not added to the Rust suite or presented as full-capability acceptance. Formatting, whole-workspace/all-target checking, Clippy with warnings denied, all-feature tests and build succeeded.
+[validation.json](validation.json) and [executed-tests.json](executed-tests.json) record the exact code snapshot and executed suite outcomes: **134 Rust tests passed, 0 failed, 0 ignored**, plus **8 separate local TLS fixture cases**. The frozen Python beta separately passed its selected **313** tests during the combined installation rehearsal. These predecessor/fixture counts are not added to the Rust suite or presented as full-capability acceptance. Formatting, whole-workspace/all-target checking, Clippy with warnings denied, all-feature tests and build succeeded.
 
 [dependencies.cdx.json](dependencies.cdx.json) now contains the actual locked metadata inventory (155 packages and declared licenses); it is not a legal or advisory clearance. [rust-requirement-observations.json](rust-requirement-observations.json) retains all93 obligations with actual partial implementation locations where established, separate full acceptance gaps and explicit unimplemented/unverified rows. No required scope was removed.
 

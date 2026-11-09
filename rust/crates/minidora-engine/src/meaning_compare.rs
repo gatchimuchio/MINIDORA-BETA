@@ -493,14 +493,57 @@ fn numeric_suffix(text: &str) -> Option<String> {
         return Some(suffix);
     }
     if suffix.contains('.') {
-        return None;
+        return decimal_with_japanese_scale(&suffix);
     }
     kanji_integer(&suffix).map(|value| value.to_string())
+}
+
+fn decimal_with_japanese_scale(text: &str) -> Option<String> {
+    let (whole, fractional_and_scale) = text.split_once('.')?;
+    let (scale_position, scale) = fractional_and_scale.char_indices().next_back()?;
+    let fraction = &fractional_and_scale[..scale_position];
+    if fraction.is_empty()
+        || (!whole.is_empty() && !whole.chars().all(|character| character.is_ascii_digit()))
+        || !fraction.chars().all(|character| character.is_ascii_digit())
+    {
+        return None;
+    }
+    let scale_zeros = match scale {
+        '十' => 1,
+        '百' => 2,
+        '千' => 3,
+        '万' => 4,
+        '億' => 8,
+        '兆' => 12,
+        _ => return None,
+    };
+    if whole.len().checked_add(fraction.len())? > 128 {
+        return None;
+    }
+
+    let integer_digits = if whole.is_empty() { "0" } else { whole };
+    let mut digits = format!("{integer_digits}{fraction}");
+    let decimal_position = integer_digits.len().checked_add(scale_zeros)?;
+    let fraction_digits = if decimal_position >= digits.len() {
+        digits.push_str(&"0".repeat(decimal_position - digits.len()));
+        String::new()
+    } else {
+        digits.split_off(decimal_position)
+    };
+    let integer = digits.trim_start_matches('0');
+    let integer = if integer.is_empty() { "0" } else { integer };
+    let fraction = fraction_digits.trim_end_matches('0');
+    if fraction.is_empty() {
+        Some(integer.to_owned())
+    } else {
+        Some(format!("{integer}.{fraction}"))
+    }
 }
 
 fn is_numeric_character(character: char) -> bool {
     character.is_ascii_digit()
         || character == '.'
+        || matches!(character, '+' | '-' | '−')
         || digit_value(character).is_some()
         || matches!(character, '十' | '百' | '千' | '万' | '億' | '兆')
 }
@@ -744,7 +787,7 @@ mod tests {
             nearby_count("参加者は一万二千三百四十五人だった。"),
             "12345人"
         );
-        assert_eq!(nearby_count("参加者は1.5万人以上だった。"), "指定値");
+        assert_eq!(nearby_count("参加者は1.5万人以上だった。"), "15000人");
         assert_eq!(
             number_and_unit("得点が１０点上がった。", "点").unwrap().0,
             "10"
@@ -753,6 +796,27 @@ mod tests {
         let report = compare("参加者は三人以上だった。", "参加者は４人以上だった。").unwrap();
         assert!(report.contains("文Aは「3人以上"));
         assert!(report.contains("文Bは「4人以上"));
+    }
+
+    #[test]
+    fn converts_decimal_coefficients_before_japanese_scale_units_exactly() {
+        assert_eq!(numeric_suffix("1.5万"), Some("15000".into()));
+        assert_eq!(numeric_suffix(".5万"), Some("5000".into()));
+        assert_eq!(numeric_suffix("０．０５万"), Some("500".into()));
+        assert_eq!(numeric_suffix("1.2345十"), Some("12.345".into()));
+        assert_eq!(numeric_suffix("1.5億"), Some("150000000".into()));
+        assert_eq!(numeric_suffix("-1.5万"), None);
+        assert_eq!(numeric_suffix("1.5万2千"), None);
+        assert_eq!(nearby_count("参加者は1.5万人以上だった。"), "15000人");
+        assert_eq!(nearby_count("参加者は−1.5万人以上だった。"), "指定値");
+        assert_eq!(
+            number_and_unit("得点が1.25万点上がった。", "点").unwrap().0,
+            "12500"
+        );
+
+        let report = compare("参加者は1.5万人以上だった。", "参加者は二万人以上だった。").unwrap();
+        assert!(report.contains("文Aは「15000人以上"));
+        assert!(report.contains("文Bは「20000人以上"));
     }
 
     #[test]

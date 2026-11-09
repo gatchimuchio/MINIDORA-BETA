@@ -25,11 +25,11 @@
     "meaning_transformations": 120
   },
   "diagnostic_observations": {
-    "latest_artifact": "diagnostic-alpha6-observations.jsonl",
+    "latest_artifact": "diagnostic-alpha7-observations.jsonl",
     "scored": false,
     "cumulative_terminal_state_counts": {
-      "COMMIT": 150,
-      "SUSPEND": 546
+      "COMMIT": 180,
+      "SUSPEND": 632
     },
     "runs": [
       {
@@ -108,11 +108,24 @@
           "COMMIT": 30,
           "SUSPEND": 86
         }
+      },
+      {
+        "artifact": "diagnostic-alpha7-observations.jsonl",
+        "score_sheet": "scoring-sheet-alpha7.tsv",
+        "source_commit": "40c80bf6079813b667573953a7a2411a9e1fcf99",
+        "source_snapshot_sha256": "3c724b84c011c7ca52943ff92f773de8baf61490f6af943642cdca2caf672887",
+        "binary_sha256": "e90a4209337cd1b51fe1dd4e814c79d83b36581ee7cff38d7b08b2cbc0cb22ff",
+        "observed_items": 116,
+        "scored": false,
+        "terminal_state_counts": {
+          "COMMIT": 30,
+          "SUSPEND": 86
+        }
       }
     ]
   },
   "file_sha256": {
-    "README.md": "8ffadda1a1de106e6907c738b988e5c27f6bb2dd84d8c70c51b99ad5e28dcecc",
+    "README.md": "be71cb610acd936dab7bd9dbbeaf4f663da756118650f7a80430815af2fb4198",
     "questions-24.md": "468dcf3954956d844bb2bd1a6615cb59ff75c4ad37b81206c0dcec1208058101",
     "writing-12.md": "e098908be2d6e7f7e1151fb9b7ade75c5d6566ec97d47e6304a0fe06eadeb884",
     "conversations-10.md": "76edf864653ef69d454fcab07c9dff7eaa07d196da9be7b2203ab9e10332e63a",
@@ -131,6 +144,8 @@
     "diagnostic-alpha5-observations.jsonl": "a0da2f955ebff9e5d5d548db23f38e047cd04c66283db378b3d4981c9456c040",
     "scoring-sheet-alpha5.tsv": "60df79d5aee6048b33c8c24722f27dade80ec14d176e3dfb335e9f73578be8bc",
     "diagnostic-alpha6-observations.jsonl": "5097f700116531a3d615f71c5db83b3174c04cf0d67529cbc1fe24fdff6d968b",
-    "scoring-sheet-alpha6.tsv": "8c63871dc2ac993a253e2aed56ee4b1799aa12ad6c19d85fddd148e2c99296ee"
+    "scoring-sheet-alpha6.tsv": "8c63871dc2ac993a253e2aed56ee4b1799aa12ad6c19d85fddd148e2c99296ee",
+    "diagnostic-alpha7-observations.jsonl": "195d94fa31f6c3c69de3cdebae22c6198b24805a98b214e03283a928c3baeec5",
+    "scoring-sheet-alpha7.tsv": "6db8ece1406318b4434a267025aeab2eae1b8326f7e8a0b27366af254cf1d25c"
   }
 }

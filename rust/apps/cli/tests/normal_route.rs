@@ -132,6 +132,29 @@ fn meaning_comparison_variants_reach_cli_and_compound_effects_suspend() {
             .contains("4人以上")
     );
 
+    let scaled_numeric_comparison = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "scaled-numeric-comparison",
+            "次の2文を比較してください。\nA: 参加者は1.5万人以上だった。\nB: 参加者は二万人以上だった。",
+        ],
+    ));
+    assert_eq!(scaled_numeric_comparison["lifecycle"], "COMMIT");
+    assert!(
+        scaled_numeric_comparison["text"]
+            .as_str()
+            .unwrap()
+            .contains("15000人以上")
+    );
+    assert!(
+        scaled_numeric_comparison["text"]
+            .as_str()
+            .unwrap()
+            .contains("20000人以上")
+    );
+
     let compound = execute(
         &scratch.0,
         "owner",
