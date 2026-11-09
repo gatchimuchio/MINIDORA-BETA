@@ -1,5 +1,13 @@
 # Documentation Revision — English Accessibility Layer
 
+## Repository-local Codex governance — 2026-11-10
+
+The owner required a self-contained, Japanese-base root `AGENTS.md` because the Cloud Codex execution path might not inherit personal/global custom instructions. This revision replaces only the repository-local agent operating contract. It reconciles the shared engineering method observed in the current BLUE-TANUKI, D4-POCKET, original MINIDORA, AI-compiler, Konjac Translation, MARS and related public research records, while explicitly **not importing other repositories' product authority, completion claims, private material or code**.
+
+The new contract governs source inspection, the sole normative R2 logical specification, frozen Python beta versus independently versioned Rust successor, three-machine ownership, bounded external effects, QE whole-system construction before scoped QC/QA, evidence limits, Japanese meaning, Git history and release authority. It does not itself amend R2, alter the acceptance population, declare the Rust alpha complete or authorize a new release. Public explanatory documentation remains English-first for non-Japanese readers; the agent's instruction language is Japanese. These are separate audiences and contracts.
+
+Affected files: `AGENTS.md`, this GitHub-only revision record, and **the `AGENTS.md` entry only** in `checksums.repo.sha256`. No Python or Rust implementation, tests, `Cargo.lock`, frozen distribution, legacy `checksums.sha256`, release manifest, wheel, upstream repository, or unrelated project is changed by this documentation revision. Previous agent instructions remain recoverable from Git history.
+
 ## Independent R1 audit and R2 logical-contract correction — 2026-11-09
 
 An independent audit rejected the previous successor “architecture complete” judgment with **22 distinct specification/traceability findings**. R2 repairs the documented logical contracts (including early `COMMIT`, state transitions, source/goal identity, storage/permissions, ID/status collisions, non-neural model inference and platform independence). It explicitly **does not claim full 414-source semantic inspection, actual successor integration, new test results, or a finalized physical runtime/model/storage choice**. Review the normative `docs/redesign/01_SYSTEM_SPECIFICATION.md`, immutable R1 commit, and `docs/redesign/07_R1_AUDIT_CLOSURE.md`.
