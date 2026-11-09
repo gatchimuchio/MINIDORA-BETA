@@ -94,6 +94,36 @@ fn calculation_followup_and_explicit_retry_survive_process_restarts() {
 }
 
 #[test]
+fn meaning_comparison_variants_reach_cli_and_compound_effects_suspend() {
+    let scratch = Scratch::new();
+    let comparison = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "comparison",
+            "次の2文を比較して、意味の差を説明してください。\nA: 太郎は書類を提出した。\nB: 太郎は書類を提出しなかった。",
+        ],
+    ));
+    assert_eq!(comparison["lifecycle"], "COMMIT");
+    assert!(comparison["text"].as_str().unwrap().contains("肯否"));
+    assert!(comparison["text"].as_str().unwrap().contains("書類"));
+
+    let compound = execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "compound-comparison",
+            "AとBの違いを説明して送信して\nA: 太郎は鳥です。\nB: 花子は魚です。",
+        ],
+    );
+    assert_eq!(compound.status.code(), Some(2));
+    let suspended: Value = serde_json::from_slice(&compound.stdout).unwrap();
+    assert_eq!(suspended["lifecycle"], "SUSPEND");
+}
+
+#[test]
 fn identity_collision_does_not_overwrite_original_result() {
     let scratch = Scratch::new();
     let first = record(&execute(&scratch.0, "owner", &["--input", "stable", "7*8"]));

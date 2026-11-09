@@ -43,7 +43,7 @@ The installed-wheel smoke must complete with terminal COMMIT, a rendered complet
 
 ## Rust successor development
 
-The independent Rust candidate is /workspace/MINIDORA-BETA/rust, version 0.7.0-alpha.4. It is not full R2/93-capability acceptance. Preserve the frozen Python source/release bytes. Use the existing isolated checkout; do not create a Git worktree unless explicitly requested.
+The independent Rust candidate is /workspace/MINIDORA-BETA/rust, version 0.7.0-alpha.5. It is not full R2/93-capability acceptance. Preserve the frozen Python source/release bytes. Use the existing isolated checkout; do not create a Git worktree unless explicitly requested.
 
 ```bash
 export CARGO_HOME=/workspace/.cargo

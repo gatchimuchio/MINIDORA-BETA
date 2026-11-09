@@ -1,5 +1,5 @@
 {
-  "source_snapshot": "9b644595d9b986d28c77739f4d4347ced03fbe2a9f1bd6b8e3cab12e89414dfa",
+  "source_snapshot": "6d40440c3d40164fba9144a02e7700121776714c1e8128a2c0303d72b7ad9aa2",
   "command": "cargo test --workspace --all-features --locked",
   "suites": [
     {
@@ -8,7 +8,7 @@
       "ignored": 0
     },
     {
-      "passed": 21,
+      "passed": 22,
       "failed": 0,
       "ignored": 0
     },
@@ -18,7 +18,7 @@
       "ignored": 0
     },
     {
-      "passed": 96,
+      "passed": 97,
       "failed": 0,
       "ignored": 0
     },
@@ -35,19 +35,23 @@
   ],
   "executed": [
     {
-      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
-      "outcome": "ok"
-    },
-    {
       "test": "tests::output_path_does_not_grant_write_authority",
       "outcome": "ok"
     },
     {
-      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
+      "test": "tests::reconcile_cannot_introduce_new_request_or_effect_permissions",
       "outcome": "ok"
     },
     {
       "test": "tests::request_flags_can_be_escaped",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::transport_enforces_bounded_headers_and_body",
+      "outcome": "ok"
+    },
+    {
+      "test": "tests::reject_public_server_and_bad_unsigned_budgets",
       "outcome": "ok"
     },
     {
@@ -56,10 +60,6 @@
     },
     {
       "test": "tests::terminal_codes_are_distinct_and_nonterminal_is_failure",
-      "outcome": "ok"
-    },
-    {
-      "test": "tests::transport_enforces_bounded_headers_and_body",
       "outcome": "ok"
     },
     {
@@ -99,11 +99,11 @@
       "outcome": "ok"
     },
     {
-      "test": "existing_file_conflict_preserves_bytes_and_does_not_close_adopted_goal",
+      "test": "decimal_statistics_are_exact_and_retain_actual_observations",
       "outcome": "ok"
     },
     {
-      "test": "decimal_statistics_are_exact_and_retain_actual_observations",
+      "test": "existing_file_conflict_preserves_bytes_and_does_not_close_adopted_goal",
       "outcome": "ok"
     },
     {
@@ -111,15 +111,19 @@
       "outcome": "ok"
     },
     {
-      "test": "insufficient_action_budget_cannot_reach_a_requested_file_effect",
-      "outcome": "ok"
-    },
-    {
       "test": "identity_collision_does_not_overwrite_original_result",
       "outcome": "ok"
     },
     {
+      "test": "insufficient_action_budget_cannot_reach_a_requested_file_effect",
+      "outcome": "ok"
+    },
+    {
       "test": "invalid_relation_stops_durably_without_wedging_later_inputs",
+      "outcome": "ok"
+    },
+    {
+      "test": "meaning_comparison_variants_reach_cli_and_compound_effects_suspend",
       "outcome": "ok"
     },
     {
@@ -139,11 +143,11 @@
       "outcome": "ok"
     },
     {
-      "test": "unsupported_input_is_suspension_and_not_an_empty_success",
+      "test": "requested_file_needs_separate_exact_permission_and_real_receipt",
       "outcome": "ok"
     },
     {
-      "test": "requested_file_needs_separate_exact_permission_and_real_receipt",
+      "test": "unsupported_input_is_suspension_and_not_an_empty_success",
       "outcome": "ok"
     },
     {
@@ -159,6 +163,10 @@
       "outcome": "ok"
     },
     {
+      "test": "envelope_tests::unrepresented_requested_effects_are_not_ignored_by_frontends",
+      "outcome": "ok"
+    },
+    {
       "test": "tests::nonexact_numbers_cannot_silently_become_null_or_facts",
       "outcome": "ok"
     },
@@ -167,15 +175,7 @@
       "outcome": "ok"
     },
     {
-      "test": "envelope_tests::unrepresented_requested_effects_are_not_ignored_by_frontends",
-      "outcome": "ok"
-    },
-    {
-      "test": "document::tests::absent_noop_empty_or_expanding_edits_stop",
-      "outcome": "ok"
-    },
-    {
-      "test": "document::tests::exact_edit_count_and_unicode_unchanged_regions",
+      "test": "document::tests::csv_json_roundtrip_preserves_string_types_and_source",
       "outcome": "ok"
     },
     {
@@ -183,15 +183,19 @@
       "outcome": "ok"
     },
     {
-      "test": "document::tests::csv_json_roundtrip_preserves_string_types_and_source",
+      "test": "document::tests::exact_edit_count_and_unicode_unchanged_regions",
       "outcome": "ok"
     },
     {
-      "test": "document::tests::malformed_csv_never_uses_a_valid_prefix",
+      "test": "document::tests::absent_noop_empty_or_expanding_edits_stop",
       "outcome": "ok"
     },
     {
       "test": "document::tests::formula_export_is_withheld_without_changing_original",
+      "outcome": "ok"
+    },
+    {
+      "test": "document::tests::malformed_csv_never_uses_a_valid_prefix",
       "outcome": "ok"
     },
     {
@@ -219,10 +223,6 @@
       "outcome": "ok"
     },
     {
-      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
-      "outcome": "ok"
-    },
-    {
       "test": "input::symbolic_and_clause_tests::english_copula_capture_groups_preserve_subject_object_and_polarity",
       "outcome": "ok"
     },
@@ -231,15 +231,11 @@
       "outcome": "ok"
     },
     {
+      "test": "input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes",
+      "outcome": "ok"
+    },
+    {
       "test": "input::tests::context_reference_requires_real_result",
-      "outcome": "ok"
-    },
-    {
-      "test": "input::tests::arithmetic_and_one_time_source_capture",
-      "outcome": "ok"
-    },
-    {
-      "test": "input::tests::relations_preserve_negation_scope_and_variables",
       "outcome": "ok"
     },
     {
@@ -247,7 +243,19 @@
       "outcome": "ok"
     },
     {
+      "test": "input::tests::relations_preserve_negation_scope_and_variables",
+      "outcome": "ok"
+    },
+    {
+      "test": "input::tests::arithmetic_and_one_time_source_capture",
+      "outcome": "ok"
+    },
+    {
       "test": "language::lossless_tests::successor_distribution_is_exact_and_comparison_boundary_is_explicit",
+      "outcome": "ok"
+    },
+    {
+      "test": "language::lossless_tests::successor_projection_preserves_unknown_unicode_and_invalid_utf8",
       "outcome": "ok"
     },
     {
@@ -255,7 +263,7 @@
       "outcome": "ok"
     },
     {
-      "test": "language::lossless_tests::successor_projection_preserves_unknown_unicode_and_invalid_utf8",
+      "test": "input::tests::labelled_meaning_comparison_accepts_bounded_japanese_and_english_directives",
       "outcome": "ok"
     },
     {
@@ -275,6 +283,10 @@
       "outcome": "ok"
     },
     {
+      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
+      "outcome": "ok"
+    },
+    {
       "test": "language::tests::parser_rejects_partial_or_unbounded_execution",
       "outcome": "ok"
     },
@@ -284,10 +296,6 @@
     },
     {
       "test": "math::polynomial_tests::exact_derivative_and_antiderivative",
-      "outcome": "ok"
-    },
-    {
-      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
       "outcome": "ok"
     },
     {
@@ -323,7 +331,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::tests::unknown_or_quoted_material_never_acquires_implicit_authority",
+      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
       "outcome": "ok"
     },
     {
@@ -355,11 +363,11 @@
       "outcome": "ok"
     },
     {
-      "test": "meaning_compare::tests::reports_common_topics_and_objects_without_duplicating_subject_differences",
+      "test": "input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved",
       "outcome": "ok"
     },
     {
-      "test": "output::tests::actual_bytes_are_exclusive_and_idempotent",
+      "test": "meaning_compare::tests::reports_common_topics_and_objects_without_duplicating_subject_differences",
       "outcome": "ok"
     },
     {
@@ -387,6 +395,10 @@
       "outcome": "ok"
     },
     {
+      "test": "output::tests::actual_bytes_are_exclusive_and_idempotent",
+      "outcome": "ok"
+    },
+    {
       "test": "ports::tests::unsupported_interpretations_are_not_body_success",
       "outcome": "ok"
     },
@@ -395,19 +407,7 @@
       "outcome": "ok"
     },
     {
-      "test": "input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved",
-      "outcome": "ok"
-    },
-    {
-      "test": "language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth",
-      "outcome": "ok"
-    },
-    {
-      "test": "recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects",
-      "outcome": "ok"
-    },
-    {
-      "test": "recovery::tests::a_replaced_symlink_is_not_an_actual_original_file_receipt",
+      "test": "math::polynomial_tests::independent_quadratic_difference_identity",
       "outcome": "ok"
     },
     {
@@ -415,7 +415,15 @@
       "outcome": "ok"
     },
     {
+      "test": "recovery::tests::a_replaced_symlink_is_not_an_actual_original_file_receipt",
+      "outcome": "ok"
+    },
+    {
       "test": "math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit",
+      "outcome": "ok"
+    },
+    {
+      "test": "recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects",
       "outcome": "ok"
     },
     {
@@ -427,7 +435,7 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed",
+      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
       "outcome": "ok"
     },
     {
@@ -499,6 +507,10 @@
       "outcome": "ok"
     },
     {
+      "test": "recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed",
+      "outcome": "ok"
+    },
+    {
       "test": "store::tests::bound_goal_is_immutable_but_pre_goal_received_is_restorable",
       "outcome": "ok"
     },
@@ -507,7 +519,7 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery",
+      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
       "outcome": "ok"
     },
     {
@@ -515,15 +527,11 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten",
+      "test": "store::tests::crash_before_database_commit_leaves_orphan_and_no_case",
       "outcome": "ok"
     },
     {
       "test": "store::tests::confirmation_requires_matching_receipt",
-      "outcome": "ok"
-    },
-    {
-      "test": "store::tests::crash_before_database_commit_leaves_orphan_and_no_case",
       "outcome": "ok"
     },
     {
@@ -547,11 +555,11 @@
       "outcome": "ok"
     },
     {
-      "test": "recovery::tests::unknown_original_blocks_new_effect_until_same_identity_reconciliation",
+      "test": "store::tests::new_input_version_must_reenter_received_before_new_seal",
       "outcome": "ok"
     },
     {
-      "test": "store::tests::new_input_version_must_reenter_received_before_new_seal",
+      "test": "recovery::tests::unknown_original_blocks_new_effect_until_same_identity_reconciliation",
       "outcome": "ok"
     }
   ]

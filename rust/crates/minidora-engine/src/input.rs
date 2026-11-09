@@ -4,7 +4,7 @@ use minidora_domain::*;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v2-meaning-compare";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v3-meaning-compare";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -380,8 +380,13 @@ fn meaning_comparison_intent(text: &str) -> Result<Option<Intent>> {
     else {
         return Ok(None);
     };
-    if !regex(r"(?s)^(?:文)?Aと(?:文)?B.*(?:違い|比較|差)")?.is_match(instruction.trim()) {
+    if !meaning_comparison_instruction(instruction.trim())? {
         return Ok(None);
+    }
+    if comparison_has_unrepresented_effect(instruction.trim())? {
+        return Ok(Some(Intent::Unknown {
+            reason: "comparison request includes an additional effect not represented by the bounded comparison route".into(),
+        }));
     }
     let Some((a, b)) = labelled
         .split_once("\nB:")
@@ -402,6 +407,24 @@ fn meaning_comparison_intent(text: &str) -> Result<Option<Intent>> {
         a: a.into(),
         b: b.into(),
     }))
+}
+
+fn meaning_comparison_instruction(instruction: &str) -> Result<bool> {
+    [
+        r"(?s)^(?:以下の)?(?:文)?Aと(?:文)?B.*(?:違い|比較|差)",
+        r"(?s)^(?:(?:次の|以下の)?)(?:二|2)(?:つの)?文(?:を|の).*(?:違い|比較|差)",
+        r"(?is)^compare\b.*",
+        r"(?is)^(?:explain|describe)\s+(?:the\s+)?(?:difference|contrast)\s+between\s+A\s+and\s+B\b.*",
+    ]
+    .into_iter()
+    .map(regex)
+    .collect::<Result<Vec<_>>>()
+    .map(|patterns| patterns.iter().any(|pattern| pattern.is_match(instruction)))
+}
+
+fn comparison_has_unrepresented_effect(instruction: &str) -> Result<bool> {
+    Ok(regex(r"(?:送信|保存|削除|実行|計算|翻訳|公開|投稿)(?:してください|して|しろ|せよ)|(?i:\b(?:and|then)\s+(?:send|write|save|delete|calculate|execute|translate|publish)\b)")?
+        .is_match(instruction))
 }
 
 #[derive(Debug)]
@@ -788,6 +811,38 @@ mod tests {
             bundle.fingerprint,
             seal(&request, None).unwrap().fingerprint
         );
+    }
+    #[test]
+    fn labelled_meaning_comparison_accepts_bounded_japanese_and_english_directives() {
+        for instruction in [
+            "文Aと文Bの違いを説明してください。",
+            "次の2文を比較して、意味の差を説明してください。",
+            "二つの文の意味の差を説明してください。",
+            "以下の文Aと文Bを比較してください。",
+            "Compare the two sentences and explain the difference.",
+            "Explain the difference between A and B.",
+        ] {
+            let text = format!(
+                "{instruction}\nA: 太郎は書類を提出した。\nB: 太郎は書類を提出しなかった。"
+            );
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", &text), None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent, Intent::MeaningCompare { a, b }
+                    if a == "太郎は書類を提出した。" && b == "太郎は書類を提出しなかった。"),
+                "{instruction}"
+            );
+        }
+
+        for text in [
+            "次の2文を読んでください。\nA: 太郎は鳥です。\nB: 花子は魚です。",
+            "AとBの違いを説明して送信して\nA: 太郎は鳥です。\nB: 花子は魚です。",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
     #[test]
     fn relations_preserve_negation_scope_and_variables() {
