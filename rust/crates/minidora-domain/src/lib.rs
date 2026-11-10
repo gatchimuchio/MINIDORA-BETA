@@ -196,6 +196,11 @@ pub enum Intent {
         document: String,
         key_column: String,
     },
+    JsonTableFilter {
+        document: String,
+        column: String,
+        equals: String,
+    },
     EvidenceSynthesize {
         document: String,
     },

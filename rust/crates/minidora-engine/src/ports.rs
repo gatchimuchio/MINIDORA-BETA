@@ -1171,8 +1171,32 @@ pub struct JsonTableComparisonReport {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableFilterDecision {
+    pub source_row_index: usize,
+    pub value: String,
+    pub matched: bool,
+    pub source: JsonComparisonSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableFilterReport {
+    pub source_sha256: String,
+    pub columns: Vec<String>,
+    pub column_source_spans: Vec<JsonComparisonSpan>,
+    pub rows: Vec<Vec<String>>,
+    pub source_row_indices: Vec<usize>,
+    pub cell_source_spans: Vec<Vec<JsonComparisonSpan>>,
+    pub filter_column: String,
+    pub filter_column_index: usize,
+    pub equals: String,
+    pub decisions: Vec<JsonTableFilterDecision>,
+    pub guarantee: String,
+}
+
 struct JsonStringTableView<'a> {
     columns: Vec<String>,
+    column_nodes: Vec<&'a JsonNode>,
     rows: Vec<Vec<&'a JsonNode>>,
     row_nodes: Vec<&'a JsonNode>,
 }
@@ -1215,6 +1239,7 @@ fn json_string_table<'a>(document: &str, node: &'a JsonNode) -> Result<JsonStrin
         ));
     }
     let mut columns = Vec::with_capacity(column_nodes.len());
+    let mut decoded_column_nodes = Vec::with_capacity(column_nodes.len());
     let mut unique_columns = BTreeSet::new();
     for column_node in column_nodes {
         let value = json_string_value(document, column_node, "JSON_TABLE_COMPARE_COLUMNS")?;
@@ -1225,6 +1250,7 @@ fn json_string_table<'a>(document: &str, node: &'a JsonNode) -> Result<JsonStrin
             ));
         }
         columns.push(value);
+        decoded_column_nodes.push(column_node);
     }
     let rows_node = fields.get("rows").expect("validated rows field");
     let JsonKind::Array(row_nodes) = &rows_node.kind else {
@@ -1268,9 +1294,108 @@ fn json_string_table<'a>(document: &str, node: &'a JsonNode) -> Result<JsonStrin
     }
     Ok(JsonStringTableView {
         columns,
+        column_nodes: decoded_column_nodes,
         rows,
         row_nodes: row_nodes.iter().collect(),
     })
+}
+
+/// Select rows from one strict JSON string-table object using an exact decoded
+/// string equality and retain original source byte ranges for decisions and
+/// emitted cells.
+pub fn json_table_filter(
+    document: &str,
+    column: &str,
+    equals: &str,
+) -> Result<JsonTableFilterReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_FILTER_INPUT_LIMIT",
+            "table document exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let table = json_string_table(document, &root)?;
+    let column_index = table
+        .columns
+        .iter()
+        .position(|name| name == column)
+        .ok_or_else(|| failure("JSON_TABLE_FILTER_COLUMN", "named column does not exist"))?;
+
+    let mut output_budget = 1024usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_FILTER_OUTPUT_LIMIT",
+                "filtered table and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    account(&mut output_budget, serde_json::to_vec(column)?.len())?;
+    account(&mut output_budget, serde_json::to_vec(equals)?.len())?;
+    let column_source_spans = table
+        .column_nodes
+        .iter()
+        .zip(&table.columns)
+        .map(|(node, name)| {
+            let encoded_len = serde_json::to_vec(name)?.len();
+            account(&mut output_budget, 192 + encoded_len)?;
+            Ok(json_comparison_span(document, node))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut rows = Vec::new();
+    let mut source_row_indices = Vec::new();
+    let mut cell_source_spans = Vec::new();
+    let mut decisions = Vec::with_capacity(table.rows.len());
+    for (source_row_index, row) in table.rows.iter().enumerate() {
+        let value = json_string_value(document, row[column_index], "JSON_TABLE_FILTER_CELL")?;
+        let matched = value == equals;
+        let encoded_value_len = serde_json::to_vec(&value)?.len();
+        account(&mut output_budget, 256 + encoded_value_len)?;
+        decisions.push(JsonTableFilterDecision {
+            source_row_index,
+            value,
+            matched,
+            source: json_comparison_span(document, row[column_index]),
+        });
+        if matched {
+            let mut output_row = Vec::with_capacity(row.len());
+            let mut output_spans = Vec::with_capacity(row.len());
+            for cell in row {
+                let value = json_string_value(document, cell, "JSON_TABLE_FILTER_CELL")?;
+                let encoded_len = serde_json::to_vec(&value)?.len();
+                account(&mut output_budget, 216 + encoded_len)?;
+                output_row.push(value);
+                output_spans.push(json_comparison_span(document, cell));
+            }
+            rows.push(output_row);
+            source_row_indices.push(source_row_index);
+            cell_source_spans.push(output_spans);
+        }
+    }
+    let report = JsonTableFilterReport {
+        source_sha256: digest(document.as_bytes()),
+        columns: table.columns,
+        column_source_spans,
+        rows,
+        source_row_indices,
+        cell_source_spans,
+        filter_column: column.into(),
+        filter_column_index: column_index,
+        equals: equals.into(),
+        decisions,
+        guarantee: "bounded exact-string filtering over an explicitly named, JSON string-typed table; no trimming, numeric conversion, case folding, Unicode normalization or factual inference; source byte ranges retained".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_FILTER_OUTPUT_LIMIT",
+            "filtered table report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
 }
 
 fn record_json_table_change(

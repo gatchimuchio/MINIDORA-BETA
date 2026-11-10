@@ -1,0 +1,66 @@
+{
+  "work_item": "B04 exact named-column filtering of a supplied JSON string table through Core",
+  "recorded_at": "2026-11-10T17:19:56Z",
+  "base_commit": "d4e89c7f40d77ee4f894a5ab550059266586b9c6",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v19-json-table-filter",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "f2e43aa843fb5dd350d6744b06b13e75fd7089e07db6cf6b8bf9a9fc4a53c952",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "440665870bf46587662e683a404be1fc44d0f5f96a5cfebefcba45692d774446",
+    "crates/minidora-engine/src/core.rs": "b9adf156e462959ce8348190ce8bfcb8ac5e5b5739821b8493ca32f66f2e563d",
+    "crates/minidora-engine/src/input.rs": "8c4e001eff9a87e96989bf6ecfbedca76a32ddb0fc2fb33bbde82a93ca508c63",
+    "crates/minidora-engine/src/ports.rs": "ac38c7634e007a4f8e1a418783a5d3d615dd76c0f1d044c1db487637bb0facd8"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "aa43f973c5621b82318f6e1d1d94670d05dca22333a5b2ea6a4c6d359023f958"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No tests or runtime/ordinary CLI verification were requested or run in this implementation slice; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonTableFilter -> ports::json_table_filter -> JsonTableFilterReport artifact",
+  "input_schema": "One strict JSON object with exactly columns and rows fields. columns is a unique 1..256 string array; rows is an array of at most 4096 rows, each an array of same-width strings. Duplicate JSON object keys and nonstring values are rejected.",
+  "supported_behavior": [
+    "The selected named column is matched by exact decoded string equality. No trimming, numeric conversion, case folding or Unicode normalization is performed.",
+    "The report contains selected table rows in original order, the source row indices, source byte ranges and digests for every header and emitted cell, and a matched/unmatched decision plus predicate span for every input row.",
+    "Input bytes, table cell count, output evidence and the Core request output budget are bounded; invalid shape, absent columns or limit overflow suspend with typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v18-csv-table-compare";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v19-json-table-filter";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -162,6 +162,10 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..18)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-compare"))
+        || header
+            .get(..17)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-filter"))
+        || header.starts_with("JSON表の列")
         || header == "証拠を整理して:"
         || header
             .get(..18)
@@ -285,6 +289,26 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::JsonTableCompare {
             document: document.into(),
             key_column: serde_json::from_str::<String>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^JSON表の列「([^」]+)」が値「([^」]*)」の行を選択して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableFilter {
+            document: document.into(),
+            column: capture[1].into(),
+            equals: capture[2].into(),
+        }));
+    }
+    if let Some(capture) = regex(
+        r#"(?i)^json-table-filter[ \t]+("(?:[^"\\]|\\.)*")[ \t]+equals[ \t]+("(?:[^"\\]|\\.)*"):$"#,
+    )?
+    .captures(header)
+    {
+        return Ok(Some(Intent::JsonTableFilter {
+            document: document.into(),
+            column: serde_json::from_str::<String>(&capture[1])?,
+            equals: serde_json::from_str::<String>(&capture[2])?,
         }));
     }
     if header == "証拠を整理して:" || regex(r"(?i)^evidence-synthesize:$")?.is_match(header)
