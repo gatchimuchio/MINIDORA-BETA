@@ -1,0 +1,77 @@
+{
+  "work_item": "B04 exact-key inner join of two strict JSON string tables through Core",
+  "recorded_at": "2026-11-10T19:04:48Z",
+  "base_commit": "2906aace4fd93f6a4e038569c0e17f3012c40e98",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v29-json-table-inner-join",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "7dbc0cf0484ac6f7f957e28204df8bc0382188c82668715a235e65b4b41e7651",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "22cec149f5255f0bea3e1f2b587fa9ba0cd98ded1136048fca98ed7c9051cba6",
+    "crates/minidora-engine/src/core.rs": "76815bdfdff6616b616b0d0cc3d0f1a4f6234f94bf78d2c987f11e945086cc55",
+    "crates/minidora-engine/src/input.rs": "718126039bdcdbcf5c1751171234a5ff7aed5a1c20148ca9f10cbe04a90864dc",
+    "crates/minidora-engine/src/ports.rs": "6aab90bd31c6e5d63773c7eec3b515679cc4bc623bbbb0b6b1dba689e96d3e86"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "d3e88188901b95db01ec58cc9b299e77e1e27310f29e37f316bb6060a45234c7"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target RUSTUP_TOOLCHAIN=1.99.1",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No test or ordinary CLI route was run in this implementation slice; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal -> input::interpret -> input::structured_intent -> Intent::JsonTableInnerJoin -> ports::json_table_inner_join -> JsonTableInnerJoinReport artifact -> Core dependencies and rendered output",
+  "supported_behavior": [
+    "The Japanese header JSON表を「left-key」と「right-key」で内部結合して: and strict quoted English json-table-inner-join \"left-key\" \"right-key\": select key columns from left and right string tables in a wrapper with exactly left and right fields.",
+    "Each side must use the strict JSON string-table schema with unique decoded column names, rows matching header width and only string cells.",
+    "Join keys use exact decoded string equality. Each selected key must be unique on its own side; duplicate keys suspend instead of creating ambiguous row multiplication.",
+    "Only exact key matches are emitted, in left-table row order. Output columns retain every input column in left-then-right order under left. and right. namespaces, including both key columns.",
+    "The report lists unmatched left and right keys, source row indices, full wrapper and side-table SHA-256 digests, original header ranges, and per-cell byte ranges and digests for both sides.",
+    "Each input wrapper and serialized report is bounded at 256000 bytes; each table is bounded at 4096 rows, 256 columns and 65536 cells."
+  ],
+  "known_limits": [
+    "No test or ordinary CLI route was executed for this slice.",
+    "This implements inner joins only. Both key columns must be explicitly named and unique; many-to-many joins, outer joins, schema inference and nonstring cells are unsupported.",
+    "The operation performs a structural transformation only and does not infer semantic equivalence or factual truth."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

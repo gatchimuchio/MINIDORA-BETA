@@ -1194,6 +1194,42 @@ impl Engine {
                 units.push(text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::JsonTableInnerJoin {
+                document,
+                left_key_column,
+                right_key_column,
+            } => {
+                let report =
+                    match ports::json_table_inner_join(document, left_key_column, right_key_column)
+                    {
+                        Ok(report) => report,
+                        Err(error) => {
+                            let code = match &error {
+                                minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                                _ => "JSON_TABLE_INNER_JOIN_UNSUPPORTED",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
+                        }
+                    };
+                let text = serde_json::to_string_pretty(&report)?;
+                if text.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "JSON table inner join report exceeds the request output budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
+                result.dependencies.push(artifact);
+                units.push(text);
+                result.guarantee = Guarantee::SourceReport;
+            }
             Intent::JsonTableFilter {
                 document,
                 column,

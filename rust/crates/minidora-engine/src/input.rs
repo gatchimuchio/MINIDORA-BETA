@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v28-json-group-statistics";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v29-json-table-inner-join";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -286,9 +286,11 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
             .get(..12)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-compare"))
         || header.starts_with("JSON表を列")
+        || header.starts_with("JSON表を「")
         || header
             .get(..18)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-compare"))
+        || header.starts_with("json-table-inner-join")
         || header
             .get(..17)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-filter"))
@@ -466,6 +468,25 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::JsonTableCompare {
             document: document.into(),
             key_column: serde_json::from_str::<String>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^JSON表を「([^」]+)」と「([^」]+)」で内部結合して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableInnerJoin {
+            document: document.into(),
+            left_key_column: capture[1].into(),
+            right_key_column: capture[2].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^json-table-inner-join[ \t]+("(?:[^"\\]|\\.)*")[ \t]+("(?:[^"\\]|\\.)*"):$"#)?
+            .captures(header)
+    {
+        return Ok(Some(Intent::JsonTableInnerJoin {
+            document: document.into(),
+            left_key_column: serde_json::from_str::<String>(&capture[1])?,
+            right_key_column: serde_json::from_str::<String>(&capture[2])?,
         }));
     }
     if let Some(capture) =

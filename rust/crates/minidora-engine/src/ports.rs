@@ -1306,6 +1306,36 @@ pub struct JsonTableComparisonReport {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableJoinUnmatchedRow {
+    pub key: String,
+    pub source_row_index: usize,
+    pub key_source: JsonComparisonSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableInnerJoinReport {
+    pub source_sha256: String,
+    pub left_sha256: String,
+    pub right_sha256: String,
+    pub left_key_column: String,
+    pub left_key_column_index: usize,
+    pub left_key_column_source: JsonComparisonSpan,
+    pub right_key_column: String,
+    pub right_key_column_index: usize,
+    pub right_key_column_source: JsonComparisonSpan,
+    pub columns: Vec<String>,
+    pub column_source_spans: Vec<JsonComparisonSpan>,
+    pub rows: Vec<Vec<String>>,
+    pub left_source_row_indices: Vec<usize>,
+    pub right_source_row_indices: Vec<usize>,
+    pub left_cell_source_spans: Vec<Vec<JsonComparisonSpan>>,
+    pub right_cell_source_spans: Vec<Vec<JsonComparisonSpan>>,
+    pub unmatched_left: Vec<JsonTableJoinUnmatchedRow>,
+    pub unmatched_right: Vec<JsonTableJoinUnmatchedRow>,
+    pub guarantee: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonTableFilterDecision {
     pub source_row_index: usize,
     pub value: String,
@@ -2313,6 +2343,209 @@ pub fn json_table_compare(document: &str, key_column: &str) -> Result<JsonTableC
         return Err(failure(
             "JSON_TABLE_COMPARE_OUTPUT_LIMIT",
             "comparison report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
+/// Perform an exact inner join of two strict JSON string tables. Both key
+/// columns must be unique, and matching rows retain their left-table order.
+pub fn json_table_inner_join(
+    document: &str,
+    left_key_column: &str,
+    right_key_column: &str,
+) -> Result<JsonTableInnerJoinReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_INNER_JOIN_INPUT_LIMIT",
+            "join wrapper exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let JsonKind::Object(wrapper) = &root.kind else {
+        return Err(failure(
+            "JSON_TABLE_INNER_JOIN_SHAPE",
+            "join input must be an object with left and right string tables",
+        ));
+    };
+    if wrapper.len() != 2 || !wrapper.contains_key("left") || !wrapper.contains_key("right") {
+        return Err(failure(
+            "JSON_TABLE_INNER_JOIN_SHAPE",
+            "join wrapper requires exactly left and right fields",
+        ));
+    }
+    let left_node = wrapper.get("left").expect("validated left table");
+    let right_node = wrapper.get("right").expect("validated right table");
+    let left = json_string_table(document, left_node)?;
+    let right = json_string_table(document, right_node)?;
+    let left_key_index = left
+        .columns
+        .iter()
+        .position(|column| column == left_key_column)
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_INNER_JOIN_COLUMN",
+                "left key column does not exist",
+            )
+        })?;
+    let right_key_index = right
+        .columns
+        .iter()
+        .position(|column| column == right_key_column)
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_INNER_JOIN_COLUMN",
+                "right key column does not exist",
+            )
+        })?;
+
+    let mut right_by_key = BTreeMap::<String, usize>::new();
+    let mut right_key_nodes = Vec::with_capacity(right.rows.len());
+    for (row_index, row) in right.rows.iter().enumerate() {
+        let key = json_string_value(document, row[right_key_index], "JSON_TABLE_INNER_JOIN_CELL")?;
+        if right_by_key.insert(key, row_index).is_some() {
+            return Err(failure(
+                "JSON_TABLE_INNER_JOIN_DUPLICATE_KEY",
+                "right join keys must be unique",
+            ));
+        }
+        right_key_nodes.push(row[right_key_index]);
+    }
+    let mut left_keys = BTreeSet::<String>::new();
+    for row in &left.rows {
+        let key = json_string_value(document, row[left_key_index], "JSON_TABLE_INNER_JOIN_CELL")?;
+        if !left_keys.insert(key) {
+            return Err(failure(
+                "JSON_TABLE_INNER_JOIN_DUPLICATE_KEY",
+                "left join keys must be unique",
+            ));
+        }
+    }
+
+    let mut columns = Vec::with_capacity(left.columns.len() + right.columns.len());
+    let mut column_source_spans = Vec::with_capacity(columns.capacity());
+    for (table, prefix) in [(&left, "left."), (&right, "right.")] {
+        for (name, node) in table.columns.iter().zip(&table.column_nodes) {
+            columns.push(format!("{prefix}{name}"));
+            column_source_spans.push(json_comparison_span(document, node));
+        }
+    }
+
+    let mut rows = Vec::new();
+    let mut left_source_row_indices = Vec::new();
+    let mut right_source_row_indices = Vec::new();
+    let mut left_cell_source_spans = Vec::new();
+    let mut right_cell_source_spans = Vec::new();
+    let mut unmatched_left = Vec::new();
+    let mut matched_right = vec![false; right.rows.len()];
+    let mut output_budget = 2048usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_INNER_JOIN_OUTPUT_LIMIT",
+                "joined rows and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    account(
+        &mut output_budget,
+        serde_json::to_vec(left_key_column)?.len(),
+    )?;
+    account(
+        &mut output_budget,
+        serde_json::to_vec(right_key_column)?.len(),
+    )?;
+    for (column, span) in columns.iter().zip(&column_source_spans) {
+        account(&mut output_budget, serde_json::to_vec(column)?.len())?;
+        account(&mut output_budget, serde_json::to_vec(span)?.len())?;
+    }
+
+    for (left_row_index, left_row) in left.rows.iter().enumerate() {
+        let key = json_string_value(
+            document,
+            left_row[left_key_index],
+            "JSON_TABLE_INNER_JOIN_CELL",
+        )?;
+        if let Some(right_row_index) = right_by_key.get(&key).copied() {
+            let right_row = &right.rows[right_row_index];
+            let mut output_row = Vec::with_capacity(columns.len());
+            for cell in left_row.iter().chain(right_row.iter()) {
+                output_row.push(json_string_value(
+                    document,
+                    cell,
+                    "JSON_TABLE_INNER_JOIN_CELL",
+                )?);
+            }
+            let left_spans: Vec<_> = left_row
+                .iter()
+                .map(|cell| json_comparison_span(document, cell))
+                .collect();
+            let right_spans: Vec<_> = right_row
+                .iter()
+                .map(|cell| json_comparison_span(document, cell))
+                .collect();
+            account(&mut output_budget, serde_json::to_vec(&output_row)?.len())?;
+            for span in left_spans.iter().chain(right_spans.iter()) {
+                account(&mut output_budget, serde_json::to_vec(span)?.len())?;
+            }
+            rows.push(output_row);
+            left_source_row_indices.push(left_row_index);
+            right_source_row_indices.push(right_row_index);
+            left_cell_source_spans.push(left_spans);
+            right_cell_source_spans.push(right_spans);
+            matched_right[right_row_index] = true;
+        } else {
+            let key_node = left_row[left_key_index];
+            let unmatched = JsonTableJoinUnmatchedRow {
+                key,
+                source_row_index: left_row_index,
+                key_source: json_comparison_span(document, key_node),
+            };
+            account(&mut output_budget, serde_json::to_vec(&unmatched)?.len())?;
+            unmatched_left.push(unmatched);
+        }
+    }
+    let mut unmatched_right = Vec::new();
+    for row_index in 0..right.rows.len() {
+        if !matched_right[row_index] {
+            let key_node = right_key_nodes[row_index];
+            let unmatched = JsonTableJoinUnmatchedRow {
+                key: json_string_value(document, key_node, "JSON_TABLE_INNER_JOIN_CELL")?,
+                source_row_index: row_index,
+                key_source: json_comparison_span(document, key_node),
+            };
+            account(&mut output_budget, serde_json::to_vec(&unmatched)?.len())?;
+            unmatched_right.push(unmatched);
+        }
+    }
+
+    let report = JsonTableInnerJoinReport {
+        source_sha256: digest(document.as_bytes()),
+        left_sha256: digest(document[left_node.span.clone()].as_bytes()),
+        right_sha256: digest(document[right_node.span.clone()].as_bytes()),
+        left_key_column: left_key_column.into(),
+        left_key_column_index: left_key_index,
+        left_key_column_source: json_comparison_span(document, left.column_nodes[left_key_index]),
+        right_key_column: right_key_column.into(),
+        right_key_column_index: right_key_index,
+        right_key_column_source: json_comparison_span(document, right.column_nodes[right_key_index]),
+        columns,
+        column_source_spans,
+        rows,
+        left_source_row_indices,
+        right_source_row_indices,
+        left_cell_source_spans,
+        right_cell_source_spans,
+        unmatched_left,
+        unmatched_right,
+        guarantee: "bounded inner join of strict JSON string tables on exact unique decoded string keys; output columns use left./right. namespaces, matching rows preserve left input order, original cell ranges and source digests retained; no type inference or population inference".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_INNER_JOIN_OUTPUT_LIMIT",
+            "join report exceeds 256000 output bytes",
         ));
     }
     Ok(report)

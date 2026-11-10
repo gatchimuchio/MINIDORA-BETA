@@ -204,6 +204,11 @@ pub enum Intent {
         document: String,
         key_column: String,
     },
+    JsonTableInnerJoin {
+        document: String,
+        left_key_column: String,
+        right_key_column: String,
+    },
     JsonTableFilter {
         document: String,
         column: String,
