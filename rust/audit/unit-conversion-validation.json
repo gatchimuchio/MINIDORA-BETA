@@ -1,0 +1,108 @@
+{
+  "work_item": "B02 exact mixed-length statistics",
+  "recorded_at": "2026-11-10T14:22:39+09:00",
+  "base_commit": "d907eaaa101ad04a29f83584b1ff39995fbb7d71",
+  "rust_version": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64",
+    "libc": "glibc 2.41"
+  },
+  "source_snapshot_sha256": "1e11f64f018aac5c49d573ae1387c63c2ca061ce1d3c55e2362f230e1b7cda83",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "tested_source_paths": {
+    "crates/minidora-engine/src/input.rs": "1be37b34b786ce959014dc64e15b3074872d93d3cac70abb1eadec6c358b55e7",
+    "crates/minidora-engine/src/math.rs": "a709aa523b9f6e376fa68bb54dbe9300f8e008f2c23ea84753ff84b0d8751706",
+    "apps/cli/tests/normal_route.rs": "00487fd4429e0e3a08b0b5186146b8d8168176756d2f54fc856effdc33c06982"
+  },
+  "binary_sha256": "50d51df02da2d2d7483c9603fc21fd1800a730800f9aea86a1f31b512fff8b8b",
+  "command_results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "exit_code": 0,
+      "passed": 137,
+      "failed": 0,
+      "ignored": 0,
+      "doc_tests": 0
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo metadata --locked --format-version 1 --no-deps",
+      "exit_code": 0
+    }
+  ],
+  "test_suites": [
+    {
+      "suite": "minidora-cli unit tests",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "normal CLI route integration tests",
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "minidora-domain unit tests",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "minidora-engine unit tests",
+      "passed": 100,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "observed_normal_route": {
+    "positive": {
+      "input": "統計 [1 km, 500 m]",
+      "lifecycle": "COMMIT",
+      "asserted_output": {
+        "unit": "m",
+        "input_values": ["1", "500"],
+        "input_units": ["km", "m"],
+        "normalized_values": ["1000", "500"],
+        "sum": "1500",
+        "mean": "750"
+      },
+      "test": "mixed_length_units_are_converted_exactly_on_the_normal_route"
+    },
+    "negative": {
+      "input": "統計 [1 km, 5 s]",
+      "lifecycle": "SUSPEND",
+      "reason_code": "UNIT_MISMATCH",
+      "content_plan_created": false,
+      "effect_receipts": 0,
+      "test": "incompatible_mixed_units_suspend_without_adopting_a_numeric_result"
+    }
+  },
+  "implementation_disposition": "NEW",
+  "coverage_scope": "PARTIAL",
+  "acceptance_status": "UNVERIFIED",
+  "limits": [
+    "Mixed conversion is implemented only for mm, cm, m and km, with metres as the canonical output unit.",
+    "Other mixed dimensions and units, source-table aggregation and full B02 follow-up/correction obligations remain unverified.",
+    "This Linux run does not establish Windows/macOS behavior, the 8 GB resource profile or full successor acceptance."
+  ]
+}

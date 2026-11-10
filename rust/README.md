@@ -52,6 +52,8 @@ Arithmetic uses exact integers/rationals, bounded expressions and recorded steps
 ```bash
 "$minidora_bin" --db "$minidora_state" --actor demo --case statistics \
   '統計 [0.1,0.2,0.3,0.4] 単位 m'
+"$minidora_bin" --db "$minidora_state" --actor demo --case mixed-statistics \
+  '統計 [1 km, 500 m]'
 "$minidora_bin" --db "$minidora_state" --actor demo --case linear \
   '連立方程式 [[2,1],[1,-1]] = [7,-1]'
 "$minidora_bin" --db "$minidora_state" --actor demo --case polynomial \
@@ -62,7 +64,7 @@ Arithmetic uses exact integers/rationals, bounded expressions and recorded steps
   '積分 x**2+y/2 変数 x'
 ```
 
-Statistics retain supplied values and compute exact sum, mean, median, extrema and population/sample variance. Units must match explicitly; they are not silently converted. One observation has no sample variance. The values do not establish a representative real-world population.
+Statistics retain supplied values and each input unit, then compute exact sum, mean, median, extrema and population/sample variance. Mixed `mm`, `cm`, `m` and `km` inputs are converted exactly to metres and reported through `normalized_values`; other mixed unit families suspend without a numeric result. Identical unit labels retain that label. One observation has no sample variance. The values do not establish a representative real-world population.
 
 Linear systems use coefficient-column order rather than inferred variable names. Results distinguish a unique solution, a parameterized solution space and inconsistent equations, with original equations, row transformations and verified substitution/contradiction certificates. Rectangular systems, dimensions, scalar sizes and operations have explicit limits.
 

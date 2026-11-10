@@ -531,7 +531,44 @@ fn scalar_array(array: MathArray) -> Result<Vec<String>> {
         MathArray::Scalar(_) => Err(failure("MATH_INPUT_SHAPE", "expected a numeric array")),
     }
 }
+
+fn quantity_statistics_intent(text: &str) -> Result<Option<Intent>> {
+    let Some(payload) = regex(r"(?is)^(?:統計|statistics)\s*[:：]?\s*\[(.*)\]$")?
+        .captures(text)
+        .map(|capture| capture[1].to_string())
+    else {
+        return Ok(None);
+    };
+    let quantity = regex(
+        r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
+    )?;
+    let mut values = Vec::new();
+    let mut units = Vec::new();
+    for item in payload.split(',') {
+        let Some(capture) = quantity.captures(item) else {
+            return Ok(None);
+        };
+        values.push(capture[1].to_string());
+        units.push(capture[2].to_string());
+        if values.len() > 4096 {
+            return Ok(Some(Intent::Unknown {
+                reason: "statistical input exceeds the 4096-observation limit".into(),
+            }));
+        }
+    }
+    if values.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Intent::Statistics {
+        values,
+        units: Some(units),
+    }))
+}
+
 fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
+    if let Some(intent) = quantity_statistics_intent(text)? {
+        return Ok(Some(intent));
+    }
     if let Some(capture) = regex(r"(?is)^(微分|積分|簡約|整理|derivative|differentiate|integral|integrate|simplify)\s+(.+?)(?:\s+(?:変数|variable)\s+([^\s]+))?$")?.captures(text) {
         let operation = match capture[1].to_lowercase().as_str() {
             "微分" | "derivative" | "differentiate" => "derive",

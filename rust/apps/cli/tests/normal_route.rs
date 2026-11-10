@@ -394,6 +394,45 @@ fn decimal_statistics_are_exact_and_retain_actual_observations() {
 }
 
 #[test]
+fn mixed_length_units_are_converted_exactly_on_the_normal_route() {
+    let scratch = Scratch::new();
+    let result = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mixed-length-statistics", "統計 [1 km, 500 m]"],
+    ));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    let statistics: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
+    assert_eq!(statistics["unit"], "m");
+    assert_eq!(statistics["input_values"], serde_json::json!(["1", "500"]));
+    assert_eq!(statistics["input_units"], serde_json::json!(["km", "m"]));
+    assert_eq!(
+        statistics["normalized_values"],
+        serde_json::json!(["1000", "500"])
+    );
+    assert_eq!(statistics["sum"], "1500");
+    assert_eq!(statistics["mean"], "750");
+    assert_eq!(statistics["variance_unit"], "(m)^2");
+}
+
+#[test]
+fn incompatible_mixed_units_suspend_without_adopting_a_numeric_result() {
+    let scratch = Scratch::new();
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "incompatible-statistics", "統計 [1 km, 5 s]"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(result["reason"].as_str().unwrap().contains("UNIT_MISMATCH"));
+    assert!(result["content_plan"].is_null());
+    assert!(result["receipts"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn linear_equation_result_preserves_matrix_and_exact_solution() {
     let scratch = Scratch::new();
     let result = record(&execute(

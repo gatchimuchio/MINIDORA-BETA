@@ -511,6 +511,10 @@ pub fn verify_linear(result: &LinearSolution) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Statistics {
     pub input_values: Vec<String>,
+    /// One source unit per input value, or `None` when the input is unitless.
+    pub input_units: Option<Vec<String>>,
+    /// Exact values expressed in `unit`, in the original input order.
+    pub normalized_values: Vec<String>,
     pub count: usize,
     pub unit: Option<String>,
     pub variance_unit: Option<String>,
@@ -526,9 +530,24 @@ pub struct Statistics {
     pub scope: String,
 }
 
+fn exact_length_scale_to_meters(unit: &str) -> Option<BigRational> {
+    let (numerator, denominator) = match unit {
+        "km" => (1000_i64, 1_i64),
+        "m" => (1, 1),
+        "cm" => (1, 100),
+        "mm" => (1, 1000),
+        _ => return None,
+    };
+    Some(BigRational::new(
+        BigInt::from(numerator),
+        BigInt::from(denominator),
+    ))
+}
+
 /// Descriptive statistics on supplied values. Every operation uses exact
-/// rationals. Units, when supplied, must match exactly; no implicit conversion
-/// or assertion that the inputs form a representative population occurs.
+/// rationals. Identical unit labels retain their original unit; mixed units
+/// convert only within the explicitly defined SI length set. No assertion is
+/// made that the supplied observations represent a wider population.
 pub fn summarize(values: &[String], units: Option<&[String]>) -> Result<Statistics> {
     if values.is_empty() || values.len() > MAX_OBSERVATIONS {
         return Err(failure(
@@ -536,7 +555,12 @@ pub fn summarize(values: &[String], units: Option<&[String]>) -> Result<Statisti
             "expected 1..4096 observations",
         ));
     }
-    let unit = if let Some(units) = units {
+    let parsed_values: Vec<BigRational> = values
+        .iter()
+        .map(|value| scalar(value))
+        .collect::<Result<_>>()?;
+    let mut budget = Budget::default();
+    let (unit, input_units, normalized_values) = if let Some(units) = units {
         if units.len() != values.len()
             || units.iter().any(|unit| {
                 unit.is_empty() || unit.len() > 64 || unit.chars().any(char::is_control)
@@ -547,21 +571,32 @@ pub fn summarize(values: &[String], units: Option<&[String]>) -> Result<Statisti
                 "one valid explicit unit is required for every value",
             ));
         }
-        if units.iter().any(|unit| unit != &units[0]) {
-            return Err(failure(
-                "UNIT_MISMATCH",
-                "mixed units require an explicit verified conversion",
-            ));
+        let input_units = Some(units.to_vec());
+        if units.iter().all(|unit| unit == &units[0]) {
+            (Some(units[0].clone()), input_units, parsed_values)
+        } else {
+            let scales = units
+                .iter()
+                .map(|unit| exact_length_scale_to_meters(unit))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    failure(
+                        "UNIT_MISMATCH",
+                        "mixed units require one verified conversion family; supported mixed units are mm, cm, m, and km",
+                    )
+                })?;
+            let normalized = parsed_values
+                .iter()
+                .zip(scales)
+                .map(|(value, scale)| budget.check(value * scale))
+                .collect::<Result<Vec<_>>>()?;
+            (Some("m".into()), input_units, normalized)
         }
-        Some(units[0].clone())
     } else {
-        None
+        (None, None, parsed_values)
     };
-    let mut ordered: Vec<BigRational> = values
-        .iter()
-        .map(|value| scalar(value))
-        .collect::<Result<_>>()?;
-    let mut budget = Budget::default();
+    let normalized_value_texts: Vec<String> = normalized_values.iter().map(rational_text).collect();
+    let mut ordered = normalized_values;
     let mut sum = BigRational::zero();
     for value in &ordered {
         sum = budget.check(sum + value)?;
@@ -591,7 +626,7 @@ pub fn summarize(values: &[String], units: Option<&[String]>) -> Result<Statisti
         ordered[middle].clone()
     };
     Ok(Statistics {
-        input_values: values.to_vec(), count: values.len(), variance_unit: unit.as_ref().map(|unit| format!("({unit})^2")), unit,
+        input_values: values.to_vec(), input_units, normalized_values: normalized_value_texts, count: values.len(), variance_unit: unit.as_ref().map(|unit| format!("({unit})^2")), unit,
         sum: rational_text(&sum), mean: rational_text(&mean), median: rational_text(&median),
         min: rational_text(&ordered[0]), max: rational_text(&ordered[ordered.len()-1]),
         population_variance: rational_text(&population_variance), sample_variance,
@@ -743,13 +778,37 @@ mod tests {
     #[test]
     fn units_empty_population_and_single_observation() {
         assert!(summarize(&[], None).is_err());
-        assert!(summarize(&strings(&["1", "2"]), Some(&strings(&["m", "cm"]))).is_err());
+        assert!(summarize(&strings(&["1", "2"]), Some(&strings(&["m", "s"]))).is_err());
         let result = summarize(&strings(&["-5"]), Some(&strings(&["m"]))).unwrap();
         assert_eq!(result.mean, "-5");
         assert_eq!(result.population_variance, "0");
         assert!(result.sample_variance.is_none());
         assert_eq!(result.unit, Some("m".into()));
         assert_eq!(result.variance_unit, Some("(m)^2".into()));
+    }
+
+    #[test]
+    fn mixed_si_length_units_are_converted_exactly_before_statistics() {
+        let result = summarize(&strings(&["1", "500"]), Some(&strings(&["km", "m"]))).unwrap();
+        assert_eq!(result.input_values, ["1", "500"]);
+        assert_eq!(result.input_units, Some(strings(&["km", "m"])));
+        assert_eq!(result.normalized_values, ["1000", "500"]);
+        assert_eq!(result.sorted_values, ["500", "1000"]);
+        assert_eq!(result.unit, Some("m".into()));
+        assert_eq!(result.variance_unit, Some("(m)^2".into()));
+        assert_eq!(result.sum, "1500");
+        assert_eq!(result.mean, "750");
+        assert_eq!(result.median, "750");
+        assert_eq!(result.population_variance, "62500");
+        assert_eq!(result.sample_variance, Some("125000".into()));
+
+        let decimal = summarize(
+            &strings(&["0.1", "25", "50", "500"]),
+            Some(&strings(&["km", "m", "cm", "mm"])),
+        )
+        .unwrap();
+        assert_eq!(decimal.normalized_values, ["100", "25", "1/2", "1/2"]);
+        assert_eq!(decimal.sum, "126");
     }
 }
 

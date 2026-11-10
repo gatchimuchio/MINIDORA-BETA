@@ -36,6 +36,7 @@ The script does not fetch, reset, modify or execute either predecessor. It reads
 - `source_identity.tsv` records each source path, both expected and measured blob identities, SHA-256, byte length and top-level Python declarations. It does not infer function semantics or actual entry routes from those declarations.
 - `test_identity.tsv` preserves every test/fixture identity and records availability. Applicability and Rust equivalents remain unreviewed until they receive separate, inspectable contract evidence.
 - `requirements.tsv` preserves all 93 baseline requirements. `CAP-Dxx` denotes capability IDs; `ARCH-Dxx` denotes architecture decisions. Metadata generation leaves implementation and acceptance unverified.
+- `unit-conversion-validation.json` records the scoped B02 mixed-length statistics implementation and its Linux component/ordinary-route checks. It does not close B02 or full successor acceptance.
 - `reference_documents.tsv` records exact public reference-document digests. A digest does not establish that a reader understood or implemented a document.
 
 Do not replace these baseline observations with later acceptance claims. Record semantic reviews, Rust implementation paths, input/output observations and executed successor results separately, with their own code/test versions. No predecessor pass is a Rust pass.

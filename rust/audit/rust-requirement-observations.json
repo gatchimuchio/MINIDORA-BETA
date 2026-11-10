@@ -225,10 +225,12 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/math.rs",
         "crates/minidora-engine/src/core.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
-      "full_acceptance_gap": "Computation plus follow-up explanation and correction preserve operands and units",
+      "evidence": "unit-conversion-validation.json observes exact mixed mm/cm/m/km length statistics on the ordinary CLI route and a typed stop for incompatible mixed units; this is partial implementation evidence, not complete row acceptance",
+      "full_acceptance_gap": "Follow-up explanation and correction, inherited quantity coverage, broader dimensions, and the full B02 observable remain unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },
