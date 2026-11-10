@@ -205,6 +205,10 @@ pub enum Intent {
         weights: Vec<String>,
         event_values: Vec<String>,
     },
+    EvaluatePolynomial {
+        expression: String,
+        bindings: BTreeMap<String, String>,
+    },
     Symbolic {
         expression: String,
         operation: String,

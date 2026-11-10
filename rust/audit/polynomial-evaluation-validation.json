@@ -1,0 +1,76 @@
+{
+  "work_item": "B03 route the existing exact polynomial evaluator through input and Core with per-term output",
+  "recorded_at": "2026-11-10T15:33:46Z",
+  "base_commit": "f0c9041a35d02e3b98e67188923e5d7436a233d7",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v10-polynomial-evaluation",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "38b34c72bc762253d3b3da975427f4567d6735d9f3102f07174654de89770547",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "904e0fa919ae23778cc3d18da4957ab99185c93f2349ce2b7699772917156612",
+    "crates/minidora-engine/src/core.rs": "2ad094f3f3a3eef03239e135ea3afac7393d2150e6a76af70e15c43b608fb458",
+    "crates/minidora-engine/src/input.rs": "a0c2336470f9b58f0c11046465df3afedc080736904b55f0bd2464d7e0af0b73",
+    "crates/minidora-engine/src/math.rs": "85053420d477662f3c5cba380a0e8404cbcca07e855be7ebbdb5b56db0efa6bd"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "978336595ab6415b17d5cb2900aaf2ee486db6cfe8a496441bb82d3af825e545"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "initial_compile_failures": [
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 101,
+      "cause": "The new parser used BTreeMap without importing the standard-library type.",
+      "correction": "Imported std::collections::BTreeMap in input.rs; the same formatting, check, Clippy and build sequence then passed."
+    }
+  ],
+  "existing_component_observation": "At base commit f0c9041, evaluate_polynomial existed as a public component and was referenced by component tests, but had no normal Core intent consumer.",
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation did not request test or runtime-route verification; only formatting, compilation, lint and build checks were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::mathematics_intent -> Intent::EvaluatePolynomial -> math::evaluate_polynomial_report -> exact polynomial evaluator",
+  "supported_behavior_from_source": [
+    "Japanese 「評価 expression 代入 x=3」 (also with 「を計算して」 / 「を計算してください」) and English `evaluate expression at x=3` or `evaluate-polynomial expression at x=3` seal one bounded polynomial expression and explicit bindings.",
+    "Bindings are comma-separated exact scalar expressions, limited to eight; duplicate bindings and malformed binding strings produce typed unresolved intents.",
+    "The existing polynomial parser and exact evaluator remain the execution engine. Every source variable requires an explicit binding; extra valid bindings do not change the computed value.",
+    "The Core report preserves the input expression, variables and bindings and lists each canonical monomial, its exact value and its exact contribution before the exact total.",
+    "The prior evaluate_polynomial string-returning component API remains as a wrapper over the new report-producing operation. Polynomial term, degree, coefficient, depth and operation bounds remain active."
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

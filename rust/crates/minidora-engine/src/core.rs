@@ -426,6 +426,22 @@ impl Engine {
                     }
                 }
             }
+            Intent::EvaluatePolynomial {
+                expression,
+                bindings,
+            } => match crate::math::evaluate_polynomial_report(expression, bindings) {
+                Ok(report) => {
+                    units.push(serde_json::to_string_pretty(&report)?);
+                    result.guarantee = Guarantee::Computed;
+                }
+                Err(error) => {
+                    let code = match &error {
+                        minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                        _ => "POLYNOMIAL_EVALUATION_UNSUPPORTED",
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                }
+            },
             Intent::Symbolic {
                 expression,
                 operation,

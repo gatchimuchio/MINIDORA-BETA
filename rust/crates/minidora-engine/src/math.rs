@@ -1078,6 +1078,25 @@ pub struct SymbolicResult {
     pub verification: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolynomialEvaluationTerm {
+    pub powers: BTreeMap<String, u16>,
+    pub coefficient: String,
+    pub monomial_value: String,
+    pub contribution: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolynomialEvaluationReport {
+    pub original_expression: String,
+    pub variables: Vec<String>,
+    pub bindings: BTreeMap<String, String>,
+    pub terms: Vec<PolynomialEvaluationTerm>,
+    pub value: String,
+    pub operations: usize,
+    pub verification: String,
+}
+
 #[derive(Default)]
 struct PolyWork {
     operations: usize,
@@ -1689,10 +1708,10 @@ pub fn symbolic(expression: &str, operation: &str, variable: &str) -> Result<Sym
 
 /// Evaluate the complete supported polynomial at explicit exact rational values.
 /// Missing variables fail; additional bounded valid bindings do not change it.
-pub fn evaluate_polynomial(
+pub fn evaluate_polynomial_report(
     expression: &str,
     bindings: &BTreeMap<String, String>,
-) -> Result<String> {
+) -> Result<PolynomialEvaluationReport> {
     let mut parser = PolyParser::new(expression)?;
     let polynomial = parser.finish()?;
     if bindings.len() > MAX_VARIABLES {
@@ -1716,18 +1735,47 @@ pub fn evaluate_polynomial(
             "every source variable must have an explicit binding",
         ));
     }
+    let variables: Vec<_> = parser.variables.iter().cloned().collect();
     let mut total = BigRational::zero();
-    for (powers, coefficient) in polynomial {
-        let mut value = coefficient;
-        for (name, exponent) in powers {
-            let power = parser
-                .work
-                .coefficient(values[&name].pow(i32::from(exponent)))?;
-            value = parser.work.coefficient(value * power)?;
+    let mut terms = Vec::new();
+    for term in polynomial_terms(&polynomial, &variables) {
+        let coefficient = polynomial
+            .get(&term.powers)
+            .expect("projected polynomial term exists")
+            .clone();
+        let mut monomial_value = BigRational::one();
+        for (name, exponent) in &term.powers {
+            let bound = values
+                .get(name)
+                .expect("all source polynomial variables were checked");
+            let power = parser.work.coefficient(bound.pow(i32::from(*exponent)))?;
+            monomial_value = parser.work.coefficient(monomial_value * power)?;
         }
-        total = parser.work.coefficient(total + value)?;
+        let contribution = parser.work.coefficient(&coefficient * &monomial_value)?;
+        total = parser.work.coefficient(total + &contribution)?;
+        terms.push(PolynomialEvaluationTerm {
+            powers: term.powers,
+            coefficient: rational_text(&coefficient),
+            monomial_value: rational_text(&monomial_value),
+            contribution: rational_text(&contribution),
+        });
     }
-    Ok(rational_text(&total))
+    Ok(PolynomialEvaluationReport {
+        original_expression: expression.into(),
+        variables,
+        bindings: bindings.clone(),
+        terms,
+        value: rational_text(&total),
+        operations: parser.work.operations,
+        verification: "complete parsed polynomial evaluated term by term with exact rational powers; reported contributions sum to the returned value".into(),
+    })
+}
+
+pub fn evaluate_polynomial(
+    expression: &str,
+    bindings: &BTreeMap<String, String>,
+) -> Result<String> {
+    evaluate_polynomial_report(expression, bindings).map(|report| report.value)
 }
 
 #[cfg(test)]

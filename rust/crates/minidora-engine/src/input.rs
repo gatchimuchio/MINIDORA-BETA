@@ -2,9 +2,10 @@
 //! Unrecognized language is retained as an unresolved intent, never guessed.
 use minidora_domain::*;
 use regex::Regex;
+use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v9-finite-event-probability";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v10-polynomial-evaluation";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -705,6 +706,55 @@ fn quantity_statistics_intent(text: &str) -> Result<Option<Intent>> {
 fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
     if let Some(intent) = quantity_statistics_intent(text)? {
         return Ok(Some(intent));
+    }
+    if let Some(capture) =
+        regex(r"(?is)^(評価|evaluate|evaluate-polynomial)\s+(.+?)\s+(?:代入|at)\s+(.+)$")?
+            .captures(text)
+    {
+        let japanese = &capture[1] == "評価";
+        let expression = capture[2].trim().to_string();
+        let mut assignment_text = capture[3].trim().to_string();
+        if japanese {
+            for suffix in ["を計算してください", "を計算して"] {
+                if let Some(stripped) = assignment_text.strip_suffix(suffix) {
+                    assignment_text = stripped.trim().to_string();
+                    break;
+                }
+            }
+        }
+        let assignment_pattern = regex(r"^([\p{L}_][\p{L}\p{N}_]*)\s*=\s*([0-9eE+\-*/^().\s]+)$")?;
+        let mut bindings = BTreeMap::new();
+        for item in assignment_text.split(',') {
+            let Some(binding) = assignment_pattern.captures(item.trim()) else {
+                return Ok(Some(Intent::Unknown {
+                    reason: "polynomial evaluation requires comma-separated variable=exact-scalar bindings".into(),
+                }));
+            };
+            let variable = binding[1].to_string();
+            if bindings
+                .insert(variable, binding[2].trim().to_string())
+                .is_some()
+            {
+                return Ok(Some(Intent::Unknown {
+                    reason: "polynomial evaluation does not allow duplicate variable bindings"
+                        .into(),
+                }));
+            }
+            if bindings.len() > 8 {
+                return Ok(Some(Intent::Unknown {
+                    reason: "polynomial evaluation accepts at most eight variable bindings".into(),
+                }));
+            }
+        }
+        if bindings.is_empty() {
+            return Ok(Some(Intent::Unknown {
+                reason: "polynomial evaluation requires at least one variable binding".into(),
+            }));
+        }
+        return Ok(Some(Intent::EvaluatePolynomial {
+            expression,
+            bindings,
+        }));
     }
     if let Some(capture) =
         regex(r"(?is)^(期待値|expected-value)\s*[:：]?\s*(\[.+)$")?.captures(text)

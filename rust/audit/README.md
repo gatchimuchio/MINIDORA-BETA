@@ -46,6 +46,7 @@ The script does not fetch, reset, modify or execute either predecessor. It reads
 - `probability-normalization-validation.json` records exact normalization of explicitly supplied nonnegative finite weights and compile/lint/build checks. No test or CLI route was executed for this slice; B03 remains unverified.
 - `finite-probability-statistics-validation.json` records exact expected value and variance for explicitly paired finite outcomes and weights, with compile/lint/build checks. No test or CLI route was executed for this slice; B03 remains unverified.
 - `finite-event-probability-validation.json` records exact mass for an explicitly supplied event-value set over paired outcomes and weights, with compile/lint/build checks. No test or CLI route was executed for this slice; B03 remains unverified.
+- `polynomial-evaluation-validation.json` records ordinary input/Core wiring for the exact bounded polynomial evaluator and per-term result contributions, with compile/lint/build checks. No test or CLI route was executed for this slice; B03 remains unverified.
 - `reference_documents.tsv` records exact public reference-document digests. A digest does not establish that a reader understood or implemented a document.
 
 Do not replace these baseline observations with later acceptance claims. Record semantic reviews, Rust implementation paths, input/output observations and executed successor results separately, with their own code/test versions. No predecessor pass is a Rust pass.

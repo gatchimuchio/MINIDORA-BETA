@@ -110,6 +110,17 @@ The event values use exact numeric equality. The example returns probability `1/
 
 Symbolic operations cover bounded rational-coefficient multivariate polynomials. Multiplication must be explicit. `**` and the documented Rust alias `^` take nonnegative literal integer exponents. Variable denominators, functions, implicit multiplication and trailing unparsed constraints fail. An integral is one representative antiderivative; an arbitrary term independent of its target variable remains possible. This is not a general computer algebra system or free-form mathematical-language claim.
 
+### Exact polynomial evaluation
+
+```bash
+"$minidora_bin" --db "$minidora_state" --actor demo --case polynomial-evaluation \
+  '評価 x**2 + 2*x + 1 代入 x=3'
+"$minidora_bin" --db "$minidora_state" --actor demo --case polynomial-evaluation-en \
+  'evaluate x**2 + 2*x + 1 at x=3'
+```
+
+Evaluation uses the same bounded polynomial grammar as simplification and symbolic calculus. Every source variable needs one exact scalar binding; comma-separated bindings such as `x=3, y=1` are supported, and at most eight bindings are accepted. Missing variables, malformed values, unsupported expressions and duplicate bindings stop with typed errors. The JSON report preserves the expression and bindings, then lists each monomial value and contribution before the exact result. Extra valid bindings are retained but do not change the value.
+
 ## Declared premises, rules and negation
 
 ```bash
@@ -282,6 +293,6 @@ See [implementation choices](docs/IMPLEMENTATION_CHOICES.md), [dependencies](doc
 
 ## Current validation and open scope
 
-See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the initial operand-correction validation](audit/unit-correction-validation.json), [the bounded operator-correction validation](audit/unit-binary-correction-validation.json), [the store migration validation](audit/schema-migration-validation.json), [the CSV statistics build record](audit/csv-statistics-validation.json), [the JSON statistics build record](audit/json-statistics-validation.json), [the exact probability-weight normalization build record](audit/probability-normalization-validation.json), [the finite-distribution moments build record](audit/finite-probability-statistics-validation.json), [the finite-event probability build record](audit/finite-event-probability-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. Later alpha 8 Linux runs passed 147 and 148 Rust tests in their separately identified snapshots. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
+See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the initial operand-correction validation](audit/unit-correction-validation.json), [the bounded operator-correction validation](audit/unit-binary-correction-validation.json), [the store migration validation](audit/schema-migration-validation.json), [the CSV statistics build record](audit/csv-statistics-validation.json), [the JSON statistics build record](audit/json-statistics-validation.json), [the exact probability-weight normalization build record](audit/probability-normalization-validation.json), [the finite-distribution moments build record](audit/finite-probability-statistics-validation.json), [the finite-event probability build record](audit/finite-event-probability-validation.json), [the polynomial-evaluation build record](audit/polynomial-evaluation-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. Later alpha 8 Linux runs passed 147 and 148 Rust tests in their separately identified snapshots. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
 
 Tested cloud reproduction and startup instructions are [cloud-install.sh](tools/cloud-install.sh) and [cloud-start.md](tools/cloud-start.md). Backend environment-draft saving is currently unconfirmed due to an API error; the scripts themselves were executed successfully.
