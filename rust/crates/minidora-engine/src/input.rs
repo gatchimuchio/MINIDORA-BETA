@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v11-table-conversion";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v12-csv-filter";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -136,6 +136,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     }
     let looks_like_document = header.starts_with("CSVの列")
         || header.starts_with("csv-select ")
+        || header
+            .get(..10)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-filter"))
         || header.starts_with("csv-statistics ")
         || header.starts_with("CSVをJSONに変換して")
         || header.starts_with("csv-to-json")
@@ -167,6 +170,25 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::CsvToJson {
             document: document.into(),
             has_header,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^CSVの列「([^」]+)」が値「([^」]*)」の行を選択して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::CsvFilter {
+            document: document.into(),
+            column: capture[1].into(),
+            equals: capture[2].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^csv-filter[ \t]+("(?:[^"\\]|\\.)*")[ \t]+equals[ \t]+("(?:[^"\\]|\\.)*"):$"#)?
+            .captures(header)
+    {
+        return Ok(Some(Intent::CsvFilter {
+            document: document.into(),
+            column: serde_json::from_str::<String>(&capture[1])?,
+            equals: serde_json::from_str::<String>(&capture[2])?,
         }));
     }
     if header == "JSONをCSVに変換して:" || regex(r"(?i)^json-to-csv:$")?.is_match(header) {

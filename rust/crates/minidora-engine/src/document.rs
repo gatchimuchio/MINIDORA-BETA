@@ -512,6 +512,77 @@ pub fn csv_to_json(document: &str, has_header: bool) -> Result<DocumentResult> {
     )
 }
 
+/// Select rows whose explicitly named CSV cell exactly matches a supplied
+/// string. Output remains a string-typed JSON table and every emitted cell
+/// retains its original source byte range.
+pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<DocumentResult> {
+    let table = parse_csv(document, true)?;
+    let header = table.header.as_ref().expect("explicit CSV header");
+    let column_index = header
+        .iter()
+        .position(|cell| cell.value == column)
+        .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
+    let rows: Vec<_> = table
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row[column_index].value == equals)
+        .collect();
+
+    let mut text = String::from("{\"columns\":[");
+    let mut spans = Vec::new();
+    for (index, cell) in header.iter().enumerate() {
+        if index > 0 {
+            text.push(',');
+        }
+        append_json_cell(
+            &mut text,
+            document,
+            cell,
+            "CSV_FILTER_HEADER",
+            Some(0),
+            index,
+            &mut spans,
+        )?;
+    }
+    text.push_str("],\"rows\":[");
+    for (output_row, (source_row, row)) in rows.iter().enumerate() {
+        if output_row > 0 {
+            text.push(',');
+        }
+        text.push('[');
+        for (index, cell) in row.iter().enumerate() {
+            if index > 0 {
+                text.push(',');
+            }
+            append_json_cell(
+                &mut text,
+                document,
+                cell,
+                "CSV_FILTER_CELL",
+                Some(source_row + 1),
+                index,
+                &mut spans,
+            )?;
+        }
+        text.push(']');
+    }
+    text.push_str("]}");
+    result(
+        document,
+        text,
+        "CSV_FILTER",
+        BTreeMap::from([
+            ("column_name".into(), column.into()),
+            ("column_index".into(), column_index.to_string()),
+            ("equals".into(), equals.into()),
+            ("matched_rows".into(), rows.len().to_string()),
+            ("value_type".into(), "STRING".into()),
+        ]),
+        spans,
+    )
+}
+
 struct JsonTableParser<'a> {
     text: &'a str,
     at: usize,

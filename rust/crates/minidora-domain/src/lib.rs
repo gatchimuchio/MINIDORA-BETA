@@ -171,6 +171,11 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    CsvFilter {
+        document: String,
+        column: String,
+        equals: String,
+    },
     CsvToJson {
         document: String,
         has_header: bool,
