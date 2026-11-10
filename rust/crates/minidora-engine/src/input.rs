@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v26-calculation-sequence";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v27-csv-group-statistics";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -254,6 +254,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         }));
     }
     let looks_like_document = header.starts_with("CSVの列")
+        || (header.starts_with("CSVの「")
+            && header.contains("ごとに")
+            && header.contains("統計量"))
         || header.starts_with("csv-select ")
         || header
             .get(..10)
@@ -264,6 +267,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..12)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-count-by"))
+        || header.starts_with("csv-group-statistics")
         || header.starts_with("CSVを列")
         || header
             .get(..14)
@@ -377,6 +381,25 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::CsvGroupCount {
             document: document.into(),
             column: capture[1].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^CSVの「([^」]+)」ごとに「([^」]+)」の統計量を計算して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::CsvGroupStatistics {
+            document: document.into(),
+            group_column: capture[1].into(),
+            value_column: capture[2].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^csv-group-statistics[ \t]+("(?:[^"\\]|\\.)*")[ \t]+("(?:[^"\\]|\\.)*"):$"#)?
+            .captures(header)
+    {
+        return Ok(Some(Intent::CsvGroupStatistics {
+            document: document.into(),
+            group_column: serde_json::from_str::<String>(&capture[1])?,
+            value_column: serde_json::from_str::<String>(&capture[2])?,
         }));
     }
     if let Some(capture) = regex(r"^CSVを列「([^」]+)」で2つの表を比較して[:：]$")?.captures(header)

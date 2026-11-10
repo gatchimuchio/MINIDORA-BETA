@@ -1,0 +1,77 @@
+{
+  "work_item": "B04 exact grouped statistics over a named CSV string key and numeric value column",
+  "recorded_at": "2026-11-10T18:48:24Z",
+  "base_commit": "5d6c38086a195948d1b1eea2f450488afe36eadd",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v27-csv-group-statistics",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "08b57fa27682690837f64ae48664f4e866c096373e7fc30116e82c45c17342d9",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "f2d70455716510a94dde930487be9b8064c33d9e1545c5056e37e6ca249ade83",
+    "crates/minidora-engine/src/core.rs": "87f8bf6ad94a148920931243fa48076e2d95dd26c0a74d95793c740a0aa09664",
+    "crates/minidora-engine/src/input.rs": "0cc836f8d932f01e4054cd7f8d182f026228950a57f12dc462c308bc364fb817",
+    "crates/minidora-engine/src/document.rs": "d50da918865232cf77675a23bfbe84a94481927c728623973de373632ac13c41"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "628de3eda6a97bf6d5f435078e1eca0e8d92a96b07c2ad458f0ce0bc96d9615d"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No test or ordinary CLI route was run in this implementation slice; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal -> input::interpret -> input::structured_intent -> Intent::CsvGroupStatistics -> document::csv_group_statistics -> parse_csv -> math::summarize for each first-seen exact decoded string group -> source-preserving DocumentResult artifact -> Core dependencies and rendered output",
+  "supported_behavior": [
+    "The Japanese header CSVの「group」ごとに「value」の統計量を計算して: and strict quoted English csv-group-statistics \"group\" \"value\": select two distinct named columns.",
+    "Grouping uses exact decoded CSV string values in first-seen order; no case folding, trimming, Unicode normalization or numeric interpretation is applied to group keys.",
+    "Each group must contain either unitless exact arithmetic expressions or unit-bearing decimal literals. Mixed interpretations within one group stop with a typed error.",
+    "Each group receives exact descriptive statistics; identical declared units remain as supplied and mixed conversions are limited to explicit mm/cm/m/km values handled by the existing math component.",
+    "The output report records group values, source record numbers, exact statistics, original group-key/value cell byte spans, header spans and the complete source digest.",
+    "The existing CSV/document limits apply: at most 256000 source/output bytes, 4096 data rows, 256 columns and 65536 cells."
+  ],
+  "known_limits": [
+    "No test or ordinary CLI route was executed for this slice.",
+    "Only an explicitly supplied CSV table with a header, two distinct named columns and numeric measured values is supported; empty tables and invalid measured values suspend. Group keys may be arbitrary decoded strings.",
+    "The operation describes supplied rows and does not infer population representativeness or general table schemas."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

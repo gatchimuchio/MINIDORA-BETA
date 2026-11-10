@@ -729,6 +729,172 @@ pub fn csv_group_count(document: &str, column: &str) -> Result<DocumentResult> {
     )
 }
 
+/// Compute exact descriptive statistics for a numeric CSV column within each
+/// exact decoded string group. Groups retain first-seen order and both group
+/// keys and measured cells retain their original source locations.
+pub fn csv_group_statistics(
+    document: &str,
+    group_column: &str,
+    value_column: &str,
+) -> Result<DocumentResult> {
+    static QUANTITY: OnceLock<Regex> = OnceLock::new();
+    let quantity = QUANTITY.get_or_init(|| {
+        Regex::new(
+            r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
+        )
+        .expect("constant CSV grouped-statistics quantity pattern")
+    });
+    let table = parse_csv(document, true)?;
+    if table.rows.is_empty() {
+        return Err(failure(
+            "CSV_GROUP_STATISTICS_EMPTY",
+            "grouped statistics require at least one data row",
+        ));
+    }
+    let header = table.header.as_ref().expect("explicit CSV header");
+    let group_index = header
+        .iter()
+        .position(|cell| cell.value == group_column)
+        .ok_or_else(|| failure("CSV_COLUMN", "group column does not exist"))?;
+    let value_index = header
+        .iter()
+        .position(|cell| cell.value == value_column)
+        .ok_or_else(|| failure("CSV_COLUMN", "value column does not exist"))?;
+    if group_index == value_index {
+        return Err(failure(
+            "CSV_GROUP_STATISTICS_COLUMNS",
+            "group and measured-value columns must be distinct",
+        ));
+    }
+
+    let mut group_indices = BTreeMap::<String, usize>::new();
+    let mut grouped = Vec::<(String, Vec<(usize, &CsvCell, &CsvCell)>)>::new();
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let key = row[group_index].value.clone();
+        let group_index_in_result = if let Some(index) = group_indices.get(&key) {
+            *index
+        } else {
+            let index = grouped.len();
+            group_indices.insert(key.clone(), index);
+            grouped.push((key, Vec::new()));
+            index
+        };
+        grouped[group_index_in_result]
+            .1
+            .push((row_index, &row[group_index], &row[value_index]));
+    }
+
+    #[derive(Serialize)]
+    struct GroupReport {
+        value: String,
+        source_record_numbers: Vec<usize>,
+        statistics: crate::math::Statistics,
+    }
+    #[derive(Serialize)]
+    struct Report<'a> {
+        source_sha256: String,
+        group_column: &'a str,
+        value_column: &'a str,
+        groups: &'a [GroupReport],
+        source_spans: &'a [DocumentSpan],
+        guarantee: &'static str,
+    }
+
+    let mut spans = vec![
+        source_span(
+            document,
+            &header[group_index],
+            "CSV_GROUP_COLUMN_HEADER",
+            Some(0),
+            group_index,
+            None,
+        ),
+        source_span(
+            document,
+            &header[value_index],
+            "CSV_GROUP_VALUE_HEADER",
+            Some(0),
+            value_index,
+            None,
+        ),
+    ];
+    let mut reports = Vec::with_capacity(grouped.len());
+    for (group_value, members) in &grouped {
+        let mut values = Vec::with_capacity(members.len());
+        let mut units = Vec::with_capacity(members.len());
+        let mut quantity_count = 0usize;
+        let mut source_record_numbers = Vec::with_capacity(members.len());
+        for (row_index, group_cell, value_cell) in members {
+            source_record_numbers.push(row_index + 1);
+            spans.push(source_span(
+                document,
+                group_cell,
+                "CSV_GROUP_MEMBER",
+                Some(row_index + 1),
+                group_index,
+                None,
+            ));
+            if let Some(capture) = quantity.captures(&value_cell.value) {
+                quantity_count += 1;
+                values.push(capture[1].trim().to_string());
+                units.push(capture[2].to_string());
+            } else {
+                values.push(value_cell.value.clone());
+                units.push(String::new());
+            }
+            spans.push(source_span(
+                document,
+                value_cell,
+                "CSV_GROUP_STATISTIC_VALUE",
+                Some(row_index + 1),
+                value_index,
+                None,
+            ));
+        }
+        if quantity_count != 0 && quantity_count != members.len() {
+            return Err(failure(
+                "CSV_GROUP_STATISTICS_MIXED_VALUES",
+                format!(
+                    "group {group_value:?} mixes unit-bearing numbers with unitless or nonnumeric cells"
+                ),
+            ));
+        }
+        let statistics = if quantity_count == members.len() {
+            crate::math::summarize(&values, Some(&units))?
+        } else {
+            crate::math::summarize(&values, None)?
+        };
+        reports.push(GroupReport {
+            value: group_value.clone(),
+            source_record_numbers,
+            statistics,
+        });
+    }
+    let text = serde_json::to_string_pretty(&Report {
+        source_sha256: digest(document.as_bytes()),
+        group_column,
+        value_column,
+        groups: &reports,
+        source_spans: &spans,
+        guarantee: "exact descriptive statistics grouped by exact decoded CSV strings; first-seen group order and original source cells are retained; no population inference",
+    })?;
+    result(
+        document,
+        text,
+        "CSV_GROUP_STATISTICS",
+        BTreeMap::from([
+            ("group_column".into(), group_column.into()),
+            ("group_column_index".into(), group_index.to_string()),
+            ("value_column".into(), value_column.into()),
+            ("value_column_index".into(), value_index.to_string()),
+            ("group_count".into(), reports.len().to_string()),
+            ("row_count".into(), table.rows.len().to_string()),
+            ("group_order".into(), "first_seen".into()),
+        ]),
+        spans,
+    )
+}
+
 /// Compare two explicitly supplied, headered CSV tables by an exact unique
 /// string key. The input body uses reserved marker lines to keep both original
 /// tables in one source document:

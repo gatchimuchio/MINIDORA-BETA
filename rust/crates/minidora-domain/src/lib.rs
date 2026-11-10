@@ -188,6 +188,11 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    CsvGroupStatistics {
+        document: String,
+        group_column: String,
+        value_column: String,
+    },
     CsvCompare {
         document: String,
         key_column: String,
