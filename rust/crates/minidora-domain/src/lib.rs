@@ -176,6 +176,11 @@ pub enum Intent {
         column: String,
         equals: String,
     },
+    CsvSort {
+        document: String,
+        column: String,
+        descending: bool,
+    },
     CsvToJson {
         document: String,
         has_header: bool,

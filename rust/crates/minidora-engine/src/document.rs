@@ -512,25 +512,15 @@ pub fn csv_to_json(document: &str, has_header: bool) -> Result<DocumentResult> {
     )
 }
 
-/// Select rows whose explicitly named CSV cell exactly matches a supplied
-/// string. Output remains a string-typed JSON table and every emitted cell
-/// retains its original source byte range.
-pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
-    let header = table.header.as_ref().expect("explicit CSV header");
-    let column_index = header
-        .iter()
-        .position(|cell| cell.value == column)
-        .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
-    let rows: Vec<_> = table
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| row[column_index].value == equals)
-        .collect();
-
+fn named_rows_as_json(
+    document: &str,
+    header: &[CsvCell],
+    rows: &[(usize, &Vec<CsvCell>)],
+    operation: &str,
+    parameters: BTreeMap<String, String>,
+    mut spans: Vec<DocumentSpan>,
+) -> Result<DocumentResult> {
     let mut text = String::from("{\"columns\":[");
-    let mut spans = Vec::new();
     for (index, cell) in header.iter().enumerate() {
         if index > 0 {
             text.push(',');
@@ -568,9 +558,41 @@ pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<Document
         text.push(']');
     }
     text.push_str("]}");
-    result(
+    result(document, text, operation, parameters, spans)
+}
+
+/// Select rows whose explicitly named CSV cell exactly matches a supplied
+/// string. Output remains a string-typed JSON table and every emitted cell
+/// retains its original source byte range. Predicate spans also include
+/// rejected rows so the exact filter decision remains inspectable.
+pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<DocumentResult> {
+    let table = parse_csv(document, true)?;
+    let header = table.header.as_ref().expect("explicit CSV header");
+    let column_index = header
+        .iter()
+        .position(|cell| cell.value == column)
+        .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
+    let rows: Vec<_> = table
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row[column_index].value == equals)
+        .collect();
+    let mut spans = Vec::with_capacity(table.rows.len());
+    for (row_index, row) in table.rows.iter().enumerate() {
+        spans.push(source_span(
+            document,
+            &row[column_index],
+            "CSV_FILTER_DECISION",
+            Some(row_index + 1),
+            column_index,
+            None,
+        ));
+    }
+    named_rows_as_json(
         document,
-        text,
+        header,
+        &rows,
         "CSV_FILTER",
         BTreeMap::from([
             ("column_name".into(), column.into()),
@@ -580,6 +602,48 @@ pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<Document
             ("value_type".into(), "STRING".into()),
         ]),
         spans,
+    )
+}
+
+/// Stably sort a named CSV column by exact decoded string order, without
+/// locale collation, case folding or numeric interpretation.
+pub fn csv_sort(document: &str, column: &str, descending: bool) -> Result<DocumentResult> {
+    let table = parse_csv(document, true)?;
+    let header = table.header.as_ref().expect("explicit CSV header");
+    let column_index = header
+        .iter()
+        .position(|cell| cell.value == column)
+        .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
+    let mut rows: Vec<_> = table.rows.iter().enumerate().collect();
+    rows.sort_by(|(_, left), (_, right)| {
+        if descending {
+            right[column_index].value.cmp(&left[column_index].value)
+        } else {
+            left[column_index].value.cmp(&right[column_index].value)
+        }
+    });
+    let row_count = rows.len();
+    named_rows_as_json(
+        document,
+        header,
+        &rows,
+        "CSV_SORT",
+        BTreeMap::from([
+            ("column_name".into(), column.into()),
+            ("column_index".into(), column_index.to_string()),
+            (
+                "sort_order".into(),
+                if descending {
+                    "descending"
+                } else {
+                    "ascending"
+                }
+                .into(),
+            ),
+            ("row_count".into(), row_count.to_string()),
+            ("value_type".into(), "STRING".into()),
+        ]),
+        Vec::new(),
     )
 }
 
