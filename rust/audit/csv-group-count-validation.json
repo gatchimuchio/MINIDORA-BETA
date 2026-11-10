@@ -1,0 +1,67 @@
+{
+  "work_item": "B04 first-seen exact-string group counts for a named CSV column through Core",
+  "recorded_at": "2026-11-10T16:34:16Z",
+  "base_commit": "c49b82e69ebcc6a35494b6395959f099b52b46a4",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v14-csv-group-count",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "acad11f8901b87a496b859027c295a8bd259506bef41cdc53738b8c7ffcf70b4",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "b0cd6eb8adddaf771abad12ecbea0f7445a7fa789e9cd6f14cba1265a851004a",
+    "crates/minidora-engine/src/core.rs": "16385b4a730b2429799155a58a262b4e78c184cfaeb89a6642d1030f266ab28b",
+    "crates/minidora-engine/src/input.rs": "ee7e25290d1c55d26bcd3b354e502c36966b0fd2a1445986471a470262daa988",
+    "crates/minidora-engine/src/document.rs": "2cbacc08ec9b929d885c78669affcbd46610fdebc6c0f87b129c643c82c7c9c3"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "2dd60cb9878c45727f72b5b50bee10044d5d44161b44def1bc74c8497fc76c4e"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This implementation continuation did not request test or runtime-route verification; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::CsvGroupCount -> document::csv_group_count -> DocumentResult artifact",
+  "supported_behavior_from_source": [
+    "The operation requires a valid CSV with an explicit unique named header and an existing selected column.",
+    "Each group is keyed by the exact decoded string in the selected column; no numeric conversion, whitespace trimming, case folding or Unicode normalization is performed.",
+    "Groups are returned in order of their first appearance, with an integer count for each value.",
+    "The report retains the selected source header and every member cell span, plus the source and output digests and group parameters.",
+    "Malformed CSV and missing columns return typed failures; CSV byte/row/column/cell/output bounds remain in force."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

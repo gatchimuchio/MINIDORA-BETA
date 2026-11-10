@@ -647,6 +647,88 @@ pub fn csv_sort(document: &str, column: &str, descending: bool) -> Result<Docume
     )
 }
 
+/// Count exact decoded string values in one named CSV column. Groups retain
+/// first-seen order, while every member cell remains in the source map.
+pub fn csv_group_count(document: &str, column: &str) -> Result<DocumentResult> {
+    let table = parse_csv(document, true)?;
+    let header = table.header.as_ref().expect("explicit CSV header");
+    let column_index = header
+        .iter()
+        .position(|cell| cell.value == column)
+        .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
+
+    let mut indices = BTreeMap::<String, usize>::new();
+    let mut groups = Vec::<Vec<(usize, &CsvCell)>>::new();
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let cell = &row[column_index];
+        let group_index = if let Some(index) = indices.get(&cell.value) {
+            *index
+        } else {
+            let index = groups.len();
+            indices.insert(cell.value.clone(), index);
+            groups.push(Vec::new());
+            index
+        };
+        groups[group_index].push((row_index, cell));
+    }
+
+    let mut text = String::from("{\"group_by\":");
+    let header_start = text.len();
+    text.push_str(&serde_json::to_string(&header[column_index].value)?);
+    let mut spans = vec![source_span(
+        document,
+        &header[column_index],
+        "CSV_GROUP_COLUMN",
+        Some(0),
+        column_index,
+        Some((header_start, text.len())),
+    )];
+    text.push_str(",\"groups\":[");
+    for (group_index, members) in groups.iter().enumerate() {
+        if group_index > 0 {
+            text.push(',');
+        }
+        text.push_str("{\"value\":");
+        for (row_index, cell) in members {
+            spans.push(source_span(
+                document,
+                cell,
+                "CSV_GROUP_MEMBER",
+                Some(row_index + 1),
+                column_index,
+                None,
+            ));
+        }
+        let (first_row, representative) = members.first().expect("group has one member");
+        append_json_cell(
+            &mut text,
+            document,
+            representative,
+            "CSV_GROUP_VALUE",
+            Some(first_row + 1),
+            column_index,
+            &mut spans,
+        )?;
+        text.push_str(",\"count\":");
+        text.push_str(&members.len().to_string());
+        text.push('}');
+    }
+    text.push_str("]}");
+    result(
+        document,
+        text,
+        "CSV_GROUP_COUNT",
+        BTreeMap::from([
+            ("column_name".into(), column.into()),
+            ("column_index".into(), column_index.to_string()),
+            ("group_count".into(), groups.len().to_string()),
+            ("row_count".into(), table.rows.len().to_string()),
+            ("group_order".into(), "first_seen".into()),
+        ]),
+        spans,
+    )
+}
+
 struct JsonTableParser<'a> {
     text: &'a str,
     at: usize,

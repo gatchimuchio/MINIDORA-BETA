@@ -181,6 +181,10 @@ pub enum Intent {
         column: String,
         descending: bool,
     },
+    CsvGroupCount {
+        document: String,
+        column: String,
+    },
     CsvToJson {
         document: String,
         has_header: bool,
