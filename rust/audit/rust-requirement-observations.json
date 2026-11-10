@@ -231,8 +231,8 @@
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-domain/src/lib.rs"
       ],
-      "evidence": "unit-conversion-validation.json observes exact mixed mm/cm/m/km length statistics; unit-arithmetic-validation.json observes exact unit-aware binary arithmetic and saved-result explanation; unit-correction-validation.json observes versioned unit-aware addition/subtraction correction; unit-binary-correction-validation.json observes actual-result-linked dimensionless *, /, %, ^ and ** correction on the ordinary CLI route with the original result retained. This is partial implementation evidence, not complete row acceptance",
-      "full_acceptance_gap": "Nested and compound correction, dimensional multiplication/division, inherited quantity coverage, broader dimensions and the full B02 observable remain unverified",
+      "evidence": "unit-conversion-validation.json observes exact mixed mm/cm/m/km length statistics; unit-arithmetic-validation.json observes exact unit-aware binary arithmetic and saved-result explanation; unit-correction-validation.json observes versioned unit-aware addition/subtraction correction; unit-binary-correction-validation.json observes actual-result-linked dimensionless *, /, %, ^ and ** correction on the ordinary CLI route with the original result retained. This is partial implementation evidence, not complete row acceptance; unit-sequence-validation.json adds build-only evidence for actual unit-bearing intermediate-value consumption through the existing addition/subtraction grammar",
+      "full_acceptance_gap": "Nested and compound correction, dimensional multiplication/division, inherited quantity coverage, broader dimensions and the full B02 observable remain unverified; no test or ordinary CLI route has demonstrated the new sequence consumer, and referenced unit use remains limited to existing addition/subtraction",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },
@@ -302,8 +302,8 @@
         "crates/minidora-engine/src/language.rs",
         "crates/minidora-engine/src/scheduler.rs"
       ],
-      "evidence": "calculation-sequence-validation.json records the bounded source route and format/check/lint/build evidence; no test or ordinary CLI route was executed, and this is not full B06 acceptance",
-      "full_acceptance_gap": "No test or ordinary CLI route has demonstrated actual downstream consumption and artifact identity at runtime; general multi-step problem solving, unseen task quality, and broader Core goal composition remain unverified",
+      "evidence": "calculation-sequence-validation.json records the bounded source route and format/check/lint/build evidence; no test or ordinary CLI route was executed, and this is not full B06 acceptance; unit-sequence-validation.json extends the same bounded route to compatible exact unit-bearing intermediates; no test or ordinary CLI route was executed",
+      "full_acceptance_gap": "No test or ordinary CLI route has demonstrated actual downstream consumption and artifact identity at runtime; general multi-step problem solving, unseen task quality, and broader Core goal composition remain unverified; unit-bearing intermediate consumption is limited to existing addition/subtraction and has no runtime acceptance observation",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

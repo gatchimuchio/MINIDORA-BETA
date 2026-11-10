@@ -136,9 +136,43 @@ pub struct ResolvedSequenceCalculation {
     pub consumed: Vec<CalculationReferenceUse>,
 }
 
+fn sequence_value_literal(value: &str) -> Result<String> {
+    if value.len() > MAX_EXPRESSION_BYTES {
+        return Err(failure(
+            "CALCULATION_REFERENCE_LIMIT",
+            "exact upstream value exceeds the expression substitution envelope",
+        ));
+    }
+    if let Ok(rational) = BigRational::from_str(value)
+        && rational_text(&rational) == value
+    {
+        return Ok(format!("({value})"));
+    }
+
+    static QUANTITY_UNIT: OnceLock<Regex> = OnceLock::new();
+    let unit_pattern = QUANTITY_UNIT.get_or_init(|| {
+        Regex::new(r"^[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}$")
+            .expect("sequence quantity unit pattern is static")
+    });
+    if let Some((number, unit)) = value.rsplit_once(' ')
+        && unit_pattern.is_match(unit)
+        && let Ok(rational) = BigRational::from_str(number)
+        && rational_text(&rational) == number
+    {
+        // Unit addition accepts a bare number+unit pair, not a parenthesized
+        // unit expression; the existing calculator rejects other operations.
+        return Ok(format!("{number} {unit}"));
+    }
+    Err(failure(
+        "CALCULATION_REFERENCE_VALUE",
+        "upstream result is neither a canonical rational nor a supported exact quantity",
+    ))
+}
+
 /// Replace explicit `@{step-id}` references with the exact scalar produced by
-/// an earlier step. The SHA-256 and occurrence ranges are retained so Core can
-/// prove which upstream artifacts this calculation consumed.
+/// an earlier step. Rational values retain grouping; exact quantity values use
+/// the existing calculator's bounded unit-addition grammar. The SHA-256 and
+/// occurrence ranges are retained so Core can prove the consumed artifacts.
 pub fn calculate_sequence_expression(
     expression: &str,
     prior_values: &BTreeMap<String, SequenceValue>,
@@ -192,25 +226,7 @@ pub fn calculate_sequence_expression(
                 "a consumed calculation requires a canonical lowercase SHA-256 artifact ID",
             ));
         }
-        if prior.exact_value.len() > MAX_EXPRESSION_BYTES {
-            return Err(failure(
-                "CALCULATION_REFERENCE_LIMIT",
-                "exact upstream value exceeds the expression substitution envelope",
-            ));
-        }
-        let value = BigRational::from_str(&prior.exact_value).map_err(|_| {
-            failure(
-                "CALCULATION_REFERENCE_VALUE",
-                "upstream result is not an exact dimensionless rational value",
-            )
-        })?;
-        if rational_text(&value) != prior.exact_value {
-            return Err(failure(
-                "CALCULATION_REFERENCE_VALUE",
-                "upstream rational value is not in canonical exact form",
-            ));
-        }
-        let literal = format!("({})", prior.exact_value);
+        let literal = sequence_value_literal(&prior.exact_value)?;
         let next_len = evaluated_expression
             .len()
             .saturating_add(start - cursor)
@@ -255,7 +271,7 @@ pub fn calculate_sequence_expression(
 fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Calculation>> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     let pattern = PATTERN.get_or_init(|| {
-        Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*([+-])\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$")
+        Regex::new(r"^\s*([+-]?(?:[0-9]+/[0-9]+|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?))\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*([+-])\s*([+-]?(?:[0-9]+/[0-9]+|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?))\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$")
             .expect("unit arithmetic expression pattern is static")
     });
     let Some(captures) = pattern.captures(normalized) else {

@@ -1,0 +1,73 @@
+{
+  "work_item": "B02 exact unit-bearing sequence results consumed by downstream calculation steps",
+  "recorded_at": "2026-11-10T18:35:15Z",
+  "base_commit": "522d1dae286468e217057eae11ab311cfde84270",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v26-calculation-sequence",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "b0897330109dc8a687e41876defaef14d5dc31d2340e8b917db1b045b3a9d8d0",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-engine/src/language.rs": "238067316bbe5af4da396d1a59933340b9ce502a26f1aad31f28a0dfea1fb2a0"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "c3494164a570fa0798b05b1de5f7289534dc21fea456ea0a71e49630c90e91f3"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No test or ordinary CLI route was run in this implementation slice; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::structured_intent -> Intent::CalculateSequence -> Core scheduler observed upstream computation artifact -> language::calculate_sequence_expression accepts canonical exact rationals or canonical rational+unit values -> existing bounded calculate_unit_addition consumes compatible unit addition/subtraction -> step artifact retains consumed source SHA-256",
+  "supported_behavior": [
+    "Sequence references can consume canonical exact rationals and exact rational quantity strings produced by the existing calculation engine.",
+    "A quantity reference is substituted as a bare number+unit token so the existing exact unit addition/subtraction parser can consume it without inventing a new dimensional operator.",
+    "The existing unit calculator admits identical declared units and exact mixed mm/cm/m/km conversions to metres; rational numeric lexemes such as 3/4 are retained and accepted for subsequent unit addition/subtraction.",
+    "Core still stores the source span, evaluated expression, exact calculation and actual upstream artifact digest for each step; Scheduler.observe enforces the exact prerequisite hash set."
+  ],
+  "known_limits": [
+    "Unit-bearing references are limited to expressions accepted by the existing binary unit addition/subtraction implementation; dimensional multiplication and division remain unsupported.",
+    "The existing same-unit contract is string-based and does not provide general physical dimension validation.",
+    "No runtime, CLI, test or independent task-quality observation accompanies this source/build slice."
+  ],
+  "acceptance": {
+    "B02": "UNVERIFIED; source inspection and format/check/lint/build evidence only for the new unit-bearing consumer",
+    "B06": "UNVERIFIED; no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}
