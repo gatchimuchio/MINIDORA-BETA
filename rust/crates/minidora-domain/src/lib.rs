@@ -218,6 +218,11 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    JsonTableGroupStatistics {
+        document: String,
+        group_column: String,
+        value_column: String,
+    },
     JsonTableSelect {
         document: String,
         column: String,

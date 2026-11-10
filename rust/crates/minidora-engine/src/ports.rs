@@ -5,6 +5,7 @@
 use minidora_domain::{
     EvidencePacket, Permissions, ResourceBudget, Result, digest, failure, identity,
 };
+use regex::Regex;
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::ops::Range;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1360,6 +1362,29 @@ pub struct JsonTableGroupCountReport {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableGroupedStatistics {
+    pub value: String,
+    pub source_row_indices: Vec<usize>,
+    pub group_source_spans: Vec<JsonComparisonSpan>,
+    pub value_source_spans: Vec<JsonComparisonSpan>,
+    pub statistics: crate::math::Statistics,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableGroupStatisticsReport {
+    pub source_sha256: String,
+    pub group_by: String,
+    pub group_by_index: usize,
+    pub group_by_source: JsonComparisonSpan,
+    pub value_column: String,
+    pub value_column_index: usize,
+    pub value_column_source: JsonComparisonSpan,
+    pub row_count: usize,
+    pub groups: Vec<JsonTableGroupedStatistics>,
+    pub guarantee: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonTableSelectReport {
     pub source_sha256: String,
     pub column_name: String,
@@ -1773,6 +1798,175 @@ pub fn json_table_group_count(document: &str, column: &str) -> Result<JsonTableG
         return Err(failure(
             "JSON_TABLE_COUNT_OUTPUT_LIMIT",
             "group report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
+/// Compute exact descriptive statistics for one explicitly named numeric
+/// column within each exact decoded string group of a strict JSON string table.
+pub fn json_table_group_statistics(
+    document: &str,
+    group_column: &str,
+    value_column: &str,
+) -> Result<JsonTableGroupStatisticsReport> {
+    static QUANTITY: OnceLock<Regex> = OnceLock::new();
+    let quantity = QUANTITY.get_or_init(|| {
+        Regex::new(
+            r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
+        )
+        .expect("constant JSON table grouped-statistics quantity pattern")
+    });
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_GROUP_STATISTICS_INPUT_LIMIT",
+            "table document exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let table = json_string_table(document, &root)?;
+    if table.rows.is_empty() {
+        return Err(failure(
+            "JSON_TABLE_GROUP_STATISTICS_EMPTY",
+            "grouped statistics require at least one data row",
+        ));
+    }
+    let group_index = table
+        .columns
+        .iter()
+        .position(|name| name == group_column)
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_GROUP_STATISTICS_COLUMN",
+                "group column does not exist",
+            )
+        })?;
+    let value_index = table
+        .columns
+        .iter()
+        .position(|name| name == value_column)
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_GROUP_STATISTICS_COLUMN",
+                "value column does not exist",
+            )
+        })?;
+    if group_index == value_index {
+        return Err(failure(
+            "JSON_TABLE_GROUP_STATISTICS_COLUMNS",
+            "group and measured-value columns must be distinct",
+        ));
+    }
+
+    let mut group_indices = BTreeMap::<String, usize>::new();
+    let mut grouped = Vec::<(String, Vec<(usize, &'_ JsonNode, &'_ JsonNode)>)>::new();
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let value = json_string_value(
+            document,
+            row[group_index],
+            "JSON_TABLE_GROUP_STATISTICS_CELL",
+        )?;
+        let group_index_in_result = if let Some(index) = group_indices.get(&value) {
+            *index
+        } else {
+            let index = grouped.len();
+            group_indices.insert(value.clone(), index);
+            grouped.push((value, Vec::new()));
+            index
+        };
+        grouped[group_index_in_result]
+            .1
+            .push((row_index, row[group_index], row[value_index]));
+    }
+
+    let mut output_budget = 1024usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_GROUP_STATISTICS_OUTPUT_LIMIT",
+                "group report and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    account(&mut output_budget, serde_json::to_vec(group_column)?.len())?;
+    account(&mut output_budget, serde_json::to_vec(value_column)?.len())?;
+    account(
+        &mut output_budget,
+        json_comparison_span(document, table.column_nodes[group_index])
+            .source_sha256
+            .len()
+            + json_comparison_span(document, table.column_nodes[value_index])
+                .source_sha256
+                .len()
+            + 384,
+    )?;
+
+    let mut groups = Vec::with_capacity(grouped.len());
+    for (value, members) in grouped {
+        account(&mut output_budget, serde_json::to_vec(&value)?.len() + 256)?;
+        let mut values = Vec::with_capacity(members.len());
+        let mut units = Vec::with_capacity(members.len());
+        let mut quantity_count = 0usize;
+        let mut source_row_indices = Vec::with_capacity(members.len());
+        let mut group_source_spans = Vec::with_capacity(members.len());
+        let mut value_source_spans = Vec::with_capacity(members.len());
+        for (row_index, group_node, value_node) in &members {
+            let measured =
+                json_string_value(document, value_node, "JSON_TABLE_GROUP_STATISTICS_CELL")?;
+            source_row_indices.push(*row_index);
+            group_source_spans.push(json_comparison_span(document, group_node));
+            value_source_spans.push(json_comparison_span(document, value_node));
+            if let Some(capture) = quantity.captures(&measured) {
+                quantity_count += 1;
+                values.push(capture[1].trim().to_string());
+                units.push(capture[2].to_string());
+            } else {
+                values.push(measured);
+                units.push(String::new());
+            }
+        }
+        if quantity_count != 0 && quantity_count != members.len() {
+            return Err(failure(
+                "JSON_TABLE_GROUP_STATISTICS_MIXED_VALUES",
+                format!(
+                    "group {value:?} mixes unit-bearing numbers with unitless or nonnumeric cells"
+                ),
+            ));
+        }
+        let statistics = if quantity_count == members.len() {
+            crate::math::summarize(&values, Some(&units))?
+        } else {
+            crate::math::summarize(&values, None)?
+        };
+        for _ in 0..members.len() {
+            account(&mut output_budget, 448)?;
+        }
+        groups.push(JsonTableGroupedStatistics {
+            value,
+            source_row_indices,
+            group_source_spans,
+            value_source_spans,
+            statistics,
+        });
+    }
+    let report = JsonTableGroupStatisticsReport {
+        source_sha256: digest(document.as_bytes()),
+        group_by: group_column.into(),
+        group_by_index: group_index,
+        group_by_source: json_comparison_span(document, table.column_nodes[group_index]),
+        value_column: value_column.into(),
+        value_column_index: value_index,
+        value_column_source: json_comparison_span(document, table.column_nodes[value_index]),
+        row_count: table.rows.len(),
+        groups,
+        guarantee: "bounded exact descriptive statistics grouped by exact decoded JSON string values; groups retain first-seen order and original key/value source ranges; no numeric inference for unselected columns, normalization or population inference".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_GROUP_STATISTICS_OUTPUT_LIMIT",
+            "group statistics report exceeds 256000 output bytes",
         ));
     }
     Ok(report)

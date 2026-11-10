@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v27-csv-group-statistics";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v28-json-group-statistics";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -298,6 +298,10 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..19)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-count-by"))
+        || header.starts_with("json-table-group-statistics")
+        || (header.starts_with("JSON表の「")
+            && header.contains("ごとに")
+            && header.contains("統計量"))
         || header
             .get(..17)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-select"))
@@ -516,6 +520,26 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::JsonTableGroupCount {
             document: document.into(),
             column: serde_json::from_str::<String>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^JSON表の「([^」]+)」ごとに「([^」]+)」の統計量を計算して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableGroupStatistics {
+            document: document.into(),
+            group_column: capture[1].into(),
+            value_column: capture[2].into(),
+        }));
+    }
+    if let Some(capture) = regex(
+        r#"(?i)^json-table-group-statistics[ \t]+("(?:[^"\\]|\\.)*")[ \t]+("(?:[^"\\]|\\.)*"):$"#,
+    )?
+    .captures(header)
+    {
+        return Ok(Some(Intent::JsonTableGroupStatistics {
+            document: document.into(),
+            group_column: serde_json::from_str::<String>(&capture[1])?,
+            value_column: serde_json::from_str::<String>(&capture[2])?,
         }));
     }
     if let Some(capture) = regex(r"^JSON表の列「([^」]+)」を選択して[:：]$")?.captures(header)
