@@ -1088,6 +1088,31 @@ impl Engine {
                 units.push(text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::JsonTableSelect { document, column } => {
+                let report = match ports::json_table_select(document, column) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "JSON_TABLE_SELECT_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let text = serde_json::to_string_pretty(&report)?;
+                if text.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "JSON table select report exceeds the request output budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
+                result.dependencies.push(artifact);
+                units.push(text);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::EvidenceSynthesize { document } => {
                 let report = match ports::synthesize_explicit_evidence(document) {
                     Ok(report) => report,

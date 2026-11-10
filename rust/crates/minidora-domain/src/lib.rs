@@ -210,6 +210,10 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    JsonTableSelect {
+        document: String,
+        column: String,
+    },
     EvidenceSynthesize {
         document: String,
     },

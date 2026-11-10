@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v21-json-table-group-count";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v22-json-table-select";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -171,6 +171,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..19)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-count-by"))
+        || header
+            .get(..17)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-select"))
         || header.starts_with("JSON表の列")
         || header == "証拠を整理して:"
         || header
@@ -347,6 +350,21 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         regex(r#"(?i)^json-table-count-by[ \t]+("(?:[^"\\]|\\.)*"):$"#)?.captures(header)
     {
         return Ok(Some(Intent::JsonTableGroupCount {
+            document: document.into(),
+            column: serde_json::from_str::<String>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) = regex(r"^JSON表の列「([^」]+)」を選択して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableSelect {
+            document: document.into(),
+            column: capture[1].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^json-table-select[ \t]+("(?:[^"\\]|\\.)*"):$"#)?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableSelect {
             document: document.into(),
             column: serde_json::from_str::<String>(&capture[1])?,
         }));

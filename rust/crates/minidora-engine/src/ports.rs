@@ -1227,6 +1227,18 @@ pub struct JsonTableGroupCountReport {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableSelectReport {
+    pub source_sha256: String,
+    pub column_name: String,
+    pub column_index: usize,
+    pub column_source: JsonComparisonSpan,
+    pub values: Vec<String>,
+    pub source_row_indices: Vec<usize>,
+    pub source_spans: Vec<JsonComparisonSpan>,
+    pub guarantee: String,
+}
+
 struct JsonStringTableView<'a> {
     columns: Vec<String>,
     column_nodes: Vec<&'a JsonNode>,
@@ -1617,6 +1629,66 @@ pub fn json_table_group_count(document: &str, column: &str) -> Result<JsonTableG
         return Err(failure(
             "JSON_TABLE_COUNT_OUTPUT_LIMIT",
             "group report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
+/// Select one explicitly named column from a strict JSON string table and
+/// retain the source range for the header and every returned cell.
+pub fn json_table_select(document: &str, column: &str) -> Result<JsonTableSelectReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_SELECT_INPUT_LIMIT",
+            "table document exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let table = json_string_table(document, &root)?;
+    let column_index = table
+        .columns
+        .iter()
+        .position(|name| name == column)
+        .ok_or_else(|| failure("JSON_TABLE_SELECT_COLUMN", "named column does not exist"))?;
+    let mut output_budget = 1024usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_SELECT_OUTPUT_LIMIT",
+                "selected values and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    account(&mut output_budget, serde_json::to_vec(column)?.len())?;
+    let column_source = json_comparison_span(document, table.column_nodes[column_index]);
+    account(&mut output_budget, 192)?;
+    let mut values = Vec::with_capacity(table.rows.len());
+    let mut source_row_indices = Vec::with_capacity(table.rows.len());
+    let mut source_spans = Vec::with_capacity(table.rows.len());
+    for (source_row_index, row) in table.rows.iter().enumerate() {
+        let cell = row[column_index];
+        let value = json_string_value(document, cell, "JSON_TABLE_SELECT_CELL")?;
+        account(&mut output_budget, 192 + serde_json::to_vec(&value)?.len())?;
+        values.push(value);
+        source_row_indices.push(source_row_index);
+        source_spans.push(json_comparison_span(document, cell));
+    }
+    let report = JsonTableSelectReport {
+        source_sha256: digest(document.as_bytes()),
+        column_name: column.into(),
+        column_index,
+        column_source,
+        values,
+        source_row_indices,
+        source_spans,
+        guarantee: "bounded selection from an explicitly named JSON string-table column; values remain exact decoded strings; source byte ranges retained; no numeric inference or factual inference".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_SELECT_OUTPUT_LIMIT",
+            "selected column report exceeds 256000 output bytes",
         ));
     }
     Ok(report)
