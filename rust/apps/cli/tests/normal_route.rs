@@ -94,6 +94,47 @@ fn calculation_followup_and_explicit_retry_survive_process_restarts() {
 }
 
 #[test]
+fn explicit_store_migration_cli_is_idempotent_for_alpha8() {
+    let scratch = Scratch::new();
+    let implicit_path = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .current_dir(&scratch.0)
+        .args(["migrate"])
+        .output()
+        .unwrap();
+    assert!(!implicit_path.status.success());
+    assert!(!scratch.0.join(".minidora-rust-state").exists());
+
+    let before = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "migration-noop", "2+3"],
+    ));
+    let migration = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["migrate", "--db"])
+        .arg(&scratch.0)
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert!(
+        migration.status.success(),
+        "status={:?} stderr={}",
+        migration.status.code(),
+        String::from_utf8_lossy(&migration.stderr)
+    );
+    let report: Value = serde_json::from_slice(&migration.stdout).unwrap();
+    assert_eq!(report["from_schema"], "minidora-rust/0.7.0-alpha.7");
+    assert_eq!(report["to_schema"], "minidora-rust/0.7.0-alpha.8");
+    assert_eq!(report["migrated"], false);
+
+    let after = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "migration-noop", "2+3"],
+    ));
+    assert_eq!(after, before);
+}
+
+#[test]
 fn mixed_unit_arithmetic_is_saved_and_explained_through_the_normal_route() {
     let scratch = Scratch::new();
     let calculation = record(&execute(

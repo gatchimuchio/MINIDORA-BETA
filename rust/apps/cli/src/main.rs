@@ -2,10 +2,10 @@
 #![forbid(unsafe_code)]
 
 use minidora_domain::{
-    ActionRecord, EffectPhase, Lifecycle, RequestEnvelope, ResourceBudget, ResultRecord,
-    SCHEMA_VERSION,
+    ActionRecord, EffectPhase, LEGACY_SCHEMA_VERSION, Lifecycle, RequestEnvelope, ResourceBudget,
+    ResultRecord, SCHEMA_VERSION,
 };
-use minidora_engine::Engine;
+use minidora_engine::{Engine, store::Store};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -18,6 +18,7 @@ const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.8 — local execution frontend
 Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...
   minidora-rust inspect [OPTIONS]
+  minidora-rust migrate --db DIRECTORY [--json]
   minidora-rust reconcile [--db DIRECTORY] [--case ID] [--actor ID] [--json]
   minidora-rust reconcile-effects [--db DIRECTORY] [--case ID] [--actor ID] [--json]
   minidora-rust serve [OPTIONS] [--bind 127.0.0.1:8080]
@@ -47,6 +48,10 @@ These are trusted local configuration, not remote authentication. State director
 access must be protected by the host. Development budgets are finite admission
 defaults, not measured performance or Windows/8GB guarantees.
 
+Migrate explicitly accepts an existing alpha 7 state directory, verifies it, then
+updates only its schema metadata. It requires --db and also accepts an already-
+migrated alpha 8 directory as a verified no-op.
+
 Reconcile asks Core to inspect the original saved operation and actual file.
 It accepts no new goal, permissions or target, and performs no write or resend.
 Reconcile-effects inspects pending operations only for a cancelled case. It
@@ -67,6 +72,7 @@ Exit: COMMIT 0; SUSPEND 2; REJECT 3; FAIL 4; CANCEL 5; frontend error 1.
 enum Mode {
     Run,
     Inspect,
+    Migrate,
     Reconcile,
     ReconcileEffects,
     Serve,
@@ -130,6 +136,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         bind: "127.0.0.1:8080".parse().expect("literal socket address"),
         text: Vec::new(),
     };
+    let mut explicit_db = false;
     let mut args = args.into_iter().peekable();
     match args.peek().map(String::as_str) {
         Some("run") => {
@@ -137,6 +144,10 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         }
         Some("inspect") => {
             options.mode = Mode::Inspect;
+            args.next();
+        }
+        Some("migrate") => {
+            options.mode = Mode::Migrate;
             args.next();
         }
         Some("reconcile") => {
@@ -162,13 +173,21 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         {
             return Err("reconciliation accepts only --db, --case, --actor and --json; saved operations cannot gain a new goal or permission".into());
         }
+        if options.mode == Mode::Migrate
+            && !matches!(arg.as_str(), "--db" | "--json" | "--help" | "-h")
+        {
+            return Err("migration accepts only --db and --json; it does not accept a request, actor or effect permission".into());
+        }
         match arg.as_str() {
             "--" => {
                 options.text.extend(args);
                 break;
             }
             "--help" | "-h" => options.mode = Mode::Help,
-            "--db" => options.db = next_value(&mut args, &arg)?.into(),
+            "--db" => {
+                explicit_db = true;
+                options.db = next_value(&mut args, &arg)?.into();
+            }
             "--case" => options.case_id = next_value(&mut args, &arg)?,
             "--input" => options.input_id = Some(next_value(&mut args, &arg)?),
             "--version" => options.input_version = number(next_value(&mut args, &arg)?, &arg)?,
@@ -217,6 +236,9 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     {
         return Err("actor, case and input identities must be nonempty".into());
     }
+    if options.mode == Mode::Migrate && !explicit_db {
+        return Err("migration requires an explicit --db DIRECTORY".into());
+    }
     if options.mode != Mode::Run && !options.text.is_empty() {
         return Err("only run accepts request text".into());
     }
@@ -264,6 +286,28 @@ fn print_result(result: &ResultRecord, json: bool) -> Result<(), String> {
 fn run(options: Options) -> Result<u8, String> {
     if options.mode == Mode::Help {
         print!("{HELP}");
+        return Ok(0);
+    }
+    if options.mode == Mode::Migrate {
+        let migrated =
+            Store::migrate_alpha7_to_alpha8(&options.db).map_err(|error| error.to_string())?;
+        let report = serde_json::json!({
+            "from_schema": LEGACY_SCHEMA_VERSION,
+            "to_schema": SCHEMA_VERSION,
+            "migrated": migrated,
+        });
+        if options.json {
+            println!(
+                "{}",
+                serde_json::to_string(&report).map_err(|error| error.to_string())?
+            );
+        } else if migrated {
+            println!(
+                "store metadata migrated from {LEGACY_SCHEMA_VERSION} to {SCHEMA_VERSION}; immutable case and effect records were retained"
+            );
+        } else {
+            println!("store already uses {SCHEMA_VERSION}; no migration was needed");
+        }
         return Ok(0);
     }
     let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
@@ -737,6 +781,32 @@ mod tests {
             ] {
                 assert!(args(&[command, forbidden, "new-value"]).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn schema_migration_accepts_only_a_database_path_and_json_output() {
+        assert!(args(&["migrate"]).is_err());
+        assert!(args(&["migrate", "--help"]).is_ok());
+        assert_eq!(
+            args(&["migrate", "--db", "/tmp/state"]).unwrap().mode,
+            Mode::Migrate
+        );
+        assert_eq!(
+            args(&["migrate", "--db", "/tmp/state", "--json"])
+                .unwrap()
+                .mode,
+            Mode::Migrate
+        );
+        for forbidden in [
+            "--case",
+            "--input",
+            "--version",
+            "--output",
+            "--allow-write",
+            "request",
+        ] {
+            assert!(args(&["migrate", "--db", "/tmp/state", forbidden, "value"]).is_err());
         }
     }
 

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.8";
+pub const LEGACY_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.7";
 pub const CANONICALIZER: &str = "utf8-sorted-json-v1";
 
 #[derive(Debug, thiserror::Error)]

@@ -2,10 +2,12 @@
 //! blobs are durably published first. Orphan blobs are harmless, while a
 //! missing or corrupt referenced blob is an integrity failure.
 use minidora_domain::{
-    ActionRecord, CaseRevision, EffectPhase, Lifecycle, MemoryState, RequestEnvelope, Result,
-    ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
+    ActionRecord, CaseRevision, EffectPhase, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
+    RequestEnvelope, Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeSet,
@@ -58,19 +60,29 @@ impl Store {
     /// Authentication belongs to the host; every operation below checks the
     /// authenticated actor argument against persisted ownership.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
+        Self::open_internal(path.as_ref(), false, true)
+    }
+
+    fn open_internal(path: &Path, allow_legacy: bool, initialize: bool) -> Result<Self> {
         if path.exists() && fs::symlink_metadata(path)?.file_type().is_symlink() {
             return Err(failure(
                 "UNSAFE_STORAGE_PATH",
                 "state directory is a symlink",
             ));
         }
-        fs::create_dir_all(path)?;
-        let parent = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        sync_directory(parent)?;
+        if initialize {
+            fs::create_dir_all(path)?;
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            sync_directory(parent)?;
+        } else if !path.is_dir() {
+            return Err(failure(
+                "MIGRATION_SOURCE_MISSING",
+                "migration requires an existing state directory",
+            ));
+        }
         let blobs = path.join("blobs");
         if blobs.exists() && fs::symlink_metadata(&blobs)?.file_type().is_symlink() {
             return Err(failure(
@@ -78,23 +90,53 @@ impl Store {
                 "blob directory is a symlink",
             ));
         }
-        fs::create_dir_all(&blobs)?;
-        sync_directory(path)?;
+        if initialize {
+            fs::create_dir_all(&blobs)?;
+            sync_directory(path)?;
+        } else if !blobs.is_dir() {
+            return Err(failure(
+                "MIGRATION_SOURCE_MISSING",
+                "migration requires the existing immutable blob directory",
+            ));
+        }
         let database = path.join("state.sqlite3");
+        if !initialize && !database.exists() {
+            return Err(failure(
+                "MIGRATION_SOURCE_MISSING",
+                "migration requires an existing state database",
+            ));
+        }
         if database.exists() && !fs::symlink_metadata(&database)?.is_file() {
             return Err(failure(
                 "UNSAFE_STORAGE_PATH",
                 "database is not a regular file",
             ));
         }
-        let connection = sql(Connection::open(database))?;
+        let connection = if initialize {
+            sql(Connection::open(&database))?
+        } else {
+            sql(Connection::open_with_flags(
+                &database,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            ))?
+        };
         sql(connection.busy_timeout(Duration::from_secs(5)))?;
-        sql(connection.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=FULL;
-             PRAGMA wal_autocheckpoint=1000;",
-        ))?;
+        if initialize {
+            sql(connection.execute_batch(
+                "PRAGMA foreign_keys=ON;
+                 PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=FULL;
+                 PRAGMA wal_autocheckpoint=1000;",
+            ))?;
+        } else {
+            // Configure only connection-local settings. Migration must not
+            // change an unexpected on-disk journal mode before verification.
+            sql(connection.execute_batch(
+                "PRAGMA foreign_keys=ON;
+                 PRAGMA synchronous=FULL;
+                 PRAGMA wal_autocheckpoint=1000;",
+            ))?;
+        }
         let foreign_keys: i64 = sql(connection.query_row("PRAGMA foreign_keys", [], |r| r.get(0)))?;
         let synchronous: i64 = sql(connection.query_row("PRAGMA synchronous", [], |r| r.get(0)))?;
         let journal_mode: String =
@@ -105,26 +147,81 @@ impl Store {
                 "SQLite cannot enforce FK/WAL/FULL profile",
             ));
         }
-        sql(connection.execute_batch(SCHEMA))?;
-        sql(connection.execute(
-            "INSERT OR IGNORE INTO store_metadata(key,value) VALUES('schema',?1)",
-            [SCHEMA_VERSION],
-        ))?;
+        if initialize {
+            sql(connection.execute_batch(SCHEMA))?;
+            sql(connection.execute(
+                "INSERT OR IGNORE INTO store_metadata(key,value) VALUES('schema',?1)",
+                [SCHEMA_VERSION],
+            ))?;
+        }
         let schema: String = sql(connection.query_row(
             "SELECT value FROM store_metadata WHERE key='schema'",
             [],
             |r| r.get(0),
         ))?;
-        if schema != SCHEMA_VERSION {
+        if schema != SCHEMA_VERSION && !(allow_legacy && schema == LEGACY_SCHEMA_VERSION) {
             return Err(failure(
                 "SCHEMA_MISMATCH",
                 "state requires an explicit migration",
             ));
         }
-        sync_directory(path)?;
+        if initialize {
+            sync_directory(path)?;
+        }
         let store = Self { connection, blobs };
         store.verify_integrity()?;
         Ok(store)
+    }
+
+    /// Explicitly upgrades alpha 7 store metadata after verifying every
+    /// referenced blob, case journal, action journal and conflict chain. Case
+    /// revision blobs remain immutable and keep their original schema version.
+    /// Returns `false` for a valid alpha 8 store without changing it.
+    pub fn migrate_alpha7_to_alpha8(path: impl AsRef<Path>) -> Result<bool> {
+        let path = path.as_ref();
+        let store = Self::open_internal(path, true, false)?;
+        let transaction = store.transaction()?;
+        // Recheck under the SQLite write lock so no concurrent alpha 7 writer
+        // can append state between verification and the metadata transition.
+        store.verify_integrity()?;
+        let schema: String = sql(transaction.query_row(
+            "SELECT value FROM store_metadata WHERE key='schema'",
+            [],
+            |row| row.get(0),
+        ))?;
+        if schema == SCHEMA_VERSION {
+            sql(transaction.commit())?;
+            return Ok(false);
+        }
+        if schema != LEGACY_SCHEMA_VERSION {
+            return Err(failure(
+                "SCHEMA_MISMATCH",
+                format!("explicit migration supports only {LEGACY_SCHEMA_VERSION}"),
+            ));
+        }
+        let changed = sql(transaction.execute(
+            "UPDATE store_metadata SET value=?1 WHERE key='schema' AND value=?2",
+            params![SCHEMA_VERSION, LEGACY_SCHEMA_VERSION],
+        ))?;
+        if changed != 1 {
+            return Err(failure(
+                "SCHEMA_MIGRATION_CONFLICT",
+                "schema metadata changed during the migration",
+            ));
+        }
+        if let Err(error) = transaction.commit() {
+            return Err(failure(
+                "MIGRATION_DURABILITY_UNKNOWN",
+                format!("SQLite commit outcome could not be confirmed: {error}"),
+            ));
+        }
+        if let Err(error) = sync_directory(path) {
+            return Err(failure(
+                "MIGRATION_DURABILITY_UNKNOWN",
+                format!("schema commit completed, but directory sync failed: {error}"),
+            ));
+        }
+        Ok(true)
     }
 
     fn transaction(&self) -> Result<Transaction<'_>> {
@@ -1025,7 +1122,8 @@ impl Store {
                 [case],
                 |r| r.get(0),
             ))?;
-            if revision.schema_version != SCHEMA_VERSION
+            if (revision.schema_version != SCHEMA_VERSION
+                && revision.schema_version != LEGACY_SCHEMA_VERSION)
                 || revision.actor_id != owner
                 || revision.case_id != case
                 || revision.revision != number as u64
@@ -1379,6 +1477,93 @@ mod tests {
                 .input_version,
             2
         );
+    }
+
+    #[test]
+    fn explicit_alpha7_migration_preserves_legacy_case_blobs_and_is_idempotent() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        let fingerprint = identity(&request).unwrap();
+        assert!(
+            store
+                .register_input("alice", &request, &fingerprint)
+                .unwrap()
+        );
+
+        let mut legacy_revision = received(&request);
+        legacy_revision.schema_version = LEGACY_SCHEMA_VERSION.into();
+        let (state_sha, state_length) = store.publish_blob(&legacy_revision).unwrap();
+        let transaction = store.transaction().unwrap();
+        Store::reference(&transaction, &state_sha, state_length, "case_revision").unwrap();
+        let parent_hash: Option<String> = None;
+        let event_hash = identity(&(
+            "case-revision-event-v1",
+            &request.case_id,
+            legacy_revision.revision,
+            &parent_hash,
+            &state_sha,
+        ))
+        .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO case_revision(case_id,revision,parent_revision,state_sha256,parent_hash,event_hash,lifecycle,goal_sha256) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    request.case_id,
+                    0_i64,
+                    Option::<i64>::None,
+                    state_sha,
+                    parent_hash,
+                    event_hash,
+                    "RECEIVED",
+                    Option::<String>::None,
+                ],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE store_metadata SET value=?1 WHERE key='schema'",
+                [LEGACY_SCHEMA_VERSION],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        drop(store);
+
+        let state_blob = directory.0.join("blobs").join(&state_sha);
+        let original_blob = fs::read(&state_blob).unwrap();
+        fs::write(&state_blob, b"corrupt legacy blob").unwrap();
+        let error = Store::migrate_alpha7_to_alpha8(&directory.0).unwrap_err();
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. } if code == "INTEGRITY_FAILURE"
+        ));
+        let connection = Connection::open(directory.0.join("state.sqlite3")).unwrap();
+        let schema: String = connection
+            .query_row(
+                "SELECT value FROM store_metadata WHERE key='schema'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(schema, LEGACY_SCHEMA_VERSION);
+        drop(connection);
+        fs::write(&state_blob, original_blob).unwrap();
+
+        assert!(Store::migrate_alpha7_to_alpha8(&directory.0).unwrap());
+        let migrated = Store::open(&directory.0).unwrap();
+        let latest = migrated.load_case("alice", "case-a").unwrap().unwrap();
+        assert_eq!(latest.schema_version, LEGACY_SCHEMA_VERSION);
+        assert_eq!(latest.revision, 0);
+        let stored_sha: String = migrated
+            .connection
+            .query_row(
+                "SELECT state_sha256 FROM case_revision WHERE case_id='case-a' AND revision=0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_sha, state_sha);
+        assert!(!Store::migrate_alpha7_to_alpha8(&directory.0).unwrap());
     }
 
     #[test]

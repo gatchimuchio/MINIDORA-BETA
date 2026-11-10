@@ -2,7 +2,7 @@
 
 `0.7.0-alpha.8` is an independently versioned Rust development implementation of the public input → Core → output execution route. It contains working mathematical, declared-relation, bounded Japanese meaning-comparison, durable-state, source-reading and exact-file-output mechanisms. It is **not an accepted implementation of all 93 capability obligations**. The [implementation status](audit/IMPLEMENTATION_STATUS.md) and [full obligations](audit/implementation-obligations.md) keep missing evidence and functionality visible; they do not reduce the requested scope.
 
-The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.8`; they are not a silent migration of the beta's saved data or duplicate-input guarantees. The alpha 8 schema is incompatible with alpha 7 Rust store metadata: opening an alpha 7 database returns `SCHEMA_MISMATCH` and leaves its files unchanged. An alpha 7-to-alpha 8 migration command is not implemented yet.
+The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.8`; they are not a silent migration of the beta's saved data or duplicate-input guarantees. The alpha 8 schema is incompatible with alpha 7 Rust store metadata: ordinary opens of an alpha 7 database return `SCHEMA_MISMATCH` and leave its files unchanged. A separate explicit `migrate` command is available for alpha 7 Rust stores.
 
 ## Build in the cloud workspace
 
@@ -117,6 +117,16 @@ minidora_report=/workspace/.minidora-cloud/rust-result.txt
 `--output` requests a file; **only** `--allow-write` grants that exact target. Core records the action identity and authorization before the physical writer runs, then checks actual bytes and its receipt before goal `COMMIT`. Parent directories must already exist and be trusted. Different existing bytes are not overwritten; a matching existing artifact can be verified. Symlinks, traversal and unconfirmed write/durability outcomes have explicit failure/unknown paths. The portable path checks are not an OS sandbox against hostile concurrent ancestor replacement.
 
 ## Inspect and reconcile existing effects
+
+### Explicit alpha 7 store migration
+
+Ordinary alpha 8 opens continue to reject `minidora-rust/0.7.0-alpha.7` metadata. To migrate an existing Rust store, run the dedicated command with its exact state directory:
+
+```bash
+"$minidora_bin" migrate --db /path/to/alpha7-state --json
+```
+
+Migration requires `--db`, accepts only alpha 7 metadata, and verifies the existing SQLite profile, foreign keys, referenced blob bytes, case revision chains, action journals and input-conflict chains before changing state. It then updates the single `store_metadata.schema` value. Case/effect rows and digest-addressed blob bytes remain intact; old case revisions retain their alpha 7 schema identity and remain readable. A valid alpha 8 store returns `"migrated":false` after verification. Unsupported versions, missing state files, a non-WAL store or any integrity failure stop before the metadata change. `MIGRATION_DURABILITY_UNKNOWN` means the commit or its final directory sync could not be confirmed; rerunning the command verifies the store and reports whether migration already completed. The frozen Python beta has a separate store and is not migrated by this command.
 
 ```bash
 "$minidora_bin" inspect --db "$minidora_state" --actor demo --case file
