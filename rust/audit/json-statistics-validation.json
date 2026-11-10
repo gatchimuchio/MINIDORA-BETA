@@ -1,0 +1,73 @@
+{
+  "work_item": "B04 source-preserving JSON array descriptive statistics",
+  "recorded_at": "2026-11-10T15:07:42Z",
+  "base_commit": "74101fba9408afaf111bb9af155d0d6c39d93684",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v6-json-statistics",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "fe25d6f9d17086db7bee8cc760463e178e06f58ad32c923865d70a5bf762a8f8",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "ebd12fc675182ddbe58d0e3dcd195d3a749ae80d5cc1079c213e2ed948a77000",
+    "crates/minidora-engine/src/core.rs": "466e170d8dacf410ff9590e3d8173f6b8733165bf3f5026438635b6303844db3",
+    "crates/minidora-engine/src/input.rs": "9dc918722f9ff58a0ed55d2f8b665f1bfda93453dfbd45ff56b6a5aa20445bd6",
+    "crates/minidora-engine/src/ports.rs": "e44d645f41763923ce265ba0ad5b22bc8a557df49f647bc49ce9baac0a2cb8c1"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "2581db5fd302dc41369aec688fa327e5dbfbc071748873e501b0445ef0834e5f"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "initial_compile_failure": {
+    "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+    "exit_code": 101,
+    "cause": "The new shared JSON Pointer traversal passed &&JsonNode where &JsonNode was expected.",
+    "correction": "Use the borrowed root directly; the complete compile, lint and build sequence then passed."
+  },
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This implementation continuation did not request test or runtime verification; compile, lint and build checks were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonStatistics -> ports::json_pointer_statistics -> math::summarize",
+  "supported_behavior_from_source": [
+    "The custom JSON parser retains numeric values as a distinct node kind and rejects duplicate keys across the complete document.",
+    "One JSON Pointer must select an array containing 1..4096 JSON number literals; strings, null, booleans, objects and nested arrays return typed suspension errors.",
+    "Statistics retain exact JSON number lexemes without binary floating point conversion.",
+    "The report contains the full document digest, selected array span, each numeric source span and exact descriptive statistics; Core persists the report artifact and returns its digest dependency.",
+    "Report output is checked against the request evidence-byte budget before artifact storage."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and build checks only, no test or normal-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

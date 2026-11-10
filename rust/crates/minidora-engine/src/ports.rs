@@ -7,6 +7,7 @@ use minidora_domain::{
 };
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -595,6 +596,7 @@ enum JsonKind {
     Object(BTreeMap<String, JsonNode>),
     Array(Vec<JsonNode>),
     Scalar,
+    Number,
 }
 #[derive(Debug)]
 struct JsonNode {
@@ -751,7 +753,7 @@ impl<'a> JsonParser<'a> {
             }
             b'-' | b'0'..=b'9' => {
                 self.number()?;
-                JsonKind::Scalar
+                JsonKind::Number
             }
             _ => return Err(self.error()),
         };
@@ -810,15 +812,14 @@ impl<'a> JsonParser<'a> {
 
 /// Select exact original JSON bytes. No floating point conversion, duplicate
 /// key overwrite, implicit missing value, or document rewrite is performed.
-pub fn json_pointer(document: &str, pointer: &str) -> Result<String> {
-    let root = JsonParser::new(document).parse()?;
+fn json_node_at_pointer<'a>(root: &'a JsonNode, pointer: &str) -> Result<&'a JsonNode> {
     if !pointer.is_empty() && !pointer.starts_with('/') {
         return Err(failure(
             "INVALID_JSON_POINTER",
             "A pointer is empty or begins with '/'",
         ));
     }
-    let mut node = &root;
+    let mut node = root;
     for raw in pointer.split('/').skip(1) {
         let mut key = String::new();
         let mut chars = raw.chars();
@@ -852,7 +853,7 @@ pub fn json_pointer(document: &str, pointer: &str) -> Result<String> {
                 }
                 key.parse::<usize>().ok().and_then(|i| entries.get(i))
             }
-            JsonKind::Scalar => None,
+            JsonKind::Scalar | JsonKind::Number => None,
         }
         .ok_or_else(|| {
             failure(
@@ -861,7 +862,86 @@ pub fn json_pointer(document: &str, pointer: &str) -> Result<String> {
             )
         })?;
     }
+    Ok(node)
+}
+
+pub fn json_pointer(document: &str, pointer: &str) -> Result<String> {
+    let root = JsonParser::new(document).parse()?;
+    let node = json_node_at_pointer(&root, pointer)?;
     Ok(document[node.span.clone()].to_owned())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonSourceSpan {
+    pub kind: String,
+    pub source_start: usize,
+    pub source_end: usize,
+    pub source_text: String,
+    pub array_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonStatisticsReport {
+    pub source_sha256: String,
+    pub pointer: String,
+    pub statistics: crate::math::Statistics,
+    pub spans: Vec<JsonSourceSpan>,
+    pub guarantee: String,
+}
+
+/// Compute exact descriptive statistics for one selected array of JSON number
+/// literals. Every observation retains its original source bytes and offset.
+pub fn json_pointer_statistics(document: &str, pointer: &str) -> Result<JsonStatisticsReport> {
+    let root = JsonParser::new(document).parse()?;
+    let node = json_node_at_pointer(&root, pointer)?;
+    let JsonKind::Array(elements) = &node.kind else {
+        return Err(failure(
+            "JSON_STATISTICS_NOT_ARRAY",
+            "the selected JSON Pointer must identify an array",
+        ));
+    };
+    if elements.is_empty() || elements.len() > 4096 {
+        return Err(failure(
+            "JSON_STATISTICS_INPUT_LIMIT",
+            "expected an array containing 1..4096 numeric observations",
+        ));
+    }
+    let mut values = Vec::with_capacity(elements.len());
+    let mut spans = Vec::with_capacity(elements.len() + 1);
+    spans.push(JsonSourceSpan {
+        kind: "JSON_ARRAY".into(),
+        source_start: node.span.start,
+        source_end: node.span.end,
+        source_text: document[node.span.clone()].into(),
+        array_index: None,
+    });
+    for (index, element) in elements.iter().enumerate() {
+        if !matches!(&element.kind, JsonKind::Number) {
+            return Err(failure(
+                "JSON_STATISTICS_NON_NUMERIC",
+                format!(
+                    "array element {index} at byte {} is not a JSON number literal",
+                    element.span.start
+                ),
+            ));
+        }
+        let source_text = &document[element.span.clone()];
+        values.push(source_text.to_owned());
+        spans.push(JsonSourceSpan {
+            kind: "JSON_NUMBER".into(),
+            source_start: element.span.start,
+            source_end: element.span.end,
+            source_text: source_text.into(),
+            array_index: Some(index),
+        });
+    }
+    Ok(JsonStatisticsReport {
+        source_sha256: digest(document.as_bytes()),
+        pointer: pointer.into(),
+        statistics: crate::math::summarize(&values, None)?,
+        spans,
+        guarantee: "exact descriptive statistics of explicitly selected JSON number literals; source bytes retained; no population inference".into(),
+    })
 }
 
 #[cfg(test)]

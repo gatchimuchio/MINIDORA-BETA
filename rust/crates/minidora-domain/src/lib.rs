@@ -219,6 +219,10 @@ pub enum Intent {
         document: String,
         pointer: String,
     },
+    JsonStatistics {
+        document: String,
+        pointer: String,
+    },
     MeaningCompare {
         a: String,
         b: String,
