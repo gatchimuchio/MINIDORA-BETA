@@ -1,0 +1,67 @@
+{
+  "work_item": "B03 exact normalization of explicitly supplied probability weights",
+  "recorded_at": "2026-11-10T15:12:53Z",
+  "base_commit": "d4ebcf23103878805d22a96b8045203ce3c17e05",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v7-exact-probability-weights",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "f4b78167da12a977bb9467eb292eaab724aec6113c3addfb506fe6616ce0e892",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "f216b758489c3fb8b95653d8106e051a6529e9457d7784dec3c9a950abfdfb37",
+    "crates/minidora-engine/src/core.rs": "bea10e279e746c58a3633381adf32987945a5fd1bb4ffd08419ac2cce300c163",
+    "crates/minidora-engine/src/input.rs": "af3c9c914e19f449c1d9a50d9a813c3e9418a0dfb3f892a46edeafb8a970cdcf",
+    "crates/minidora-engine/src/math.rs": "c60ec71290b883f7e5dcfa26e6190aed2232b4cb244437204404adee5df5ec7a"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "f001b759b41678db246ed1cee4a7bbd52cd4851dc77e4ba1c207ea09345998cb"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation recorded implementation and compile/lint/build evidence only; no test or runtime route observation was made."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::mathematics_intent -> Intent::NormalizeProbabilityWeights -> math::normalize_probability_weights",
+  "supported_behavior_from_source": [
+    "The finite declarative parser accepts one explicit flat array through Japanese 「確率分布 [..] を正規化して」 / 「を正規化してください」 and English `normalize-probabilities [..]` forms.",
+    "Between 1 and 4096 exact scalar weights are accepted; negative values and an all-zero total produce typed suspension errors.",
+    "Each output probability is the exact rational quotient of its supplied weight by the exact total; an internal invariant checks that the exact output sum is one.",
+    "The JSON report preserves input weights, total, normalized probabilities, count and probability sum, and labels the scope as supplied weights rather than empirical or real-world likelihood.",
+    "The parser rejects trailing constraints for this operation; arithmetic representation and operation budgets remain bounded."
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or normal-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

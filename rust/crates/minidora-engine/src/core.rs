@@ -475,6 +475,21 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::NormalizeProbabilityWeights { weights } => {
+                match crate::math::normalize_probability_weights(weights) {
+                    Ok(distribution) => {
+                        units.push(serde_json::to_string_pretty(&distribution)?);
+                        result.guarantee = Guarantee::Computed;
+                    }
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "PROBABILITY_NORMALIZATION_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                }
+            }
             Intent::CsvSelect { document, column } => {
                 let value = crate::document::csv_select(document, column)?;
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;

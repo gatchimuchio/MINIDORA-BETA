@@ -4,7 +4,7 @@ use minidora_domain::*;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v6-json-statistics";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v7-exact-probability-weights";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -681,6 +681,25 @@ fn quantity_statistics_intent(text: &str) -> Result<Option<Intent>> {
 fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
     if let Some(intent) = quantity_statistics_intent(text)? {
         return Ok(Some(intent));
+    }
+    if let Some(capture) =
+        regex(r"(?is)^(確率分布|normalize-probabilities)\s*[:：]?\s*(\[.+)$")?.captures(text)
+    {
+        let payload = capture[2].trim();
+        let mut at = 0;
+        let weights = scalar_array(math_array(payload, &mut at, 0)?)?;
+        let suffix = payload[at..].trim();
+        let suffix_valid = match &capture[1] {
+            "確率分布" => matches!(suffix, "を正規化して" | "を正規化してください"),
+            "normalize-probabilities" => suffix.is_empty(),
+            _ => false,
+        };
+        if !suffix_valid {
+            return Ok(Some(Intent::Unknown {
+                reason: "probability normalization requires one explicit weight array and no extra constraints".into(),
+            }));
+        }
+        return Ok(Some(Intent::NormalizeProbabilityWeights { weights }));
     }
     if let Some(capture) = regex(r"(?is)^(微分|積分|簡約|整理|derivative|differentiate|integral|integrate|simplify)\s+(.+?)(?:\s+(?:変数|variable)\s+([^\s]+))?$")?.captures(text) {
         let operation = match capture[1].to_lowercase().as_str() {

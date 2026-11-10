@@ -193,6 +193,9 @@ pub enum Intent {
         values: Vec<String>,
         units: Option<Vec<String>>,
     },
+    NormalizeProbabilityWeights {
+        weights: Vec<String>,
+    },
     Symbolic {
         expression: String,
         operation: String,

@@ -530,6 +530,70 @@ pub struct Statistics {
     pub scope: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NormalizedProbabilityWeights {
+    pub input_weights: Vec<String>,
+    pub total_weight: String,
+    pub normalized_probabilities: Vec<String>,
+    pub count: usize,
+    pub probability_sum: String,
+    pub scope: String,
+}
+
+/// Normalize explicit nonnegative weights into an exact finite distribution.
+/// The values describe only the supplied weights, not empirical likelihoods.
+pub fn normalize_probability_weights(weights: &[String]) -> Result<NormalizedProbabilityWeights> {
+    if weights.is_empty() || weights.len() > MAX_OBSERVATIONS {
+        return Err(failure(
+            "PROBABILITY_INPUT_LIMIT",
+            "expected 1..4096 explicit weights",
+        ));
+    }
+    let values = weights
+        .iter()
+        .map(|weight| scalar(weight))
+        .collect::<Result<Vec<_>>>()?;
+    if values.iter().any(|value| value < &BigRational::zero()) {
+        return Err(failure(
+            "NEGATIVE_PROBABILITY_WEIGHT",
+            "probability weights must be nonnegative",
+        ));
+    }
+    let mut budget = Budget::default();
+    let mut total = BigRational::zero();
+    for value in &values {
+        total = budget.check(total + value)?;
+    }
+    if total.is_zero() {
+        return Err(failure(
+            "ZERO_PROBABILITY_WEIGHT_TOTAL",
+            "at least one supplied weight must be positive",
+        ));
+    }
+    let normalized: Vec<BigRational> = values
+        .iter()
+        .map(|value| budget.check(value / &total))
+        .collect::<Result<_>>()?;
+    let mut probability_sum = BigRational::zero();
+    for probability in &normalized {
+        probability_sum = budget.check(probability_sum + probability)?;
+    }
+    if !probability_sum.is_one() {
+        return Err(failure(
+            "PROBABILITY_CERTIFICATE_FAILURE",
+            "normalized probabilities do not sum exactly to one",
+        ));
+    }
+    Ok(NormalizedProbabilityWeights {
+        input_weights: weights.to_vec(),
+        total_weight: rational_text(&total),
+        normalized_probabilities: normalized.iter().map(rational_text).collect(),
+        count: weights.len(),
+        probability_sum: rational_text(&probability_sum),
+        scope: "exact normalization of the explicitly supplied nonnegative weights; not an empirical or real-world probability estimate".into(),
+    })
+}
+
 pub(crate) fn exact_length_scale_to_meters(unit: &str) -> Option<BigRational> {
     let (numerator, denominator) = match unit {
         "km" => (1000_i64, 1_i64),

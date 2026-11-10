@@ -52,7 +52,7 @@ Use the same actor, state directory and case to continue a conversation. Each co
 
 Arithmetic uses exact integers/rationals, bounded expressions and recorded steps. Binary addition/subtraction preserves identical explicit units and converts mixed `mm`, `cm`, `m` and `km` exactly to metres. An explicit first/second operand correction creates the next input version, links it to the actual prior result and retains that original result. Corrections cover saved binary literals using `+`, `-`, `*`, `/`, `%`, `^` or `**`; unit-bearing correction remains limited to addition/subtraction, and nested or compound expressions suspend. A repeated explicit `--case`, `--input` and `--version` with the same complete request retrieves its saved result; changing the request under that identity is a conflict. Omit `--input` for the CLI to choose an identity from the next case revision. This successor behavior is separate from the frozen beta facade's in-instance duplicate rejection.
 
-## Statistics, linear systems and symbolic polynomials
+## Statistics, linear systems and probability
 
 ```bash
 "$minidora_bin" --db "$minidora_state" --actor demo --case statistics \
@@ -72,6 +72,19 @@ Arithmetic uses exact integers/rationals, bounded expressions and recorded steps
 Statistics retain supplied values and each input unit, then compute exact sum, mean, median, extrema and population/sample variance. Mixed `mm`, `cm`, `m` and `km` inputs are converted exactly to metres and reported through `normalized_values`; other mixed unit families suspend without a numeric result. Identical unit labels retain that label. One observation has no sample variance. The values do not establish a representative real-world population.
 
 Linear systems use coefficient-column order rather than inferred variable names. Results distinguish a unique solution, a parameterized solution space and inconsistent equations, with original equations, row transformations and verified substitution/contradiction certificates. Rectangular systems, dimensions, scalar sizes and operations have explicit limits.
+
+## Finite probability distributions
+
+```bash
+"$minidora_bin" --db "$minidora_state" --actor demo --case probabilities \
+  '確率分布 [1, 2, 3] を正規化して'
+"$minidora_bin" --db "$minidora_state" --actor demo --case probabilities-en \
+  'normalize-probabilities [1, 2, 3]'
+```
+
+The operation accepts 1–4096 explicitly supplied nonnegative exact weights and divides each by their exact total. The example yields `1/6`, `1/3` and `1/2`, with an exact probability sum of `1`. Negative weights, an all-zero total, extra constraints and out-of-limit input stop with typed errors. The result describes only the supplied weights; it is not an empirical or real-world likelihood estimate.
+
+## Symbolic polynomials
 
 Symbolic operations cover bounded rational-coefficient multivariate polynomials. Multiplication must be explicit. `**` and the documented Rust alias `^` take nonnegative literal integer exponents. Variable denominators, functions, implicit multiplication and trailing unparsed constraints fail. An integral is one representative antiderivative; an arbitrary term independent of its target variable remains possible. This is not a general computer algebra system or free-form mathematical-language claim.
 
@@ -247,6 +260,6 @@ See [implementation choices](docs/IMPLEMENTATION_CHOICES.md), [dependencies](doc
 
 ## Current validation and open scope
 
-See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the initial operand-correction validation](audit/unit-correction-validation.json), [the bounded operator-correction validation](audit/unit-binary-correction-validation.json), [the store migration validation](audit/schema-migration-validation.json), [the CSV statistics build record](audit/csv-statistics-validation.json), [the JSON statistics build record](audit/json-statistics-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. Later alpha 8 Linux runs passed 147 and 148 Rust tests in their separately identified snapshots. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
+See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the initial operand-correction validation](audit/unit-correction-validation.json), [the bounded operator-correction validation](audit/unit-binary-correction-validation.json), [the store migration validation](audit/schema-migration-validation.json), [the CSV statistics build record](audit/csv-statistics-validation.json), [the JSON statistics build record](audit/json-statistics-validation.json), [the exact probability-weight normalization build record](audit/probability-normalization-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. Later alpha 8 Linux runs passed 147 and 148 Rust tests in their separately identified snapshots. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
 
 Tested cloud reproduction and startup instructions are [cloud-install.sh](tools/cloud-install.sh) and [cloud-start.md](tools/cloud-start.md). Backend environment-draft saving is currently unconfirmed due to an API error; the scripts themselves were executed successfully.
