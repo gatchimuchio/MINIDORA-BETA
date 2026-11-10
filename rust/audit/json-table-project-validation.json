@@ -1,0 +1,67 @@
+{
+  "work_item": "B04 ordered multi-column projection of an explicit JSON string table through Core",
+  "recorded_at": "2026-11-10T18:12:23Z",
+  "base_commit": "359e4111c4bcdddec58bd595e6f4376eba591b17",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v23-json-table-project",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "1e2fbe95f9cf0f47f78fc9b26bfbffbe277e1665094d646a861569a5ac86c8fb",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "2f6a3079b51aeb44629e36fd61afb4d1a045e0ffc926fc65687f0faec9d0cb28",
+    "crates/minidora-engine/src/core.rs": "062ab73c07b8d2ad13481156556c806629a79c730c3f3998aafe3630f59e8987",
+    "crates/minidora-engine/src/input.rs": "1713a9ca9a9ae9b6229192dd20d54cbfbfe46084015e367621df5600b853e654",
+    "crates/minidora-engine/src/ports.rs": "b650aebc8096e9bda36ab86e5b988db2353bf1a6b1c92d6acd0a81befdc5069e"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "24d700319673f3a4313dfaec36d76b0c43f0ddc463508fbfe1c5805a03327f41"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No tests or runtime/ordinary CLI verification were requested or run in this implementation slice; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonTableProject -> ports::json_table_project -> JsonTableProjectReport artifact",
+  "input_schema": "One strict JSON object with exactly columns and rows fields. columns is a unique 1..256 string array; rows is an array of at most 4096 rows, each an array of same-width strings. Duplicate JSON object keys and nonstring values are rejected.",
+  "projection_columns": "A nonempty JSON array of unique decoded header names, limited to 256 entries. The selected names must all exist; output order follows the requested list.",
+  "supported_behavior": [
+    "The report contains only selected columns in the requested order and all rows in their original order; every output cell remains an exact decoded string.",
+    "The report preserves requested source header indices, original zero-based row indices, and exact byte-range digests for each selected header and emitted cell.",
+    "Input bytes, table cells, output evidence and the Core request output budget are bounded; invalid shapes, duplicate/unknown projection columns or limit overflow suspend with typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v22-json-table-select";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v23-json-table-project";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -174,7 +174,11 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..17)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-select"))
+        || header
+            .get(..18)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-project"))
         || header.starts_with("JSON表の列")
+        || header.starts_with("JSON表から列")
         || header == "証拠を整理して:"
         || header
             .get(..18)
@@ -367,6 +371,19 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::JsonTableSelect {
             document: document.into(),
             column: serde_json::from_str::<String>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) = regex(r"^JSON表から列(\[.*\])を抽出して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableProject {
+            document: document.into(),
+            columns: serde_json::from_str::<Vec<String>>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) = regex(r#"(?i)^json-table-project[ \t]+(\[.*\]):$"#)?.captures(header) {
+        return Ok(Some(Intent::JsonTableProject {
+            document: document.into(),
+            columns: serde_json::from_str::<Vec<String>>(&capture[1])?,
         }));
     }
     if header == "証拠を整理して:" || regex(r"(?i)^evidence-synthesize:$")?.is_match(header)

@@ -214,6 +214,10 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    JsonTableProject {
+        document: String,
+        columns: Vec<String>,
+    },
     EvidenceSynthesize {
         document: String,
     },

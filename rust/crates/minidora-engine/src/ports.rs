@@ -1239,6 +1239,18 @@ pub struct JsonTableSelectReport {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableProjectReport {
+    pub source_sha256: String,
+    pub columns: Vec<String>,
+    pub selected_column_indices: Vec<usize>,
+    pub column_source_spans: Vec<JsonComparisonSpan>,
+    pub rows: Vec<Vec<String>>,
+    pub source_row_indices: Vec<usize>,
+    pub cell_source_spans: Vec<Vec<JsonComparisonSpan>>,
+    pub guarantee: String,
+}
+
 struct JsonStringTableView<'a> {
     columns: Vec<String>,
     column_nodes: Vec<&'a JsonNode>,
@@ -1689,6 +1701,102 @@ pub fn json_table_select(document: &str, column: &str) -> Result<JsonTableSelect
         return Err(failure(
             "JSON_TABLE_SELECT_OUTPUT_LIMIT",
             "selected column report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
+/// Project a strict JSON string table onto a nonempty ordered list of unique
+/// named columns, retaining source locations for each projected value.
+pub fn json_table_project(document: &str, columns: &[String]) -> Result<JsonTableProjectReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_PROJECT_INPUT_LIMIT",
+            "table document exceeds 256000 source bytes",
+        ));
+    }
+    if columns.is_empty() || columns.len() > 256 {
+        return Err(failure(
+            "JSON_TABLE_PROJECT_COLUMNS",
+            "projection requires 1..256 named columns",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let table = json_string_table(document, &root)?;
+    let mut seen = BTreeSet::new();
+    let mut selected_column_indices = Vec::with_capacity(columns.len());
+    for column in columns {
+        if !seen.insert(column) {
+            return Err(failure(
+                "JSON_TABLE_PROJECT_DUPLICATE_COLUMN",
+                "projection column names must be unique",
+            ));
+        }
+        selected_column_indices.push(
+            table
+                .columns
+                .iter()
+                .position(|name| name == column)
+                .ok_or_else(|| {
+                    failure(
+                        "JSON_TABLE_PROJECT_COLUMN",
+                        format!("named column {column:?} does not exist"),
+                    )
+                })?,
+        );
+    }
+
+    let mut output_budget = 1024usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_PROJECT_OUTPUT_LIMIT",
+                "projected table and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    let column_source_spans = selected_column_indices
+        .iter()
+        .map(|index| {
+            let name = &table.columns[*index];
+            account(&mut output_budget, serde_json::to_vec(name)?.len() + 192)?;
+            Ok(json_comparison_span(document, table.column_nodes[*index]))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut rows = Vec::with_capacity(table.rows.len());
+    let mut source_row_indices = Vec::with_capacity(table.rows.len());
+    let mut cell_source_spans = Vec::with_capacity(table.rows.len());
+    for (source_row_index, row) in table.rows.iter().enumerate() {
+        let mut projected_row = Vec::with_capacity(selected_column_indices.len());
+        let mut projected_spans = Vec::with_capacity(selected_column_indices.len());
+        for column_index in &selected_column_indices {
+            let cell = row[*column_index];
+            let value = json_string_value(document, cell, "JSON_TABLE_PROJECT_CELL")?;
+            account(&mut output_budget, serde_json::to_vec(&value)?.len() + 216)?;
+            projected_row.push(value);
+            projected_spans.push(json_comparison_span(document, cell));
+        }
+        rows.push(projected_row);
+        source_row_indices.push(source_row_index);
+        cell_source_spans.push(projected_spans);
+    }
+    let report = JsonTableProjectReport {
+        source_sha256: digest(document.as_bytes()),
+        columns: columns.to_vec(),
+        selected_column_indices,
+        column_source_spans,
+        rows,
+        source_row_indices,
+        cell_source_spans,
+        guarantee: "bounded projection of an explicitly named JSON string table; requested column order and original row order are preserved; values remain exact decoded strings; source ranges retained; no numeric or factual inference".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_PROJECT_OUTPUT_LIMIT",
+            "projected table report exceeds 256000 output bytes",
         ));
     }
     Ok(report)
