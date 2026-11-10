@@ -1,0 +1,71 @@
+{
+  "work_item": "B04 connect existing bidirectional CSV and JSON table conversions to the normal Core route",
+  "recorded_at": "2026-11-10T15:37:33Z",
+  "base_commit": "e724316d3e6722420debe68dc0d21ce9671ffb41",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v11-table-conversion",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "28655257a854d1776048d40d99e1de990aa2a36ca7e41fda228230ed7bcde9aa",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "6472db37afc87989185db79f6c21aac5d1b822477fc55b8cbf5c872a65b455d2",
+    "crates/minidora-engine/src/core.rs": "c251d43077e0e6e6681bcce47d3522448846104de7a206ba6cdd18cf1687ac06",
+    "crates/minidora-engine/src/input.rs": "0757df6459d4f83dd6449a370fa844cc330491e6ca5b5fce3ad6a17588461275"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "ee37913d17fd07c3a3b12f8e9e2cee0361e0489946baf18e0bd0d64b297eea50"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation did not request test or runtime-route verification; only formatting, compilation, lint and build checks were run."
+  },
+  "implemented_routes": [
+    "apps/cli -> Core::run -> input::structured_intent -> Intent::CsvToJson -> document::csv_to_json -> DocumentResult artifact",
+    "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonToCsv -> document::json_to_csv -> DocumentResult artifact"
+  ],
+  "existing_component_observation": "At base commit e724316, csv_to_json and json_to_csv existed as pure document functions but had no ordinary Core intent consumers.",
+  "supported_behavior_from_source": [
+    "CSV-to-JSON requires a header-mode declaration: English `csv-to-json header:` / `csv-to-json no-header:` or the corresponding explicit Japanese header.",
+    "CSV-to-JSON produces the strict string-table schema {\"columns\":[string,...] | null,\"rows\":[[string,...],...]}; numeric-looking text is never converted to a JSON number.",
+    "JSON-to-CSV accepts the strict columns/rows table schema with string cells, rejects unknown or duplicate fields and invalid structure, writes CRLF records and rejects formula-leading cells.",
+    "Both transformations return DocumentResult data with source/output digests, parameters and source/output byte spans. Core stores that record as an artifact dependency and exposes only the transformed text as the result content.",
+    "Input body bytes are retained after the directive newline; explicit grammar failures stay unresolved, and the functions impose bounded source/output size, rows, columns and cell counts.",
+    "This route does not write a user-selected filesystem path; the converted result is a Core-managed artifact. No source-data truth or general schema-transformation claim is made."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

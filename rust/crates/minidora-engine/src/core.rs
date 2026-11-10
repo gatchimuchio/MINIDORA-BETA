@@ -545,6 +545,41 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::CsvToJson {
+                document,
+                has_header,
+            } => {
+                let value = match crate::document::csv_to_json(document, *has_header) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CSV_JSON_CONVERSION_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::Computed;
+            }
+            Intent::JsonToCsv { document } => {
+                let value = match crate::document::json_to_csv(document) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "JSON_CSV_CONVERSION_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::CsvStatistics { document, column } => {
                 let value = match crate::document::csv_statistics(document, column) {
                     Ok(value) => value,

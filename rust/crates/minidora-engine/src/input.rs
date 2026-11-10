@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v10-polynomial-evaluation";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v11-table-conversion";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -137,6 +137,10 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     let looks_like_document = header.starts_with("CSVの列")
         || header.starts_with("csv-select ")
         || header.starts_with("csv-statistics ")
+        || header.starts_with("CSVをJSONに変換して")
+        || header.starts_with("csv-to-json")
+        || header.starts_with("JSONをCSVに変換して")
+        || header.starts_with("json-to-csv")
         || header.starts_with("JSONの配列")
         || header == "json-statistics"
         || header.starts_with("json-statistics ")
@@ -152,6 +156,24 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
                     .into(),
         }));
     };
+    let csv_to_json_header = match header {
+        "CSVをJSONに変換して（先頭行をヘッダーとして）:" => Some(true),
+        "CSVをJSONに変換して（ヘッダーなし）:" => Some(false),
+        _ => regex(r"(?i)^csv-to-json[ \t]+(header|no-header):$")?
+            .captures(header)
+            .map(|capture| capture[1].eq_ignore_ascii_case("header")),
+    };
+    if let Some(has_header) = csv_to_json_header {
+        return Ok(Some(Intent::CsvToJson {
+            document: document.into(),
+            has_header,
+        }));
+    }
+    if header == "JSONをCSVに変換して:" || regex(r"(?i)^json-to-csv:$")?.is_match(header) {
+        return Ok(Some(Intent::JsonToCsv {
+            document: document.into(),
+        }));
+    }
     if let Some(capture) = regex(r"^CSVの列「([^」]+)」の統計量を計算して[:：]$")?.captures(header)
     {
         return Ok(Some(Intent::CsvStatistics {

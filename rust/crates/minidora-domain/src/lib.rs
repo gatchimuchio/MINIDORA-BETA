@@ -171,6 +171,13 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    CsvToJson {
+        document: String,
+        has_header: bool,
+    },
+    JsonToCsv {
+        document: String,
+    },
     CsvStatistics {
         document: String,
         column: String,
