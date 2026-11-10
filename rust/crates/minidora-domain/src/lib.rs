@@ -171,6 +171,10 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    CsvStatistics {
+        document: String,
+        column: String,
+    },
     TextReplace {
         document: String,
         old: String,

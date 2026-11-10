@@ -41,6 +41,7 @@ The script does not fetch, reset, modify or execute either predecessor. It reads
 - `unit-correction-validation.json` records a narrowly bounded operand correction from an actual saved calculation, retention of the original result and a typed stop when no actual result exists. It does not close B02 or full successor acceptance.
 - `unit-binary-correction-validation.json` records actual-result-linked dimensionless multiplication, division, remainder and power corrections, retaining the original version. Nested/compound expressions, dimensional multiplication/division and full B02 acceptance remain open.
 - `schema-migration-validation.json` records explicit alpha 7-to-alpha 8 store migration checks, legacy blob/revision retention and idempotence. It does not establish cross-target durability or full successor acceptance.
+- `csv-statistics-validation.json` records the source-preserving named-column CSV statistics implementation and compile/lint/build checks. No test or CLI route was executed for this slice; B04 remains unverified.
 - `reference_documents.tsv` records exact public reference-document digests. A digest does not establish that a reader understood or implemented a document.
 
 Do not replace these baseline observations with later acceptance claims. Record semantic reviews, Rust implementation paths, input/output observations and executed successor results separately, with their own code/test versions. No predecessor pass is a Rust pass.

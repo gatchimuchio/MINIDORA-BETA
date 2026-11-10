@@ -4,7 +4,7 @@ use minidora_domain::*;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v4-calculation-correction";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v5-csv-statistics";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -135,6 +135,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     }
     let looks_like_document = header.starts_with("CSVの列")
         || header.starts_with("csv-select ")
+        || header.starts_with("csv-statistics ")
         || header.starts_with("置換「")
         || header.starts_with("replace ");
     if !looks_like_document {
@@ -147,6 +148,35 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
                     .into(),
         }));
     };
+    if let Some(capture) = regex(r"^CSVの列「([^」]+)」の統計量を計算して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::CsvStatistics {
+            document: document.into(),
+            column: capture[1].into(),
+        }));
+    }
+    if let Some(raw) = header.strip_prefix("csv-statistics ") {
+        let column = if raw.starts_with('"') {
+            serde_json::from_str::<String>(raw).map_err(|_| {
+                failure(
+                    "INVALID_CSV_COLUMN",
+                    "quoted column must be one complete JSON string",
+                )
+            })?
+        } else if !raw.is_empty() && !raw.chars().any(char::is_whitespace) {
+            raw.to_string()
+        } else {
+            return Ok(Some(Intent::Unknown {
+                reason:
+                    "CSV statistics column must be one literal token or one complete quoted string"
+                        .into(),
+            }));
+        };
+        return Ok(Some(Intent::CsvStatistics {
+            document: document.into(),
+            column,
+        }));
+    }
     if let Some(capture) = regex(r"^CSVの列「([^」]+)」を選択して[:：]$")?.captures(header)
     {
         return Ok(Some(Intent::CsvSelect {

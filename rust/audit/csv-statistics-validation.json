@@ -1,0 +1,66 @@
+{
+  "work_item": "B04 source-preserving named-column CSV descriptive statistics",
+  "recorded_at": "2026-11-10T14:08:49Z",
+  "base_commit": "8491febba878901380eb5334a325dcf977aaf986",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v5-csv-statistics",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "d759175c1e48287715595f99f650cb74923ad293fd5a987214eaced3ac8244ec",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "d1cd2e8db02b33e242c0b0c63924183a33243ffa1ef1f254f3910761f02f9dbc",
+    "crates/minidora-engine/src/core.rs": "8060044487c4e34d22ef2bda00b6bb63d03408fe1049e83d8d0d1274ab45ade3",
+    "crates/minidora-engine/src/document.rs": "0f5083a16d2cd14e279cc8c7afb72bd374be9c8d9f0788df685a571f0c6c847d",
+    "crates/minidora-engine/src/input.rs": "a46d4050880d074ea0a735d601febef7c94121d36a17b45c7c22b888f84e609f"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "713037221d3f717fdb20df4f329c8150cc0b902693c05fcddee69a2e2e188b83"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "Tests and the normal CLI route were not executed in this implementation pass; formatting, compilation, Clippy and build checks were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::CsvStatistics -> document::csv_statistics -> math::summarize",
+  "supported_behavior_from_source": [
+    "Exact decoded named-header selection over source-preserving RFC-style CSV.",
+    "Unitless cells are passed to the exact scalar/statistics path; all-unit cells must be exact decimal numeric literals with units.",
+    "Mixed unit-bearing and unitless cells return CSV_STATISTICS_MIXED_VALUES before an artifact is stored.",
+    "Successful reports include the CSV body digest, exact column/index, exact descriptive statistics and original header/cell byte spans; Core stores the full DocumentResult artifact and returns its digest dependency."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and build checks only, no test or normal-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

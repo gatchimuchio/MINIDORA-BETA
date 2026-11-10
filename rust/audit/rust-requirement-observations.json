@@ -257,10 +257,13 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/document.rs"
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/document.rs",
+        "crates/minidora-engine/src/math.rs",
+        "crates/minidora-engine/src/core.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
-      "full_acceptance_gap": "Real input documents yield schema-valid results, source-location and error records",
+      "evidence": "csv-statistics-validation.json records the implemented producer-to-consumer route and build checks; no route execution or full row acceptance is claimed",
+      "full_acceptance_gap": "General JSON/schema transformations, table comparison/aggregation breadth and observed normal-route acceptance remain unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

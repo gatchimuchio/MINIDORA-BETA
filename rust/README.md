@@ -96,13 +96,19 @@ The first line names a supported operation; the body after its newline is retain
 ```bash
 "$minidora_bin" --db "$minidora_state" --actor demo --case csv \
   $'CSVの列「price」を選択して:\nname,price\r\n猫,001\r\n犬,9007199254740993\r\n'
+"$minidora_bin" --db "$minidora_state" --actor demo --case csv-stats \
+  $'CSVの列「price」の統計量を計算して:\nname,price\r\ncat,0.1\r\ndog,0.2\r\nfox,0.3\r\n'
+"$minidora_bin" --db "$minidora_state" --actor demo --case length-stats \
+  $'CSVの列「length」の統計量を計算して:\nplace,length\r\nA,1 km\r\nB,500 m\r\n'
 "$minidora_bin" --db "$minidora_state" --actor demo --case edit \
   $'置換「猫」→「犬」 件数 2:\n猫の猫'
 ```
 
-English equivalents are `csv-select price` followed by a newline and CSV, or `replace "old" -> "new" count 1:` followed by a newline and the exact source body. A header containing spaces can be selected with a complete quoted JSON string, for example `csv-select "unit price"`.
+English equivalents are `csv-select price` or `csv-statistics price` followed by a newline and CSV, or `replace "old" -> "new" count 1:` followed by a newline and the exact source body. A header containing spaces can be selected with a complete quoted JSON string, for example `csv-select "unit price"` or `csv-statistics "unit price"`.
 
 Selection uses the exact decoded named header and returns a JSON array of **strings**; `001` and huge numeric-looking fields are not converted to numbers. Quote escapes, empty cells, embedded quoted line breaks and source byte spans are retained. Bare LF record separators, inconsistent widths and duplicate decoded header names are rejected. The library additionally has explicit headerless/indexed selection and string-table CSV↔JSON functions; those extra library functions do not have an ordinary CLI intent in this alpha. CSV export rejects formula-leading cells rather than silently sanitizing or executing them.
+
+Named-column statistics explicitly interpret every selected cell as either a unitless exact arithmetic expression or as one decimal numeric literal followed by a unit. Mixed unit-bearing and unitless/non-numeric cells suspend. The exact statistics report identifies the source digest, decoded column, observation count and original header/cell byte spans; mixed `mm`, `cm`, `m` and `km` values normalize exactly to metres. These are descriptive statistics for supplied cells and do not imply a representative population.
 
 Literal editing replaces original nonoverlapping matches only. A supplied count must match before any result is formed; omitting the count means all such matches. Unmatched text stays byte-for-byte unchanged; inserted text is not rescanned. Missing search text, a no-op, an empty search, a count mismatch or resource overflow stops. The original document/hash, exact parameters and source/output mappings are stored separately from the emitted result. This is not arbitrary editing-intent inference, unrestricted writing quality or a file write without the separate exact-target grant.
 
@@ -239,6 +245,6 @@ See [implementation choices](docs/IMPLEMENTATION_CHOICES.md), [dependencies](doc
 
 ## Current validation and open scope
 
-See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the initial operand-correction validation](audit/unit-correction-validation.json), [the bounded operator-correction validation](audit/unit-binary-correction-validation.json), [the store migration validation](audit/schema-migration-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. Later alpha 8 Linux runs passed 147 and 148 Rust tests in their separately identified snapshots. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
+See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the initial operand-correction validation](audit/unit-correction-validation.json), [the bounded operator-correction validation](audit/unit-binary-correction-validation.json), [the store migration validation](audit/schema-migration-validation.json), [the CSV statistics build record](audit/csv-statistics-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. Later alpha 8 Linux runs passed 147 and 148 Rust tests in their separately identified snapshots. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
 
 Tested cloud reproduction and startup instructions are [cloud-install.sh](tools/cloud-install.sh) and [cloud-start.md](tools/cloud-start.md). Backend environment-draft saving is currently unconfirmed due to an API error; the scripts themselves were executed successfully.

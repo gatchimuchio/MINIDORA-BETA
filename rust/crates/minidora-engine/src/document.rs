@@ -2,8 +2,10 @@
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
 use minidora_domain::{Result, digest, failure};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 const MAX_DOCUMENT_BYTES: usize = 256_000;
 const MAX_RESULT_BYTES: usize = 256_000;
@@ -351,6 +353,100 @@ pub fn csv_select(document: &str, column: &str) -> Result<DocumentResult> {
         .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
     select(table, index, Some(column))
 }
+
+/// Compute exact descriptive statistics for one explicitly named CSV column.
+/// A column is treated either as unitless exact expressions or as one exact
+/// decimal literal plus a unit in every row; mixed/ambiguous interpretation
+/// stops before producing a result.
+pub fn csv_statistics(document: &str, column: &str) -> Result<DocumentResult> {
+    static QUANTITY: OnceLock<Regex> = OnceLock::new();
+    let quantity = QUANTITY.get_or_init(|| {
+        Regex::new(
+            r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
+        )
+        .expect("constant CSV quantity pattern")
+    });
+    let table = parse_csv(document, true)?;
+    let header = table.header.as_ref().expect("explicit CSV header");
+    let index = header
+        .iter()
+        .position(|cell| cell.value == column)
+        .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
+    let mut values = Vec::with_capacity(table.rows.len());
+    let mut units = Vec::with_capacity(table.rows.len());
+    let mut quantity_count = 0;
+    let mut spans = vec![source_span(
+        document,
+        &header[index],
+        "CSV_HEADER",
+        Some(0),
+        index,
+        None,
+    )];
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let cell = &row[index];
+        if let Some(capture) = quantity.captures(&cell.value) {
+            quantity_count += 1;
+            values.push(capture[1].trim().to_string());
+            units.push(capture[2].to_string());
+        } else {
+            values.push(cell.value.clone());
+            units.push(String::new());
+        }
+        spans.push(source_span(
+            document,
+            cell,
+            "CSV_NUMERIC_OBSERVATION",
+            Some(row_index + 1),
+            index,
+            None,
+        ));
+    }
+    let statistics = match quantity_count {
+        0 => crate::math::summarize(&values, None)?,
+        count if count == values.len() => crate::math::summarize(&values, Some(&units))?,
+        _ => {
+            return Err(failure(
+                "CSV_STATISTICS_MIXED_VALUES",
+                "selected column mixes unit-bearing numeric literals with unitless or nonnumeric cells",
+            ));
+        }
+    };
+    #[derive(Serialize)]
+    struct Report<'a> {
+        source_sha256: String,
+        column_name: &'a str,
+        column_index: usize,
+        statistics: &'a crate::math::Statistics,
+        source_spans: &'a [DocumentSpan],
+        guarantee: &'static str,
+    }
+    let text = serde_json::to_string_pretty(&Report {
+        source_sha256: digest(document.as_bytes()),
+        column_name: column,
+        column_index: index,
+        statistics: &statistics,
+        source_spans: &spans,
+        guarantee: "exact descriptive statistics of explicitly selected supplied cells; source locations retained; no population inference",
+    })?;
+    let parameters = BTreeMap::from([
+        ("has_header".into(), "true".into()),
+        ("column_name".into(), column.into()),
+        ("column_index".into(), index.to_string()),
+        ("observation_count".into(), statistics.count.to_string()),
+        (
+            "interpretation".into(),
+            if quantity_count == values.len() && quantity_count > 0 {
+                "exact_numeric_literal_with_unit"
+            } else {
+                "exact_unitless_expression"
+            }
+            .into(),
+        ),
+    ]);
+    result(document, text, "CSV_STATISTICS", parameters, spans)
+}
+
 pub fn csv_select_index(document: &str, index: usize, has_header: bool) -> Result<DocumentResult> {
     select(parse_csv(document, has_header)?, index, None)
 }
