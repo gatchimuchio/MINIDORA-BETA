@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v14-csv-group-count";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v15-json-compare";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -151,6 +151,10 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header.starts_with("csv-to-json")
         || header.starts_with("JSONをCSVに変換して")
         || header.starts_with("json-to-csv")
+        || header == "JSONを比較して:"
+        || header
+            .get(..12)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-compare"))
         || header.starts_with("JSONの配列")
         || header == "json-statistics"
         || header.starts_with("json-statistics ")
@@ -234,6 +238,11 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     }
     if header == "JSONをCSVに変換して:" || regex(r"(?i)^json-to-csv:$")?.is_match(header) {
         return Ok(Some(Intent::JsonToCsv {
+            document: document.into(),
+        }));
+    }
+    if header == "JSONを比較して:" || regex(r"(?i)^json-compare:$")?.is_match(header) {
+        return Ok(Some(Intent::JsonCompare {
             document: document.into(),
         }));
     }

@@ -1,0 +1,70 @@
+{
+  "work_item": "B04 bounded structural JSON comparison with source-located JSON Pointer differences through Core",
+  "recorded_at": "2026-11-10T16:52:30Z",
+  "base_commit": "ebc61a55276164d1ef8d0707dc74b2d5fcc70922",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v15-json-compare",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "4ecd13f41e49b996463ec2b802b4c65d225125e0703ad387c1c1b0d7ed57905b",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "3c55537c638f25b69f8d3a3c29cdc511f673e43366e8b1b95c496517e7a061ed",
+    "crates/minidora-engine/src/core.rs": "800e83430119df647abdffe745ba54bb39ef595e3ce38ea6e9ed25663dc5e916",
+    "crates/minidora-engine/src/input.rs": "f33ce9d6d1b20a0735991c8a36561f1e39396b580983ed7dd9055c362e85820d",
+    "crates/minidora-engine/src/ports.rs": "be7eb69171b4e04b6a0046714588b025a9b366c89ec93babcc98db7d1d6e2538",
+    "crates/minidora-engine/src/math.rs": "cc65008828ce79c99a942917af2bd362b5b01ba9b346516f42ae12757a4dc12b"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "c99812793fd8fe2984f85a952add90b240d42ecb8d0c470ff5d9ffabf9455e89"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation did not request test or runtime-route verification; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonCompare -> ports::json_compare -> JsonComparisonReport artifact",
+  "wrapper_schema": "Exactly {\"left\": JSON value, \"right\": JSON value}; duplicate and unknown fields are rejected.",
+  "comparison_rules": [
+    "Object member order is ignored; decoded object keys are compared exactly and duplicate decoded keys are rejected.",
+    "Array order is significant. Decoded JSON strings compare exactly without Unicode normalization; booleans and null compare by value.",
+    "JSON number spellings compare by exact bounded rational value, so equivalent decimal/exponent lexemes are equal without binary floating point.",
+    "Each difference contains an escaped JSON Pointer and optional left/right source byte ranges and digests relative to the wrapper body.",
+    "Missing fields/elements produce ADDED or REMOVED; values/type changes produce CHANGED. Missing and explicit null remain distinct.",
+    "Input is limited to 256000 bytes, the shared JSON parser limits nesting/nodes, differences are capped at 4096 and report output at 256000 bytes plus the request output budget."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

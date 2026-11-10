@@ -105,6 +105,11 @@ fn scalar(text: &str) -> Result<BigRational> {
         .map_err(|_| failure("INVALID_EXACT_NUMBER", "invalid exact calculation result"))?;
     Budget::default().check(value)
 }
+
+pub(crate) fn json_number_equal(left: &str, right: &str) -> Result<bool> {
+    Ok(scalar(left)? == scalar(right)?)
+}
+
 fn certificate_number(text: &str) -> Result<BigRational> {
     if text.is_empty() || text.len() > 8192 {
         return Err(failure(

@@ -8,7 +8,7 @@ use minidora_domain::{
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::ops::Range;
@@ -887,6 +887,264 @@ pub struct JsonStatisticsReport {
     pub statistics: crate::math::Statistics,
     pub spans: Vec<JsonSourceSpan>,
     pub guarantee: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonComparisonSpan {
+    pub source_start: usize,
+    pub source_end: usize,
+    pub source_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonDifference {
+    pub pointer: String,
+    pub change: String,
+    pub left: Option<JsonComparisonSpan>,
+    pub right: Option<JsonComparisonSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonComparisonReport {
+    pub source_sha256: String,
+    pub left_sha256: String,
+    pub right_sha256: String,
+    pub equal: bool,
+    pub comparison: String,
+    pub differences: Vec<JsonDifference>,
+    pub guarantee: String,
+}
+
+const MAX_JSON_COMPARE_BYTES: usize = 256_000;
+const MAX_JSON_COMPARE_DIFFERENCES: usize = 4096;
+const MAX_JSON_COMPARE_OUTPUT_BYTES: usize = 256_000;
+
+fn json_comparison_span(document: &str, node: &JsonNode) -> JsonComparisonSpan {
+    JsonComparisonSpan {
+        source_start: node.span.start,
+        source_end: node.span.end,
+        source_sha256: digest(document[node.span.clone()].as_bytes()),
+    }
+}
+
+fn add_json_difference(
+    document: &str,
+    pointer: String,
+    change: &str,
+    left: Option<&JsonNode>,
+    right: Option<&JsonNode>,
+    differences: &mut Vec<JsonDifference>,
+    output_budget: &mut usize,
+) -> Result<()> {
+    if differences.len() >= MAX_JSON_COMPARE_DIFFERENCES {
+        return Err(failure(
+            "JSON_COMPARE_DIFFERENCE_LIMIT",
+            "comparison exceeds 4096 recorded differences",
+        ));
+    }
+    *output_budget = output_budget.saturating_add(pointer.len() + 512);
+    if *output_budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_COMPARE_OUTPUT_LIMIT",
+            "comparison report exceeds its bounded output envelope",
+        ));
+    }
+    differences.push(JsonDifference {
+        pointer,
+        change: change.into(),
+        left: left.map(|node| json_comparison_span(document, node)),
+        right: right.map(|node| json_comparison_span(document, node)),
+    });
+    Ok(())
+}
+
+fn json_pointer_child(parent: &str, child: &str) -> String {
+    let escaped = child.replace('~', "~0").replace('/', "~1");
+    format!("{parent}/{escaped}")
+}
+
+fn json_scalar_equal(document: &str, left: &JsonNode, right: &JsonNode) -> Result<bool> {
+    let left_text = &document[left.span.clone()];
+    let right_text = &document[right.span.clone()];
+    if left_text.starts_with('"') && right_text.starts_with('"') {
+        Ok(serde_json::from_str::<String>(left_text)?
+            == serde_json::from_str::<String>(right_text)?)
+    } else {
+        Ok(left_text == right_text)
+    }
+}
+
+fn compare_json_nodes(
+    document: &str,
+    left: &JsonNode,
+    right: &JsonNode,
+    pointer: &str,
+    differences: &mut Vec<JsonDifference>,
+    output_budget: &mut usize,
+) -> Result<()> {
+    match (&left.kind, &right.kind) {
+        (JsonKind::Object(left_entries), JsonKind::Object(right_entries)) => {
+            let keys: BTreeSet<_> = left_entries.keys().chain(right_entries.keys()).collect();
+            for key in keys {
+                let child_pointer = json_pointer_child(pointer, key);
+                match (left_entries.get(key), right_entries.get(key)) {
+                    (Some(left_value), Some(right_value)) => compare_json_nodes(
+                        document,
+                        left_value,
+                        right_value,
+                        &child_pointer,
+                        differences,
+                        output_budget,
+                    )?,
+                    (Some(left_value), None) => add_json_difference(
+                        document,
+                        child_pointer,
+                        "REMOVED",
+                        Some(left_value),
+                        None,
+                        differences,
+                        output_budget,
+                    )?,
+                    (None, Some(right_value)) => add_json_difference(
+                        document,
+                        child_pointer,
+                        "ADDED",
+                        None,
+                        Some(right_value),
+                        differences,
+                        output_budget,
+                    )?,
+                    (None, None) => unreachable!("union key must occur in one object"),
+                }
+            }
+        }
+        (JsonKind::Array(left_values), JsonKind::Array(right_values)) => {
+            for index in 0..left_values.len().max(right_values.len()) {
+                let child_pointer = json_pointer_child(pointer, &index.to_string());
+                match (left_values.get(index), right_values.get(index)) {
+                    (Some(left_value), Some(right_value)) => compare_json_nodes(
+                        document,
+                        left_value,
+                        right_value,
+                        &child_pointer,
+                        differences,
+                        output_budget,
+                    )?,
+                    (Some(left_value), None) => add_json_difference(
+                        document,
+                        child_pointer,
+                        "REMOVED",
+                        Some(left_value),
+                        None,
+                        differences,
+                        output_budget,
+                    )?,
+                    (None, Some(right_value)) => add_json_difference(
+                        document,
+                        child_pointer,
+                        "ADDED",
+                        None,
+                        Some(right_value),
+                        differences,
+                        output_budget,
+                    )?,
+                    (None, None) => unreachable!("index must occur in one array"),
+                }
+            }
+        }
+        (JsonKind::Scalar, JsonKind::Scalar) => {
+            if !json_scalar_equal(document, left, right)? {
+                add_json_difference(
+                    document,
+                    pointer.into(),
+                    "CHANGED",
+                    Some(left),
+                    Some(right),
+                    differences,
+                    output_budget,
+                )?;
+            }
+        }
+        (JsonKind::Number, JsonKind::Number) => {
+            let left_text = &document[left.span.clone()];
+            let right_text = &document[right.span.clone()];
+            if !crate::math::json_number_equal(left_text, right_text)? {
+                add_json_difference(
+                    document,
+                    pointer.into(),
+                    "CHANGED",
+                    Some(left),
+                    Some(right),
+                    differences,
+                    output_budget,
+                )?;
+            }
+        }
+        _ => add_json_difference(
+            document,
+            pointer.into(),
+            "CHANGED",
+            Some(left),
+            Some(right),
+            differences,
+            output_budget,
+        )?,
+    }
+    Ok(())
+}
+
+/// Compare JSON values in `{"left": ..., "right": ...}`. Object key order and
+/// JSON number spelling are ignored, while array order and decoded string
+/// contents remain significant. Difference spans are byte offsets into the
+/// original wrapper document.
+pub fn json_compare(document: &str) -> Result<JsonComparisonReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_COMPARE_INPUT_LIMIT",
+            "comparison wrapper exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let JsonKind::Object(wrapper) = &root.kind else {
+        return Err(failure(
+            "JSON_COMPARE_SHAPE",
+            "comparison input must be an object with left and right fields",
+        ));
+    };
+    if wrapper.len() != 2 || !wrapper.contains_key("left") || !wrapper.contains_key("right") {
+        return Err(failure(
+            "JSON_COMPARE_SHAPE",
+            "comparison wrapper requires exactly left and right fields",
+        ));
+    }
+    let left = wrapper.get("left").expect("validated left field");
+    let right = wrapper.get("right").expect("validated right field");
+    let mut differences = Vec::new();
+    let mut output_budget = 512usize;
+    compare_json_nodes(
+        document,
+        left,
+        right,
+        "",
+        &mut differences,
+        &mut output_budget,
+    )?;
+    let report = JsonComparisonReport {
+        source_sha256: digest(document.as_bytes()),
+        left_sha256: digest(document[left.span.clone()].as_bytes()),
+        right_sha256: digest(document[right.span.clone()].as_bytes()),
+        equal: differences.is_empty(),
+        comparison: "JSON_STRUCTURAL_EXACT_DECIMAL".into(),
+        differences,
+        guarantee: "bounded structural JSON comparison; object order is ignored, array order and decoded strings are significant, numeric values are compared as exact decimals; no factual truth is inferred".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_COMPARE_OUTPUT_LIMIT",
+            "comparison report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
 }
 
 /// Compute exact descriptive statistics for one selected array of JSON number
