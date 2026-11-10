@@ -195,9 +195,9 @@ fn exact_rational(expression: &str) -> Result<BigRational> {
 }
 
 /// Return a new exact result after replacing one literal operand in a saved
-/// binary addition/subtraction. The caller must retain the prior result as a
-/// dependency; this function never edits it in place.
-pub fn correct_additive_operand(
+/// binary calculation. Unit-bearing corrections are restricted to addition
+/// and subtraction; the caller retains the prior result as a dependency.
+pub fn correct_binary_operand(
     prior: &Calculation,
     operand_index: usize,
     replacement: &str,
@@ -205,7 +205,7 @@ pub fn correct_additive_operand(
     static OPERANDS: OnceLock<Regex> = OnceLock::new();
     static REPLACEMENT: OnceLock<Regex> = OnceLock::new();
     let operands = OPERANDS.get_or_init(|| {
-        Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*([+-])\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*$")
+        Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*(\*\*|[-+*/%^])\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*$")
             .expect("binary operand expression pattern is static")
     });
     let replacement_pattern = REPLACEMENT.get_or_init(|| {
@@ -229,7 +229,7 @@ pub fn correct_additive_operand(
     let Some(captures) = operands.captures(&normalized_expression) else {
         return Err(failure(
             "CORRECTION_UNSUPPORTED",
-            "only a saved binary literal addition or subtraction can be corrected",
+            "only a saved binary literal arithmetic expression can be corrected",
         ));
     };
     let normalized_replacement: String = replacement.nfkc().collect();
@@ -251,16 +251,26 @@ pub fn correct_additive_operand(
     } else {
         prior_right_unit
     };
-    let new_unit = match (target_prior_unit, supplied_unit) {
-        (None, Some(_)) => {
+    let new_unit = if operation == "+" || operation == "-" {
+        match (target_prior_unit, supplied_unit) {
+            (None, Some(_)) => {
+                return Err(failure(
+                    "UNIT_MISMATCH",
+                    "a unit cannot be added to a previously unitless operand during correction",
+                ));
+            }
+            (Some(prior_unit), None) => Some(prior_unit.to_string()),
+            (_, Some(supplied)) => Some(supplied.to_string()),
+            (None, None) => None,
+        }
+    } else {
+        if prior_left_unit.is_some() || prior_right_unit.is_some() || supplied_unit.is_some() {
             return Err(failure(
-                "UNIT_MISMATCH",
-                "a unit cannot be added to a previously unitless operand during correction",
+                "UNIT_OPERATION_UNSUPPORTED",
+                "unit-bearing multiplication, division, remainder and power corrections are unsupported",
             ));
         }
-        (Some(prior_unit), None) => Some(prior_unit.to_string()),
-        (_, Some(supplied)) => Some(supplied.to_string()),
-        (None, None) => None,
+        None
     };
     let left = if operand_index == 0 {
         (new_value.clone(), new_unit.clone())
@@ -1223,30 +1233,66 @@ mod tests {
     }
 
     #[test]
-    fn operand_correction_builds_a_new_exact_calculation() {
+    fn operand_correction_builds_a_new_exact_binary_calculation() {
         let prior = calculate("1 km + 500 m").unwrap();
-        let corrected = correct_additive_operand(&prior, 1, "600 m").unwrap();
+        let corrected = correct_binary_operand(&prior, 1, "600 m").unwrap();
         assert_eq!(corrected.expression, "1 km + 600 m");
         assert_eq!(corrected.exact_value, "1600 m");
         assert_eq!(prior.exact_value, "1500 m");
 
-        let omitted_unit = correct_additive_operand(&prior, 1, "700").unwrap();
+        let omitted_unit = correct_binary_operand(&prior, 1, "700").unwrap();
         assert_eq!(omitted_unit.expression, "1 km + 700 m");
         assert_eq!(omitted_unit.exact_value, "1700 m");
 
         let unitless = calculate("2+3").unwrap();
-        let changed = correct_additive_operand(&unitless, 0, "4").unwrap();
+        let changed = correct_binary_operand(&unitless, 0, "4").unwrap();
         assert_eq!(changed.expression, "4 + 3");
         assert_eq!(changed.exact_value, "7");
 
-        assert!(correct_additive_operand(&unitless, 1, "5 km").is_err());
-        assert!(correct_additive_operand(&calculate("2*3").unwrap(), 1, "4").is_err());
+        assert!(correct_binary_operand(&unitless, 1, "5 km").is_err());
+        assert_eq!(
+            correct_binary_operand(&calculate("2 * 3").unwrap(), 1, "4")
+                .unwrap()
+                .exact_value,
+            "8"
+        );
+        assert_eq!(
+            correct_binary_operand(&calculate("12 / 3").unwrap(), 1, "4")
+                .unwrap()
+                .exact_value,
+            "3"
+        );
+        assert_eq!(
+            correct_binary_operand(&calculate("10 % 3").unwrap(), 1, "4")
+                .unwrap()
+                .exact_value,
+            "2"
+        );
+        assert_eq!(
+            correct_binary_operand(&calculate("2 ** 3").unwrap(), 1, "4")
+                .unwrap()
+                .exact_value,
+            "16"
+        );
+        assert_eq!(
+            correct_binary_operand(&calculate("2 ^ 3").unwrap(), 1, "4")
+                .unwrap()
+                .exact_value,
+            "16"
+        );
+        let unit_product = correct_binary_operand(&calculate("2 * 3").unwrap(), 1, "4 m");
+        assert!(matches!(
+            unit_product,
+            Err(minidora_domain::Error::Contract { code, .. })
+                if code == "UNIT_OPERATION_UNSUPPORTED"
+        ));
+        assert!(correct_binary_operand(&calculate("2+3*4").unwrap(), 1, "4").is_err());
         let inconsistent = Calculation {
             expression: "2+3".into(),
             exact_value: "999".into(),
             steps: Vec::new(),
         };
-        assert!(correct_additive_operand(&inconsistent, 1, "4").is_err());
+        assert!(correct_binary_operand(&inconsistent, 1, "4").is_err());
     }
 
     #[test]

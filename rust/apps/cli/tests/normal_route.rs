@@ -252,6 +252,143 @@ fn explicit_operand_correction_creates_a_new_version_linked_to_the_actual_result
 }
 
 #[test]
+fn explicit_operand_correction_recomputes_other_bounded_binary_operators() {
+    for (expression, replacement, expected_expression, expected_initial, expected_corrected) in [
+        ("2 * 3", "第二項を4に変更して", "2 * 4", "6", "8"),
+        ("2 * 3", "第一項を4に変更して", "4 * 3", "6", "12"),
+        ("12 / 3", "第二項を4に変更して", "12 / 4", "4", "3"),
+        ("10 % 3", "第二項を4に変更して", "10 % 4", "1", "2"),
+        ("2 ** 3", "第二項を4に変更して", "2 ** 4", "8", "16"),
+        ("2 ^ 3", "第二項を4に変更して", "2 ^ 4", "8", "16"),
+    ] {
+        let scratch = Scratch::new();
+        let original = record(&execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "operator-correction",
+                "--version",
+                "1",
+                expression,
+            ],
+        ));
+        assert_eq!(original["lifecycle"], "COMMIT", "{expression}");
+        assert_eq!(original["calculation"]["exact_value"], expected_initial);
+
+        let corrected = record(&execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "operator-correction",
+                "--version",
+                "2",
+                replacement,
+            ],
+        ));
+        assert_eq!(corrected["lifecycle"], "COMMIT", "{expression}");
+        assert_eq!(corrected["input_version"], 2);
+        assert_eq!(corrected["calculation"]["expression"], expected_expression);
+        assert_eq!(corrected["calculation"]["exact_value"], expected_corrected);
+        assert!(
+            corrected["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&original["id"])
+        );
+        if expression == "12 / 3" {
+            let zero_divisor = stopped(
+                &execute(
+                    &scratch.0,
+                    "owner",
+                    &[
+                        "--input",
+                        "operator-correction",
+                        "--version",
+                        "3",
+                        "第二項を0に変更して",
+                    ],
+                ),
+                2,
+                "SUSPEND",
+            );
+            assert!(
+                zero_divisor["reason"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("DIVISION_BY_ZERO:")
+            );
+            assert_eq!(
+                record(&execute(
+                    &scratch.0,
+                    "owner",
+                    &[
+                        "--input",
+                        "operator-correction",
+                        "--version",
+                        "2",
+                        replacement,
+                    ],
+                )),
+                corrected
+            );
+        }
+        assert_eq!(
+            record(&execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    "operator-correction",
+                    "--version",
+                    "1",
+                    expression
+                ],
+            )),
+            original
+        );
+    }
+
+    let scratch = Scratch::new();
+    let compound = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "compound-correction", "--version", "1", "2+3*4"],
+    ));
+    assert_eq!(compound["calculation"]["exact_value"], "14");
+    let refused = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "compound-correction",
+                "--version",
+                "2",
+                "第二項を5に変更して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        refused["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CORRECTION_UNSUPPORTED:")
+    );
+    assert_eq!(
+        record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "compound-correction", "--version", "1", "2+3*4"],
+        )),
+        compound
+    );
+}
+
+#[test]
 fn meaning_comparison_variants_reach_cli_and_compound_effects_suspend() {
     let scratch = Scratch::new();
     let comparison = record(&execute(

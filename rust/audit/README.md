@@ -39,6 +39,7 @@ The script does not fetch, reset, modify or execute either predecessor. It reads
 - `unit-conversion-validation.json` records the scoped B02 mixed-length statistics implementation and its Linux component/ordinary-route checks. It does not close B02 or full successor acceptance.
 - `unit-arithmetic-validation.json` records exact unit-aware binary addition/subtraction and saved-result explanation on the ordinary CLI route, plus workspace validation. It is partial B02 evidence; correction coverage and full successor acceptance remain limited.
 - `unit-correction-validation.json` records a narrowly bounded operand correction from an actual saved calculation, retention of the original result and a typed stop when no actual result exists. It does not close B02 or full successor acceptance.
+- `unit-binary-correction-validation.json` records actual-result-linked dimensionless multiplication, division, remainder and power corrections, retaining the original version. Nested/compound expressions, dimensional multiplication/division and full B02 acceptance remain open.
 - `schema-migration-validation.json` records explicit alpha 7-to-alpha 8 store migration checks, legacy blob/revision retention and idempotence. It does not establish cross-target durability or full successor acceptance.
 - `reference_documents.tsv` records exact public reference-document digests. A digest does not establish that a reader understood or implemented a document.
 

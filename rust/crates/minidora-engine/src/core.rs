@@ -398,7 +398,7 @@ impl Engine {
                         "直前の採用済み成果に計算式がありません。",
                     );
                 };
-                match language::correct_additive_operand(
+                match language::correct_binary_operand(
                     prior_calculation,
                     *operand_index,
                     replacement,

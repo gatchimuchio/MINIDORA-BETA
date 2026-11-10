@@ -1,0 +1,136 @@
+{
+  "work_item": "B02 versioned correction of actual saved binary arithmetic",
+  "recorded_at": "2026-11-10T13:57:56Z",
+  "base_commit": "352c913b588dc962ca1658377fde00b20333c6c3",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v4-calculation-correction",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "3f512f13c0aa2fdc7054a1718315cacfdf572d02cf2e3b6f3e1ada2c1743e48c",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "tested_source_paths": {
+    "Cargo.toml": "f87a7b6bdb5d36d92bff76bb9f03458771d90df6dbbec10f55b3d6243bddab08",
+    "Cargo.lock": "306b812d94996764d7a1a6e2097ac44891e7478a5166742de7916e70cf9d2e37",
+    "apps/cli/tests/normal_route.rs": "e02a4baca12e1b9e5e24a7ba1fdd0303d13da4eae4ea8e71660455b5af84762e",
+    "crates/minidora-engine/src/core.rs": "8f6fb515ab1ce3272e390d287d0e9cfdd205855cb2a412a626a1b575192d6d30",
+    "crates/minidora-engine/src/language.rs": "e821a7fc5705ce74677e5126a6a54efeae427fe691e92079a9e114489120137c"
+  },
+  "binary_sha256": "7a508b6e33f871d9ea3d13f40c57b3b27e5203afbe77d2dad115be3f73c0cc65",
+  "command_results": [
+    {
+      "command": "cargo +1.99.1 fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo +1.99.1 check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo +1.99.1 clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo +1.99.1 test --manifest-path rust/Cargo.toml --workspace --all-features --locked",
+      "exit_code": 0,
+      "passed": 148,
+      "failed": 0,
+      "ignored": 0,
+      "doc_tests": 0
+    },
+    {
+      "command": "cargo +1.99.1 build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo +1.99.1 metadata --manifest-path rust/Cargo.toml --locked --format-version 1 --no-deps",
+      "exit_code": 0
+    }
+  ],
+  "test_suites": [
+    {
+      "suite": "minidora-cli unit tests",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "normal CLI route integration tests",
+      "passed": 28,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "minidora-domain unit tests",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "minidora-engine unit tests",
+      "passed": 106,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "observed_routes": {
+    "normal_route_positive": [
+      {
+        "source_expression": "2 * 3",
+        "correction": "第一項を4に変更して",
+        "corrected_expression": "4 * 3",
+        "original_exact_value": "6",
+        "corrected_exact_value": "12"
+      },
+      {
+        "source_expression": "2 * 3",
+        "correction": "第二項を4に変更して",
+        "corrected_expression": "2 * 4",
+        "original_exact_value": "6",
+        "corrected_exact_value": "8"
+      },
+      {
+        "source_expression": "12 / 3",
+        "corrected_expression": "12 / 4",
+        "original_exact_value": "4",
+        "corrected_exact_value": "3"
+      },
+      {
+        "source_expression": "10 % 3",
+        "corrected_expression": "10 % 4",
+        "original_exact_value": "1",
+        "corrected_exact_value": "2"
+      },
+      {
+        "source_expression": "2 ** 3",
+        "corrected_expression": "2 ** 4",
+        "original_exact_value": "8",
+        "corrected_exact_value": "16"
+      },
+      {
+        "source_expression": "2 ^ 3",
+        "corrected_expression": "2 ^ 4",
+        "original_exact_value": "8",
+        "corrected_exact_value": "16"
+      }
+    ],
+    "versioning": "Each accepted correction used input version 2, depended on the actual version 1 result and retained the exact version 1 retry result.",
+    "normal_route_negative": [
+      "Correcting 12 / 4 to a zero divisor at version 3 returned SUSPEND with DIVISION_BY_ZERO; the version 2 result remained identical on retry.",
+      "A committed 2+3*4 calculation could not be partially edited; correction returned SUSPEND with CORRECTION_UNSUPPORTED and the version 1 result remained identical on retry."
+    ],
+    "component_negative": "Adding a unit to a dimensionless multiplication correction returned UNIT_OPERATION_UNSUPPORTED.",
+    "supported_surface": "Exactly two numeric literal operands and one operator from +, -, *, /, %, ^ or **. Units remain supported only for + and -; parentheses and compound expressions are not correction targets."
+  },
+  "acceptance": {
+    "B02": "UNVERIFIED",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}
