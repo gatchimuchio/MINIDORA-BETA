@@ -1,0 +1,75 @@
+{
+  "work_item": "B03 bounded exact single-variable linear equation solver through input and Core",
+  "recorded_at": "2026-11-10T20:54:30Z",
+  "base_commit": "33c8658117fe2216f097de7e1f72c6ee89d7e14b",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v32-linear-equation",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "5921a4a60e13a79bae8bd0d0752341ac30a88ce8b0430217a948e08116ada11b",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "9301ad894efece0f6bbb91a4f962c76beabd6ce6984def247273c209e1aaf4d2",
+    "crates/minidora-engine/src/core.rs": "e914b949e0ea77d5429ace273529f8c69910ce3507a8cc54627accc3b6f3a5d6",
+    "crates/minidora-engine/src/input.rs": "b292a6f0507fab340b927697608cdb88b18a729ed51f291cc0d40c05b7fc99c8",
+    "crates/minidora-engine/src/math.rs": "313b612fb576765a84fab98dee2ebabc62d98b76feffa474e40e8d3a92e3771c"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "f0d606955c0bf81092dadace92e462eafbc1c54d7a2e5db192824c4eb6bbe3a9"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target RUSTUP_TOOLCHAIN=1.99.1",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This slice did not run tests or a runtime route; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal -> input::interpret -> input::structured_intent (no match) -> input::mathematics_intent -> Intent::LinearEquation -> math::solve_linear_equation -> serialized LinearEquationSolution artifact -> Core computed result",
+  "supported_behavior": [
+    "Japanese 「一次方程式 left=right を解いて」 and English `solve-linear left=right` select one bounded explicit equality; malformed or multiple equalities remain unresolved.",
+    "The existing exact sparse-polynomial grammar reduces both sides to one normalized equation. Multiplication must be explicit; exactly one syntactically mentioned variable is required.",
+    "A unique solution is returned as an exact rational and verified by exact substitution into the normalized difference. A normalized identity is classified as ALL_REAL_VALUES; a nonzero constant difference is classified as NO_SOLUTION.",
+    "The report preserves both input sides, normalized slope/intercept, classification, optional exact solution and operation count. Expression length, coefficient, term and operation limits remain in force."
+  ],
+  "known_limits": [
+    "No test or ordinary CLI route was executed for this slice.",
+    "Degree-two or higher equations, multiple variables, implicit multiplication, functions and free-form mathematical language are outside this route.",
+    "The command requires exactly one syntactically mentioned variable; constant equalities with no variable are rejected because the variable domain is not specified."
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

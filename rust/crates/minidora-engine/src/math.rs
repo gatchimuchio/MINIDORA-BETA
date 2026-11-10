@@ -1104,6 +1104,27 @@ pub struct PolynomialEvaluationReport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LinearEquationKind {
+    UniqueSolution,
+    NoSolution,
+    AllRealValues,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinearEquationSolution {
+    pub equation_left: String,
+    pub equation_right: String,
+    pub variable: String,
+    /// Coefficients are ordered [a, b] for a*x + b = 0.
+    pub coefficients: [String; 2],
+    pub kind: LinearEquationKind,
+    pub exact_solution: Option<String>,
+    pub operations: usize,
+    pub verification: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum QuadraticRootKind {
     RepeatedRealRoot,
     TwoRationalRealRoots,
@@ -1814,6 +1835,83 @@ pub fn evaluate_polynomial(
     bindings: &BTreeMap<String, String>,
 ) -> Result<String> {
     evaluate_polynomial_report(expression, bindings).map(|report| report.value)
+}
+
+/// Solve one bounded single-variable linear equation with exact rationals.
+pub fn solve_linear_equation(left: &str, right: &str) -> Result<LinearEquationSolution> {
+    let expression = format!("({left})-({right})");
+    if expression.len() > 8192 {
+        return Err(failure(
+            "LINEAR_EQUATION_INPUT_LIMIT",
+            "combined equation exceeds the 8192-byte symbolic expression limit",
+        ));
+    }
+    let mut parser = PolyParser::new(&expression)?;
+    let polynomial = parser.finish()?;
+    if parser.variables.len() != 1 {
+        return Err(failure(
+            "LINEAR_EQUATION_VARIABLES",
+            "a linear equation must mention exactly one variable",
+        ));
+    }
+    let variable = parser
+        .variables
+        .iter()
+        .next()
+        .expect("one variable was checked")
+        .clone();
+    let mut coefficients = [BigRational::zero(), BigRational::zero()];
+    for (monomial, coefficient) in &polynomial {
+        if monomial.keys().any(|name| name != &variable) {
+            return Err(failure(
+                "LINEAR_EQUATION_VARIABLES",
+                "all nonconstant terms must use the same variable",
+            ));
+        }
+        let degree = monomial.get(&variable).copied().unwrap_or(0);
+        if degree > 1 {
+            return Err(failure(
+                "LINEAR_EQUATION_DEGREE",
+                "the normalized equation has degree greater than one",
+            ));
+        }
+        coefficients[degree as usize] = coefficient.clone();
+    }
+    let slope = coefficients[1].clone();
+    let intercept = coefficients[0].clone();
+    let mut budget = Budget::default();
+    let (kind, exact_solution) = if slope.is_zero() {
+        if intercept.is_zero() {
+            (LinearEquationKind::AllRealValues, None)
+        } else {
+            (LinearEquationKind::NoSolution, None)
+        }
+    } else {
+        let solution = budget.check(-intercept.clone() / slope.clone())?;
+        let linear_term = budget.check(slope.clone() * solution.clone())?;
+        let residual = budget.check(linear_term + intercept.clone())?;
+        if !residual.is_zero() {
+            return Err(failure(
+                "LINEAR_EQUATION_VERIFICATION",
+                "the rational solution failed exact substitution",
+            ));
+        }
+        (
+            LinearEquationKind::UniqueSolution,
+            Some(rational_text(&solution)),
+        )
+    };
+
+    Ok(LinearEquationSolution {
+        equation_left: left.into(),
+        equation_right: right.into(),
+        variable,
+        coefficients: [rational_text(&slope), rational_text(&intercept)],
+        kind,
+        exact_solution,
+        operations: parser.work.operations + budget.0,
+        verification: "both sides were reduced by exact sparse-polynomial arithmetic; a unique rational solution was substituted into the normalized difference exactly; identity and contradiction cases are classified from exact coefficients; no decimal approximation".into(),
+    })
 }
 
 fn integer_square_root(value: &BigInt) -> BigInt {

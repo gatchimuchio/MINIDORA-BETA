@@ -628,6 +628,19 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::LinearEquation { left, right } => {
+                match crate::math::solve_linear_equation(left, right) {
+                    Ok(solution) => units.push(serde_json::to_string_pretty(&solution)?),
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "LINEAR_EQUATION_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                }
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::Statistics {
                 values,
                 units: source_units,

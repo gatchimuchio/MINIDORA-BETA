@@ -1257,6 +1257,40 @@ fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
         }));
     }
     if let Some(capture) =
+        regex(r"(?is)^(一次方程式|solve-linear)\s*[:：]?\s*(.+)$")?.captures(text)
+    {
+        let japanese = &capture[1] == "一次方程式";
+        let mut payload = capture[2].trim();
+        if japanese {
+            for suffix in [
+                "を解いてください",
+                "を求めてください",
+                "を解いて",
+                "を求めて",
+                "を解け",
+            ] {
+                if let Some(stripped) = payload.strip_suffix(suffix) {
+                    payload = stripped.trim_end();
+                    break;
+                }
+            }
+        }
+        let Some((left, right)) = payload.split_once('=') else {
+            return Ok(Some(Intent::Unknown {
+                reason: "linear equation syntax requires exactly one left=right equality".into(),
+            }));
+        };
+        if right.contains('=') || left.trim().is_empty() || right.trim().is_empty() {
+            return Ok(Some(Intent::Unknown {
+                reason: "linear equation syntax requires exactly one nonempty equality".into(),
+            }));
+        }
+        return Ok(Some(Intent::LinearEquation {
+            left: left.trim().into(),
+            right: right.trim().into(),
+        }));
+    }
+    if let Some(capture) =
         regex(r"(?is)^(期待値|expected-value)\s*[:：]?\s*(\[.+)$")?.captures(text)
     {
         let payload = capture[2].trim();

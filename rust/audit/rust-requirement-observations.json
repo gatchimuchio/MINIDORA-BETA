@@ -248,7 +248,7 @@
         "crates/minidora-engine/src/input.rs",
         "crates/minidora-engine/src/math.rs"
       ],
-      "evidence": "probability-normalization-validation.json, finite-probability-statistics-validation.json, finite-event-probability-validation.json, polynomial-evaluation-validation.json and quadratic-equation-validation.json record exact supplied-weight normalization, moments, event mass, input/Core wiring for polynomial evaluation and single-variable quadratic solving, per-term contributions, exact rational/radical/complex roots and formatting/check/lint/build evidence; no test or ordinary-route execution; B03 acceptance remains UNVERIFIED",
+      "evidence": "probability-normalization-validation.json, finite-probability-statistics-validation.json, finite-event-probability-validation.json, polynomial-evaluation-validation.json, linear-equation-validation.json and quadratic-equation-validation.json record exact supplied-weight normalization, moments, event mass, input/Core wiring for polynomial evaluation and single-variable linear/quadratic solving, per-term contributions, rational solutions, identity/contradiction classification, radical/complex roots and formatting/check/lint/build evidence; no test or ordinary-route execution; B03 acceptance remains UNVERIFIED",
       "full_acceptance_gap": "Independent structured and natural-language cases with verified intermediate values",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

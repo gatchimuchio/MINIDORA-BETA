@@ -269,6 +269,10 @@ pub enum Intent {
         coefficients: Vec<Vec<String>>,
         rhs: Vec<String>,
     },
+    LinearEquation {
+        left: String,
+        right: String,
+    },
     QuadraticEquation {
         left: String,
         right: String,
