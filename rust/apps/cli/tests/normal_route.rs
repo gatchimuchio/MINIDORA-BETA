@@ -748,6 +748,71 @@ fn linear_equation_result_preserves_matrix_and_exact_solution() {
 }
 
 #[test]
+fn explicit_linear_and_quadratic_equations_reach_the_normal_cli_route() {
+    let scratch = Scratch::new();
+    let linear = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "linear-rational", "一次方程式 2*x+1=0 を解いて"],
+    ));
+    assert_eq!(linear["lifecycle"], "COMMIT");
+    assert_eq!(linear["guarantee"], "COMPUTED");
+    let report: Value = serde_json::from_str(linear["text"].as_str().unwrap()).unwrap();
+    assert_eq!(report["kind"], "UNIQUE_SOLUTION");
+    assert_eq!(report["exact_solution"], "-1/2");
+    assert_eq!(report["coefficients"], serde_json::json!(["2", "1"]));
+
+    let identity = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "linear-identity", "solve-linear x=x"],
+    ));
+    let identity_report: Value = serde_json::from_str(identity["text"].as_str().unwrap()).unwrap();
+    assert_eq!(identity_report["kind"], "ALL_REAL_VALUES");
+    assert!(identity_report["exact_solution"].is_null());
+
+    let contradiction = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "linear-contradiction", "solve-linear x+1=x+2"],
+    ));
+    let contradiction_report: Value =
+        serde_json::from_str(contradiction["text"].as_str().unwrap()).unwrap();
+    assert_eq!(contradiction_report["kind"], "NO_SOLUTION");
+
+    let unsupported = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "linear-degree-rejection", "solve-linear x^2=1"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        unsupported["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("LINEAR_EQUATION_DEGREE:")
+    );
+
+    let quadratic = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "quadratic-rational",
+            "二次方程式 2*x^2-3*x+1=0 を解いて",
+        ],
+    ));
+    let quadratic_report: Value =
+        serde_json::from_str(quadratic["text"].as_str().unwrap()).unwrap();
+    assert_eq!(quadratic_report["root_kind"], "TWO_RATIONAL_REAL_ROOTS");
+    assert_eq!(quadratic_report["real_roots"][0]["exact_value"], "1/2");
+    assert_eq!(quadratic_report["real_roots"][1]["exact_value"], "1");
+}
+
+#[test]
 fn conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract() {
     let scratch = Scratch::new();
     stopped(

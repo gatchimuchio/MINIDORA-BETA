@@ -242,13 +242,14 @@
       "required_observable": "Independent structured and natural-language cases with verified intermediate values",
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
+      "evidence": "probability-normalization-validation.json, finite-probability-statistics-validation.json, finite-event-probability-validation.json, polynomial-evaluation-validation.json, linear-equation-validation.json and quadratic-equation-validation.json record exact supplied-weight normalization, moments, event mass, input/Core wiring for polynomial evaluation and single-variable linear/quadratic solving, per-term contributions, rational solutions, identity/contradiction classification, radical/complex roots and formatting/check/lint/build evidence; the linear-equation follow-up runs 154 workspace tests and observes the linear unique/identity/contradiction/degree-rejection plus quadratic rational-root cases through the normal CLI route; broader B03 acceptance remains UNVERIFIED",
       "current_rust_paths": [
         "crates/minidora-domain/src/lib.rs",
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-engine/src/input.rs",
-        "crates/minidora-engine/src/math.rs"
+        "crates/minidora-engine/src/math.rs",
+        "apps/cli/tests/normal_route.rs"
       ],
-      "evidence": "probability-normalization-validation.json, finite-probability-statistics-validation.json, finite-event-probability-validation.json, polynomial-evaluation-validation.json, linear-equation-validation.json and quadratic-equation-validation.json record exact supplied-weight normalization, moments, event mass, input/Core wiring for polynomial evaluation and single-variable linear/quadratic solving, per-term contributions, rational solutions, identity/contradiction classification, radical/complex roots and formatting/check/lint/build evidence; no test or ordinary-route execution; B03 acceptance remains UNVERIFIED",
       "full_acceptance_gap": "Independent structured and natural-language cases with verified intermediate values",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

@@ -1792,6 +1792,27 @@ mod tests {
 mod mathematics_and_source_tests {
     use super::*;
     #[test]
+    fn linear_equation_directives_preserve_exact_equality_sides() {
+        for (text, left, right) in [
+            ("一次方程式 2*x + 1=0 を解いて", "2*x + 1", "0"),
+            ("solve-linear 2*x+1 = 0", "2*x+1", "0"),
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent, Intent::LinearEquation { left: actual_left, right: actual_right }
+                    if actual_left == left && actual_right == right),
+                "{text}"
+            );
+        }
+        for text in ["一次方程式 x=0=1", "solve-linear x=", "solve-linear x"] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(bundle.meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+    #[test]
     fn matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes() {
         let matrix = seal(
             &RequestEnvelope::new("c", "i", "actor", "連立方程式 [[2,1],[1,-1]] = [5,1]"),

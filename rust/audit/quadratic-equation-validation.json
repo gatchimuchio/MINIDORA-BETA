@@ -56,12 +56,6 @@
       "correction": "Used the standard integer div_ceil method; formatting, check, Clippy and build then passed."
     }
   ],
-  "tests_and_route": {
-    "tests_added": false,
-    "tests_executed": false,
-    "normal_cli_route_executed": false,
-    "reason_not_executed": "This slice did not run tests or a runtime route; verification was limited to formatting, compilation, lint, build and static diff checks."
-  },
   "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal -> input::interpret -> input::structured_intent (no match) -> input::mathematics_intent -> Intent::QuadraticEquation -> math::solve_quadratic -> serialized QuadraticSolution artifact -> Core computed result",
   "supported_behavior": [
     "Japanese 「二次方程式 left=right を解いて」 and English `solve-quadratic left=right` select one bounded explicit equality; malformed or multiple equalities remain unresolved.",
@@ -71,14 +65,147 @@
     "Existing expression length, coefficient, term, degree and operation bounds remain in force; unsupported shapes produce typed errors."
   ],
   "known_limits": [
-    "No test or ordinary CLI route was executed for this slice.",
-    "Linear equations, degree greater than two, multiple variables, implicit multiplication, functions and free-form mathematical language are outside this route.",
-    "Radical forms follow the exact quadratic formula; irrational and complex roots are not separately substituted through an algebraic-number evaluator."
+    "This follow-up covers bounded exact single-variable equations only; broader B03 mathematics and independent quality populations remain unverified.",
+    "Rational quadratic roots were observed through the normal CLI route; repeated, radical and complex roots were checked at the component layer.",
+    "Irrational and complex roots use exact formula forms and are not separately substituted through an algebraic-number evaluator."
   ],
   "acceptance": {
-    "B03": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "B03": "UNVERIFIED; the follow-up ran 154 workspace tests and observed bounded linear/quadratic cases through normal CLI, but the broader independent structured/natural-language B03 observable remains open.",
     "full_r2_successor_acceptance": "UNVERIFIED",
     "capability_population": 93,
     "release_or_deployment": "NOT_PERFORMED"
+  },
+  "initial_tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This slice did not run tests or a runtime route; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "follow_up_observation": {
+    "recorded_at": "2026-11-11T08:33:15+09:00",
+    "base_commit": "77369e8bd41cd07509a4a13e204c819db21d6d5d",
+    "source_snapshot_sha256": "7409a084cb88a5b545aaa6a9abc53e5150029f26646e0a5fb3517316687c70ad",
+    "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+    "code_snapshot_ref": "code-snapshot.json",
+    "observed_source_paths": {
+      "crates/minidora-engine/src/input.rs": "59b5d8fba42ec5b1c65548d12bfaa7066d8935c8d083fb0a45d2bd6f75e7e8d9",
+      "crates/minidora-engine/src/math.rs": "2dde9fa725710f5cccc30df04d9f019fba75c79a1706122fe1831af777de59cc",
+      "apps/cli/tests/normal_route.rs": "b4a8c96639127949e95361cbab0f662eb4242ffca3937852e29fb345276c8324"
+    },
+    "build_artifact": {
+      "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+      "sha256": "f0d606955c0bf81092dadace92e462eafbc1c54d7a2e5db192824c4eb6bbe3a9"
+    },
+    "command_results": [
+      {
+        "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test --workspace --all-features --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo check --workspace --all-targets --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo build --workspace --all-targets --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "git diff --check",
+        "exit_code": 0
+      }
+    ],
+    "tests_and_route": {
+      "added": true,
+      "executed": true,
+      "normal_cli_route_executed": true,
+      "test_paths": [
+        "crates/minidora-engine/src/math.rs",
+        "crates/minidora-engine/src/input.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "suite_results": {
+        "minidora_cli_unit": {
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0
+        },
+        "normal_route_integration": {
+          "passed": 29,
+          "failed": 0,
+          "ignored": 0
+        },
+        "minidora_domain_unit": {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        "minidora_engine_unit": {
+          "passed": 111,
+          "failed": 0,
+          "ignored": 0
+        },
+        "doc_tests": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        "total": {
+          "passed": 154,
+          "failed": 0,
+          "ignored": 0
+        }
+      },
+      "normal_cli_observations": [
+        {
+          "input": "一次方程式 2*x+1=0 を解いて",
+          "lifecycle": "COMMIT",
+          "result_kind": "UNIQUE_SOLUTION",
+          "coefficients": [
+            "2",
+            "1"
+          ],
+          "exact_solution": "-1/2"
+        },
+        {
+          "input": "solve-linear x=x",
+          "lifecycle": "COMMIT",
+          "result_kind": "ALL_REAL_VALUES"
+        },
+        {
+          "input": "solve-linear x+1=x+2",
+          "lifecycle": "COMMIT",
+          "result_kind": "NO_SOLUTION"
+        },
+        {
+          "input": "solve-linear x^2=1",
+          "lifecycle": "SUSPEND",
+          "reason_code": "LINEAR_EQUATION_DEGREE"
+        },
+        {
+          "input": "二次方程式 2*x^2-3*x+1=0 を解いて",
+          "lifecycle": "COMMIT",
+          "root_kind": "TWO_RATIONAL_REAL_ROOTS",
+          "roots": [
+            "1/2",
+            "1"
+          ]
+        }
+      ],
+      "component_observations": [
+        "Repeated quadratic root x=-1 has multiplicity 2.",
+        "x^2=2 produces two exact radical forms retaining sqrt(8)/2.",
+        "x^2+1=0 produces two exact complex-conjugate forms retaining i*sqrt(4).",
+        "Malformed linear directive equalities, multi-variable linear equations, degree-two linear equations, and unsupported quadratic variable/degree shapes are rejected by input/component tests."
+      ],
+      "temporary_state": "The existing integration-test Scratch guard removes the temporary database directory after the CLI route test."
+    }
   }
 }

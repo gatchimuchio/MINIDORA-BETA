@@ -2114,6 +2114,78 @@ mod polynomial_tests {
             .collect()
     }
     #[test]
+    fn exact_linear_equations_classify_unique_identity_and_contradiction() {
+        let unique = solve_linear_equation("2*x + 1", "0").unwrap();
+        assert_eq!(unique.variable, "x");
+        assert_eq!(unique.coefficients, ["2", "1"]);
+        assert_eq!(unique.kind, LinearEquationKind::UniqueSolution);
+        assert_eq!(unique.exact_solution.as_deref(), Some("-1/2"));
+
+        let identity = solve_linear_equation("x", "x").unwrap();
+        assert_eq!(identity.coefficients, ["0", "0"]);
+        assert_eq!(identity.kind, LinearEquationKind::AllRealValues);
+        assert_eq!(identity.exact_solution, None);
+
+        let contradiction = solve_linear_equation("x + 1", "x + 2").unwrap();
+        assert_eq!(contradiction.coefficients, ["0", "-1"]);
+        assert_eq!(contradiction.kind, LinearEquationKind::NoSolution);
+        assert_eq!(contradiction.exact_solution, None);
+    }
+    #[test]
+    fn exact_linear_equations_reject_unsupported_variables_and_degree() {
+        for (left, right, code) in [
+            ("x + y", "2", "LINEAR_EQUATION_VARIABLES"),
+            ("x**2", "1", "LINEAR_EQUATION_DEGREE"),
+            ("2", "1", "LINEAR_EQUATION_VARIABLES"),
+        ] {
+            let error = solve_linear_equation(left, right).unwrap_err();
+            assert!(error.to_string().starts_with(code), "{error}");
+        }
+    }
+    #[test]
+    fn exact_quadratic_equations_cover_rational_repeated_radical_and_complex_roots() {
+        let rational = solve_quadratic("2*x^2 - 3*x + 1", "0").unwrap();
+        assert_eq!(rational.coefficients, ["2", "-3", "1"]);
+        assert_eq!(rational.discriminant, "1");
+        assert_eq!(rational.root_kind, QuadraticRootKind::TwoRationalRealRoots);
+        assert_eq!(
+            rational
+                .real_roots
+                .iter()
+                .map(|root| root.exact_value.as_str())
+                .collect::<Vec<_>>(),
+            ["1/2", "1"]
+        );
+
+        let repeated = solve_quadratic("x^2 + 2*x + 1", "0").unwrap();
+        assert_eq!(repeated.root_kind, QuadraticRootKind::RepeatedRealRoot);
+        assert_eq!(repeated.real_roots[0].exact_value, "-1");
+        assert_eq!(repeated.real_roots[0].multiplicity, 2);
+
+        let radical = solve_quadratic("x^2", "2").unwrap();
+        assert_eq!(radical.root_kind, QuadraticRootKind::TwoRadicalRealRoots);
+        assert!(radical.real_roots.iter().all(|root| {
+            root.representation == "EXACT_RADICAL" && root.exact_value.contains("sqrt(8)")
+        }));
+
+        let complex = solve_quadratic("x^2 + 1", "0").unwrap();
+        assert_eq!(complex.root_kind, QuadraticRootKind::TwoComplexConjugates);
+        assert!(complex.real_roots.is_empty());
+        assert_eq!(complex.complex_roots.len(), 2);
+        assert!(
+            complex
+                .complex_roots
+                .iter()
+                .all(|root| root.contains("i*sqrt(4)"))
+        );
+    }
+    #[test]
+    fn exact_quadratic_equations_reject_unsupported_variables_and_degrees() {
+        for (left, right) in [("x^2 + y", "0"), ("x**3", "0"), ("x^2", "x^2 + 1")] {
+            assert!(solve_quadratic(left, right).is_err(), "{left}={right}");
+        }
+    }
+    #[test]
     fn normalization_and_full_roundtrip() {
         let result = symbolic("(x + 1)*(x - 1) + 1/2*y - y/2", "simplify", "").unwrap();
         assert_eq!(result.canonical_expression, "x**2 - 1");
