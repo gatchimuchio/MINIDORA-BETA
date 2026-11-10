@@ -1,0 +1,76 @@
+{
+  "work_item": "B06 bounded Core-scheduled calculation sequence with actual upstream result consumption",
+  "recorded_at": "2026-11-10T18:28:54Z",
+  "base_commit": "76a8d79be9f9794565e1aa15ab1fb32967496417",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v26-calculation-sequence",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "0197faa5fc22497eddb4c13718797c33dcae0a83894bb35f6d363db86d6794cf",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "35db5300b31fe9f2a5fcd3e8d174886ba53b469d6123d93fc873f90189c5be31",
+    "crates/minidora-engine/src/core.rs": "41f917a09b3357ab22965d02e4a3f7c6279f3a9398209ea99a8b3034097af72b",
+    "crates/minidora-engine/src/input.rs": "d4e28df79e33fd9a848d4fdc26741cfa8db9c8177747303761cd45b56ae65db3",
+    "crates/minidora-engine/src/language.rs": "4d48abdf05968c758db7bad1a2e15cb696c189888e0cbbfca30074c87b008cba"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "2dd42befd3ac5a29bcae3296fc320ed984e5c45d70b5410c49be201e813c2589"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No test or ordinary CLI route was run in this implementation slice; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal/structured_intent -> Intent::CalculateSequence -> Core constructs scheduler computed-value nodes -> language::calculate_sequence_expression substitutes exact earlier results -> step artifact stores original source span, evaluated expression, result and consumed artifact SHA-256 -> Scheduler::observe validates exact prerequisite hashes -> execution graph artifact retains per-node consumption",
+  "supported_behavior": [
+    "The explicit Japanese header 計算手順を実行して: accepts 1..16 lines in step-id: expression form; IDs are unique ASCII identifiers and each expression is limited to 8192 bytes.",
+    "A step can reference only earlier steps using @{step-id}; each reference becomes a parenthesized canonical exact dimensionless rational from the actual prior calculation artifact.",
+    "The Core scheduler declares each step as a required computed-value node and consumes the exact artifact hashes for declared prerequisites before observing the new result.",
+    "Per-step immutable artifacts retain input source byte spans, evaluated expressions, calculation records and each consumed occurrence; a sequence report links all step artifact hashes and the final exact value.",
+    "The existing finite task action budget includes all sequence graph nodes; the parser rejects forward/unknown references, duplicate IDs and malformed sequence lines before calculation."
+  ],
+  "known_limits": [
+    "Unit-bearing results cannot be substituted as dimensionless rational values.",
+    "The expression language remains the existing bounded exact arithmetic grammar; this does not establish general symbolic or natural-language multi-step reasoning.",
+    "No runtime, CLI, test or independent task-quality observation accompanies this source/build slice."
+  ],
+  "acceptance": {
+    "B06": "UNVERIFIED; source inspection and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

@@ -113,6 +113,145 @@ pub fn calculate(expression: &str) -> Result<Calculation> {
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequenceValue {
+    pub exact_value: String,
+    pub artifact_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CalculationReferenceUse {
+    pub step_id: String,
+    pub expression_start: usize,
+    pub expression_end: usize,
+    pub occurrence: usize,
+    pub exact_value: String,
+    pub artifact_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedSequenceCalculation {
+    pub evaluated_expression: String,
+    pub calculation: Calculation,
+    pub consumed: Vec<CalculationReferenceUse>,
+}
+
+/// Replace explicit `@{step-id}` references with the exact scalar produced by
+/// an earlier step. The SHA-256 and occurrence ranges are retained so Core can
+/// prove which upstream artifacts this calculation consumed.
+pub fn calculate_sequence_expression(
+    expression: &str,
+    prior_values: &BTreeMap<String, SequenceValue>,
+) -> Result<ResolvedSequenceCalculation> {
+    if expression.len() > MAX_EXPRESSION_BYTES {
+        return Err(failure(
+            "EXPRESSION_LIMIT",
+            "sequence expression exceeds 8192 source bytes",
+        ));
+    }
+    let mut evaluated_expression = String::with_capacity(expression.len());
+    let mut consumed = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative_start) = expression[cursor..].find("@{") {
+        let start = cursor + relative_start;
+        let id_start = start + 2;
+        let relative_end = expression[id_start..].find('}').ok_or_else(|| {
+            failure(
+                "CALCULATION_REFERENCE_SYNTAX",
+                "calculation reference is missing its closing brace",
+            )
+        })?;
+        let end = id_start + relative_end;
+        let id = &expression[id_start..end];
+        let mut id_bytes = id.bytes();
+        if !id_bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphabetic())
+            || id.len() > 32
+            || !id_bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        {
+            return Err(failure(
+                "CALCULATION_REFERENCE_ID",
+                "calculation references require a valid ASCII step ID",
+            ));
+        }
+        let prior = prior_values.get(id).ok_or_else(|| {
+            failure(
+                "CALCULATION_REFERENCE_UNAVAILABLE",
+                format!("step {id} has no actual earlier calculation artifact"),
+            )
+        })?;
+        if prior.artifact_sha256.len() != 64
+            || !prior
+                .artifact_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(failure(
+                "INVALID_ARTIFACT_REFERENCE",
+                "a consumed calculation requires a canonical lowercase SHA-256 artifact ID",
+            ));
+        }
+        if prior.exact_value.len() > MAX_EXPRESSION_BYTES {
+            return Err(failure(
+                "CALCULATION_REFERENCE_LIMIT",
+                "exact upstream value exceeds the expression substitution envelope",
+            ));
+        }
+        let value = BigRational::from_str(&prior.exact_value).map_err(|_| {
+            failure(
+                "CALCULATION_REFERENCE_VALUE",
+                "upstream result is not an exact dimensionless rational value",
+            )
+        })?;
+        if rational_text(&value) != prior.exact_value {
+            return Err(failure(
+                "CALCULATION_REFERENCE_VALUE",
+                "upstream rational value is not in canonical exact form",
+            ));
+        }
+        let literal = format!("({})", prior.exact_value);
+        let next_len = evaluated_expression
+            .len()
+            .saturating_add(start - cursor)
+            .saturating_add(literal.len());
+        if next_len > MAX_EXPRESSION_BYTES {
+            return Err(failure(
+                "EXPRESSION_LIMIT",
+                "resolved sequence expression exceeds 8192 bytes",
+            ));
+        }
+        evaluated_expression.push_str(&expression[cursor..start]);
+        evaluated_expression.push_str(&literal);
+        consumed.push(CalculationReferenceUse {
+            step_id: id.to_string(),
+            expression_start: start,
+            expression_end: end + 1,
+            occurrence: consumed.len(),
+            exact_value: prior.exact_value.clone(),
+            artifact_sha256: prior.artifact_sha256.clone(),
+        });
+        cursor = end + 1;
+    }
+    if evaluated_expression
+        .len()
+        .saturating_add(expression.len().saturating_sub(cursor))
+        > MAX_EXPRESSION_BYTES
+    {
+        return Err(failure(
+            "EXPRESSION_LIMIT",
+            "resolved sequence expression exceeds 8192 bytes",
+        ));
+    }
+    evaluated_expression.push_str(&expression[cursor..]);
+    let calculation = calculate(&evaluated_expression)?;
+    Ok(ResolvedSequenceCalculation {
+        evaluated_expression,
+        calculation,
+        consumed,
+    })
+}
+
 fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Calculation>> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     let pattern = PATTERN.get_or_init(|| {

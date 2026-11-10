@@ -296,10 +296,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/core.rs"
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/language.rs",
+        "crates/minidora-engine/src/scheduler.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
-      "full_acceptance_gap": "A downstream action actually uses an upstream result; no artificial progress credit",
+      "evidence": "calculation-sequence-validation.json records the bounded source route and format/check/lint/build evidence; no test or ordinary CLI route was executed, and this is not full B06 acceptance",
+      "full_acceptance_gap": "No test or ordinary CLI route has demonstrated actual downstream consumption and artifact identity at runtime; general multi-step problem solving, unseen task quality, and broader Core goal composition remain unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

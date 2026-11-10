@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v25-json-object-project";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v26-calculation-sequence";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -90,6 +90,122 @@ fn terminal_trim(text: &str) -> &str {
         .trim()
 }
 
+fn valid_calculation_step_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        && value.len() <= 32
+}
+
+fn calculation_step_references(expression: &str) -> std::result::Result<Vec<String>, String> {
+    let mut references = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative_start) = expression[cursor..].find("@{") {
+        let start = cursor + relative_start;
+        let id_start = start + 2;
+        let Some(relative_end) = expression[id_start..].find('}') else {
+            return Err("a calculation reference is missing its closing brace".into());
+        };
+        let end = id_start + relative_end;
+        let id = &expression[id_start..end];
+        if !valid_calculation_step_id(id) {
+            return Err("calculation references require a valid step ID".into());
+        }
+        references.push(id.to_string());
+        cursor = end + 1;
+    }
+    Ok(references)
+}
+
+fn calculation_sequence_intent(text: &str, header: &str) -> Result<Option<Intent>> {
+    let japanese = matches!(header, "計算手順を実行して:" | "計算手順を実行して：");
+    let english = header.eq_ignore_ascii_case("calculation-sequence:");
+    if !japanese && !english {
+        return Ok(None);
+    }
+    let Some(header_end) = text.find('\n') else {
+        return Ok(Some(Intent::Unknown {
+            reason: "calculation sequence requires a header newline and one or more step lines"
+                .into(),
+        }));
+    };
+    let mut line_start = header_end + 1;
+    let mut seen = BTreeMap::<String, usize>::new();
+    let mut steps = Vec::new();
+    for raw_line in text[line_start..].split_inclusive('\n') {
+        let line = raw_line
+            .strip_suffix('\n')
+            .unwrap_or(raw_line)
+            .strip_suffix('\r')
+            .unwrap_or(raw_line.strip_suffix('\n').unwrap_or(raw_line));
+        if line.trim().is_empty() {
+            line_start += raw_line.len();
+            continue;
+        }
+        if steps.len() == 16 {
+            return Ok(Some(Intent::Unknown {
+                reason: "calculation sequence supports at most 16 declared steps".into(),
+            }));
+        }
+        let Some(separator) = line.find(':') else {
+            return Ok(Some(Intent::Unknown {
+                reason: "each calculation sequence line must use step-id: expression".into(),
+            }));
+        };
+        let id = line[..separator].trim();
+        if !valid_calculation_step_id(id) || seen.contains_key(id) {
+            return Ok(Some(Intent::Unknown {
+                reason: "step IDs must be unique ASCII identifiers beginning with a letter".into(),
+            }));
+        }
+        let raw_expression = &line[separator + 1..];
+        let expression = raw_expression.trim();
+        if expression.is_empty() || expression.len() > 8192 {
+            return Ok(Some(Intent::Unknown {
+                reason: "each calculation expression must contain 1..8192 UTF-8 bytes".into(),
+            }));
+        }
+        let references = match calculation_step_references(expression) {
+            Ok(references) => references,
+            Err(reason) => return Ok(Some(Intent::Unknown { reason })),
+        };
+        let mut requires = Vec::new();
+        for reference in references {
+            if !seen.contains_key(&reference) {
+                return Ok(Some(Intent::Unknown {
+                    reason: format!(
+                        "step {} may consume only an earlier declared result; reference {reference} is unavailable",
+                        id
+                    ),
+                }));
+            }
+            if !requires.contains(&reference) {
+                requires.push(reference);
+            }
+        }
+        let leading_expression_bytes = raw_expression.len() - raw_expression.trim_start().len();
+        let expression_start = line_start + separator + 1 + leading_expression_bytes;
+        let step_index = steps.len();
+        seen.insert(id.to_string(), step_index);
+        steps.push(CalculationSequenceStep {
+            id: id.to_string(),
+            expression: SourceSpan {
+                start: expression_start,
+                end: expression_start + expression.len(),
+                text: expression.to_string(),
+            },
+            requires,
+        });
+        line_start += raw_line.len();
+    }
+    if steps.is_empty() {
+        return Ok(Some(Intent::Unknown {
+            reason: "calculation sequence must contain at least one step".into(),
+        }));
+    }
+    Ok(Some(Intent::CalculateSequence { steps }))
+}
+
 /// Explicit headers separate instructions from document/query data. The body is
 /// sliced from the original request, without trim, newline conversion or NFKC.
 fn structured_intent(text: &str) -> Result<Option<Intent>> {
@@ -99,6 +215,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         .unwrap_or(text)
         .trim_end_matches('\r');
     let header = first_line.trim();
+    if let Some(intent) = calculation_sequence_intent(text, header)? {
+        return Ok(Some(intent));
+    }
     if header.starts_with("検索 ") || header.starts_with("search ") {
         if text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']) {
             return Ok(Some(Intent::Unknown { reason: "metadata search accepts one explicitly bounded query line; following clauses are not silently discarded".into() }));

@@ -1,6 +1,6 @@
 {
   "snapshot_kind": "first-party code/tests/tools plus manifests/lock/toolchain",
-  "sha256": "9373117a14baf44af597caeaebcde07b8997db4d975b5dc7e33e9e661546bc1a",
+  "sha256": "0197faa5fc22497eddb4c13718797c33dcae0a83894bb35f6d363db86d6794cf",
   "files": [
     {
       "path": "Cargo.lock",
@@ -32,7 +32,7 @@
     },
     {
       "path": "crates/minidora-domain/src/lib.rs",
-      "sha256": "67953a526bdfefd8ea31929c073c827607c718a2ab6df773f333f5ac7792ead1"
+      "sha256": "35db5300b31fe9f2a5fcd3e8d174886ba53b469d6123d93fc873f90189c5be31"
     },
     {
       "path": "crates/minidora-engine/Cargo.toml",
@@ -40,7 +40,7 @@
     },
     {
       "path": "crates/minidora-engine/src/core.rs",
-      "sha256": "581c2a74aca7fcc6f4db639aaeb5fe497a20282784de95c320387f866011686b"
+      "sha256": "41f917a09b3357ab22965d02e4a3f7c6279f3a9398209ea99a8b3034097af72b"
     },
     {
       "path": "crates/minidora-engine/src/document.rs",
@@ -48,11 +48,11 @@
     },
     {
       "path": "crates/minidora-engine/src/input.rs",
-      "sha256": "aa91f684febdf7edc4d9fe613a07b81e84d875225ebfbde776444d8d3cd08a5a"
+      "sha256": "d4e28df79e33fd9a848d4fdc26741cfa8db9c8177747303761cd45b56ae65db3"
     },
     {
       "path": "crates/minidora-engine/src/language.rs",
-      "sha256": "e821a7fc5705ce74677e5126a6a54efeae427fe691e92079a9e114489120137c"
+      "sha256": "4d48abdf05968c758db7bad1a2e15cb696c189888e0cbbfca30074c87b008cba"
     },
     {
       "path": "crates/minidora-engine/src/lib.rs",

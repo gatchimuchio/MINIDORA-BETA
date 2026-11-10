@@ -162,6 +162,9 @@ pub enum Intent {
     Calculate {
         expression: String,
     },
+    CalculateSequence {
+        steps: Vec<CalculationSequenceStep>,
+    },
     CorrectCalculation {
         operand_index: usize,
         replacement: String,
@@ -314,6 +317,12 @@ pub struct SourceSpan {
     pub start: usize,
     pub end: usize,
     pub text: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CalculationSequenceStep {
+    pub id: String,
+    pub expression: SourceSpan,
+    pub requires: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeaningIR {
