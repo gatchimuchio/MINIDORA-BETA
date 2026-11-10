@@ -927,6 +927,30 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::JsonObjectProject { document, fields } => {
+                let report = match ports::json_object_project(document, fields) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "JSON_OBJECT_PROJECT_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                if report.json.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "JSON object projection exceeds the request output budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
+                result.dependencies.push(artifact);
+                units.push(report.json);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::JsonStatistics { document, pointer } => {
                 let report = match ports::json_pointer_statistics(document, pointer) {
                     Ok(report) => report,

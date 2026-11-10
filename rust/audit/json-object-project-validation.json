@@ -1,0 +1,66 @@
+{
+  "work_item": "B04 ordered projection of selected root-object JSON fields through Core",
+  "recorded_at": "2026-11-10T18:17:42Z",
+  "base_commit": "69d248964aafe597e56e0680f194adb7ac91d543",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v25-json-object-project",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "9373117a14baf44af597caeaebcde07b8997db4d975b5dc7e33e9e661546bc1a",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "67953a526bdfefd8ea31929c073c827607c718a2ab6df773f333f5ac7792ead1",
+    "crates/minidora-engine/src/core.rs": "581c2a74aca7fcc6f4db639aaeb5fe497a20282784de95c320387f866011686b",
+    "crates/minidora-engine/src/input.rs": "aa91f684febdf7edc4d9fe613a07b81e84d875225ebfbde776444d8d3cd08a5a",
+    "crates/minidora-engine/src/ports.rs": "4abf76e34aaa95b739ca081ca67160ea0584024ece094878ae75cf294e0269aa"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "ebe4f30b43d3a95cb776e0464f46916f5846481fde7eb8d4fd0a3a5cf2019834"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No tests or runtime/ordinary CLI verification were requested or run in this implementation slice; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonObjectProject -> ports::json_object_project -> JsonObjectProjectReport artifact; Core renders report.json",
+  "supported_behavior": [
+    "The operation requires one complete valid root JSON object; duplicate decoded JSON keys are rejected by the shared parser.",
+    "The selected field list must contain 1..256 unique names and every requested field must exist at the root. Fields are emitted in caller order.",
+    "Selected value JSON lexemes are copied byte-for-byte into the projected object. Output names are encoded JSON strings; the source-map artifact retains original key/value byte ranges and SHA-256 values plus output byte ranges and JSON Pointers.",
+    "Input, projection output, source map and Core request evidence are bounded; invalid root shape, missing/duplicate fields and limit overflow suspend with typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

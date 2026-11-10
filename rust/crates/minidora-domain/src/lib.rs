@@ -292,6 +292,10 @@ pub enum Intent {
         document: String,
         pointer: String,
     },
+    JsonObjectProject {
+        document: String,
+        fields: Vec<String>,
+    },
     JsonStatistics {
         document: String,
         pointer: String,

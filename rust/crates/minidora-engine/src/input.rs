@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v23-json-table-project";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v25-json-object-project";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -155,6 +155,10 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header.starts_with("JSONをCSVに変換して")
         || header.starts_with("json-to-csv")
         || header == "JSONを比較して:"
+        || header.starts_with("JSONオブジェクトからフィールド")
+        || header
+            .get(..19)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-object-project"))
         || header
             .get(..12)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-compare"))
@@ -287,6 +291,20 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     if header == "JSONを比較して:" || regex(r"(?i)^json-compare:$")?.is_match(header) {
         return Ok(Some(Intent::JsonCompare {
             document: document.into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^JSONオブジェクトからフィールド(\[.*\])を抽出して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonObjectProject {
+            document: document.into(),
+            fields: serde_json::from_str::<Vec<String>>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) = regex(r#"(?i)^json-object-project[ \t]+(\[.*\]):$"#)?.captures(header) {
+        return Ok(Some(Intent::JsonObjectProject {
+            document: document.into(),
+            fields: serde_json::from_str::<Vec<String>>(&capture[1])?,
         }));
     }
     if let Some(capture) = regex(r"^JSON表を列「([^」]+)」で比較して[:：]$")?.captures(header)

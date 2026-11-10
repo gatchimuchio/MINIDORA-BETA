@@ -602,6 +602,7 @@ enum JsonKind {
 struct JsonNode {
     span: Range<usize>,
     kind: JsonKind,
+    object_key_spans: BTreeMap<String, Range<usize>>,
 }
 struct JsonParser<'a> {
     text: &'a str,
@@ -677,6 +678,7 @@ impl<'a> JsonParser<'a> {
             .as_bytes()
             .get(self.position)
             .ok_or_else(|| self.error())?;
+        let mut object_key_spans = BTreeMap::new();
         let kind = match byte {
             b'{' => {
                 self.position += 1;
@@ -687,19 +689,23 @@ impl<'a> JsonParser<'a> {
                 } else {
                     loop {
                         self.whitespace();
+                        let key_start = self.position;
                         let key = self.string()?;
+                        let key_end = self.position;
                         self.whitespace();
                         if self.text.as_bytes().get(self.position) != Some(&b':') {
                             return Err(self.error());
                         }
                         self.position += 1;
                         let node = self.node(depth + 1)?;
-                        if entries.insert(key, node).is_some() {
+                        if entries.contains_key(&key) {
                             return Err(failure(
                                 "DUPLICATE_JSON_KEY",
                                 "Decoded JSON object keys must be unique",
                             ));
                         }
+                        entries.insert(key.clone(), node);
+                        object_key_spans.insert(key, key_start..key_end);
                         self.whitespace();
                         match self.text.as_bytes().get(self.position) {
                             Some(b'}') => {
@@ -760,6 +766,7 @@ impl<'a> JsonParser<'a> {
         Ok(JsonNode {
             span: start..self.position,
             kind,
+            object_key_spans,
         })
     }
     fn number(&mut self) -> Result<()> {
@@ -897,6 +904,27 @@ pub struct JsonComparisonSpan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonObjectProjectField {
+    pub name: String,
+    pub source_pointer: String,
+    pub key_source: JsonComparisonSpan,
+    pub value_source: JsonComparisonSpan,
+    pub output_key_start: usize,
+    pub output_key_end: usize,
+    pub output_value_start: usize,
+    pub output_value_end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonObjectProjectReport {
+    pub source_sha256: String,
+    pub output_sha256: String,
+    pub json: String,
+    pub fields: Vec<JsonObjectProjectField>,
+    pub guarantee: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonDifference {
     pub pointer: String,
     pub change: String,
@@ -920,11 +948,115 @@ const MAX_JSON_COMPARE_DIFFERENCES: usize = 4096;
 const MAX_JSON_COMPARE_OUTPUT_BYTES: usize = 256_000;
 
 fn json_comparison_span(document: &str, node: &JsonNode) -> JsonComparisonSpan {
+    json_range_span(document, &node.span)
+}
+
+fn json_range_span(document: &str, range: &Range<usize>) -> JsonComparisonSpan {
     JsonComparisonSpan {
-        source_start: node.span.start,
-        source_end: node.span.end,
-        source_sha256: digest(document[node.span.clone()].as_bytes()),
+        source_start: range.start,
+        source_end: range.end,
+        source_sha256: digest(document[range.clone()].as_bytes()),
     }
+}
+
+/// Project selected root-object fields in caller order, preserving each value's
+/// exact source JSON lexeme and mapping key/value source bytes to output bytes.
+pub fn json_object_project(document: &str, fields: &[String]) -> Result<JsonObjectProjectReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_OBJECT_PROJECT_INPUT_LIMIT",
+            "object document exceeds 256000 source bytes",
+        ));
+    }
+    if fields.is_empty() || fields.len() > 256 {
+        return Err(failure(
+            "JSON_OBJECT_PROJECT_FIELDS",
+            "projection requires 1..256 field names",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let JsonKind::Object(values) = &root.kind else {
+        return Err(failure(
+            "JSON_OBJECT_PROJECT_SHAPE",
+            "the source document must be one JSON object",
+        ));
+    };
+    let mut seen = BTreeSet::new();
+    let mut selected = Vec::with_capacity(fields.len());
+    for name in fields {
+        if !seen.insert(name) {
+            return Err(failure(
+                "JSON_OBJECT_PROJECT_DUPLICATE_FIELD",
+                "requested field names must be unique",
+            ));
+        }
+        let value = values.get(name).ok_or_else(|| {
+            failure(
+                "JSON_OBJECT_PROJECT_FIELD",
+                format!("requested field {name:?} does not exist"),
+            )
+        })?;
+        let key_span = root.object_key_spans.get(name).ok_or_else(|| {
+            failure(
+                "JSON_OBJECT_PROJECT_SOURCE_MAP",
+                "the source key range is unavailable",
+            )
+        })?;
+        selected.push((name, value, key_span));
+    }
+
+    let mut json = String::from("{");
+    let mut output_budget = 1024usize;
+    let mut output_fields = Vec::with_capacity(selected.len());
+    for (index, (name, value, key_span)) in selected.into_iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        let output_key_start = json.len();
+        json.push_str(&serde_json::to_string(name)?);
+        let output_key_end = json.len();
+        json.push(':');
+        let output_value_start = json.len();
+        json.push_str(&document[value.span.clone()]);
+        let output_value_end = json.len();
+        let pointer = json_pointer_child("", name);
+        output_budget = output_budget
+            .saturating_add(output_key_end - output_key_start)
+            .saturating_add(output_value_end - output_value_start)
+            .saturating_add(pointer.len())
+            .saturating_add(512);
+        if output_budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_OBJECT_PROJECT_OUTPUT_LIMIT",
+                "projected document and source maps exceed the 256000-byte output envelope",
+            ));
+        }
+        output_fields.push(JsonObjectProjectField {
+            name: name.clone(),
+            source_pointer: pointer,
+            key_source: json_range_span(document, key_span),
+            value_source: json_comparison_span(document, value),
+            output_key_start,
+            output_key_end,
+            output_value_start,
+            output_value_end,
+        });
+    }
+    json.push('}');
+    let report = JsonObjectProjectReport {
+        source_sha256: digest(document.as_bytes()),
+        output_sha256: digest(json.as_bytes()),
+        json,
+        fields: output_fields,
+        guarantee: "bounded root-object projection in explicit caller order; selected value JSON lexemes are preserved byte-for-byte; source key/value ranges map to the projected output; no schema validity or factual truth is inferred".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_OBJECT_PROJECT_OUTPUT_LIMIT",
+            "projection report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
 }
 
 fn add_json_difference(
