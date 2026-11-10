@@ -675,6 +675,89 @@ pub fn finite_probability_statistics(
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventProbabilityResult {
+    pub input_outcomes: Vec<String>,
+    pub input_weights: Vec<String>,
+    pub event_values: Vec<String>,
+    pub total_weight: String,
+    pub normalized_probabilities: Vec<String>,
+    pub probability_sum: String,
+    pub event_membership: Vec<bool>,
+    pub event_probability_contributions: Vec<String>,
+    pub event_probability: String,
+    pub count: usize,
+    pub scope: String,
+}
+
+/// Sum the exact mass of outcomes contained in the explicitly supplied event set.
+/// Duplicate event values have set membership semantics and do not double-count.
+pub fn finite_event_probability(
+    outcomes: &[String],
+    weights: &[String],
+    event_values: &[String],
+) -> Result<EventProbabilityResult> {
+    if outcomes.is_empty()
+        || outcomes.len() > MAX_OBSERVATIONS
+        || weights.is_empty()
+        || weights.len() > MAX_OBSERVATIONS
+        || event_values.len() > MAX_OBSERVATIONS
+    {
+        return Err(failure(
+            "PROBABILITY_INPUT_LIMIT",
+            "expected 1..4096 outcomes and weights and at most 4096 event values",
+        ));
+    }
+    if outcomes.len() != weights.len() {
+        return Err(failure(
+            "PROBABILITY_CARDINALITY_MISMATCH",
+            "each outcome must have exactly one corresponding weight",
+        ));
+    }
+    let parsed_outcomes = outcomes
+        .iter()
+        .map(|outcome| scalar(outcome))
+        .collect::<Result<Vec<_>>>()?;
+    let parsed_event_values = event_values
+        .iter()
+        .map(|value| scalar(value))
+        .collect::<Result<Vec<_>>>()?;
+    let event_set: std::collections::BTreeSet<BigRational> =
+        parsed_event_values.into_iter().collect();
+    let (probabilities, total, probability_sum) = normalize_weight_values(weights)?;
+    let mut budget = Budget::default();
+    let mut event_probability = BigRational::zero();
+    let mut event_membership = Vec::with_capacity(outcomes.len());
+    let mut event_probability_contributions = Vec::with_capacity(outcomes.len());
+    for (outcome, probability) in parsed_outcomes.iter().zip(&probabilities) {
+        let is_member = event_set.contains(outcome);
+        let contribution = if is_member {
+            probability.clone()
+        } else {
+            BigRational::zero()
+        };
+        event_probability = budget.check(event_probability + &contribution)?;
+        event_membership.push(is_member);
+        event_probability_contributions.push(contribution);
+    }
+    Ok(EventProbabilityResult {
+        input_outcomes: outcomes.to_vec(),
+        input_weights: weights.to_vec(),
+        event_values: event_values.to_vec(),
+        total_weight: rational_text(&total),
+        normalized_probabilities: probabilities.iter().map(rational_text).collect(),
+        probability_sum: rational_text(&probability_sum),
+        event_membership,
+        event_probability_contributions: event_probability_contributions
+            .iter()
+            .map(rational_text)
+            .collect(),
+        event_probability: rational_text(&event_probability),
+        count: outcomes.len(),
+        scope: "exact probability mass of the explicitly listed finite outcomes that match the supplied event values; duplicate event values do not double-count; not an empirical or real-world estimate".into(),
+    })
+}
+
 pub(crate) fn exact_length_scale_to_meters(unit: &str) -> Option<BigRational> {
     let (numerator, denominator) = match unit {
         "km" => (1000_i64, 1_i64),

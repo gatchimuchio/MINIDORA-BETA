@@ -200,6 +200,11 @@ pub enum Intent {
         outcomes: Vec<String>,
         weights: Vec<String>,
     },
+    FiniteEventProbability {
+        outcomes: Vec<String>,
+        weights: Vec<String>,
+        event_values: Vec<String>,
+    },
     Symbolic {
         expression: String,
         operation: String,

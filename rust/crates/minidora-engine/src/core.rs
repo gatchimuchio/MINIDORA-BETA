@@ -505,6 +505,23 @@ impl Engine {
                     }
                 }
             }
+            Intent::FiniteEventProbability {
+                outcomes,
+                weights,
+                event_values,
+            } => match crate::math::finite_event_probability(outcomes, weights, event_values) {
+                Ok(probability) => {
+                    units.push(serde_json::to_string_pretty(&probability)?);
+                    result.guarantee = Guarantee::Computed;
+                }
+                Err(error) => {
+                    let code = match &error {
+                        minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                        _ => "EVENT_PROBABILITY_UNSUPPORTED",
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                }
+            },
             Intent::CsvSelect { document, column } => {
                 let value = crate::document::csv_select(document, column)?;
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;

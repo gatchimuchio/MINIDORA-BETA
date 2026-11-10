@@ -248,7 +248,7 @@
         "crates/minidora-engine/src/input.rs",
         "crates/minidora-engine/src/math.rs"
       ],
-      "evidence": "probability-normalization-validation.json and finite-probability-statistics-validation.json record exact supplied-weight normalization, expected value, variance, contribution terms and formatting/check/lint/build evidence; no test or ordinary-route execution; B03 acceptance remains UNVERIFIED",
+      "evidence": "probability-normalization-validation.json, finite-probability-statistics-validation.json and finite-event-probability-validation.json record exact supplied-weight normalization, moments, explicit event mass and formatting/check/lint/build evidence; no test or ordinary-route execution; B03 acceptance remains UNVERIFIED",
       "full_acceptance_gap": "Independent structured and natural-language cases with verified intermediate values",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
