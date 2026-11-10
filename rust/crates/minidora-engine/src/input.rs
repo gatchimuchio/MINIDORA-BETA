@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v19-json-table-filter";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v20-json-table-sort";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -165,6 +165,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..17)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-filter"))
+        || header
+            .get(..15)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-sort"))
         || header.starts_with("JSON表の列")
         || header == "証拠を整理して:"
         || header
@@ -309,6 +312,25 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
             document: document.into(),
             column: serde_json::from_str::<String>(&capture[1])?,
             equals: serde_json::from_str::<String>(&capture[2])?,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^JSON表の列「([^」]+)」を(昇順|降順)に並べ替えて[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableSort {
+            document: document.into(),
+            column: capture[1].into(),
+            descending: &capture[2] == "降順",
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^json-table-sort[ \t]+("(?:[^"\\]|\\.)*")[ \t]+(ascending|descending):$"#)?
+            .captures(header)
+    {
+        return Ok(Some(Intent::JsonTableSort {
+            document: document.into(),
+            column: serde_json::from_str::<String>(&capture[1])?,
+            descending: capture[2].eq_ignore_ascii_case("descending"),
         }));
     }
     if header == "証拠を整理して:" || regex(r"(?i)^evidence-synthesize:$")?.is_match(header)

@@ -1,0 +1,67 @@
+{
+  "work_item": "B04 stable exact-string sorting of a supplied JSON string table through Core",
+  "recorded_at": "2026-11-10T17:23:09Z",
+  "base_commit": "478992b5c1183d4fbc8fde6ce92f94c5354f91da",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v20-json-table-sort",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "51b3d6e6e683168840c0a486bd6e4354ddfc7e046aba804d82d584dc811c9399",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "daefbf1d38f8c8b32830ab1bbed1906a224ccfe0719c9faa9a41214a2c41835e",
+    "crates/minidora-engine/src/core.rs": "b9d38e058dbb66818652835dcbbffd49bf9ca811839957b16d92ca8f9ae6dc7b",
+    "crates/minidora-engine/src/input.rs": "60cb47b3c0e95ea2c23c52539af526cb93b4a50015580bdb14ac7daf8e1e10de",
+    "crates/minidora-engine/src/ports.rs": "1a5e15dc406b9fa567c03b40c71d3fa7fa0566426d91f3934b854daca7671220"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "a94db783b459546406dd69464e9e42a7006c47584d948786d2a309e64a3f01d5"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No tests or runtime/ordinary CLI verification were requested or run in this implementation slice; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonTableSort -> ports::json_table_sort -> JsonTableSortReport artifact",
+  "input_schema": "One strict JSON object with exactly columns and rows fields. columns is a unique 1..256 string array; rows is an array of at most 4096 rows, each an array of same-width strings. Duplicate JSON object keys and nonstring values are rejected.",
+  "supported_behavior": [
+    "The selected named column is interpreted as a decoded string, with no numeric conversion, locale collation, case folding or Unicode normalization.",
+    "Rows are stably sorted ascending or descending; equal values retain original source order.",
+    "The report includes the output string table, original zero-based row indices, exact source ranges and digests for each output cell and column, plus the source document digest.",
+    "Input bytes, table cells, report evidence and the Core request output budget are bounded; invalid shape, absent columns or limit overflow suspend with typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

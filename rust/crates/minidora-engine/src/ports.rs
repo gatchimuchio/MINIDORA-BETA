@@ -1194,6 +1194,20 @@ pub struct JsonTableFilterReport {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableSortReport {
+    pub source_sha256: String,
+    pub columns: Vec<String>,
+    pub column_source_spans: Vec<JsonComparisonSpan>,
+    pub rows: Vec<Vec<String>>,
+    pub source_row_indices: Vec<usize>,
+    pub cell_source_spans: Vec<Vec<JsonComparisonSpan>>,
+    pub sort_column: String,
+    pub sort_column_index: usize,
+    pub sort_order: String,
+    pub guarantee: String,
+}
+
 struct JsonStringTableView<'a> {
     columns: Vec<String>,
     column_nodes: Vec<&'a JsonNode>,
@@ -1393,6 +1407,110 @@ pub fn json_table_filter(
         return Err(failure(
             "JSON_TABLE_FILTER_OUTPUT_LIMIT",
             "filtered table report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
+/// Stably sort rows from one strict JSON string-table object by an exact
+/// decoded string column, retaining each output cell's original byte range.
+pub fn json_table_sort(
+    document: &str,
+    column: &str,
+    descending: bool,
+) -> Result<JsonTableSortReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_SORT_INPUT_LIMIT",
+            "table document exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let table = json_string_table(document, &root)?;
+    let column_index = table
+        .columns
+        .iter()
+        .position(|name| name == column)
+        .ok_or_else(|| failure("JSON_TABLE_SORT_COLUMN", "named column does not exist"))?;
+    let mut sort_keys = Vec::with_capacity(table.rows.len());
+    for row in &table.rows {
+        sort_keys.push(json_string_value(
+            document,
+            row[column_index],
+            "JSON_TABLE_SORT_CELL",
+        )?);
+    }
+    let mut order: Vec<usize> = (0..table.rows.len()).collect();
+    order.sort_by(|left, right| {
+        let order = if descending {
+            sort_keys[*right].cmp(&sort_keys[*left])
+        } else {
+            sort_keys[*left].cmp(&sort_keys[*right])
+        };
+        order.then_with(|| left.cmp(right))
+    });
+
+    let mut output_budget = 1024usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_SORT_OUTPUT_LIMIT",
+                "sorted table and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    account(&mut output_budget, serde_json::to_vec(column)?.len())?;
+    let column_source_spans = table
+        .column_nodes
+        .iter()
+        .zip(&table.columns)
+        .map(|(node, name)| {
+            let encoded_len = serde_json::to_vec(name)?.len();
+            account(&mut output_budget, 192 + encoded_len)?;
+            Ok(json_comparison_span(document, node))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut rows = Vec::with_capacity(order.len());
+    let mut source_row_indices = Vec::with_capacity(order.len());
+    let mut cell_source_spans = Vec::with_capacity(order.len());
+    for source_row_index in order {
+        let mut output_row = Vec::with_capacity(table.rows[source_row_index].len());
+        let mut output_spans = Vec::with_capacity(table.rows[source_row_index].len());
+        for cell in &table.rows[source_row_index] {
+            let value = json_string_value(document, cell, "JSON_TABLE_SORT_CELL")?;
+            let encoded_len = serde_json::to_vec(&value)?.len();
+            account(&mut output_budget, 216 + encoded_len)?;
+            output_row.push(value);
+            output_spans.push(json_comparison_span(document, cell));
+        }
+        rows.push(output_row);
+        source_row_indices.push(source_row_index);
+        cell_source_spans.push(output_spans);
+    }
+    let report = JsonTableSortReport {
+        source_sha256: digest(document.as_bytes()),
+        columns: table.columns,
+        column_source_spans,
+        rows,
+        source_row_indices,
+        cell_source_spans,
+        sort_column: column.into(),
+        sort_column_index: column_index,
+        sort_order: if descending {
+            "descending"
+        } else {
+            "ascending"
+        }
+        .into(),
+        guarantee: "bounded stable sort of an explicitly named JSON string-table column by exact decoded strings; ties preserve source order; no locale collation, case folding, Unicode normalization, numeric conversion or factual inference; source byte ranges retained".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_SORT_OUTPUT_LIMIT",
+            "sorted table report exceeds 256000 output bytes",
         ));
     }
     Ok(report)

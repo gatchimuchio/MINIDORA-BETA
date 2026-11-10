@@ -201,6 +201,11 @@ pub enum Intent {
         column: String,
         equals: String,
     },
+    JsonTableSort {
+        document: String,
+        column: String,
+        descending: bool,
+    },
     EvidenceSynthesize {
         document: String,
     },
