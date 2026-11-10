@@ -228,10 +228,11 @@
         "crates/minidora-engine/src/input.rs",
         "crates/minidora-engine/src/language.rs",
         "crates/minidora-engine/src/math.rs",
-        "crates/minidora-engine/src/core.rs"
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-domain/src/lib.rs"
       ],
-      "evidence": "unit-conversion-validation.json observes exact mixed mm/cm/m/km length statistics; unit-arithmetic-validation.json observes exact unit-aware binary arithmetic, saved-result follow-up explanation and a typed stop for incompatible mixed units through the ordinary CLI route. This is partial implementation evidence, not complete row acceptance",
-      "full_acceptance_gap": "Versioned operand correction, inherited quantity coverage, broader dimensions, and the full B02 observable remain unverified",
+      "evidence": "unit-conversion-validation.json observes exact mixed mm/cm/m/km length statistics; unit-arithmetic-validation.json observes exact unit-aware binary arithmetic and saved-result explanation; unit-correction-validation.json observes a new operand-correction result linked to its actual predecessor, retained original result and typed no-prior stop on the ordinary CLI route. This is partial implementation evidence, not complete row acceptance",
+      "full_acceptance_gap": "Correction is limited to binary literal addition/subtraction; inherited quantity coverage, broader dimensions, and the full B02 observable remain unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

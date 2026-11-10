@@ -6,7 +6,7 @@
     "component": {
       "type": "application",
       "name": "MINIDORA Rust",
-      "version": "0.7.0-alpha.7"
+      "version": "0.7.0-alpha.8"
     },
     "properties": [
       {
@@ -1482,10 +1482,10 @@
     },
     {
       "type": "application",
-      "bom-ref": "minidora-cli@0.7.0-alpha.7",
+      "bom-ref": "minidora-cli@0.7.0-alpha.8",
       "name": "minidora-cli",
-      "version": "0.7.0-alpha.7",
-      "purl": "pkg:cargo/minidora-cli@0.7.0-alpha.7",
+      "version": "0.7.0-alpha.8",
+      "purl": "pkg:cargo/minidora-cli@0.7.0-alpha.8",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -1500,10 +1500,10 @@
     },
     {
       "type": "application",
-      "bom-ref": "minidora-domain@0.7.0-alpha.7",
+      "bom-ref": "minidora-domain@0.7.0-alpha.8",
       "name": "minidora-domain",
-      "version": "0.7.0-alpha.7",
-      "purl": "pkg:cargo/minidora-domain@0.7.0-alpha.7",
+      "version": "0.7.0-alpha.8",
+      "purl": "pkg:cargo/minidora-domain@0.7.0-alpha.8",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -1518,10 +1518,10 @@
     },
     {
       "type": "application",
-      "bom-ref": "minidora-engine@0.7.0-alpha.7",
+      "bom-ref": "minidora-engine@0.7.0-alpha.8",
       "name": "minidora-engine",
-      "version": "0.7.0-alpha.7",
-      "purl": "pkg:cargo/minidora-engine@0.7.0-alpha.7",
+      "version": "0.7.0-alpha.8",
+      "purl": "pkg:cargo/minidora-engine@0.7.0-alpha.8",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -4117,16 +4117,16 @@
       "dependsOn": []
     },
     {
-      "ref": "minidora-cli@0.7.0-alpha.7",
+      "ref": "minidora-cli@0.7.0-alpha.8",
       "dependsOn": [
-        "minidora-domain@0.7.0-alpha.7",
-        "minidora-engine@0.7.0-alpha.7",
+        "minidora-domain@0.7.0-alpha.8",
+        "minidora-engine@0.7.0-alpha.8",
         "serde@1.0.229",
         "serde_json@1.0.154"
       ]
     },
     {
-      "ref": "minidora-domain@0.7.0-alpha.7",
+      "ref": "minidora-domain@0.7.0-alpha.8",
       "dependsOn": [
         "serde-value@0.7.0",
         "serde@1.0.229",
@@ -4136,9 +4136,9 @@
       ]
     },
     {
-      "ref": "minidora-engine@0.7.0-alpha.7",
+      "ref": "minidora-engine@0.7.0-alpha.8",
       "dependsOn": [
-        "minidora-domain@0.7.0-alpha.7",
+        "minidora-domain@0.7.0-alpha.8",
         "num-bigint@0.4.8",
         "num-rational@0.4.2",
         "num-traits@0.2.19",

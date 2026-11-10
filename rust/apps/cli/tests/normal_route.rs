@@ -146,6 +146,71 @@ fn mixed_unit_arithmetic_is_saved_and_explained_through_the_normal_route() {
 }
 
 #[test]
+fn explicit_operand_correction_creates_a_new_version_linked_to_the_actual_result() {
+    let scratch = Scratch::new();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "measurement", "--version", "1", "1 km + 500 m"],
+    ));
+    assert_eq!(original["input_version"], 1);
+    assert_eq!(original["calculation"]["exact_value"], "1500 m");
+
+    let corrected = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "measurement",
+            "--version",
+            "2",
+            "第二項を600 mに変更して",
+        ],
+    ));
+    assert_eq!(corrected["lifecycle"], "COMMIT");
+    assert_eq!(corrected["calculation"]["expression"], "1 km + 600 m");
+    assert_eq!(corrected["calculation"]["exact_value"], "1600 m");
+    assert_eq!(corrected["input_version"], 2);
+    assert_ne!(corrected["id"], original["id"]);
+    assert!(
+        corrected["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&original["id"])
+    );
+
+    let original_retry = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "measurement", "--version", "1", "1 km + 500 m"],
+    ));
+    assert_eq!(original_retry, original);
+
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["calculation"]["exact_value"], "1600 m");
+    assert!(
+        explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&corrected["id"])
+    );
+
+    let missing = stopped(
+        &execute(&Scratch::new().0, "owner", &["第二項を600 mに変更して"]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING_ACTUAL_RESULT:")
+    );
+    assert!(missing["calculation"].is_null());
+}
+
+#[test]
 fn meaning_comparison_variants_reach_cli_and_compound_effects_suspend() {
     let scratch = Scratch::new();
     let comparison = record(&execute(

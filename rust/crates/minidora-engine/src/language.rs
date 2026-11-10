@@ -194,6 +194,97 @@ fn exact_rational(expression: &str) -> Result<BigRational> {
     })
 }
 
+/// Return a new exact result after replacing one literal operand in a saved
+/// binary addition/subtraction. The caller must retain the prior result as a
+/// dependency; this function never edits it in place.
+pub fn correct_additive_operand(
+    prior: &Calculation,
+    operand_index: usize,
+    replacement: &str,
+) -> Result<Calculation> {
+    static OPERANDS: OnceLock<Regex> = OnceLock::new();
+    static REPLACEMENT: OnceLock<Regex> = OnceLock::new();
+    let operands = OPERANDS.get_or_init(|| {
+        Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*([+-])\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*$")
+            .expect("binary operand expression pattern is static")
+    });
+    let replacement_pattern = REPLACEMENT.get_or_init(|| {
+        Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})?\s*$")
+            .expect("operand replacement pattern is static")
+    });
+    if operand_index > 1 {
+        return Err(failure(
+            "CORRECTION_TARGET_INVALID",
+            "a binary calculation has only operand 1 and operand 2",
+        ));
+    }
+    let verified_prior = calculate(&prior.expression)?;
+    if verified_prior.exact_value != prior.exact_value {
+        return Err(failure(
+            "CORRECTION_SOURCE_MISMATCH",
+            "saved result value does not match its original expression",
+        ));
+    }
+    let normalized_expression: String = prior.expression.nfkc().collect();
+    let Some(captures) = operands.captures(&normalized_expression) else {
+        return Err(failure(
+            "CORRECTION_UNSUPPORTED",
+            "only a saved binary literal addition or subtraction can be corrected",
+        ));
+    };
+    let normalized_replacement: String = replacement.nfkc().collect();
+    let Some(new) = replacement_pattern.captures(&normalized_replacement) else {
+        return Err(failure(
+            "CORRECTION_REPLACEMENT_INVALID",
+            "replacement must be one exact numeric literal with an optional explicit unit",
+        ));
+    };
+    let prior_left = captures[1].to_string();
+    let prior_left_unit = captures.get(2).map(|value| value.as_str());
+    let operation = captures[3].to_string();
+    let prior_right = captures[4].to_string();
+    let prior_right_unit = captures.get(5).map(|value| value.as_str());
+    let new_value = new[1].to_string();
+    let supplied_unit = new.get(2).map(|value| value.as_str());
+    let target_prior_unit = if operand_index == 0 {
+        prior_left_unit
+    } else {
+        prior_right_unit
+    };
+    let new_unit = match (target_prior_unit, supplied_unit) {
+        (None, Some(_)) => {
+            return Err(failure(
+                "UNIT_MISMATCH",
+                "a unit cannot be added to a previously unitless operand during correction",
+            ));
+        }
+        (Some(prior_unit), None) => Some(prior_unit.to_string()),
+        (_, Some(supplied)) => Some(supplied.to_string()),
+        (None, None) => None,
+    };
+    let left = if operand_index == 0 {
+        (new_value.clone(), new_unit.clone())
+    } else {
+        (prior_left, prior_left_unit.map(str::to_string))
+    };
+    let right = if operand_index == 1 {
+        (new_value, new_unit)
+    } else {
+        (prior_right, prior_right_unit.map(str::to_string))
+    };
+    let format_quantity = |value: &str, unit: Option<String>| match unit {
+        Some(unit) => format!("{value} {unit}"),
+        None => value.to_string(),
+    };
+    let expression = format!(
+        "{} {} {}",
+        format_quantity(&left.0, left.1),
+        operation,
+        format_quantity(&right.0, right.1)
+    );
+    calculate(&expression)
+}
+
 pub fn rational_text(value: &BigRational) -> String {
     if value.is_integer() {
         value.to_integer().to_string()
@@ -1129,6 +1220,33 @@ mod tests {
         assert!(
             matches!(error, minidora_domain::Error::Contract { code, .. } if code == "UNIT_MISMATCH")
         );
+    }
+
+    #[test]
+    fn operand_correction_builds_a_new_exact_calculation() {
+        let prior = calculate("1 km + 500 m").unwrap();
+        let corrected = correct_additive_operand(&prior, 1, "600 m").unwrap();
+        assert_eq!(corrected.expression, "1 km + 600 m");
+        assert_eq!(corrected.exact_value, "1600 m");
+        assert_eq!(prior.exact_value, "1500 m");
+
+        let omitted_unit = correct_additive_operand(&prior, 1, "700").unwrap();
+        assert_eq!(omitted_unit.expression, "1 km + 700 m");
+        assert_eq!(omitted_unit.exact_value, "1700 m");
+
+        let unitless = calculate("2+3").unwrap();
+        let changed = correct_additive_operand(&unitless, 0, "4").unwrap();
+        assert_eq!(changed.expression, "4 + 3");
+        assert_eq!(changed.exact_value, "7");
+
+        assert!(correct_additive_operand(&unitless, 1, "5 km").is_err());
+        assert!(correct_additive_operand(&calculate("2*3").unwrap(), 1, "4").is_err());
+        let inconsistent = Calculation {
+            expression: "2+3".into(),
+            exact_value: "999".into(),
+            steps: Vec::new(),
+        };
+        assert!(correct_additive_operand(&inconsistent, 1, "4").is_err());
     }
 
     #[test]

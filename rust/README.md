@@ -1,8 +1,8 @@
 # MINIDORA Rust successor alpha
 
-`0.7.0-alpha.7` is an independently versioned Rust development implementation of the public input → Core → output execution route. It contains working mathematical, declared-relation, bounded Japanese meaning-comparison, durable-state, source-reading and exact-file-output mechanisms. It is **not an accepted implementation of all 93 capability obligations**. The [implementation status](audit/IMPLEMENTATION_STATUS.md) and [full obligations](audit/implementation-obligations.md) keep missing evidence and functionality visible; they do not reduce the requested scope.
+`0.7.0-alpha.8` is an independently versioned Rust development implementation of the public input → Core → output execution route. It contains working mathematical, declared-relation, bounded Japanese meaning-comparison, durable-state, source-reading and exact-file-output mechanisms. It is **not an accepted implementation of all 93 capability obligations**. The [implementation status](audit/IMPLEMENTATION_STATUS.md) and [full obligations](audit/implementation-obligations.md) keep missing evidence and functionality visible; they do not reduce the requested scope.
 
-The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.7`; they are not a silent migration of the beta's saved data or duplicate-input guarantees.
+The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.8`; they are not a silent migration of the beta's saved data or duplicate-input guarantees. The alpha 8 schema is incompatible with alpha 7 Rust store metadata: opening an alpha 7 database returns `SCHEMA_MISMATCH` and leaves its files unchanged. An alpha 7-to-alpha 8 migration command is not implemented yet.
 
 ## Build in the cloud workspace
 
@@ -42,10 +42,15 @@ Use the same actor, state directory and case to continue a conversation. Each co
 "$minidora_bin" --db "$minidora_state" --actor demo --case arithmetic '2+3'
 "$minidora_bin" --db "$minidora_state" --actor demo --case arithmetic '詳しく説明して'
 "$minidora_bin" --db "$minidora_state" --actor demo --case arithmetic '2+4'
+"$minidora_bin" --db "$minidora_state" --actor demo --case unit-correction \
+  --input measurement --version 1 '1 km + 500 m'
+"$minidora_bin" --db "$minidora_state" --actor demo --case unit-correction \
+  --input measurement --version 2 '第二項を600 mに変更して'
+"$minidora_bin" --db "$minidora_state" --actor demo --case unit-correction '詳しく説明して'
 "$minidora_bin" inspect --db "$minidora_state" --actor demo --case arithmetic
 ```
 
-Arithmetic uses exact integers/rationals, bounded expressions and recorded steps. A repeated explicit `--case`, `--input` and `--version` with the same complete request retrieves its saved result; changing the request under that identity is a conflict. Omit `--input` for the CLI to choose an identity from the next case revision. This successor behavior is separate from the frozen beta facade's in-instance duplicate rejection.
+Arithmetic uses exact integers/rationals, bounded expressions and recorded steps. Binary addition/subtraction preserves identical explicit units and converts mixed `mm`, `cm`, `m` and `km` exactly to metres. An explicit first/second operand correction creates the next input version, links it to the actual prior result and retains that original result; this correction grammar currently covers binary literal addition/subtraction only. A repeated explicit `--case`, `--input` and `--version` with the same complete request retrieves its saved result; changing the request under that identity is a conflict. Omit `--input` for the CLI to choose an identity from the next case revision. This successor behavior is separate from the frozen beta facade's in-instance duplicate rejection.
 
 ## Statistics, linear systems and symbolic polynomials
 
@@ -224,6 +229,6 @@ See [implementation choices](docs/IMPLEMENTATION_CHOICES.md), [dependencies](doc
 
 ## Current validation and open scope
 
-See [the historical alpha 7 validation record](audit/validation.json), [the current B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. The current B02 Linux workspace run passed 141 Rust tests. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
+See [the historical alpha 7 validation record](audit/validation.json), [the B02 unit-arithmetic validation](audit/unit-arithmetic-validation.json), [the operand-correction validation](audit/unit-correction-validation.json), [all93 requirement observations](audit/rust-requirement-observations.json) and [implementation status](audit/IMPLEMENTATION_STATUS.md). The historical alpha 7 run passed 134 Rust tests and 8 separately labeled local TLS fixture cases; the preserved predecessor passed 313 selected tests separately. The current alpha 8 B02 Linux workspace run passed 144 Rust tests. These scoped observations do not establish full R2/93-capability successor acceptance. Unrestricted natural-language work, the complete inherited semantic/regression audit, LIVE benchmark and physical Windows/8GB validation remain incomplete. No missing item is an approved release-scope exclusion.
 
 Tested cloud reproduction and startup instructions are [cloud-install.sh](tools/cloud-install.sh) and [cloud-start.md](tools/cloud-start.md). Backend environment-draft saving is currently unconfirmed due to an API error; the scripts themselves were executed successfully.

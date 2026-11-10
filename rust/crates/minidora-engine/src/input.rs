@@ -4,7 +4,7 @@ use minidora_domain::*;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v3-meaning-compare";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v4-calculation-correction";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -44,6 +44,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     };
     if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
         unresolved.push("no actual adopted previous result is available".into());
+    }
+    if matches!(intent, Intent::CorrectCalculation { .. })
+        && previous.is_none_or(|result| {
+            result.lifecycle != Lifecycle::Commit || result.calculation.is_none()
+        })
+    {
+        unresolved.push("no actual committed calculation is available to correct".into());
     }
     let context_sha256 = identity(&previous)?;
     let meaning = MeaningIR {
@@ -195,6 +202,47 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     Ok(Some(Intent::Unknown { reason: "document operation header contains unsupported or ambiguous constraints; original body retained".into() }))
 }
 
+fn calculation_correction_intent(text: &str) -> Result<Option<Intent>> {
+    let normalized: String = text.nfkc().collect();
+    let text = normalized.trim();
+    for (pattern, operand_index) in [
+        (
+            r"(?i)^(?:please\s+)?change\s+(?:the\s+)?(?:first|1st)(?:\s+operand)?\s+to\s+(.+)$",
+            0,
+        ),
+        (
+            r"(?i)^(?:please\s+)?change\s+(?:the\s+)?(?:second|2nd)(?:\s+operand)?\s+to\s+(.+)$",
+            1,
+        ),
+        (r"(?i)^(?:please\s+)?change\s+operand\s*1\s+to\s+(.+)$", 0),
+        (r"(?i)^(?:please\s+)?change\s+operand\s*2\s+to\s+(.+)$", 1),
+        (
+            r"^(?:計算の?)?第1項を\s*(.+?)\s*に(?:変更|修正)(?:してください|して|せよ)$",
+            0,
+        ),
+        (
+            r"^(?:計算の?)?第2項を\s*(.+?)\s*に(?:変更|修正)(?:してください|して|せよ)$",
+            1,
+        ),
+        (
+            r"^(?:計算の?)?第一項を\s*(.+?)\s*に(?:変更|修正)(?:してください|して|せよ)$",
+            0,
+        ),
+        (
+            r"^(?:計算の?)?第二項を\s*(.+?)\s*に(?:変更|修正)(?:してください|して|せよ)$",
+            1,
+        ),
+    ] {
+        if let Some(capture) = regex(pattern)?.captures(text) {
+            return Ok(Some(Intent::CorrectCalculation {
+                operand_index,
+                replacement: capture[1].trim().to_string(),
+            }));
+        }
+    }
+    Ok(None)
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = structured_intent(text)? {
         return Ok(intent);
@@ -203,6 +251,9 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     let body = terminal_trim(text);
+    if let Some(correction) = calculation_correction_intent(body)? {
+        return Ok(correction);
+    }
     if matches!(
         body.to_lowercase().as_str(),
         "cancel" | "stop" | "中止" | "停止" | "キャンセル" | "やめて"
@@ -876,6 +927,28 @@ mod tests {
             assert!(
                 !matches!(bundle.meaning.intent, Intent::Calculate { .. }),
                 "{text}"
+            );
+        }
+    }
+    #[test]
+    fn operand_correction_input_is_explicit_and_keeps_the_replacement_complete() {
+        for (text, operand_index, replacement) in [
+            ("第二項を600 mに変更して", 1, "600 m"),
+            ("第1項を2.5に修正してください", 0, "2.5"),
+            ("change the second operand to 4", 1, "4"),
+            ("change operand 1 to 7", 0, "7"),
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent, Intent::CorrectCalculation { operand_index: actual, replacement: value } if *actual == operand_index && value == replacement),
+                "{text}"
+            );
+            assert!(
+                bundle
+                    .meaning
+                    .unresolved
+                    .iter()
+                    .any(|reason| reason.contains("no actual committed calculation"))
             );
         }
     }

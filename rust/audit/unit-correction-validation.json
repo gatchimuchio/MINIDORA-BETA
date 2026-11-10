@@ -1,0 +1,146 @@
+{
+  "work_item": "B02 versioned correction of an actual saved binary calculation",
+  "recorded_at": "2026-11-10T05:50:25+00:00",
+  "base_commit": "fe1e1ee0b2895613680c6c302b1ae858a23ecb1a",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v4-calculation-correction",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64",
+    "libc": "glibc 2.41"
+  },
+  "source_snapshot_sha256": "f39727acc761397c12afbefdefc10b4cbf735113c8b13bc2b0f99a4efefe79f8",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "tested_source_paths": {
+    "Cargo.toml": "f87a7b6bdb5d36d92bff76bb9f03458771d90df6dbbec10f55b3d6243bddab08",
+    "Cargo.lock": "306b812d94996764d7a1a6e2097ac44891e7478a5166742de7916e70cf9d2e37",
+    "apps/cli/src/main.rs": "c22db51987a2f735de01caa72f0e0976ac638f5e8602bdc0e7e6f6a9f2d76797",
+    "apps/cli/tests/normal_route.rs": "570e96d39ae05eccad4841b14471b2eec952e2b3b090555aead0f68ff1c0acc5",
+    "crates/minidora-domain/src/lib.rs": "ae3af69a8010ae088ecb1d62e34fa2d6540d4017ddc27b6e3a3bccbec274774e",
+    "crates/minidora-engine/src/input.rs": "e7e1a383a21f3579f3ff7c8eb8ad263c4ce3bfadabd65288806aaa96fdce97ea",
+    "crates/minidora-engine/src/language.rs": "d952bffb93eef1c8d2f4f9236d5691c116e5a2df8d99fdb69016b8f931aa9c44",
+    "crates/minidora-engine/src/core.rs": "abef9cfa76dbf156927130d62188a91227857c7eced540c59464c0e51aab43c5"
+  },
+  "binary_sha256": "7cfb6214e3835fe1ea7fc6b6695f176f980e8bb66b6482134733f572e540130c",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked",
+      "exit_code": 0,
+      "passed": 144,
+      "failed": 0,
+      "ignored": 0,
+      "doc_tests": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo metadata --manifest-path rust/Cargo.toml --locked --format-version 1 --no-deps",
+      "exit_code": 0
+    }
+  ],
+  "test_suites": [
+    {
+      "suite": "minidora-cli unit tests",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "normal CLI route integration tests",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "minidora-domain unit tests",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "minidora-engine unit tests",
+      "passed": 105,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "observed_normal_route": {
+    "positive": {
+      "initial_input": "1 km + 500 m",
+      "input_id": "measurement",
+      "initial_input_version": 1,
+      "initial_lifecycle": "COMMIT",
+      "initial_exact_value": "1500 m",
+      "correction_input": "第二項を600 mに変更して",
+      "correction_input_id": "measurement",
+      "correction_input_version": 2,
+      "corrected_lifecycle": "COMMIT",
+      "corrected_expression": "1 km + 600 m",
+      "corrected_exact_value": "1600 m",
+      "corrected_result_depends_on_initial_result": true,
+      "original_input_retry_still_returns": "1500 m",
+      "follow_up_input": "詳しく説明して",
+      "follow_up_lifecycle": "COMMIT",
+      "follow_up_depends_on_corrected_result": true,
+      "test": "explicit_operand_correction_creates_a_new_version_linked_to_the_actual_result"
+    },
+    "negative": {
+      "input": "第二項を600 mに変更して",
+      "prior_result": "none",
+      "lifecycle": "SUSPEND",
+      "reason_code": "MISSING_ACTUAL_RESULT",
+      "calculation_created": false,
+      "effect_receipts": 0,
+      "test": "explicit_operand_correction_creates_a_new_version_linked_to_the_actual_result"
+    }
+  },
+  "component_observations": [
+    {
+      "input_expression": "1 km + 500 m",
+      "correction": "second operand = 600 m",
+      "new_exact_value": "1600 m"
+    },
+    {
+      "input_expression": "2+3",
+      "correction": "first operand = 4",
+      "new_exact_value": "7"
+    },
+    {
+      "unsupported_cases": [
+        "non-additive saved expressions",
+        "replacement with a unit when the prior operand was unitless",
+        "saved value inconsistent with its expression"
+      ],
+      "outcome": "typed calculation error; no corrected result"
+    }
+  ],
+  "previous_schema_handling": "Alpha 7 databases are not silently migrated; the alpha 8 store returns SCHEMA_MISMATCH and leaves existing files unchanged pending an explicit migration.",
+  "implementation_disposition": "NEW",
+  "coverage_scope": "PARTIAL",
+  "acceptance_status": "UNVERIFIED",
+  "limits": [
+    "Only complete binary literal addition/subtraction can be corrected; arbitrary expressions, multiplication/division and symbolic operands suspend.",
+    "Correction language is bounded to explicit first/second operand phrases in the recorded English/Japanese forms.",
+    "Mixed conversion supports only mm, cm, m and km; same explicit units are retained without a general dimensional registry.",
+    "Inherited quantities, other dimensions, general correction, and full B02/93-capability acceptance remain unverified.",
+    "This Linux run does not establish Windows/macOS behavior, the 8 GB resource profile or full successor acceptance."
+  ]
+}

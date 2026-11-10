@@ -377,6 +377,55 @@ impl Engine {
                     return self.stop(&mut state, Lifecycle::Suspend, stop_code, &e.to_string());
                 }
             },
+            Intent::CorrectCalculation {
+                operand_index,
+                replacement,
+            } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "訂正対象となる実際の計算結果がありません。",
+                    );
+                };
+                let Some(prior_calculation) = prior.calculation.as_ref() else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_CALCULATION",
+                        "直前の採用済み成果に計算式がありません。",
+                    );
+                };
+                match language::correct_additive_operand(
+                    prior_calculation,
+                    *operand_index,
+                    replacement,
+                ) {
+                    Ok(calculation) => {
+                        units.push(format!(
+                            "{} = {}",
+                            calculation.expression, calculation.exact_value
+                        ));
+                        result.dependencies.push(prior.id.clone());
+                        result.calculation = Some(calculation);
+                        result.guarantee = Guarantee::Computed;
+                    }
+                    Err(error) => {
+                        let stop_code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CORRECTION_UNSUPPORTED",
+                        };
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            stop_code,
+                            &error.to_string(),
+                        );
+                    }
+                }
+            }
             Intent::Symbolic {
                 expression,
                 operation,
