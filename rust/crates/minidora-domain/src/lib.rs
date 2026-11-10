@@ -196,6 +196,10 @@ pub enum Intent {
     NormalizeProbabilityWeights {
         weights: Vec<String>,
     },
+    FiniteProbabilityStatistics {
+        outcomes: Vec<String>,
+        weights: Vec<String>,
+    },
     Symbolic {
         expression: String,
         operation: String,

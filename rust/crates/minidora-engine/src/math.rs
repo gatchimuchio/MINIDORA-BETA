@@ -542,7 +542,9 @@ pub struct NormalizedProbabilityWeights {
 
 /// Normalize explicit nonnegative weights into an exact finite distribution.
 /// The values describe only the supplied weights, not empirical likelihoods.
-pub fn normalize_probability_weights(weights: &[String]) -> Result<NormalizedProbabilityWeights> {
+fn normalize_weight_values(
+    weights: &[String],
+) -> Result<(Vec<BigRational>, BigRational, BigRational)> {
     if weights.is_empty() || weights.len() > MAX_OBSERVATIONS {
         return Err(failure(
             "PROBABILITY_INPUT_LIMIT",
@@ -584,6 +586,11 @@ pub fn normalize_probability_weights(weights: &[String]) -> Result<NormalizedPro
             "normalized probabilities do not sum exactly to one",
         ));
     }
+    Ok((normalized, total, probability_sum))
+}
+
+pub fn normalize_probability_weights(weights: &[String]) -> Result<NormalizedProbabilityWeights> {
+    let (normalized, total, probability_sum) = normalize_weight_values(weights)?;
     Ok(NormalizedProbabilityWeights {
         input_weights: weights.to_vec(),
         total_weight: rational_text(&total),
@@ -591,6 +598,80 @@ pub fn normalize_probability_weights(weights: &[String]) -> Result<NormalizedPro
         count: weights.len(),
         probability_sum: rational_text(&probability_sum),
         scope: "exact normalization of the explicitly supplied nonnegative weights; not an empirical or real-world probability estimate".into(),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FiniteProbabilityStatistics {
+    pub input_outcomes: Vec<String>,
+    pub input_weights: Vec<String>,
+    pub total_weight: String,
+    pub normalized_probabilities: Vec<String>,
+    pub probability_sum: String,
+    pub count: usize,
+    pub expected_value_contributions: Vec<String>,
+    pub expected_value: String,
+    pub variance_contributions: Vec<String>,
+    pub variance: String,
+    pub scope: String,
+}
+
+/// Compute exact moments for explicitly paired finite outcomes and weights.
+/// This does not infer empirical or real-world probabilities.
+pub fn finite_probability_statistics(
+    outcomes: &[String],
+    weights: &[String],
+) -> Result<FiniteProbabilityStatistics> {
+    if outcomes.is_empty()
+        || outcomes.len() > MAX_OBSERVATIONS
+        || weights.is_empty()
+        || weights.len() > MAX_OBSERVATIONS
+    {
+        return Err(failure(
+            "PROBABILITY_INPUT_LIMIT",
+            "expected 1..4096 outcomes and weights",
+        ));
+    }
+    if outcomes.len() != weights.len() {
+        return Err(failure(
+            "PROBABILITY_CARDINALITY_MISMATCH",
+            "each outcome must have exactly one corresponding weight",
+        ));
+    }
+    let parsed_outcomes = outcomes
+        .iter()
+        .map(|outcome| scalar(outcome))
+        .collect::<Result<Vec<_>>>()?;
+    let (probabilities, total, probability_sum) = normalize_weight_values(weights)?;
+    let mut budget = Budget::default();
+    let mut expected_value = BigRational::zero();
+    let mut expected_value_contributions = Vec::with_capacity(outcomes.len());
+    for (outcome, probability) in parsed_outcomes.iter().zip(&probabilities) {
+        let weighted_value = budget.check(outcome * probability)?;
+        expected_value = budget.check(expected_value + &weighted_value)?;
+        expected_value_contributions.push(weighted_value);
+    }
+    let mut variance = BigRational::zero();
+    let mut variance_contributions = Vec::with_capacity(outcomes.len());
+    for (outcome, probability) in parsed_outcomes.iter().zip(&probabilities) {
+        let deviation = budget.check(outcome - &expected_value)?;
+        let squared_deviation = budget.check(&deviation * &deviation)?;
+        let weighted_deviation = budget.check(probability * squared_deviation)?;
+        variance = budget.check(variance + &weighted_deviation)?;
+        variance_contributions.push(weighted_deviation);
+    }
+    Ok(FiniteProbabilityStatistics {
+        input_outcomes: outcomes.to_vec(),
+        input_weights: weights.to_vec(),
+        total_weight: rational_text(&total),
+        normalized_probabilities: probabilities.iter().map(rational_text).collect(),
+        probability_sum: rational_text(&probability_sum),
+        count: outcomes.len(),
+        expected_value_contributions: expected_value_contributions.iter().map(rational_text).collect(),
+        expected_value: rational_text(&expected_value),
+        variance_contributions: variance_contributions.iter().map(rational_text).collect(),
+        variance: rational_text(&variance),
+        scope: "exact expectation and variance over the explicitly supplied finite outcomes and weights; not an empirical or real-world probability estimate".into(),
     })
 }
 

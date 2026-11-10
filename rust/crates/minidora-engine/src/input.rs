@@ -4,7 +4,7 @@ use minidora_domain::*;
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v7-exact-probability-weights";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v8-finite-probability-statistics";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -681,6 +681,53 @@ fn quantity_statistics_intent(text: &str) -> Result<Option<Intent>> {
 fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
     if let Some(intent) = quantity_statistics_intent(text)? {
         return Ok(Some(intent));
+    }
+    if let Some(capture) =
+        regex(r"(?is)^(期待値|expected-value)\s*[:：]?\s*(\[.+)$")?.captures(text)
+    {
+        let payload = capture[2].trim();
+        let mut outcomes_at = 0;
+        let outcomes = scalar_array(math_array(payload, &mut outcomes_at, 0)?)?;
+        let tail = payload[outcomes_at..].trim_start();
+        let japanese = &capture[1] == "期待値";
+        let weight_payload = if japanese {
+            tail.strip_prefix("重み")
+        } else {
+            tail.get(..7)
+                .filter(|label| label.eq_ignore_ascii_case("weights"))
+                .and_then(|_| {
+                    let rest = tail.get(7..)?;
+                    let separator = rest.chars().next()?;
+                    (separator.is_whitespace() || separator == ':').then_some(rest)
+                })
+        };
+        let Some(weight_payload) = weight_payload else {
+            return Ok(Some(Intent::Unknown {
+                reason: "expected-value input requires one explicit weight array".into(),
+            }));
+        };
+        let weight_payload = weight_payload
+            .trim_start()
+            .strip_prefix(':')
+            .unwrap_or(weight_payload.trim_start())
+            .trim_start();
+        let mut weights_at = 0;
+        let weights = scalar_array(math_array(weight_payload, &mut weights_at, 0)?)?;
+        let suffix = weight_payload[weights_at..].trim();
+        let suffix_valid = if japanese {
+            matches!(suffix, "を計算して" | "を計算してください")
+        } else {
+            suffix.is_empty()
+        };
+        if !suffix_valid {
+            return Ok(Some(Intent::Unknown {
+                reason: "expected-value input accepts only outcome and weight arrays with no extra constraints".into(),
+            }));
+        }
+        return Ok(Some(Intent::FiniteProbabilityStatistics {
+            outcomes,
+            weights,
+        }));
     }
     if let Some(capture) =
         regex(r"(?is)^(確率分布|normalize-probabilities)\s*[:：]?\s*(\[.+)$")?.captures(text)

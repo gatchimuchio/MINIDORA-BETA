@@ -1,0 +1,74 @@
+{
+  "work_item": "B03 exact expectation and variance for explicitly paired finite outcomes and weights",
+  "recorded_at": "2026-11-10T15:21:02Z",
+  "base_commit": "3a9dee133f39807e42ab002edb937ad124a2c9f6",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v8-finite-probability-statistics",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "4958e8f5f7efd9d68f6a6fc631943f80f7206b5ae44de5127da97ea79437de9d",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "bd5aa9d3e3ab8f3eef2f66689548391f01ee08a1caa26623bfa360ceee1df4a4",
+    "crates/minidora-engine/src/core.rs": "a846d37e1ef1914f40a5eaab4893321e812571bb413bcae4ee62b8a11c5c0253",
+    "crates/minidora-engine/src/input.rs": "246de7056139ecaed3f25a1c325c4ca0f948fdf5019eb31f17d4a83d0ffde4b8",
+    "crates/minidora-engine/src/math.rs": "730fa6d531e9f5fed3ec3a03820f6d2696d44ea5c9b78dffb09e719b29a0140f"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "5205a5925fb2ed6dec8a4772abd737591b7107eeefd7657232cdfaeeed93b491"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "initial_compile_failure": {
+    "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+    "exit_code": 101,
+    "cause": "The Japanese/English intent discriminator compared the unsized regex capture str directly with a string reference.",
+    "correction": "Borrow the capture before comparing; the same formatting, full check, Clippy and build sequence then passed."
+  },
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation did not request test or runtime-route verification; only formatting, compilation, lint and build checks were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::mathematics_intent -> Intent::FiniteProbabilityStatistics -> math::finite_probability_statistics -> normalize_weight_values",
+  "supported_behavior_from_source": [
+    "Japanese 「期待値 [outcomes] 重み [weights] を計算して」 / 「を計算してください」 and English `expected-value [outcomes] weights [weights]` parse two explicit flat exact-scalar arrays.",
+    "Each outcome is paired with one weight; both arrays must contain 1..4096 elements and have equal lengths. Outcomes may be negative; weights must be nonnegative with a positive exact total.",
+    "The existing exact weight-normalization implementation is shared. It verifies that normalized probabilities sum exactly to one.",
+    "Core computes expected value as the sum of outcome times normalized probability and variance as the probability-weighted squared deviation from that exact expected value.",
+    "The report retains original outcomes and weights, exact normalized probabilities, each aligned expected-value and variance contribution, total weight, exact probability sum, count, expected value and variance.",
+    "Extra trailing constraints are rejected by the finite parser; integer/rational representation and operation budgets remain bounded. The result describes the supplied distribution and does not infer an empirical or real-world probability."
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}
