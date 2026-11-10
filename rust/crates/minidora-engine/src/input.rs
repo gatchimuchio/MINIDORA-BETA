@@ -697,11 +697,16 @@ fn arithmetic_expression(text: &str) -> Result<Option<String>> {
         candidate = capture[1].trim().to_string();
     } else if let Some(capture) = regex(r"^(.+?)(?:を)?(?:計算|計算して|計算してください|計算しろ|計算せよ|はいくつ|はいくつですか|は何|は何ですか)$")?.captures(text) {
         candidate = capture[1].trim().trim_end_matches('を').trim().to_string();
-    } else if let Some(capture) = regex(r"^(?:計算|計算して|計算してください)[:：\s]+(.+)$")?.captures(text) {
+    } else if let Some(capture) = regex(r"^(?:計算して|計算してください|計算)[:：\s]+(.+)$")?.captures(text) {
         candidate = capture[1].trim().to_string();
     }
     // A complete arithmetic surface is required; never accept a numeric prefix
     // while dropping a second request or an unparsed condition.
+    if regex(r"^[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}\s*[+-]\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}$")?
+        .is_match(&candidate)
+    {
+        return Ok(Some(candidate));
+    }
     if regex(r"^[0-9eE+*/%^().\s×÷−-]+$")?.is_match(&candidate)
         && candidate.chars().any(|ch| ch.is_ascii_digit())
     {
@@ -848,6 +853,31 @@ mod tests {
             bundle.fingerprint,
             seal(&request, None).unwrap().fingerprint
         );
+    }
+    #[test]
+    fn unit_arithmetic_input_requires_a_complete_two_quantity_expression() {
+        for (text, expected) in [
+            ("1 km + 500 m", "1 km + 500 m"),
+            ("計算して 1 km + 500 m", "1 km + 500 m"),
+            ("1.5 m - 25 cm", "1.5 m - 25 cm"),
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent, Intent::Calculate { expression } if expression == expected),
+                "{text}"
+            );
+        }
+        for text in [
+            "1 km + 500 m and delete file",
+            "1 km + 500",
+            "1 km + 500 m; 2+2",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                !matches!(bundle.meaning.intent, Intent::Calculate { .. }),
+                "{text}"
+            );
+        }
     }
     #[test]
     fn labelled_meaning_comparison_accepts_bounded_japanese_and_english_directives() {

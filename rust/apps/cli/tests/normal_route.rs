@@ -94,6 +94,58 @@ fn calculation_followup_and_explicit_retry_survive_process_restarts() {
 }
 
 #[test]
+fn mixed_unit_arithmetic_is_saved_and_explained_through_the_normal_route() {
+    let scratch = Scratch::new();
+    let calculation = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mixed-unit-addition", "1 km + 500 m"],
+    ));
+    assert_eq!(calculation["lifecycle"], "COMMIT");
+    assert_eq!(calculation["calculation"]["expression"], "1 km + 500 m");
+    assert_eq!(calculation["calculation"]["exact_value"], "1500 m");
+    assert_eq!(calculation["calculation"]["steps"][0], "1 km = 1000 m");
+    assert_eq!(
+        calculation["calculation"]["steps"][2],
+        "1000 m + 500 m = 1500 m"
+    );
+
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["calculation"]["exact_value"], "1500 m");
+    assert!(
+        explanation["text"]
+            .as_str()
+            .unwrap()
+            .contains("1000 m + 500 m = 1500 m")
+    );
+    assert!(
+        explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&calculation["id"])
+    );
+
+    let incompatible = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "incompatible-units", "1 km + 2 s"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        incompatible["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("UNIT_MISMATCH:")
+    );
+    assert!(incompatible["calculation"].is_null());
+    assert!(incompatible["receipts"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn meaning_comparison_variants_reach_cli_and_compound_effects_suspend() {
     let scratch = Scratch::new();
     let comparison = record(&execute(

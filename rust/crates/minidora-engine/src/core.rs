@@ -366,12 +366,15 @@ impl Engine {
                     result.guarantee = Guarantee::Computed;
                 }
                 Err(e) => {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "CALCULATION_UNSUPPORTED",
-                        &e.to_string(),
-                    );
+                    let stop_code = match &e {
+                        minidora_domain::Error::Contract { code, .. }
+                            if code == "UNIT_MISMATCH" =>
+                        {
+                            "UNIT_MISMATCH"
+                        }
+                        _ => "CALCULATION_UNSUPPORTED",
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, stop_code, &e.to_string());
                 }
             },
             Intent::Symbolic {

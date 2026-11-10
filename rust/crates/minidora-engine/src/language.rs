@@ -4,8 +4,11 @@ use minidora_domain::{Calculation, Result, failure, identity};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Signed, Zero};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 
@@ -86,6 +89,9 @@ pub fn calculate(expression: &str) -> Result<Calculation> {
         .replace('×', "*")
         .replace('÷', "/")
         .replace('−', "-");
+    if let Some(calculation) = calculate_unit_addition(expression, &normalized)? {
+        return Ok(calculation);
+    }
     let mut parser = ExpressionParser {
         text: normalized.as_bytes(),
         at: 0,
@@ -104,6 +110,87 @@ pub fn calculate(expression: &str) -> Result<Calculation> {
         expression: expression.into(),
         exact_value: rational_text(&value),
         steps: parser.steps,
+    })
+}
+
+fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Calculation>> {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*([+-])\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$")
+            .expect("unit arithmetic expression pattern is static")
+    });
+    let Some(captures) = pattern.captures(normalized) else {
+        return Ok(None);
+    };
+    let left = exact_rational(captures.get(1).expect("left value exists").as_str())?;
+    let left_unit = captures.get(2).expect("left unit exists").as_str();
+    let operation = captures.get(3).expect("operator exists").as_str();
+    let right = exact_rational(captures.get(4).expect("right value exists").as_str())?;
+    let right_unit = captures.get(5).expect("right unit exists").as_str();
+    ExpressionParser::check(&left)?;
+    ExpressionParser::check(&right)?;
+
+    let (left_value, right_value, unit) = if left_unit == right_unit {
+        (left.clone(), right.clone(), left_unit.to_string())
+    } else {
+        let left_scale = crate::math::exact_length_scale_to_meters(left_unit);
+        let right_scale = crate::math::exact_length_scale_to_meters(right_unit);
+        let (Some(left_scale), Some(right_scale)) = (left_scale, right_scale) else {
+            return Err(failure(
+                "UNIT_MISMATCH",
+                "mixed addition or subtraction requires one verified conversion family; supported mixed units are mm, cm, m, and km",
+            ));
+        };
+        (&left * &left_scale, &right * &right_scale, "m".to_string())
+    };
+    ExpressionParser::check(&left_value)?;
+    ExpressionParser::check(&right_value)?;
+    let result = if operation == "+" {
+        &left_value + &right_value
+    } else {
+        &left_value - &right_value
+    };
+    ExpressionParser::check(&result)?;
+
+    let mut steps = Vec::new();
+    if left_unit != right_unit {
+        steps.push(format!(
+            "{} {} = {} m",
+            rational_text(&left),
+            left_unit,
+            rational_text(&left_value)
+        ));
+        steps.push(format!(
+            "{} {} = {} m",
+            rational_text(&right),
+            right_unit,
+            rational_text(&right_value)
+        ));
+    }
+    steps.push(format!(
+        "{} {} {} {} {} = {} {}",
+        rational_text(&left_value),
+        unit,
+        operation,
+        rational_text(&right_value),
+        unit,
+        rational_text(&result),
+        unit
+    ));
+    Ok(Some(Calculation {
+        expression: original.into(),
+        exact_value: format!("{} {}", rational_text(&result), unit),
+        steps,
+    }))
+}
+
+fn exact_rational(expression: &str) -> Result<BigRational> {
+    let calculation = calculate(expression)?;
+    BigRational::from_str(&calculation.exact_value).map_err(|_| {
+        failure(
+            "ARITHMETIC_INTERNAL",
+            "exact scalar result could not be read as a rational number",
+        )
     })
 }
 
@@ -1014,6 +1101,36 @@ mod tests {
             assert_eq!(calculate(input).unwrap().exact_value, expected, "{input}");
         }
     }
+    #[test]
+    fn exact_addition_and_subtraction_preserve_or_convert_units() {
+        let mixed = calculate("1 km + 500 m").unwrap();
+        assert_eq!(mixed.expression, "1 km + 500 m");
+        assert_eq!(mixed.exact_value, "1500 m");
+        assert_eq!(
+            mixed.steps,
+            ["1 km = 1000 m", "500 m = 500 m", "1000 m + 500 m = 1500 m"]
+        );
+
+        let decimal = calculate("0.1 km - 25 m").unwrap();
+        assert_eq!(decimal.exact_value, "75 m");
+        assert_eq!(
+            decimal.steps,
+            ["1/10 km = 100 m", "25 m = 25 m", "100 m - 25 m = 75 m"]
+        );
+
+        let same_unit = calculate("1.25 kg + 0.5 kg").unwrap();
+        assert_eq!(same_unit.exact_value, "7/4 kg");
+        assert_eq!(same_unit.steps, ["5/4 kg + 1/2 kg = 7/4 kg"]);
+    }
+
+    #[test]
+    fn incompatible_mixed_units_are_a_typed_stop() {
+        let error = calculate("1 km + 2 s").unwrap_err();
+        assert!(
+            matches!(error, minidora_domain::Error::Contract { code, .. } if code == "UNIT_MISMATCH")
+        );
+    }
+
     #[test]
     fn parser_rejects_partial_or_unbounded_execution() {
         for input in [

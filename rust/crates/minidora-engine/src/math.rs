@@ -530,7 +530,7 @@ pub struct Statistics {
     pub scope: String,
 }
 
-fn exact_length_scale_to_meters(unit: &str) -> Option<BigRational> {
+pub(crate) fn exact_length_scale_to_meters(unit: &str) -> Option<BigRational> {
     let (numerator, denominator) = match unit {
         "km" => (1000_i64, 1_i64),
         "m" => (1, 1),
