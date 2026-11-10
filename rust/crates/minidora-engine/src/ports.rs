@@ -1208,6 +1208,25 @@ pub struct JsonTableSortReport {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableGroup {
+    pub value: String,
+    pub count: usize,
+    pub source_row_indices: Vec<usize>,
+    pub member_source_spans: Vec<JsonComparisonSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableGroupCountReport {
+    pub source_sha256: String,
+    pub group_by: String,
+    pub group_by_source: JsonComparisonSpan,
+    pub group_by_index: usize,
+    pub row_count: usize,
+    pub groups: Vec<JsonTableGroup>,
+    pub guarantee: String,
+}
+
 struct JsonStringTableView<'a> {
     columns: Vec<String>,
     column_nodes: Vec<&'a JsonNode>,
@@ -1511,6 +1530,93 @@ pub fn json_table_sort(
         return Err(failure(
             "JSON_TABLE_SORT_OUTPUT_LIMIT",
             "sorted table report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
+/// Count exact decoded string values in a named JSON string-table column.
+/// Groups follow the first row in which each value appears.
+pub fn json_table_group_count(document: &str, column: &str) -> Result<JsonTableGroupCountReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_COUNT_INPUT_LIMIT",
+            "table document exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let table = json_string_table(document, &root)?;
+    let column_index = table
+        .columns
+        .iter()
+        .position(|name| name == column)
+        .ok_or_else(|| failure("JSON_TABLE_COUNT_COLUMN", "named column does not exist"))?;
+
+    let mut group_indices = BTreeMap::<String, usize>::new();
+    let mut members = Vec::<(String, Vec<(usize, &JsonNode)>)>::new();
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let value = json_string_value(document, row[column_index], "JSON_TABLE_COUNT_CELL")?;
+        let group_index = if let Some(index) = group_indices.get(&value) {
+            *index
+        } else {
+            let index = members.len();
+            group_indices.insert(value.clone(), index);
+            members.push((value.clone(), Vec::new()));
+            index
+        };
+        members[group_index].1.push((row_index, row[column_index]));
+    }
+
+    let mut output_budget = 1024usize;
+    let account = |budget: &mut usize, bytes: usize| -> Result<()> {
+        *budget = budget.saturating_add(bytes);
+        if *budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+            return Err(failure(
+                "JSON_TABLE_COUNT_OUTPUT_LIMIT",
+                "group report and source evidence exceed the 256000-byte output envelope",
+            ));
+        }
+        Ok(())
+    };
+    account(&mut output_budget, serde_json::to_vec(column)?.len())?;
+    account(
+        &mut output_budget,
+        json_comparison_span(document, table.column_nodes[column_index])
+            .source_sha256
+            .len()
+            + 192,
+    )?;
+    let mut groups = Vec::with_capacity(members.len());
+    for (value, group_members) in members {
+        let encoded_len = serde_json::to_vec(&value)?.len();
+        account(&mut output_budget, 256 + encoded_len)?;
+        let mut source_row_indices = Vec::with_capacity(group_members.len());
+        let mut member_source_spans = Vec::with_capacity(group_members.len());
+        for (row_index, node) in &group_members {
+            account(&mut output_budget, 224)?;
+            source_row_indices.push(*row_index);
+            member_source_spans.push(json_comparison_span(document, node));
+        }
+        groups.push(JsonTableGroup {
+            value,
+            count: group_members.len(),
+            source_row_indices,
+            member_source_spans,
+        });
+    }
+    let report = JsonTableGroupCountReport {
+        source_sha256: digest(document.as_bytes()),
+        group_by: column.into(),
+        group_by_source: json_comparison_span(document, table.column_nodes[column_index]),
+        group_by_index: column_index,
+        row_count: table.rows.len(),
+        groups,
+        guarantee: "bounded exact-string counts over an explicitly named JSON string-table column; groups retain first-seen order and every member's source range; no numeric inference, case folding, Unicode normalization or factual inference".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_COUNT_OUTPUT_LIMIT",
+            "group report exceeds 256000 output bytes",
         ));
     }
     Ok(report)

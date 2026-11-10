@@ -1,0 +1,66 @@
+{
+  "work_item": "B04 first-seen exact-string group counts for a supplied JSON string table through Core",
+  "recorded_at": "2026-11-10T17:27:33Z",
+  "base_commit": "90519c6cc9e8f2349256523b7c03a690a58a9bd6",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v21-json-table-group-count",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "def76b5c35ef12e12e1f9b053b35aced6543ac57c751f885b8d46af69c6effeb",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "64864ab0115f022c7cd673c825d47b2e19aee31cb4824309083e33355e7fecfa",
+    "crates/minidora-engine/src/core.rs": "394f8c3350b2b2a2a7dbd8f82cef39c0c956aa417fec0f978e6eacd3ec0f67b7",
+    "crates/minidora-engine/src/input.rs": "c2072228690535ef63ceee4af6302a4ebdcf564c16606e11286885b95a225a95",
+    "crates/minidora-engine/src/ports.rs": "28c636da8171d2d03f54a9e1acf3a073b149e65a8531dd58b0e7e525cb4411d1"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "192ab09fec36bb085897f48f178e8f1b487edc0f5ef2a033cbee9272d5428178"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No tests or runtime/ordinary CLI verification were requested or run in this implementation slice; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonTableGroupCount -> ports::json_table_group_count -> JsonTableGroupCountReport artifact",
+  "input_schema": "One strict JSON object with exactly columns and rows fields. columns is a unique 1..256 string array; rows is an array of at most 4096 rows, each an array of same-width strings. Duplicate JSON object keys and nonstring values are rejected.",
+  "supported_behavior": [
+    "The selected named column is grouped by exact decoded string equality. Numeric conversion, trimming, case folding and Unicode normalization are not performed.",
+    "Groups are ordered by their first source row and include integer counts, zero-based member row indices, and exact source byte ranges/digests for every member cell.",
+    "Input bytes, table cells, group evidence and the Core request output budget are bounded; invalid shape, absent columns or limit overflow suspend with typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

@@ -206,6 +206,10 @@ pub enum Intent {
         column: String,
         descending: bool,
     },
+    JsonTableGroupCount {
+        document: String,
+        column: String,
+    },
     EvidenceSynthesize {
         document: String,
     },

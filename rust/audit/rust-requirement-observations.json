@@ -267,8 +267,8 @@
         "crates/minidora-engine/src/math.rs",
         "crates/minidora-engine/src/core.rs"
       ],
-      "evidence": "csv-statistics-validation.json, json-statistics-validation.json, json-comparison-validation.json, json-table-comparison-validation.json, structured-table-conversion-validation.json, csv-filter-validation.json, csv-sort-validation.json, csv-group-count-validation.json, csv-table-comparison-validation.json, json-table-filter-validation.json and json-table-sort-validation.json record source-preserving CSV/JSON consumer paths and build checks; no test or ordinary-route execution or full B04 acceptance is claimed",
-      "full_acceptance_gap": "General JSON/schema transformations beyond bounded structural and strict string-table filtering/sorting/keyed comparison, CSV comparison beyond exact unique-key matching, and observed normal-route acceptance remain unverified",
+      "evidence": "csv-statistics-validation.json, json-statistics-validation.json, json-comparison-validation.json, json-table-comparison-validation.json, structured-table-conversion-validation.json, csv-filter-validation.json, csv-sort-validation.json, csv-group-count-validation.json, csv-table-comparison-validation.json, json-table-filter-validation.json, json-table-sort-validation.json and json-table-group-count-validation.json record source-preserving CSV/JSON consumer paths and build checks; no test or ordinary-route execution or full B04 acceptance is claimed",
+      "full_acceptance_gap": "General JSON/schema transformations beyond bounded structural and strict string-table filtering/sorting/group counting/keyed comparison, CSV comparison beyond exact unique-key matching, and observed normal-route acceptance remain unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

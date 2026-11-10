@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v20-json-table-sort";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v21-json-table-group-count";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -168,6 +168,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..15)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-sort"))
+        || header
+            .get(..19)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-count-by"))
         || header.starts_with("JSON表の列")
         || header == "証拠を整理して:"
         || header
@@ -331,6 +334,21 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
             document: document.into(),
             column: serde_json::from_str::<String>(&capture[1])?,
             descending: capture[2].eq_ignore_ascii_case("descending"),
+        }));
+    }
+    if let Some(capture) = regex(r"^JSON表を列「([^」]+)」で件数集計して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableGroupCount {
+            document: document.into(),
+            column: capture[1].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^json-table-count-by[ \t]+("(?:[^"\\]|\\.)*"):$"#)?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableGroupCount {
+            document: document.into(),
+            column: serde_json::from_str::<String>(&capture[1])?,
         }));
     }
     if header == "証拠を整理して:" || regex(r"(?i)^evidence-synthesize:$")?.is_match(header)
