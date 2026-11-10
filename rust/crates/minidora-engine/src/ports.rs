@@ -1147,6 +1147,322 @@ pub fn json_compare(document: &str) -> Result<JsonComparisonReport> {
     Ok(report)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableChange {
+    pub change: String,
+    pub key: String,
+    pub column: Option<String>,
+    pub left_value: Option<String>,
+    pub right_value: Option<String>,
+    pub left_pointer: Option<String>,
+    pub right_pointer: Option<String>,
+    pub left: Option<JsonComparisonSpan>,
+    pub right: Option<JsonComparisonSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JsonTableComparisonReport {
+    pub source_sha256: String,
+    pub left_sha256: String,
+    pub right_sha256: String,
+    pub key_column: String,
+    pub equal: bool,
+    pub changes: Vec<JsonTableChange>,
+    pub guarantee: String,
+}
+
+struct JsonStringTableView<'a> {
+    columns: Vec<String>,
+    rows: Vec<Vec<&'a JsonNode>>,
+    row_nodes: Vec<&'a JsonNode>,
+}
+
+fn json_string_value(document: &str, node: &JsonNode, code: &str) -> Result<String> {
+    if !matches!(&node.kind, JsonKind::Scalar) {
+        return Err(failure(code, "table labels and cells must be JSON strings"));
+    }
+    let raw = &document[node.span.clone()];
+    if !raw.starts_with('"') {
+        return Err(failure(code, "table labels and cells must be JSON strings"));
+    }
+    Ok(serde_json::from_str(raw)?)
+}
+
+fn json_string_table<'a>(document: &str, node: &'a JsonNode) -> Result<JsonStringTableView<'a>> {
+    let JsonKind::Object(fields) = &node.kind else {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_SHAPE",
+            "each side must be an object with columns and rows",
+        ));
+    };
+    if fields.len() != 2 || !fields.contains_key("columns") || !fields.contains_key("rows") {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_SHAPE",
+            "each table requires exactly columns and rows fields",
+        ));
+    }
+    let columns_node = fields.get("columns").expect("validated columns field");
+    let JsonKind::Array(column_nodes) = &columns_node.kind else {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_COLUMNS",
+            "keyed table comparison requires a named columns array",
+        ));
+    };
+    if !(1..=256).contains(&column_nodes.len()) {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_COLUMNS",
+            "expected 1..256 named columns",
+        ));
+    }
+    let mut columns = Vec::with_capacity(column_nodes.len());
+    let mut unique_columns = BTreeSet::new();
+    for column_node in column_nodes {
+        let value = json_string_value(document, column_node, "JSON_TABLE_COMPARE_COLUMNS")?;
+        if !unique_columns.insert(value.clone()) {
+            return Err(failure(
+                "DUPLICATE_COLUMNS",
+                "decoded table column names must be unique",
+            ));
+        }
+        columns.push(value);
+    }
+    let rows_node = fields.get("rows").expect("validated rows field");
+    let JsonKind::Array(row_nodes) = &rows_node.kind else {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_ROWS",
+            "table rows must be an array",
+        ));
+    };
+    if row_nodes.len() > 4096 {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_ROWS",
+            "table exceeds 4096 rows",
+        ));
+    }
+    let mut rows = Vec::with_capacity(row_nodes.len());
+    let mut cells = columns.len();
+    for row_node in row_nodes {
+        let JsonKind::Array(cell_nodes) = &row_node.kind else {
+            return Err(failure(
+                "JSON_TABLE_COMPARE_ROWS",
+                "each table row must be an array",
+            ));
+        };
+        if cell_nodes.len() != columns.len() {
+            return Err(failure(
+                "JSON_TABLE_COMPARE_ROWS",
+                "every row must match the named column width",
+            ));
+        }
+        cells = cells.saturating_add(cell_nodes.len());
+        if cells > 65_536 {
+            return Err(failure(
+                "JSON_TABLE_COMPARE_CELL_LIMIT",
+                "table exceeds 65536 cells",
+            ));
+        }
+        for cell in cell_nodes {
+            let _ = json_string_value(document, cell, "JSON_TABLE_COMPARE_CELL")?;
+        }
+        rows.push(cell_nodes.iter().collect());
+    }
+    Ok(JsonStringTableView {
+        columns,
+        rows,
+        row_nodes: row_nodes.iter().collect(),
+    })
+}
+
+fn record_json_table_change(
+    mut change: JsonTableChange,
+    left_node: Option<&JsonNode>,
+    right_node: Option<&JsonNode>,
+    document: &str,
+    changes: &mut Vec<JsonTableChange>,
+    output_budget: &mut usize,
+) -> Result<()> {
+    if changes.len() >= MAX_JSON_COMPARE_DIFFERENCES {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_DIFFERENCE_LIMIT",
+            "comparison exceeds 4096 recorded changes",
+        ));
+    }
+    let estimate = change.key.len()
+        + change.column.as_ref().map_or(0, String::len)
+        + change.left_value.as_ref().map_or(0, String::len)
+        + change.right_value.as_ref().map_or(0, String::len)
+        + change.left_pointer.as_ref().map_or(0, String::len)
+        + change.right_pointer.as_ref().map_or(0, String::len)
+        + 512;
+    *output_budget = (*output_budget).saturating_add(estimate);
+    if *output_budget > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_OUTPUT_LIMIT",
+            "comparison report exceeds its bounded output envelope",
+        ));
+    }
+    change.left = left_node.map(|node| json_comparison_span(document, node));
+    change.right = right_node.map(|node| json_comparison_span(document, node));
+    changes.push(change);
+    Ok(())
+}
+
+/// Compare string-table JSON sides by one unique exact-string key column.
+/// Wrapper shape is `{"left":{"columns":[...],"rows":[...]},"right":...}`.
+pub fn json_table_compare(document: &str, key_column: &str) -> Result<JsonTableComparisonReport> {
+    if document.len() > MAX_JSON_COMPARE_BYTES {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_INPUT_LIMIT",
+            "comparison wrapper exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let JsonKind::Object(wrapper) = &root.kind else {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_SHAPE",
+            "comparison wrapper must be an object with left and right tables",
+        ));
+    };
+    if wrapper.len() != 2 || !wrapper.contains_key("left") || !wrapper.contains_key("right") {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_SHAPE",
+            "comparison wrapper requires exactly left and right fields",
+        ));
+    }
+    let left_node = wrapper.get("left").expect("validated left field");
+    let right_node = wrapper.get("right").expect("validated right field");
+    let left = json_string_table(document, left_node)?;
+    let right = json_string_table(document, right_node)?;
+    if left.columns != right.columns {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_SCHEMA",
+            "both tables must have identical decoded column names in the same order",
+        ));
+    }
+    let key_index = left
+        .columns
+        .iter()
+        .position(|column| column == key_column)
+        .ok_or_else(|| failure("JSON_TABLE_COMPARE_KEY", "key column does not exist"))?;
+
+    let mut left_keys = BTreeMap::new();
+    for (row_index, row) in left.rows.iter().enumerate() {
+        let key = json_string_value(document, row[key_index], "JSON_TABLE_COMPARE_KEY")?;
+        if left_keys.insert(key, row_index).is_some() {
+            return Err(failure(
+                "JSON_TABLE_COMPARE_DUPLICATE_KEY",
+                "left table key values must be unique",
+            ));
+        }
+    }
+    let mut right_keys = BTreeMap::new();
+    for (row_index, row) in right.rows.iter().enumerate() {
+        let key = json_string_value(document, row[key_index], "JSON_TABLE_COMPARE_KEY")?;
+        if right_keys.insert(key, row_index).is_some() {
+            return Err(failure(
+                "JSON_TABLE_COMPARE_DUPLICATE_KEY",
+                "right table key values must be unique",
+            ));
+        }
+    }
+
+    let mut changes = Vec::new();
+    let mut output_budget = 512usize;
+    for (left_index, left_row) in left.rows.iter().enumerate() {
+        let key = json_string_value(document, left_row[key_index], "JSON_TABLE_COMPARE_KEY")?;
+        let Some(right_index) = right_keys.get(&key).copied() else {
+            record_json_table_change(
+                JsonTableChange {
+                    change: "ROW_REMOVED".into(),
+                    key,
+                    column: None,
+                    left_value: None,
+                    right_value: None,
+                    left_pointer: Some(format!("/left/rows/{left_index}")),
+                    right_pointer: None,
+                    left: None,
+                    right: None,
+                },
+                Some(left.row_nodes[left_index]),
+                None,
+                document,
+                &mut changes,
+                &mut output_budget,
+            )?;
+            continue;
+        };
+        let right_row = &right.rows[right_index];
+        for column_index in 0..left.columns.len() {
+            if column_index == key_index {
+                continue;
+            }
+            let left_value =
+                json_string_value(document, left_row[column_index], "JSON_TABLE_COMPARE_CELL")?;
+            let right_value =
+                json_string_value(document, right_row[column_index], "JSON_TABLE_COMPARE_CELL")?;
+            if left_value != right_value {
+                record_json_table_change(
+                    JsonTableChange {
+                        change: "CELL_CHANGED".into(),
+                        key: key.clone(),
+                        column: Some(left.columns[column_index].clone()),
+                        left_value: Some(left_value),
+                        right_value: Some(right_value),
+                        left_pointer: Some(format!("/left/rows/{left_index}/{column_index}")),
+                        right_pointer: Some(format!("/right/rows/{right_index}/{column_index}")),
+                        left: None,
+                        right: None,
+                    },
+                    Some(left_row[column_index]),
+                    Some(right_row[column_index]),
+                    document,
+                    &mut changes,
+                    &mut output_budget,
+                )?;
+            }
+        }
+    }
+    for (right_index, right_row) in right.rows.iter().enumerate() {
+        let key = json_string_value(document, right_row[key_index], "JSON_TABLE_COMPARE_KEY")?;
+        if !left_keys.contains_key(&key) {
+            record_json_table_change(
+                JsonTableChange {
+                    change: "ROW_ADDED".into(),
+                    key,
+                    column: None,
+                    left_value: None,
+                    right_value: None,
+                    left_pointer: None,
+                    right_pointer: Some(format!("/right/rows/{right_index}")),
+                    left: None,
+                    right: None,
+                },
+                None,
+                Some(right.row_nodes[right_index]),
+                document,
+                &mut changes,
+                &mut output_budget,
+            )?;
+        }
+    }
+    let report = JsonTableComparisonReport {
+        source_sha256: digest(document.as_bytes()),
+        left_sha256: digest(document[left_node.span.clone()].as_bytes()),
+        right_sha256: digest(document[right_node.span.clone()].as_bytes()),
+        key_column: key_column.into(),
+        equal: changes.is_empty(),
+        changes,
+        guarantee: "bounded keyed comparison of explicitly string-typed tables; exact key/value matching, identical column order and unique keys required; source ranges retained; no semantic truth inferred".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_JSON_COMPARE_OUTPUT_BYTES {
+        return Err(failure(
+            "JSON_TABLE_COMPARE_OUTPUT_LIMIT",
+            "comparison report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
 /// Compute exact descriptive statistics for one selected array of JSON number
 /// literals. Every observation retains its original source bytes and offset.
 pub fn json_pointer_statistics(document: &str, pointer: &str) -> Result<JsonStatisticsReport> {

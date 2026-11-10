@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v15-json-compare";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v16-json-table-compare";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -155,6 +155,10 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..12)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-compare"))
+        || header.starts_with("JSON表を列")
+        || header
+            .get(..18)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-compare"))
         || header.starts_with("JSONの配列")
         || header == "json-statistics"
         || header.starts_with("json-statistics ")
@@ -244,6 +248,21 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     if header == "JSONを比較して:" || regex(r"(?i)^json-compare:$")?.is_match(header) {
         return Ok(Some(Intent::JsonCompare {
             document: document.into(),
+        }));
+    }
+    if let Some(capture) = regex(r"^JSON表を列「([^」]+)」で比較して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableCompare {
+            document: document.into(),
+            key_column: capture[1].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^json-table-compare[ \t]+("(?:[^"\\]|\\.)*"):$"#)?.captures(header)
+    {
+        return Ok(Some(Intent::JsonTableCompare {
+            document: document.into(),
+            key_column: serde_json::from_str::<String>(&capture[1])?,
         }));
     }
     if let Some(capture) = regex(r"^CSVの列「([^」]+)」の統計量を計算して[:：]$")?.captures(header)

@@ -188,6 +188,10 @@ pub enum Intent {
     JsonCompare {
         document: String,
     },
+    JsonTableCompare {
+        document: String,
+        key_column: String,
+    },
     CsvToJson {
         document: String,
         has_header: bool,

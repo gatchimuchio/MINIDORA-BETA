@@ -1,0 +1,68 @@
+{
+  "work_item": "B04 keyed comparison of JSON string tables with two-sided source locations through Core",
+  "recorded_at": "2026-11-10T16:58:08Z",
+  "base_commit": "5a978d7f1831617523010dd4f6d953cbafeb311f",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v16-json-table-compare",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "a4d2e54f227b86537740932c5f7c00bbb7ef73039eba5db012f0b34bbb8c150e",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "071b4009ae6fe01759d287d6d7b98da2e5d439514a3ea121cc457da2ba9f27e5",
+    "crates/minidora-engine/src/core.rs": "e5517c4c63a1f13f44a92a23065666b0d80a02a78d92a20373528fe7bb8d5ad9",
+    "crates/minidora-engine/src/input.rs": "e26089c9bd628b9d94ceab177dadf93320037791a7ff06e8ea2e6dc538f7998e",
+    "crates/minidora-engine/src/ports.rs": "7dbf36cc7a87bb7e98da392d65da7830d6f04fc6c0583504995844406f6ebbc4"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "34d8304156b3ce7889c779c5354abf92cd1bafb9aa67c36807c9ad27342e967a"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation did not request test or runtime-route verification; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::JsonTableCompare -> ports::json_table_compare -> JsonTableComparisonReport artifact",
+  "wrapper_schema": "Exactly {\"left\":{\"columns\":[string,...],\"rows\":[[string,...],...]},\"right\":...}; duplicate/unknown fields and nonstring cells are rejected.",
+  "comparison_rules": [
+    "Both sides require identical decoded column names in the same order, 1..256 columns, rectangular rows and at most 4096 rows.",
+    "The selected key column must exist and have unique exact-string values on both sides; keys and cells are not normalized or converted.",
+    "Left rows are reported in source order as removed rows or changed non-key cells; right-only rows follow in source order as additions.",
+    "Each change carries left/right JSON Pointers, byte ranges and SHA-256 digests; changed cells also carry exact string values.",
+    "Duplicate decoded JSON keys and table headers, invalid shapes, duplicate keys and bounded-input/output overflows return typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}
