@@ -583,6 +583,19 @@ impl Engine {
                     return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
                 }
             },
+            Intent::QuadraticEquation { left, right } => {
+                match crate::math::solve_quadratic(left, right) {
+                    Ok(solution) => units.push(serde_json::to_string_pretty(&solution)?),
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "QUADRATIC_SOLVE_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                }
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::Symbolic {
                 expression,
                 operation,

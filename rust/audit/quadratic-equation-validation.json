@@ -1,0 +1,84 @@
+{
+  "work_item": "B03 bounded exact single-variable quadratic equation solver through input and Core",
+  "recorded_at": "2026-11-10T20:48:51Z",
+  "base_commit": "ef0929d7b60535b2a9e049f8e48d18fb776fb69f",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v31-quadratic-equation",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "83ec152d8b1dc4b538d121874ba5b5492fdd1cfd3edd9e629bac3061e3ff50bd",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "dd6cab9d1918fe577735a3d1238dbcff4e95abe715f0ef531597800f2b58159a",
+    "crates/minidora-engine/src/core.rs": "9751dfd5a06bf9f47278c37df74cc458114d16b909b6c68e1445623170c13c9a",
+    "crates/minidora-engine/src/input.rs": "379450a8cc79d2b0e4357a8f495c4519abb8dace537134d70696b4cc6728f42c",
+    "crates/minidora-engine/src/math.rs": "2f291ed3d6eb2046c042d8790d97ef4d11a07613152a4cb0d1dd685dd64cb473"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "42dde5004ea477bbd10de6ca881512469bbdf960ad163b93b567985c84453385"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target RUSTUP_TOOLCHAIN=1.99.1",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "initial_compile_failures": [
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "cause": "Clippy identified a manually written integer ceiling division in the integer square-root initializer.",
+      "correction": "Used the standard integer div_ceil method; formatting, check, Clippy and build then passed."
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This slice did not run tests or a runtime route; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal -> input::interpret -> input::structured_intent (no match) -> input::mathematics_intent -> Intent::QuadraticEquation -> math::solve_quadratic -> serialized QuadraticSolution artifact -> Core computed result",
+  "supported_behavior": [
+    "Japanese 「二次方程式 left=right を解いて」 and English `solve-quadratic left=right` select one bounded explicit equality; malformed or multiple equalities remain unresolved.",
+    "The existing exact sparse-polynomial grammar reduces both sides to one normalized equation. Multiplication must be explicit; exactly one syntactically mentioned variable and normalized degree two with nonzero leading coefficient are required.",
+    "The result contains the normalized [a,b,c] coefficients, exact discriminant, root classification, exact real or complex roots, exact root sum and product, and operation count.",
+    "Rational real roots are verified by exact substitution. Irrational and complex forms are emitted as exact quadratic-formula radicals without decimal approximation.",
+    "Existing expression length, coefficient, term, degree and operation bounds remain in force; unsupported shapes produce typed errors."
+  ],
+  "known_limits": [
+    "No test or ordinary CLI route was executed for this slice.",
+    "Linear equations, degree greater than two, multiple variables, implicit multiplication, functions and free-form mathematical language are outside this route.",
+    "Radical forms follow the exact quadratic formula; irrational and complex roots are not separately substituted through an algebraic-number evaluator."
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

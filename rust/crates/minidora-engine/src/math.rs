@@ -1102,6 +1102,39 @@ pub struct PolynomialEvaluationReport {
     pub verification: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum QuadraticRootKind {
+    RepeatedRealRoot,
+    TwoRationalRealRoots,
+    TwoRadicalRealRoots,
+    TwoComplexConjugates,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuadraticRoot {
+    pub exact_value: String,
+    pub representation: String,
+    pub multiplicity: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuadraticSolution {
+    pub equation_left: String,
+    pub equation_right: String,
+    pub variable: String,
+    /// Coefficients are ordered [a, b, c] for a*x^2 + b*x + c = 0.
+    pub coefficients: [String; 3],
+    pub discriminant: String,
+    pub root_kind: QuadraticRootKind,
+    pub real_roots: Vec<QuadraticRoot>,
+    pub complex_roots: Vec<String>,
+    pub sum_of_roots: String,
+    pub product_of_roots: String,
+    pub operations: usize,
+    pub verification: String,
+}
+
 #[derive(Default)]
 struct PolyWork {
     operations: usize,
@@ -1781,6 +1814,196 @@ pub fn evaluate_polynomial(
     bindings: &BTreeMap<String, String>,
 ) -> Result<String> {
     evaluate_polynomial_report(expression, bindings).map(|report| report.value)
+}
+
+fn integer_square_root(value: &BigInt) -> BigInt {
+    if value <= &BigInt::zero() {
+        return BigInt::zero();
+    }
+    let mut estimate = BigInt::one() << value.bits().div_ceil(2) as usize;
+    loop {
+        let next = (&estimate + value / &estimate) >> 1;
+        if next >= estimate {
+            return estimate;
+        }
+        estimate = next;
+    }
+}
+
+fn exact_rational_square_root(value: &BigRational) -> Option<BigRational> {
+    if value < &BigRational::zero() {
+        return None;
+    }
+    let numerator = integer_square_root(value.numer());
+    let denominator = integer_square_root(value.denom());
+    if numerator.clone() * &numerator != value.numer().clone()
+        || denominator.clone() * &denominator != value.denom().clone()
+    {
+        return None;
+    }
+    Some(BigRational::new(numerator, denominator))
+}
+
+/// Solve one single-variable degree-two equation using the existing exact
+/// polynomial grammar. Non-rational roots are retained as exact radicals.
+pub fn solve_quadratic(left: &str, right: &str) -> Result<QuadraticSolution> {
+    let expression = format!("({left})-({right})");
+    if expression.len() > 8192 {
+        return Err(failure(
+            "QUADRATIC_INPUT_LIMIT",
+            "combined equation exceeds the 8192-byte symbolic expression limit",
+        ));
+    }
+    let mut parser = PolyParser::new(&expression)?;
+    let polynomial = parser.finish()?;
+    if parser.variables.len() != 1 {
+        return Err(failure(
+            "QUADRATIC_VARIABLES",
+            "a quadratic equation must mention exactly one variable",
+        ));
+    }
+    let variable = parser
+        .variables
+        .iter()
+        .next()
+        .expect("one variable was checked")
+        .clone();
+    let mut coefficients = vec![BigRational::zero(); 3];
+    for (monomial, coefficient) in &polynomial {
+        if monomial.keys().any(|name| name != &variable) {
+            return Err(failure(
+                "QUADRATIC_VARIABLES",
+                "all nonconstant terms must use the same variable",
+            ));
+        }
+        let degree = monomial.get(&variable).copied().unwrap_or(0);
+        if degree > 2 {
+            return Err(failure(
+                "QUADRATIC_DEGREE",
+                "the normalized equation has degree greater than two",
+            ));
+        }
+        coefficients[degree as usize] = coefficient.clone();
+    }
+    let a = coefficients[2].clone();
+    let b = coefficients[1].clone();
+    let c = coefficients[0].clone();
+    if a.is_zero() {
+        return Err(failure(
+            "QUADRATIC_LEADING_COEFFICIENT",
+            "the normalized equation must have a nonzero degree-two coefficient",
+        ));
+    }
+
+    let mut budget = Budget::default();
+    let b_squared = budget.check(b.clone() * b.clone())?;
+    let ac = budget.check(a.clone() * c.clone())?;
+    let four_ac = budget.check(BigRational::from_integer(BigInt::from(4)) * ac)?;
+    let discriminant = budget.check(b_squared - four_ac)?;
+    let two_a = budget.check(BigRational::from_integer(BigInt::from(2)) * a.clone())?;
+    let sum_of_roots = budget.check(-b.clone() / a.clone())?;
+    let product_of_roots = budget.check(c.clone() / a.clone())?;
+    let base_numerator = rational_text(&(-b.clone()));
+    let denominator = rational_text(&two_a);
+
+    let (root_kind, real_roots, complex_roots) = if discriminant.is_zero() {
+        let root = budget.check(-b.clone() / two_a.clone())?;
+        let a_root_squared = budget.check(a.clone() * root.clone() * root.clone())?;
+        let b_root = budget.check(b.clone() * root.clone())?;
+        let ab = budget.check(a_root_squared + b_root)?;
+        let residual = budget.check(ab + c.clone())?;
+        if !residual.is_zero() {
+            return Err(failure(
+                "QUADRATIC_VERIFICATION",
+                "the repeated rational root failed exact substitution",
+            ));
+        }
+        (
+            QuadraticRootKind::RepeatedRealRoot,
+            vec![QuadraticRoot {
+                exact_value: rational_text(&root),
+                representation: "RATIONAL".into(),
+                multiplicity: 2,
+            }],
+            Vec::new(),
+        )
+    } else if discriminant > BigRational::zero() {
+        if let Some(square_root) = exact_rational_square_root(&discriminant) {
+            let mut roots = vec![
+                budget.check((-b.clone() - square_root.clone()) / two_a.clone())?,
+                budget.check((-b.clone() + square_root) / two_a.clone())?,
+            ];
+            roots.sort();
+            for root in &roots {
+                let a_root_squared = budget.check(a.clone() * root.clone() * root.clone())?;
+                let b_root = budget.check(b.clone() * root.clone())?;
+                let ab = budget.check(a_root_squared + b_root)?;
+                let residual = budget.check(ab + c.clone())?;
+                if !residual.is_zero() {
+                    return Err(failure(
+                        "QUADRATIC_VERIFICATION",
+                        "a rational root failed exact substitution",
+                    ));
+                }
+            }
+            (
+                QuadraticRootKind::TwoRationalRealRoots,
+                roots
+                    .iter()
+                    .map(|root| QuadraticRoot {
+                        exact_value: rational_text(root),
+                        representation: "RATIONAL".into(),
+                        multiplicity: 1,
+                    })
+                    .collect(),
+                Vec::new(),
+            )
+        } else {
+            let radical = rational_text(&discriminant);
+            let minus = format!("(({base_numerator}) - sqrt({radical})) / ({denominator})");
+            let plus = format!("(({base_numerator}) + sqrt({radical})) / ({denominator})");
+            (
+                QuadraticRootKind::TwoRadicalRealRoots,
+                vec![
+                    QuadraticRoot {
+                        exact_value: minus,
+                        representation: "EXACT_RADICAL".into(),
+                        multiplicity: 1,
+                    },
+                    QuadraticRoot {
+                        exact_value: plus,
+                        representation: "EXACT_RADICAL".into(),
+                        multiplicity: 1,
+                    },
+                ],
+                Vec::new(),
+            )
+        }
+    } else {
+        let radical = rational_text(&(-discriminant.clone()));
+        let minus = format!("(({base_numerator}) - i*sqrt({radical})) / ({denominator})");
+        let plus = format!("(({base_numerator}) + i*sqrt({radical})) / ({denominator})");
+        (
+            QuadraticRootKind::TwoComplexConjugates,
+            Vec::new(),
+            vec![minus, plus],
+        )
+    };
+
+    Ok(QuadraticSolution {
+        equation_left: left.into(),
+        equation_right: right.into(),
+        variable,
+        coefficients: [rational_text(&a), rational_text(&b), rational_text(&c)],
+        discriminant: rational_text(&discriminant),
+        root_kind,
+        real_roots,
+        complex_roots,
+        sum_of_roots: rational_text(&sum_of_roots),
+        product_of_roots: rational_text(&product_of_roots),
+        operations: parser.work.operations + budget.0,
+        verification: "both sides were reduced by exact sparse-polynomial arithmetic; rational real roots were substituted exactly; radical forms follow the exact quadratic formula; root sum and product identities use exact rational arithmetic; no decimal approximation".into(),
+    })
 }
 
 #[cfg(test)]
