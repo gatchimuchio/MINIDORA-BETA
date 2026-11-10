@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v29-json-table-inner-join";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v30-csv-inner-join";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -257,6 +257,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || (header.starts_with("CSVの「")
             && header.contains("ごとに")
             && header.contains("統計量"))
+        || header.starts_with("CSVを「")
         || header.starts_with("csv-select ")
         || header
             .get(..10)
@@ -272,6 +273,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..14)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-compare-by"))
+        || header.starts_with("csv-inner-join")
         || header.starts_with("csv-statistics ")
         || header.starts_with("CSVをJSONに変換して")
         || header.starts_with("csv-to-json")
@@ -421,6 +423,25 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::CsvCompare {
             document: document.into(),
             key_column: serde_json::from_str::<String>(&capture[1])?,
+        }));
+    }
+    if let Some(capture) =
+        regex(r"^CSVを「([^」]+)」と「([^」]+)」で内部結合して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::CsvInnerJoin {
+            document: document.into(),
+            left_key_column: capture[1].into(),
+            right_key_column: capture[2].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^csv-inner-join[ \t]+("(?:[^"\\]|\\.)*")[ \t]+("(?:[^"\\]|\\.)*"):$"#)?
+            .captures(header)
+    {
+        return Ok(Some(Intent::CsvInnerJoin {
+            document: document.into(),
+            left_key_column: serde_json::from_str::<String>(&capture[1])?,
+            right_key_column: serde_json::from_str::<String>(&capture[2])?,
         }));
     }
     if let Some(capture) =

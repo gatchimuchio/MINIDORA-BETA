@@ -785,6 +785,30 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::CsvInnerJoin {
+                document,
+                left_key_column,
+                right_key_column,
+            } => {
+                let value = match crate::document::csv_inner_join(
+                    document,
+                    left_key_column,
+                    right_key_column,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CSV_INNER_JOIN_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::CsvToJson {
                 document,
                 has_header,

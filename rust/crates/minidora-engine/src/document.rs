@@ -1166,6 +1166,302 @@ pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult
     )
 }
 
+fn append_csv_join_cell(
+    output: &mut String,
+    document: &str,
+    cell: &CsvCell,
+    kind: &str,
+    location: (usize, usize),
+    spans: &mut Vec<DocumentSpan>,
+    source_span_budget: &mut usize,
+) -> Result<()> {
+    let span_index = spans.len();
+    append_json_cell(
+        output,
+        document,
+        cell,
+        kind,
+        Some(location.0),
+        location.1,
+        spans,
+    )?;
+    *source_span_budget =
+        source_span_budget.saturating_add(serde_json::to_vec(&spans[span_index])?.len());
+    if output.len() > MAX_RESULT_BYTES || *source_span_budget > MAX_RESULT_BYTES {
+        return Err(failure(
+            "CSV_INNER_JOIN_OUTPUT_LIMIT",
+            "joined table and source spans exceed the 256000-byte output envelope",
+        ));
+    }
+    Ok(())
+}
+
+/// Join two explicitly supplied headered CSV tables using unique exact-string
+/// keys. Output rows retain left-table order and map every emitted cell back to
+/// the combined original source document.
+pub fn csv_inner_join(
+    document: &str,
+    left_key_column: &str,
+    right_key_column: &str,
+) -> Result<DocumentResult> {
+    const LEFT_MARKER: &str = "--- MINIDORA LEFT CSV ---\n";
+    const RIGHT_DELIMITER: &str = "\r\n--- MINIDORA RIGHT CSV ---\n";
+    admission(document)?;
+    if left_key_column.is_empty() || right_key_column.is_empty() {
+        return Err(failure(
+            "CSV_INNER_JOIN_COLUMN",
+            "both named key columns must not be empty",
+        ));
+    }
+    if !document.starts_with(LEFT_MARKER)
+        || document.matches(LEFT_MARKER).count() != 1
+        || document.matches(RIGHT_DELIMITER).count() != 1
+    {
+        return Err(failure(
+            "CSV_INNER_JOIN_DELIMITER",
+            "expected one left marker and one CRLF-prefixed right marker; marker text is reserved",
+        ));
+    }
+    let left_start = LEFT_MARKER.len();
+    let delimiter_start = document
+        .find(RIGHT_DELIMITER)
+        .ok_or_else(|| failure("CSV_INNER_JOIN_DELIMITER", "right marker is missing"))?;
+    let right_start = delimiter_start + RIGHT_DELIMITER.len();
+    let left_source = &document[left_start..delimiter_start];
+    let right_source = &document[right_start..];
+    if left_source.contains("--- MINIDORA LEFT CSV ---")
+        || left_source.contains("--- MINIDORA RIGHT CSV ---")
+        || right_source.contains("--- MINIDORA RIGHT CSV ---")
+        || right_source.contains("--- MINIDORA LEFT CSV ---")
+    {
+        return Err(failure(
+            "CSV_INNER_JOIN_DELIMITER",
+            "reserved comparison marker text occurs more than once",
+        ));
+    }
+
+    let mut left = parse_csv(left_source, true)?;
+    let mut right = parse_csv(right_source, true)?;
+    let shift_table = |table: &mut CsvTable, offset: usize| {
+        for cell in table
+            .header
+            .iter_mut()
+            .flatten()
+            .chain(table.rows.iter_mut().flatten())
+        {
+            cell.source_start += offset;
+            cell.source_end += offset;
+        }
+        table.source_document = document.into();
+        table.source_sha256 = digest(document.as_bytes());
+    };
+    shift_table(&mut left, left_start);
+    shift_table(&mut right, right_start);
+    let left_header = left.header.as_deref().expect("header parsing is explicit");
+    let right_header = right.header.as_deref().expect("header parsing is explicit");
+    let left_key_index = left_header
+        .iter()
+        .position(|cell| cell.value == left_key_column)
+        .ok_or_else(|| failure("CSV_INNER_JOIN_COLUMN", "left key column does not exist"))?;
+    let right_key_index = right_header
+        .iter()
+        .position(|cell| cell.value == right_key_column)
+        .ok_or_else(|| failure("CSV_INNER_JOIN_COLUMN", "right key column does not exist"))?;
+
+    let mut right_by_key = BTreeMap::<String, usize>::new();
+    for (row_index, row) in right.rows.iter().enumerate() {
+        if right_by_key
+            .insert(row[right_key_index].value.clone(), row_index)
+            .is_some()
+        {
+            return Err(failure(
+                "CSV_INNER_JOIN_DUPLICATE_KEY",
+                "right join keys must be unique",
+            ));
+        }
+    }
+    let mut left_keys = BTreeSet::<String>::new();
+    for row in &left.rows {
+        if !left_keys.insert(row[left_key_index].value.clone()) {
+            return Err(failure(
+                "CSV_INNER_JOIN_DUPLICATE_KEY",
+                "left join keys must be unique",
+            ));
+        }
+    }
+
+    let mut text = String::from("{\"columns\":[");
+    let mut spans = Vec::new();
+    let mut source_span_budget = 0usize;
+    for (side, header) in [("left.", left_header), ("right.", right_header)] {
+        for (column_index, cell) in header.iter().enumerate() {
+            if !spans.is_empty() {
+                text.push(',');
+            }
+            let output_start = text.len();
+            text.push_str(&serde_json::to_string(&format!("{side}{}", cell.value))?);
+            let span = source_span(
+                document,
+                cell,
+                if side == "left." {
+                    "CSV_INNER_JOIN_LEFT_HEADER"
+                } else {
+                    "CSV_INNER_JOIN_RIGHT_HEADER"
+                },
+                Some(0),
+                column_index,
+                Some((output_start, text.len())),
+            );
+            source_span_budget =
+                source_span_budget.saturating_add(serde_json::to_vec(&span)?.len());
+            if text.len() > MAX_RESULT_BYTES || source_span_budget > MAX_RESULT_BYTES {
+                return Err(failure(
+                    "CSV_INNER_JOIN_OUTPUT_LIMIT",
+                    "joined table and source spans exceed the 256000-byte output envelope",
+                ));
+            }
+            spans.push(span);
+        }
+    }
+
+    text.push_str("],\"rows\":[");
+    let mut source_record_pairs = Vec::<(usize, usize)>::new();
+    let mut unmatched_left = Vec::<(usize, usize)>::new();
+    let mut matched_right = vec![false; right.rows.len()];
+    for (left_row_index, left_row) in left.rows.iter().enumerate() {
+        let Some(&right_row_index) = right_by_key.get(&left_row[left_key_index].value) else {
+            unmatched_left.push((left_row_index, left_key_index));
+            continue;
+        };
+        if !source_record_pairs.is_empty() {
+            text.push(',');
+        }
+        text.push('[');
+        for (column_index, cell) in left_row.iter().enumerate() {
+            if column_index > 0 {
+                text.push(',');
+            }
+            append_csv_join_cell(
+                &mut text,
+                document,
+                cell,
+                "CSV_INNER_JOIN_LEFT_CELL",
+                (left_row_index + 1, column_index),
+                &mut spans,
+                &mut source_span_budget,
+            )?;
+        }
+        for (column_index, cell) in right.rows[right_row_index].iter().enumerate() {
+            if column_index > 0 {
+                text.push(',');
+            }
+            append_csv_join_cell(
+                &mut text,
+                document,
+                cell,
+                "CSV_INNER_JOIN_RIGHT_CELL",
+                (right_row_index + 1, column_index),
+                &mut spans,
+                &mut source_span_budget,
+            )?;
+        }
+        text.push(']');
+        source_record_pairs.push((left_row_index, right_row_index));
+        matched_right[right_row_index] = true;
+        if text.len() > MAX_RESULT_BYTES {
+            return Err(failure(
+                "CSV_INNER_JOIN_OUTPUT_LIMIT",
+                "joined table exceeds 256000 output bytes",
+            ));
+        }
+    }
+
+    text.push_str("],\"left_source_record_numbers\":[");
+    for (index, (left_row, _)) in source_record_pairs.iter().enumerate() {
+        if index > 0 {
+            text.push(',');
+        }
+        text.push_str(&(left_row + 1).to_string());
+    }
+    text.push_str("],\"right_source_record_numbers\":[");
+    for (index, (_, right_row)) in source_record_pairs.iter().enumerate() {
+        if index > 0 {
+            text.push(',');
+        }
+        text.push_str(&(right_row + 1).to_string());
+    }
+    text.push_str("],\"unmatched_left\":[");
+    for (index, (row_index, key_index)) in unmatched_left.iter().enumerate() {
+        if index > 0 {
+            text.push(',');
+        }
+        text.push_str("{\"key\":");
+        append_csv_join_cell(
+            &mut text,
+            document,
+            &left.rows[*row_index][*key_index],
+            "CSV_INNER_JOIN_UNMATCHED_LEFT_KEY",
+            (row_index + 1, *key_index),
+            &mut spans,
+            &mut source_span_budget,
+        )?;
+        text.push_str(",\"source_record_number\":");
+        text.push_str(&(row_index + 1).to_string());
+        text.push('}');
+    }
+    text.push_str("],\"unmatched_right\":[");
+    let mut unmatched_right_output_index = 0usize;
+    for (row_index, row) in right.rows.iter().enumerate() {
+        if matched_right[row_index] {
+            continue;
+        }
+        if unmatched_right_output_index > 0 {
+            text.push(',');
+        }
+        unmatched_right_output_index += 1;
+        text.push_str("{\"key\":");
+        append_csv_join_cell(
+            &mut text,
+            document,
+            &row[right_key_index],
+            "CSV_INNER_JOIN_UNMATCHED_RIGHT_KEY",
+            (row_index + 1, right_key_index),
+            &mut spans,
+            &mut source_span_budget,
+        )?;
+        text.push_str(",\"source_record_number\":");
+        text.push_str(&(row_index + 1).to_string());
+        text.push('}');
+    }
+    text.push_str("]}");
+    let matched_count = source_record_pairs.len();
+    let unmatched_left_count = unmatched_left.len();
+    let unmatched_right_count = matched_right.iter().filter(|matched| !**matched).count();
+    result(
+        document,
+        text,
+        "CSV_INNER_JOIN",
+        BTreeMap::from([
+            ("left_key_column".into(), left_key_column.into()),
+            ("left_key_index".into(), left_key_index.to_string()),
+            ("right_key_column".into(), right_key_column.into()),
+            ("right_key_index".into(), right_key_index.to_string()),
+            ("matched_row_count".into(), matched_count.to_string()),
+            (
+                "unmatched_left_row_count".into(),
+                unmatched_left_count.to_string(),
+            ),
+            (
+                "unmatched_right_row_count".into(),
+                unmatched_right_count.to_string(),
+            ),
+            ("ordering".into(), "left_row_order".into()),
+            ("comparison".into(), "exact_decoded_strings".into()),
+        ]),
+        spans,
+    )
+}
+
 struct JsonTableParser<'a> {
     text: &'a str,
     at: usize,

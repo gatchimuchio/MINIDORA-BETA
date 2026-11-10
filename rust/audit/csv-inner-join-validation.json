@@ -1,0 +1,78 @@
+{
+  "work_item": "B04 exact-key inner join of two headered CSV tables through Core",
+  "recorded_at": "2026-11-10T19:13:18Z",
+  "base_commit": "b60b8147e638179516ea035c7d3e9c3c0284b270",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v30-csv-inner-join",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "5e85f74a9c8bbd02807a5d5eb90a6b50d5f3e72bbc518c027a0d5818c5803321",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "20df8de01e705970f2622b1da6b657e90487cb6d9fa9255b1b06f6a464c9fb71",
+    "crates/minidora-engine/src/core.rs": "e31b473187eadbb61862e5d01612a98ff0d9884f0c0e1b409751280487d3bc0d",
+    "crates/minidora-engine/src/input.rs": "fac3718613bf7653be1656cee8dab5e817539171a564c6d4008cfa1b26ceae3f",
+    "crates/minidora-engine/src/document.rs": "b303b85287088f95b85aaa283564856a0a09df0d950a693bbf9d070631b99153"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "0d73cc96949b7dea4d303c8c20bdb3d335b482a48b8fac42c05fa7dfef799eaa"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target RUSTUP_TOOLCHAIN=1.99.1",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No test or ordinary CLI route was run in this implementation slice; verification was limited to formatting, compilation, lint, build and static diff checks."
+  },
+  "implemented_route": "apps/cli -> Engine::execute/execute_inner -> input::seal -> input::interpret -> input::structured_intent -> Intent::CsvInnerJoin -> document::csv_inner_join -> DocumentResult artifact -> Core dependencies and rendered output",
+  "input_contract": "After a csv-inner-join header, the body has exactly one --- MINIDORA LEFT CSV --- marker line and one CRLF-prefixed --- MINIDORA RIGHT CSV --- marker line, separating two explicitly headered CSV tables. Marker text is reserved.",
+  "supported_behavior": [
+    "The Japanese header CSVを「left-key」と「right-key」で内部結合して: and strict quoted English csv-inner-join \"left-key\" \"right-key\": select the key column on each side.",
+    "Both payloads must parse as bounded headered RFC 4180 CSV with unique decoded header names and consistent record widths.",
+    "Each selected key must be unique on its own side. Matching uses exact decoded string equality without trimming, case folding, Unicode normalization or numeric interpretation; duplicates suspend rather than expanding rows.",
+    "The output is a JSON string-table object with left.<column> and right.<column> namespaces, retaining all columns including both keys. Matched rows follow left-table order; unmatched left and right keys are reported separately.",
+    "The DocumentResult retains the combined original input, its digest, output digest, source record numbers for matched rows, and exact source byte spans and decoded values for emitted headers and cells.",
+    "The combined input and output are bounded at 256000 bytes; each CSV table is bounded at 4096 rows, 256 columns and 65536 cells. The serialized source-span envelope is also capped at 256000 bytes."
+  ],
+  "known_limits": [
+    "No test or ordinary CLI route was executed for this slice.",
+    "Only inner joins with explicitly named unique keys are supported; outer joins, duplicate-key expansion, inferred schemas and headerless inputs are unsupported.",
+    "The transformation reports supplied string values and does not infer semantic equivalence or factual truth."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}
