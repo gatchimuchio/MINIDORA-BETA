@@ -276,11 +276,16 @@
       "capability_id": "B05",
       "requirement": "Multi-document evidence synthesis and explicit inference chains",
       "required_observable": "Distinguish agreement, independence, contradiction and inferred claims",
-      "implementation_disposition": "UNVERIFIED",
+      "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
-      "current_rust_paths": [],
-      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
-      "full_acceptance_gap": "Distinguish agreement, independence, contradiction and inferred claims",
+      "current_rust_paths": [
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/ports.rs",
+        "crates/minidora-engine/src/core.rs"
+      ],
+      "evidence": "explicit-evidence-synthesis-validation.json records source implementation and format/check/lint/build evidence for a caller-supplied ledger; no test or ordinary-route execution and no full B05 acceptance are claimed",
+      "full_acceptance_gap": "External document claim extraction, verified source identities/independence, source-grounded contradiction checking and logical entailment validity remain unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

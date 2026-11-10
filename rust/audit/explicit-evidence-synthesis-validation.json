@@ -1,0 +1,68 @@
+{
+  "work_item": "B05 caller-supplied explicit evidence ledger classification and declared inference links through Core",
+  "recorded_at": "2026-11-10T17:08:25Z",
+  "base_commit": "8f4aaf6946d92419428334ecd94192c7e752e9dc",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v17-evidence-synthesis",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "7312a344be3d852f75dc9d9da2efd32237c0c892d07f6f1b8a78c09876a525cd",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "6b66b335b092754282f6a5688e0b77c018f68bfe7cfc51ecfbf9848c5f290d46",
+    "crates/minidora-engine/src/core.rs": "75ca7740edd46fc535ab793723794858770b80d59966265ef5619b99082a8db0",
+    "crates/minidora-engine/src/input.rs": "326f053b28c5f5e37d291c9d963202f322dd5896375d1d3644e89bc56d4545c3",
+    "crates/minidora-engine/src/ports.rs": "5ac699cd1f45f7cc3a530baf6900603074a4271bd27423c9eb587084716eb025"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "7d9bb389f5bb4cb65dd8d2fc32a05fc4c16b3bc0985d8c290a9eb6948467b667"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "This continuation did not request test or runtime-route verification; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::EvidenceSynthesize -> ports::synthesize_explicit_evidence -> ExplicitEvidenceSynthesisReport artifact",
+  "ledger_schema": "Exactly {\"sources\":[{\"source_id\":string,\"independence_group\":string,\"claims\":[{\"id\":string,\"text\":string,\"stance\":\"SUPPORTS\"|\"REFUTES\"}]}...],\"inferences\":[{\"id\":string,\"text\":string,\"premises\":[id,...]}...]}; all object fields are strict.",
+  "supported_behavior": [
+    "Unique source IDs and per-source claim IDs, exact claim text consistency across shared claim IDs, and explicit SUPPORTS/REFUTES stances are validated.",
+    "Claims are classified as AGREEMENT across two or more distinct supplied independence_group labels, CONTRADICTION when both stances are present, SAME_GROUP_REPETITION for repeated one-stance entries inside one group, or SINGLE_SOURCE.",
+    "Source indexes, independence-group labels and claim/stance JSON byte spans are retained. Independence-group membership remains caller-supplied and unverified.",
+    "Declared inference premises must reference claim IDs or earlier inference IDs; cycles/forward references are rejected by order, but entailment and inference validity are not checked.",
+    "Input/source/claim/inference/output limits apply; duplicate JSON keys, unknown fields, malformed shapes and invalid links return typed failures."
+  ],
+  "acceptance": {
+    "B05": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

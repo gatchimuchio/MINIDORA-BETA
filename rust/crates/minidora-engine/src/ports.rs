@@ -1463,6 +1463,429 @@ pub fn json_table_compare(document: &str, key_column: &str) -> Result<JsonTableC
     Ok(report)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceSourceIdentity {
+    pub source_id: String,
+    pub independence_group: String,
+    pub source_id_span: JsonComparisonSpan,
+    pub independence_group_span: JsonComparisonSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceCitation {
+    pub source_index: usize,
+    pub claim_text_span: JsonComparisonSpan,
+    pub stance_span: JsonComparisonSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceClaimSynthesis {
+    pub claim_id: String,
+    pub text: String,
+    pub status: String,
+    pub consensus_stance: Option<String>,
+    pub supporting_independence_group_count: usize,
+    pub refuting_independence_group_count: usize,
+    pub supporting: Vec<EvidenceCitation>,
+    pub refuting: Vec<EvidenceCitation>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclaredInference {
+    pub inference_id: String,
+    pub text: String,
+    pub premise_ids: Vec<String>,
+    pub classification: String,
+    pub inference_id_span: JsonComparisonSpan,
+    pub text_span: JsonComparisonSpan,
+    pub premise_spans: Vec<JsonComparisonSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplicitEvidenceSynthesisReport {
+    pub source_sha256: String,
+    pub source_count: usize,
+    pub evidence_record_count: usize,
+    pub sources: Vec<EvidenceSourceIdentity>,
+    pub claims: Vec<EvidenceClaimSynthesis>,
+    pub declared_inferences: Vec<DeclaredInference>,
+    pub independence_basis: String,
+    pub guarantee: String,
+}
+
+#[derive(Default)]
+struct EvidenceClaimAccumulator {
+    text: String,
+    supporting: Vec<EvidenceCitation>,
+    refuting: Vec<EvidenceCitation>,
+}
+
+fn evidence_object<'a>(
+    node: &'a JsonNode,
+    fields: &[&str],
+    code: &str,
+) -> Result<&'a BTreeMap<String, JsonNode>> {
+    let JsonKind::Object(entries) = &node.kind else {
+        return Err(failure(code, "expected a JSON object"));
+    };
+    if entries.len() != fields.len() || fields.iter().any(|field| !entries.contains_key(*field)) {
+        return Err(failure(code, "object has missing or unknown fields"));
+    }
+    Ok(entries)
+}
+
+fn evidence_array<'a>(node: &'a JsonNode, code: &str) -> Result<&'a [JsonNode]> {
+    let JsonKind::Array(entries) = &node.kind else {
+        return Err(failure(code, "expected a JSON array"));
+    };
+    Ok(entries)
+}
+
+fn evidence_nonempty_label(value: &str, code: &str) -> Result<()> {
+    if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(failure(
+            code,
+            "identifier/group labels must be nonempty, single-line strings of at most 256 bytes",
+        ));
+    }
+    Ok(())
+}
+
+const MAX_EVIDENCE_SYNTHESIS_BYTES: usize = 256_000;
+const MAX_EVIDENCE_SOURCES: usize = 128;
+const MAX_EVIDENCE_RECORDS: usize = 4096;
+const MAX_DECLARED_INFERENCES: usize = 512;
+const MAX_EVIDENCE_SYNTHESIS_OUTPUT: usize = 256_000;
+
+/// Classify only a caller-supplied evidence ledger. Independence groups and
+/// inference links are explicit metadata, not independently verified claims.
+pub fn synthesize_explicit_evidence(document: &str) -> Result<ExplicitEvidenceSynthesisReport> {
+    if document.len() > MAX_EVIDENCE_SYNTHESIS_BYTES {
+        return Err(failure(
+            "EVIDENCE_SYNTHESIS_INPUT_LIMIT",
+            "evidence ledger exceeds 256000 source bytes",
+        ));
+    }
+    let root = JsonParser::new(document).parse()?;
+    let wrapper = evidence_object(&root, &["sources", "inferences"], "EVIDENCE_LEDGER_SHAPE")?;
+    let source_nodes = evidence_array(
+        wrapper.get("sources").expect("validated sources field"),
+        "EVIDENCE_LEDGER_SOURCES",
+    )?;
+    if !(2..=MAX_EVIDENCE_SOURCES).contains(&source_nodes.len()) {
+        return Err(failure(
+            "EVIDENCE_LEDGER_SOURCE_LIMIT",
+            "expected 2..128 explicit source records",
+        ));
+    }
+
+    let mut sources = Vec::with_capacity(source_nodes.len());
+    let mut source_ids = BTreeSet::new();
+    let mut claim_labels = BTreeMap::<String, String>::new();
+    let mut grouped = BTreeMap::<String, EvidenceClaimAccumulator>::new();
+    let mut record_count = 0usize;
+    let mut output_estimate = 1024usize;
+
+    for (source_index, source_node) in source_nodes.iter().enumerate() {
+        let source_fields = evidence_object(
+            source_node,
+            &["source_id", "independence_group", "claims"],
+            "EVIDENCE_SOURCE_SHAPE",
+        )?;
+        let source_id_node = source_fields
+            .get("source_id")
+            .expect("validated source id field");
+        let group_node = source_fields
+            .get("independence_group")
+            .expect("validated independence group field");
+        let source_id = json_string_value(document, source_id_node, "EVIDENCE_SOURCE_ID")?;
+        let independence_group =
+            json_string_value(document, group_node, "EVIDENCE_INDEPENDENCE_GROUP")?;
+        evidence_nonempty_label(&source_id, "EVIDENCE_SOURCE_ID")?;
+        evidence_nonempty_label(&independence_group, "EVIDENCE_INDEPENDENCE_GROUP")?;
+        if !source_ids.insert(source_id.clone()) {
+            return Err(failure(
+                "EVIDENCE_DUPLICATE_SOURCE_ID",
+                "source identifiers must be unique",
+            ));
+        }
+        output_estimate = output_estimate
+            .saturating_add(source_id.len())
+            .saturating_add(independence_group.len())
+            .saturating_add(512);
+        if output_estimate > MAX_EVIDENCE_SYNTHESIS_OUTPUT {
+            return Err(failure(
+                "EVIDENCE_SYNTHESIS_OUTPUT_LIMIT",
+                "evidence report exceeds its bounded output envelope",
+            ));
+        }
+        sources.push(EvidenceSourceIdentity {
+            source_id,
+            independence_group,
+            source_id_span: json_comparison_span(document, source_id_node),
+            independence_group_span: json_comparison_span(document, group_node),
+        });
+
+        let claims = evidence_array(
+            source_fields.get("claims").expect("validated claims field"),
+            "EVIDENCE_SOURCE_CLAIMS",
+        )?;
+        if claims.is_empty() {
+            return Err(failure(
+                "EVIDENCE_SOURCE_NO_CLAIMS",
+                "each explicit source must provide at least one claim record",
+            ));
+        }
+        let mut source_claim_ids = BTreeSet::new();
+        for claim_node in claims {
+            record_count += 1;
+            if record_count > MAX_EVIDENCE_RECORDS {
+                return Err(failure(
+                    "EVIDENCE_RECORD_LIMIT",
+                    "evidence ledger exceeds 4096 source claim records",
+                ));
+            }
+            let claim_fields = evidence_object(
+                claim_node,
+                &["id", "text", "stance"],
+                "EVIDENCE_CLAIM_SHAPE",
+            )?;
+            let id_node = claim_fields.get("id").expect("validated claim id field");
+            let text_node = claim_fields
+                .get("text")
+                .expect("validated claim text field");
+            let stance_node = claim_fields
+                .get("stance")
+                .expect("validated claim stance field");
+            let claim_id = json_string_value(document, id_node, "EVIDENCE_CLAIM_ID")?;
+            let text = json_string_value(document, text_node, "EVIDENCE_CLAIM_TEXT")?;
+            let stance = json_string_value(document, stance_node, "EVIDENCE_STANCE")?;
+            evidence_nonempty_label(&claim_id, "EVIDENCE_CLAIM_ID")?;
+            if text.trim().is_empty() || text.len() > 16_384 {
+                return Err(failure(
+                    "EVIDENCE_CLAIM_TEXT",
+                    "claim text must be nonempty and at most 16384 bytes",
+                ));
+            }
+            if !matches!(stance.as_str(), "SUPPORTS" | "REFUTES") {
+                return Err(failure(
+                    "EVIDENCE_STANCE",
+                    "claim stance must be exactly SUPPORTS or REFUTES",
+                ));
+            }
+            if !source_claim_ids.insert(claim_id.clone()) {
+                return Err(failure(
+                    "EVIDENCE_DUPLICATE_SOURCE_CLAIM",
+                    "one source may state each claim id only once",
+                ));
+            }
+            if let Some(existing) = claim_labels.get(&claim_id) {
+                if existing != &text {
+                    return Err(failure(
+                        "EVIDENCE_CLAIM_LABEL_CONFLICT",
+                        "the same claim id must use identical decoded claim text across sources",
+                    ));
+                }
+            } else {
+                output_estimate = output_estimate.saturating_add(claim_id.len() + text.len());
+                claim_labels.insert(claim_id.clone(), text.clone());
+            }
+            output_estimate = output_estimate.saturating_add(400);
+            if output_estimate > MAX_EVIDENCE_SYNTHESIS_OUTPUT {
+                return Err(failure(
+                    "EVIDENCE_SYNTHESIS_OUTPUT_LIMIT",
+                    "evidence report exceeds its bounded output envelope",
+                ));
+            }
+            let citation = EvidenceCitation {
+                source_index,
+                claim_text_span: json_comparison_span(document, text_node),
+                stance_span: json_comparison_span(document, stance_node),
+            };
+            let accumulator = grouped.entry(claim_id).or_default();
+            if accumulator.text.is_empty() {
+                accumulator.text = text;
+            }
+            match stance.as_str() {
+                "SUPPORTS" => accumulator.supporting.push(citation),
+                "REFUTES" => accumulator.refuting.push(citation),
+                _ => unreachable!("stance value was validated"),
+            }
+        }
+    }
+    if record_count == 0 {
+        return Err(failure(
+            "EVIDENCE_LEDGER_EMPTY",
+            "at least one explicit claim record is required",
+        ));
+    }
+
+    let mut claims = Vec::with_capacity(grouped.len());
+    for (claim_id, accumulator) in grouped {
+        let support_groups: BTreeSet<_> = accumulator
+            .supporting
+            .iter()
+            .map(|citation| sources[citation.source_index].independence_group.as_str())
+            .collect();
+        let refute_groups: BTreeSet<_> = accumulator
+            .refuting
+            .iter()
+            .map(|citation| sources[citation.source_index].independence_group.as_str())
+            .collect();
+        let (status, consensus_stance) =
+            if !accumulator.supporting.is_empty() && !accumulator.refuting.is_empty() {
+                ("CONTRADICTION", None)
+            } else if support_groups.len() >= 2 || refute_groups.len() >= 2 {
+                (
+                    "AGREEMENT",
+                    Some(if support_groups.len() >= 2 {
+                        "SUPPORTS"
+                    } else {
+                        "REFUTES"
+                    }),
+                )
+            } else if accumulator.supporting.len() + accumulator.refuting.len() > 1 {
+                (
+                    "SAME_GROUP_REPETITION",
+                    Some(if accumulator.supporting.is_empty() {
+                        "REFUTES"
+                    } else {
+                        "SUPPORTS"
+                    }),
+                )
+            } else {
+                (
+                    "SINGLE_SOURCE",
+                    Some(if accumulator.supporting.is_empty() {
+                        "REFUTES"
+                    } else {
+                        "SUPPORTS"
+                    }),
+                )
+            };
+        claims.push(EvidenceClaimSynthesis {
+            claim_id,
+            text: accumulator.text,
+            status: status.into(),
+            consensus_stance: consensus_stance.map(str::to_owned),
+            supporting_independence_group_count: support_groups.len(),
+            refuting_independence_group_count: refute_groups.len(),
+            supporting: accumulator.supporting,
+            refuting: accumulator.refuting,
+        });
+    }
+
+    let inference_nodes = evidence_array(
+        wrapper
+            .get("inferences")
+            .expect("validated inferences field"),
+        "EVIDENCE_INFERENCES",
+    )?;
+    if inference_nodes.len() > MAX_DECLARED_INFERENCES {
+        return Err(failure(
+            "EVIDENCE_INFERENCE_LIMIT",
+            "evidence ledger exceeds 512 declared inferences",
+        ));
+    }
+    let mut known_ids: BTreeSet<String> = claim_labels.keys().cloned().collect();
+    let mut used_ids = known_ids.clone();
+    used_ids.extend(source_ids);
+    let mut declared_inferences = Vec::with_capacity(inference_nodes.len());
+    for inference_node in inference_nodes {
+        let inference_fields = evidence_object(
+            inference_node,
+            &["id", "text", "premises"],
+            "EVIDENCE_INFERENCE_SHAPE",
+        )?;
+        let id_node = inference_fields.get("id").expect("validated inference id");
+        let text_node = inference_fields
+            .get("text")
+            .expect("validated inference text");
+        let inference_id = json_string_value(document, id_node, "EVIDENCE_INFERENCE_ID")?;
+        let text = json_string_value(document, text_node, "EVIDENCE_INFERENCE_TEXT")?;
+        evidence_nonempty_label(&inference_id, "EVIDENCE_INFERENCE_ID")?;
+        if text.trim().is_empty() || text.len() > 16_384 {
+            return Err(failure(
+                "EVIDENCE_INFERENCE_TEXT",
+                "inference text must be nonempty and at most 16384 bytes",
+            ));
+        }
+        if !used_ids.insert(inference_id.clone()) {
+            return Err(failure(
+                "EVIDENCE_DUPLICATE_INFERENCE_ID",
+                "inference ids must be unique and distinct from source/claim ids",
+            ));
+        }
+        let premise_nodes = evidence_array(
+            inference_fields
+                .get("premises")
+                .expect("validated premises field"),
+            "EVIDENCE_INFERENCE_PREMISES",
+        )?;
+        if premise_nodes.is_empty() || premise_nodes.len() > 64 {
+            return Err(failure(
+                "EVIDENCE_INFERENCE_PREMISES",
+                "each declared inference needs 1..64 earlier premises",
+            ));
+        }
+        let mut premise_ids = Vec::with_capacity(premise_nodes.len());
+        let mut premise_seen = BTreeSet::new();
+        let mut premise_spans = Vec::with_capacity(premise_nodes.len());
+        for premise_node in premise_nodes {
+            let premise = json_string_value(document, premise_node, "EVIDENCE_INFERENCE_PREMISE")?;
+            if !known_ids.contains(&premise) || !premise_seen.insert(premise.clone()) {
+                return Err(failure(
+                    "EVIDENCE_INFERENCE_PREMISE",
+                    "premises must reference distinct claim ids or earlier inference ids",
+                ));
+            }
+            output_estimate = output_estimate
+                .saturating_add(premise.len())
+                .saturating_add(128);
+            premise_ids.push(premise);
+            premise_spans.push(json_comparison_span(document, premise_node));
+        }
+        output_estimate = output_estimate
+            .saturating_add(inference_id.len())
+            .saturating_add(text.len())
+            .saturating_add(512);
+        if output_estimate > MAX_EVIDENCE_SYNTHESIS_OUTPUT {
+            return Err(failure(
+                "EVIDENCE_SYNTHESIS_OUTPUT_LIMIT",
+                "evidence report exceeds its bounded output envelope",
+            ));
+        }
+        known_ids.insert(inference_id.clone());
+        declared_inferences.push(DeclaredInference {
+            inference_id,
+            text,
+            premise_ids,
+            classification: "USER_DECLARED_INFERENCE_NOT_VALIDATED".into(),
+            inference_id_span: json_comparison_span(document, id_node),
+            text_span: json_comparison_span(document, text_node),
+            premise_spans,
+        });
+    }
+
+    let report = ExplicitEvidenceSynthesisReport {
+        source_sha256: digest(document.as_bytes()),
+        source_count: sources.len(),
+        evidence_record_count: record_count,
+        sources,
+        claims,
+        declared_inferences,
+        independence_basis: "independence_group labels are caller-supplied and not independently verified".into(),
+        guarantee: "explicit evidence ledger classification only; source identities, claim text, stances and inference links are caller-supplied; no source fact extraction, claim truth or inference validity is asserted".into(),
+    };
+    if serde_json::to_vec(&report)?.len() > MAX_EVIDENCE_SYNTHESIS_OUTPUT {
+        return Err(failure(
+            "EVIDENCE_SYNTHESIS_OUTPUT_LIMIT",
+            "evidence synthesis report exceeds 256000 output bytes",
+        ));
+    }
+    Ok(report)
+}
+
 /// Compute exact descriptive statistics for one selected array of JSON number
 /// literals. Every observation retains its original source bytes and offset.
 pub fn json_pointer_statistics(document: &str, pointer: &str) -> Result<JsonStatisticsReport> {

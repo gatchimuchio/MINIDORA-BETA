@@ -192,6 +192,9 @@ pub enum Intent {
         document: String,
         key_column: String,
     },
+    EvidenceSynthesize {
+        document: String,
+    },
     CsvToJson {
         document: String,
         has_header: bool,
