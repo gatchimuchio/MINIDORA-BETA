@@ -729,6 +729,277 @@ pub fn csv_group_count(document: &str, column: &str) -> Result<DocumentResult> {
     )
 }
 
+/// Compare two explicitly supplied, headered CSV tables by an exact unique
+/// string key. The input body uses reserved marker lines to keep both original
+/// tables in one source document:
+/// `--- MINIDORA LEFT CSV ---\n<left CSV>\r\n--- MINIDORA RIGHT CSV ---\n<right CSV>`.
+/// Marker text is reserved and must not occur inside either CSV payload.
+pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult> {
+    const LEFT_MARKER: &str = "--- MINIDORA LEFT CSV ---\n";
+    const RIGHT_DELIMITER: &str = "\r\n--- MINIDORA RIGHT CSV ---\n";
+    admission(document)?;
+    if key_column.is_empty() {
+        return Err(failure("CSV_COLUMN", "key column name must not be empty"));
+    }
+    if !document.starts_with(LEFT_MARKER)
+        || document.matches(LEFT_MARKER).count() != 1
+        || document.matches(RIGHT_DELIMITER).count() != 1
+    {
+        return Err(failure(
+            "CSV_COMPARE_DELIMITER",
+            "expected one left marker and one CRLF-prefixed right marker; marker text is reserved",
+        ));
+    }
+    let left_start = LEFT_MARKER.len();
+    let delimiter_start = document
+        .find(RIGHT_DELIMITER)
+        .ok_or_else(|| failure("CSV_COMPARE_DELIMITER", "right marker is missing"))?;
+    let right_start = delimiter_start + RIGHT_DELIMITER.len();
+    let left_source = &document[left_start..delimiter_start];
+    let right_source = &document[right_start..];
+    if left_source.contains("--- MINIDORA RIGHT CSV ---")
+        || right_source.contains("--- MINIDORA RIGHT CSV ---")
+        || right_source.contains("--- MINIDORA LEFT CSV ---")
+    {
+        return Err(failure(
+            "CSV_COMPARE_DELIMITER",
+            "reserved comparison marker text occurs more than once",
+        ));
+    }
+
+    let mut left = parse_csv(left_source, true)?;
+    let mut right = parse_csv(right_source, true)?;
+    let shift_table = |table: &mut CsvTable, offset: usize| {
+        for cell in table
+            .header
+            .iter_mut()
+            .flatten()
+            .chain(table.rows.iter_mut().flatten())
+        {
+            cell.source_start += offset;
+            cell.source_end += offset;
+        }
+        table.source_document = document.into();
+        table.source_sha256 = digest(document.as_bytes());
+    };
+    shift_table(&mut left, left_start);
+    shift_table(&mut right, right_start);
+
+    let left_header = left.header.as_deref().expect("header parsing is explicit");
+    let right_header = right.header.as_deref().expect("header parsing is explicit");
+    if left_header.len() != right_header.len()
+        || left_header
+            .iter()
+            .zip(right_header)
+            .any(|(left, right)| left.value != right.value)
+    {
+        return Err(failure(
+            "CSV_COMPARE_SCHEMA",
+            "both CSV headers must contain the same decoded names in the same order",
+        ));
+    }
+    let key_index = left_header
+        .iter()
+        .position(|cell| cell.value == key_column)
+        .ok_or_else(|| failure("CSV_COLUMN", "key column does not exist"))?;
+
+    let make_key_index = |rows: &[Vec<CsvCell>]| -> Result<BTreeMap<String, usize>> {
+        let mut index = BTreeMap::new();
+        for (row_index, row) in rows.iter().enumerate() {
+            let key = &row[key_index].value;
+            if index.insert(key.clone(), row_index).is_some() {
+                return Err(failure(
+                    "CSV_COMPARE_DUPLICATE_KEY",
+                    "key column values must be unique within each table",
+                ));
+            }
+        }
+        Ok(index)
+    };
+    let left_keys = make_key_index(&left.rows)?;
+    let right_keys = make_key_index(&right.rows)?;
+
+    let mut text = String::from("{\"key_column\":");
+    let mut spans = Vec::new();
+    append_json_cell(
+        &mut text,
+        document,
+        &left_header[key_index],
+        "CSV_COMPARE_KEY_HEADER",
+        Some(0),
+        key_index,
+        &mut spans,
+    )?;
+    text.push_str(",\"changes\":[");
+    let mut first_change = true;
+    let mut changed_cells = 0usize;
+    let mut removed_rows = 0usize;
+    let mut added_rows = 0usize;
+
+    for (left_row_index, left_row) in left.rows.iter().enumerate() {
+        let key = &left_row[key_index].value;
+        let Some(&right_row_index) = right_keys.get(key) else {
+            if !first_change {
+                text.push(',');
+            }
+            first_change = false;
+            removed_rows += 1;
+            text.push_str("{\"kind\":\"ROW_REMOVED\",\"key\":");
+            append_json_cell(
+                &mut text,
+                document,
+                &left_row[key_index],
+                "CSV_COMPARE_REMOVED_KEY",
+                Some(left_row_index + 1),
+                key_index,
+                &mut spans,
+            )?;
+            text.push_str(",\"row\":[");
+            for (column, cell) in left_row.iter().enumerate() {
+                if column > 0 {
+                    text.push(',');
+                }
+                append_json_cell(
+                    &mut text,
+                    document,
+                    cell,
+                    "CSV_COMPARE_REMOVED_CELL",
+                    Some(left_row_index + 1),
+                    column,
+                    &mut spans,
+                )?;
+            }
+            text.push_str("]}");
+            continue;
+        };
+
+        let right_row = &right.rows[right_row_index];
+        for (column, (left_cell, right_cell)) in left_row.iter().zip(right_row).enumerate() {
+            if column == key_index || left_cell.value == right_cell.value {
+                continue;
+            }
+            if !first_change {
+                text.push(',');
+            }
+            first_change = false;
+            changed_cells += 1;
+            text.push_str("{\"kind\":\"CELL_CHANGED\",\"key\":");
+            append_json_cell(
+                &mut text,
+                document,
+                &left_row[key_index],
+                "CSV_COMPARE_CHANGED_KEY",
+                Some(left_row_index + 1),
+                key_index,
+                &mut spans,
+            )?;
+            spans.push(source_span(
+                document,
+                &right_row[key_index],
+                "CSV_COMPARE_MATCHED_KEY",
+                Some(right_row_index + 1),
+                key_index,
+                None,
+            ));
+            text.push_str(",\"column\":");
+            append_json_cell(
+                &mut text,
+                document,
+                &left_header[column],
+                "CSV_COMPARE_COLUMN",
+                Some(0),
+                column,
+                &mut spans,
+            )?;
+            text.push_str(",\"left\":");
+            append_json_cell(
+                &mut text,
+                document,
+                left_cell,
+                "CSV_COMPARE_LEFT_CELL",
+                Some(left_row_index + 1),
+                column,
+                &mut spans,
+            )?;
+            text.push_str(",\"right\":");
+            append_json_cell(
+                &mut text,
+                document,
+                right_cell,
+                "CSV_COMPARE_RIGHT_CELL",
+                Some(right_row_index + 1),
+                column,
+                &mut spans,
+            )?;
+            text.push('}');
+        }
+    }
+
+    for (right_row_index, right_row) in right.rows.iter().enumerate() {
+        if left_keys.contains_key(&right_row[key_index].value) {
+            continue;
+        }
+        if !first_change {
+            text.push(',');
+        }
+        first_change = false;
+        added_rows += 1;
+        text.push_str("{\"kind\":\"ROW_ADDED\",\"key\":");
+        append_json_cell(
+            &mut text,
+            document,
+            &right_row[key_index],
+            "CSV_COMPARE_ADDED_KEY",
+            Some(right_row_index + 1),
+            key_index,
+            &mut spans,
+        )?;
+        text.push_str(",\"row\":[");
+        for (column, cell) in right_row.iter().enumerate() {
+            if column > 0 {
+                text.push(',');
+            }
+            append_json_cell(
+                &mut text,
+                document,
+                cell,
+                "CSV_COMPARE_ADDED_CELL",
+                Some(right_row_index + 1),
+                column,
+                &mut spans,
+            )?;
+        }
+        text.push_str("]}");
+    }
+    text.push_str("]}");
+    result(
+        document,
+        text,
+        "CSV_TABLE_COMPARE",
+        BTreeMap::from([
+            ("key_column".into(), key_column.into()),
+            ("key_index".into(), key_index.to_string()),
+            (
+                "matched_key_count".into(),
+                left_keys
+                    .keys()
+                    .filter(|key| right_keys.contains_key(*key))
+                    .count()
+                    .to_string(),
+            ),
+            ("changed_cell_count".into(), changed_cells.to_string()),
+            ("removed_row_count".into(), removed_rows.to_string()),
+            ("added_row_count".into(), added_rows.to_string()),
+            (
+                "ordering".into(),
+                "left_row_then_column_then_right_row".into(),
+            ),
+            ("comparison".into(), "exact_decoded_strings".into()),
+        ]),
+        spans,
+    )
+}
+
 struct JsonTableParser<'a> {
     text: &'a str,
     at: usize,

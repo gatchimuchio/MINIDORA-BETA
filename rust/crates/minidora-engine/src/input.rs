@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v17-evidence-synthesis";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v18-csv-table-compare";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -146,6 +146,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
             .get(..12)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-count-by"))
         || header.starts_with("CSVを列")
+        || header
+            .get(..14)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-compare-by"))
         || header.starts_with("csv-statistics ")
         || header.starts_with("CSVをJSONに変換して")
         || header.starts_with("csv-to-json")
@@ -234,6 +237,21 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::CsvGroupCount {
             document: document.into(),
             column: capture[1].into(),
+        }));
+    }
+    if let Some(capture) = regex(r"^CSVを列「([^」]+)」で2つの表を比較して[:：]$")?.captures(header)
+    {
+        return Ok(Some(Intent::CsvCompare {
+            document: document.into(),
+            key_column: capture[1].into(),
+        }));
+    }
+    if let Some(capture) =
+        regex(r#"(?i)^csv-compare-by[ \t]+("(?:[^"\\]|\\.)*"):$"#)?.captures(header)
+    {
+        return Ok(Some(Intent::CsvCompare {
+            document: document.into(),
+            key_column: serde_json::from_str::<String>(&capture[1])?,
         }));
     }
     if let Some(capture) =

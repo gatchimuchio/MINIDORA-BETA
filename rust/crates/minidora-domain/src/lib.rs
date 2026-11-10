@@ -185,6 +185,10 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    CsvCompare {
+        document: String,
+        key_column: String,
+    },
     JsonCompare {
         document: String,
     },

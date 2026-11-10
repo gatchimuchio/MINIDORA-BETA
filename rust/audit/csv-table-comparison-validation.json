@@ -1,0 +1,68 @@
+{
+  "work_item": "B04 keyed comparison of two supplied CSV tables with two-sided original source locations through Core",
+  "recorded_at": "2026-11-10T17:13:50Z",
+  "base_commit": "39b20387185ee2bf52ac4bc3fd9866f90520db64",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v18-csv-table-compare",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "700bf895ef293425a51b4e3fda083ad27b1370dadd030b2b9562d8412e9793bf",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "88be465beba395f160a7a691b5b9acf576e5e0967f69979fb98daefed9183ea6",
+    "crates/minidora-engine/src/core.rs": "e6ce74856163f9f62f382c31ef4d78bbf18dffc6560cbd36245922fb66822e95",
+    "crates/minidora-engine/src/document.rs": "24d6992a5526be60b46b0f9c1683ecc90ed15d42f6c82d7699903c61bd944cc4",
+    "crates/minidora-engine/src/input.rs": "38166ffc40b01cfe31fb9a76cce542e483e5ef486d0b4ff8efeea715b25ad8be"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "e32e5f3f594b0ba0c65a9c4f497a22b36087d66531c631698f22cbf647529c75"
+  },
+  "execution_prefix": "PATH=/workspace/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin:/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+  "command_results": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "exit_code": 0
+    }
+  ],
+  "tests_and_route": {
+    "tests_added": false,
+    "tests_executed": false,
+    "normal_cli_route_executed": false,
+    "reason_not_executed": "No tests or runtime/ordinary CLI verification were requested or run in this implementation slice; formatting, compilation, lint and build checks only were run."
+  },
+  "implemented_route": "apps/cli -> Core::run -> input::structured_intent -> Intent::CsvCompare -> document::csv_compare_by -> DocumentResult artifact",
+  "input_contract": "One explicit headered CSV body per side. After the operation header, body syntax is exactly --- MINIDORA LEFT CSV --- LF <left CSV> CRLF --- MINIDORA RIGHT CSV --- LF <right CSV>. Marker text is reserved and forbidden inside either payload.",
+  "supported_behavior": [
+    "The operation requires both tables to parse as valid headered CSV and their decoded header names to match in the same order.",
+    "The selected named key column must exist and contain unique exact decoded string values within each table; no numeric conversion, trimming, case folding or Unicode normalization is performed.",
+    "Rows are matched by exact key. The report contains per-cell changes, full added/removed rows, stable left-row/column ordering followed by right-side additions, and counts in result parameters.",
+    "Output value spans identify the exact original bytes for each emitted key, header, cell and row value; changed cells retain source locations on both input sides. Spans reference the complete comparison body including reserved markers.",
+    "Malformed CSV, missing columns, duplicate keys, mismatched schemas, ambiguous marker syntax, and input/output bound violations stop with typed failures."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; source implementation and format/check/lint/build evidence only, no test or ordinary-route execution",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

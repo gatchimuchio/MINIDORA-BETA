@@ -601,6 +601,25 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::CsvCompare {
+                document,
+                key_column,
+            } => {
+                let value = match crate::document::csv_compare_by(document, key_column) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CSV_TABLE_COMPARE_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::CsvToJson {
                 document,
                 has_header,
