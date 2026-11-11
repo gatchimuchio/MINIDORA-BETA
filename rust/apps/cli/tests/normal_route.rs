@@ -1626,6 +1626,582 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+const COMPARE_LEFT_JSON: &str = r#"{"columns":["id","名前","値"],"rows":[["2","猫","001"],["gone","犬\r\n南",""],["1","同じ","1"]]}"#;
+const COMPARE_RIGHT_JSON: &str = r#"{"columns":["\u0069d","名前","値"],"rows":[["1","\u540cじ","1"],["\u0032","狐","1"],["new","鳥","9"]]}"#;
+const COMPARE_EQUAL_JSON: &str = r#"{"columns":["id","名前","値"],"rows":[["1","\u540cじ","1"],["2","\u732b","001"],["gone","犬\r\n南",""]]}"#;
+const COMPARE_EMPTY_JSON: &str = r#"{"columns":["id","名前","値"],"rows":[]}"#;
+const COMPARE_LEFT_CSV: &str = "id,名前,値\r\n2,\"猫\",001\r\ngone,\"犬\r\n南\",\r\n1,同じ,1";
+const COMPARE_RIGHT_CSV: &str = "\"id\",名前,値\r\n1,同じ,1\r\n\"2\",狐,1\r\nnew,鳥,9";
+const COMPARE_EQUAL_CSV: &str =
+    "\"id\",名前,値\r\n1,同じ,1\r\n\"2\",猫,001\r\ngone,\"犬\r\n南\",\"\"";
+
+fn comparison_wrapper(left: &str, right: &str) -> String {
+    format!(r#"{{"left":{left},"right":{right}}}"#)
+}
+
+fn comparison_csv(left: &str, right: &str) -> String {
+    format!("--- MINIDORA LEFT CSV ---\n{left}\r\n--- MINIDORA RIGHT CSV ---\n{right}")
+}
+
+// Each side/fragment/token below is fixed independently of the returned maps.
+fn comparison_fixture_span(source: &str, side: &str, fragment: &str, token: &str) -> Value {
+    assert_eq!(source.matches(side).count(), 1);
+    assert_eq!(side.matches(fragment).count(), 1);
+    assert_eq!(fragment.matches(token).count(), 1);
+    let start =
+        source.find(side).unwrap() + side.find(fragment).unwrap() + fragment.find(token).unwrap();
+    serde_json::json!({
+        "source_start":start, "source_end":start+token.len(),
+        "source_sha256":minidora_domain::digest(token.as_bytes())
+    })
+}
+
+fn assert_comparison_side_hashes(report: &Value, left: &str, right: &str) {
+    assert_eq!(
+        report["left_sha256"],
+        minidora_domain::digest(left.as_bytes())
+    );
+    assert_eq!(
+        report["right_sha256"],
+        minidora_domain::digest(right.as_bytes())
+    );
+}
+
+#[test]
+fn structured_comparison_json_exact_values_and_pointer_differences() {
+    let equal_left = r#"{"a/b~c":[1,-0,9007199254740993,1.2300e+40,"猫"],"empty":[]}"#;
+    let equal_right = r#"{"empty":[],"\u0061/b~c":[1.0,0,9007199254740993.0,123e38,"\u732b"]}"#;
+    let left =
+        r#"{"":null,"a/b~c":[1,2,3],"gone":null,"huge":9007199254740993,"kind":"1","text":"é"}"#;
+    let right =
+        r#"{"":false,"a/b~c":[2,1],"huge":9007199254740992,"kind":1,"new":null,"text":"e\u0301"}"#;
+    for (case, (a, b)) in [
+        (equal_left, equal_right),
+        (left, right),
+        ("1", "[]"),
+        ("{}", "{}"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (actor, header) in [
+            ("japanese", "JSONを比較して:"),
+            ("english", "json-compare:"),
+            ("mixed-case", "JsOn-CoMpArE:"),
+        ] {
+            let scratch = Scratch::new();
+            let source = comparison_wrapper(a, b);
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, &source);
+            assert_comparison_side_hashes(&report, a, b);
+            assert_eq!(report["comparison"], "JSON_STRUCTURAL_EXACT_DECIMAL");
+            let expected = if case == 1 {
+                let differences = [
+                    (
+                        "/",
+                        "CHANGED",
+                        Some((r#""":null"#, "null")),
+                        Some((r#""":false"#, "false")),
+                    ),
+                    (
+                        "/a~1b~0c/0",
+                        "CHANGED",
+                        Some(("[1,2,3]", "1")),
+                        Some(("[2,1]", "2")),
+                    ),
+                    (
+                        "/a~1b~0c/1",
+                        "CHANGED",
+                        Some(("[1,2,3]", "2")),
+                        Some(("[2,1]", "1")),
+                    ),
+                    ("/a~1b~0c/2", "REMOVED", Some(("[1,2,3]", "3")), None),
+                    ("/gone", "REMOVED", Some((r#""gone":null"#, "null")), None),
+                    (
+                        "/huge",
+                        "CHANGED",
+                        Some((r#""huge":9007199254740993"#, "9007199254740993")),
+                        Some((r#""huge":9007199254740992"#, "9007199254740992")),
+                    ),
+                    (
+                        "/kind",
+                        "CHANGED",
+                        Some((r#""kind":"1""#, r#""1""#)),
+                        Some((r#""kind":1"#, "1")),
+                    ),
+                    ("/new", "ADDED", None, Some((r#""new":null"#, "null"))),
+                    (
+                        "/text",
+                        "CHANGED",
+                        Some((r#""text":"é""#, r#""é""#)),
+                        Some((r#""text":"e\u0301""#, r#""e\u0301""#)),
+                    ),
+                ];
+                serde_json::json!(
+                    differences
+                        .into_iter()
+                        .map(|(pointer, change, l, r)| serde_json::json!({
+                            "pointer":pointer,"change":change,
+                            "left":l.map(|(f,t)|comparison_fixture_span(&source,a,f,t)),
+                            "right":r.map(|(f,t)|comparison_fixture_span(&source,b,f,t))
+                        }))
+                        .collect::<Vec<_>>()
+                )
+            } else if case == 2 {
+                serde_json::json!([{"pointer":"","change":"CHANGED",
+                    "left":comparison_fixture_span(&source,a,a,a),
+                    "right":comparison_fixture_span(&source,b,b,b)}])
+            } else {
+                serde_json::json!([])
+            };
+            assert_eq!(report["equal"], case == 0 || case == 3);
+            assert_eq!(report["differences"], expected);
+        }
+    }
+}
+
+fn assert_json_table_comparison(
+    report: &Value,
+    source: &str,
+    left: &str,
+    right: &str,
+    changed: bool,
+) {
+    assert_comparison_side_hashes(report, left, right);
+    assert_eq!(report["key_column"], "id");
+    assert_eq!(report["equal"], !changed);
+    let expected = if changed {
+        serde_json::json!([
+            {"change":"CELL_CHANGED","key":"2","column":"名前","left_value":"猫","right_value":"狐",
+             "left_pointer":"/left/rows/0/1","right_pointer":"/right/rows/1/1",
+             "left":comparison_fixture_span(source,left,r#"["2","猫","001"]"#,r#""猫""#),
+             "right":comparison_fixture_span(source,right,r#"["\u0032","狐","1"]"#,r#""狐""#)},
+            {"change":"CELL_CHANGED","key":"2","column":"値","left_value":"001","right_value":"1",
+             "left_pointer":"/left/rows/0/2","right_pointer":"/right/rows/1/2",
+             "left":comparison_fixture_span(source,left,r#"["2","猫","001"]"#,r#""001""#),
+             "right":comparison_fixture_span(source,right,r#"["\u0032","狐","1"]"#,r#""1""#)},
+            {"change":"ROW_REMOVED","key":"gone","column":null,"left_value":null,"right_value":null,
+             "left_pointer":"/left/rows/1","right_pointer":null,
+             "left":comparison_fixture_span(source,left,r#"["gone","犬\r\n南",""]"#,r#"["gone","犬\r\n南",""]"#),"right":null},
+            {"change":"ROW_ADDED","key":"new","column":null,"left_value":null,"right_value":null,
+             "left_pointer":null,"right_pointer":"/right/rows/2","left":null,
+             "right":comparison_fixture_span(source,right,r#"["new","鳥","9"]"#,r#"["new","鳥","9"]"#)}
+        ])
+    } else {
+        serde_json::json!([])
+    };
+    assert_eq!(report["changes"], expected);
+}
+
+#[test]
+fn structured_comparison_json_tables_preserve_key_matching_and_two_sided_locations() {
+    for (left, right, changed) in [
+        (COMPARE_LEFT_JSON, COMPARE_RIGHT_JSON, true),
+        (COMPARE_LEFT_JSON, COMPARE_EQUAL_JSON, false),
+        (COMPARE_EMPTY_JSON, COMPARE_EMPTY_JSON, false),
+    ] {
+        for (actor, header) in [
+            ("japanese", "JSON表を列「id」で比較して:"),
+            ("english", "json-table-compare \"id\":"),
+            ("mixed-case", "JsOn-TaBlE-CoMpArE \"id\":"),
+        ] {
+            let scratch = Scratch::new();
+            let source = comparison_wrapper(left, right);
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, &source);
+            assert_json_table_comparison(&report, &source, left, right, changed);
+        }
+    }
+}
+
+fn expected_csv_comparison_span(
+    artifact: &Value,
+    source: &str,
+    kind: &str,
+    location: (bool, usize, usize),
+    occurrence: Option<usize>,
+) -> Value {
+    let (left, row, column) = location;
+    let (side, raw, decoded) = if left {
+        (
+            COMPARE_LEFT_CSV,
+            [
+                ["id", "名前", "値"],
+                ["2", "\"猫\"", "001"],
+                ["gone", "\"犬\r\n南\"", ""],
+                ["1", "同じ", "1"],
+            ],
+            [
+                ["id", "名前", "値"],
+                ["2", "猫", "001"],
+                ["gone", "犬\r\n南", ""],
+                ["1", "同じ", "1"],
+            ],
+        )
+    } else {
+        (
+            COMPARE_RIGHT_CSV,
+            [
+                ["\"id\"", "名前", "値"],
+                ["1", "同じ", "1"],
+                ["\"2\"", "狐", "1"],
+                ["new", "鳥", "9"],
+            ],
+            [
+                ["id", "名前", "値"],
+                ["1", "同じ", "1"],
+                ["2", "狐", "1"],
+                ["new", "鳥", "9"],
+            ],
+        )
+    };
+    let fragment = raw[row].join(",");
+    let start = source.find(side).unwrap()
+        + side.find(&fragment).unwrap()
+        + raw[row][..column]
+            .iter()
+            .map(|s| s.len() + 1)
+            .sum::<usize>();
+    let token = serde_json::to_string(decoded[row][column]).unwrap();
+    let output = artifact["text"].as_str().unwrap();
+    let output_start = occurrence.map(|n| output.match_indices(&token).nth(n).unwrap().0);
+    serde_json::json!({"kind":kind,"row":row,"column":column,"source_start":start,
+        "source_end":start+raw[row][column].len(),"source_text":raw[row][column],
+        "decoded_value":decoded[row][column],"output_start":output_start,
+        "output_end":output_start.map(|p|p+token.len())})
+}
+
+fn assert_csv_comparison(artifact: &Value, source: &str, changed: bool, empty: bool) {
+    let report: Value = serde_json::from_str(artifact["text"].as_str().unwrap()).unwrap();
+    assert_eq!(report["key_column"], "id");
+    let changes = if changed {
+        serde_json::json!([
+            {"kind":"CELL_CHANGED","key":"2","column":"名前","left":"猫","right":"狐"},
+            {"kind":"CELL_CHANGED","key":"2","column":"値","left":"001","right":"1"},
+            {"kind":"ROW_REMOVED","key":"gone","row":["gone","犬\r\n南",""]},
+            {"kind":"ROW_ADDED","key":"new","row":["new","鳥","9"]}
+        ])
+    } else {
+        serde_json::json!([])
+    };
+    assert_eq!(
+        report,
+        serde_json::json!({"key_column":"id","changes":changes})
+    );
+    for (name, value) in [
+        ("key_column", "id"),
+        ("key_index", "0"),
+        (
+            "matched_key_count",
+            if empty {
+                "0"
+            } else if changed {
+                "2"
+            } else {
+                "3"
+            },
+        ),
+        ("changed_cell_count", if changed { "2" } else { "0" }),
+        ("removed_row_count", if changed { "1" } else { "0" }),
+        ("added_row_count", if changed { "1" } else { "0" }),
+        ("ordering", "left_row_then_column_then_right_row"),
+        ("comparison", "exact_decoded_strings"),
+    ] {
+        assert_eq!(artifact["parameters"][name], value);
+    }
+    if changed {
+        let mut spans = vec![expected_csv_comparison_span(
+            artifact,
+            source,
+            "CSV_COMPARE_KEY_HEADER",
+            (true, 0, 0),
+            Some(0),
+        )];
+        for column in 1..=2 {
+            for (kind, location, occurrence) in [
+                ("CSV_COMPARE_CHANGED_KEY", (true, 1, 0), Some(column - 1)),
+                ("CSV_COMPARE_MATCHED_KEY", (false, 2, 0), None),
+                ("CSV_COMPARE_COLUMN", (true, 0, column), Some(0)),
+                ("CSV_COMPARE_LEFT_CELL", (true, 1, column), Some(0)),
+                ("CSV_COMPARE_RIGHT_CELL", (false, 2, column), Some(0)),
+            ] {
+                spans.push(expected_csv_comparison_span(
+                    artifact, source, kind, location, occurrence,
+                ));
+            }
+        }
+        for (left, row, key_kind, cell_kind) in [
+            (
+                true,
+                2,
+                "CSV_COMPARE_REMOVED_KEY",
+                "CSV_COMPARE_REMOVED_CELL",
+            ),
+            (false, 3, "CSV_COMPARE_ADDED_KEY", "CSV_COMPARE_ADDED_CELL"),
+        ] {
+            spans.push(expected_csv_comparison_span(
+                artifact,
+                source,
+                key_kind,
+                (left, row, 0),
+                Some(0),
+            ));
+            for column in 0..3 {
+                spans.push(expected_csv_comparison_span(
+                    artifact,
+                    source,
+                    cell_kind,
+                    (left, row, column),
+                    Some(usize::from(column == 0)),
+                ));
+            }
+        }
+        assert_eq!(artifact["spans"], serde_json::json!(spans));
+    } else {
+        assert_eq!(artifact["spans"].as_array().unwrap().len(), 1);
+        let span = &artifact["spans"][0];
+        assert_eq!(span["kind"], "CSV_COMPARE_KEY_HEADER");
+        assert_eq!(span["row"], 0);
+        assert_eq!(span["column"], 0);
+        assert_eq!(span["source_text"], "id");
+        assert_eq!(span["decoded_value"], "id");
+        let start = source.find("id,名前,値").unwrap();
+        assert_eq!(span["source_start"], start);
+        assert_eq!(span["source_end"], start + 2);
+        let output_start = artifact["text"].as_str().unwrap().find(r#""id""#).unwrap();
+        assert_eq!(span["output_start"], output_start);
+        assert_eq!(span["output_end"], output_start + 4);
+    }
+}
+
+#[test]
+fn structured_comparison_csv_tables_preserve_change_order_and_complete_emitted_maps() {
+    for (left, right, changed, empty) in [
+        (COMPARE_LEFT_CSV, COMPARE_RIGHT_CSV, true, false),
+        (COMPARE_LEFT_CSV, COMPARE_EQUAL_CSV, false, false),
+        ("id,名前,値", "id,名前,値", false, true),
+    ] {
+        for (actor, header) in [
+            ("japanese", "CSVを列「id」で2つの表を比較して:"),
+            ("english", "csv-compare-by \"id\":"),
+            ("mixed-case", "CsV-CoMpArE-By \"id\":"),
+        ] {
+            let scratch = Scratch::new();
+            let source = comparison_csv(left, right);
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                actor,
+                &result,
+                &request,
+                &source,
+                "CSV_TABLE_COMPARE",
+            );
+            assert_csv_comparison(&artifact, &source, changed, empty);
+        }
+    }
+}
+
+#[test]
+fn structured_comparison_actual_reports_feed_explicit_difference_projection() {
+    for (header, source, field, csv) in [
+        (
+            "json-compare:",
+            r#"{"left":{"x":null},"right":{}}"#.to_string(),
+            "differences",
+            false,
+        ),
+        (
+            "json-table-compare \"id\":",
+            comparison_wrapper(COMPARE_LEFT_JSON, COMPARE_RIGHT_JSON),
+            "changes",
+            false,
+        ),
+        (
+            "csv-compare-by \"id\":",
+            comparison_csv(COMPARE_LEFT_CSV, COMPARE_RIGHT_CSV),
+            "changes",
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        let report = if csv {
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                "owner",
+                &result,
+                &request,
+                &source,
+                "CSV_TABLE_COMPARE",
+            );
+            assert_csv_comparison(&artifact, &source, true, false);
+            serde_json::from_str::<Value>(result["text"].as_str().unwrap()).unwrap()
+        } else {
+            normal_row_report(&scratch.0, "owner", &result, &request, &source)
+        };
+        let actual = result["text"].as_str().unwrap();
+        let projected_request = format!("json-object-project [\"{field}\"]:\n{actual}");
+        let projected = record(&execute(&scratch.0, "owner", &[&projected_request]));
+        let artifact =
+            normal_object_projection(&scratch.0, "owner", &projected, &projected_request, actual);
+        let raw_key = serde_json::to_string(field).unwrap();
+        let pointer = format!("/{field}");
+        assert_object_projection_maps(&artifact, actual, &[(field, &raw_key, &pointer)]);
+        let mut expected = serde_json::Map::new();
+        expected.insert(field.into(), report[field].clone());
+        assert_eq!(
+            serde_json::from_str::<Value>(projected["text"].as_str().unwrap()).unwrap(),
+            Value::Object(expected)
+        );
+    }
+}
+
+fn assert_comparison_stop(header: &str, source: &str, code: &str) {
+    let scratch = Scratch::new();
+    let request = format!("{header}\n{source}");
+    let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+    assert!(result["reason"].as_str().unwrap().contains(code));
+    assert_eq!(result["guarantee"], "UNKNOWN");
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    assert_eq!(saved["result"], result);
+    assert_eq!(saved["lifecycle"], "SUSPEND");
+}
+
+#[test]
+fn structured_comparison_invalid_inputs_and_all_reserved_markers_stop_durably() {
+    for (header, source, code) in [
+        (
+            "json-compare:",
+            r#"{"left":1,"right":1,"extra":0}"#,
+            "JSON_COMPARE_SHAPE",
+        ),
+        (
+            "json-compare:",
+            r#"{"left":{"a":1,"\u0061":2},"right":{}}"#,
+            "DUPLICATE_JSON_KEY",
+        ),
+        (
+            "json-compare:",
+            r#"{"left":1,"right":1}x"#,
+            "INVALID_JSON_DOCUMENT",
+        ),
+        (
+            "json-compare:",
+            r#"{"left":1e1025,"right":1e1025}"#,
+            "EXPONENT_LIMIT",
+        ),
+        (
+            "json-compare and send:",
+            r#"{"left":1,"right":1}"#,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        assert_comparison_stop(header, source, code);
+    }
+    let one = r#"{"columns":["id","v"],"rows":[["k","x"]]}"#;
+    let duplicate = r#"{"columns":["id","v"],"rows":[["k","x"],["\u006b","y"]]}"#;
+    for (header, left, right, code) in [
+        (
+            "json-table-compare \"id\":",
+            duplicate,
+            one,
+            "JSON_TABLE_COMPARE_DUPLICATE_KEY",
+        ),
+        (
+            "json-table-compare \"id\":",
+            one,
+            duplicate,
+            "JSON_TABLE_COMPARE_DUPLICATE_KEY",
+        ),
+        (
+            "json-table-compare \"id\":",
+            one,
+            r#"{"columns":["v","id"],"rows":[["x","k"]]}"#,
+            "JSON_TABLE_COMPARE_SCHEMA",
+        ),
+        (
+            "json-table-compare \"missing\":",
+            one,
+            one,
+            "JSON_TABLE_COMPARE_KEY",
+        ),
+        (
+            "json-table-compare \"id\":",
+            one,
+            r#"{"columns":["id","v"],"rows":[["k",1]]}"#,
+            "JSON_TABLE_COMPARE_CELL",
+        ),
+        (
+            "json-table-compare \"id\" and send:",
+            one,
+            one,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        assert_comparison_stop(header, &comparison_wrapper(left, right), code);
+    }
+    let one = "id,v\r\nk,x";
+    let duplicate = "id,v\r\nk,x\r\n\"k\",y";
+    for (header, left, right, code) in [
+        (
+            "csv-compare-by \"id\":",
+            duplicate,
+            one,
+            "CSV_COMPARE_DUPLICATE_KEY",
+        ),
+        (
+            "csv-compare-by \"id\":",
+            one,
+            duplicate,
+            "CSV_COMPARE_DUPLICATE_KEY",
+        ),
+        (
+            "csv-compare-by \"id\":",
+            one,
+            "v,id\r\nx,k",
+            "CSV_COMPARE_SCHEMA",
+        ),
+        ("csv-compare-by \"missing\":", one, one, "CSV_COLUMN"),
+        (
+            "csv-compare-by \"id\":",
+            "id,v\nk,x",
+            one,
+            "CSV_LINE_ENDING",
+        ),
+        (
+            "csv-compare-by \"id\" and send:",
+            one,
+            one,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        assert_comparison_stop(header, &comparison_csv(left, right), code);
+    }
+    assert_comparison_stop("csv-compare-by \"id\":", one, "CSV_COMPARE_DELIMITER");
+    for left_side in [true, false] {
+        for marker in ["LEFT", "RIGHT"] {
+            let embedded = format!("id,v\r\nk,--- MINIDORA {marker} CSV ---");
+            let (left, right) = if left_side {
+                (embedded.as_str(), one)
+            } else {
+                (one, embedded.as_str())
+            };
+            assert_comparison_stop(
+                "csv-compare-by \"id\":",
+                &comparison_csv(left, right),
+                "CSV_COMPARE_DELIMITER",
+            );
+        }
+    }
+}
+
 const COUNT_CSV: &str = "id,分類\r\na,猫\r\nb,open\r\nc,\"猫\"\r\nd,Open\r\ne,open \r\nf, open\r\ng,001\r\nh,1\r\ni,\"\"\r\nj,猫\r\nk,\"open\"\r\nl,\r\nm,é\r\nn,e\u{301}\r\n";
 const COUNT_JSON: &str = r#"{"columns":["id","分類"],"rows":[["a","猫"],["b","open"],["c","\u732b"],["d","Open"],["e","open "],["f"," open"],["g","001"],["h","1"],["i",""],["j","猫"],["k","\u006fpen"],["l",""],["m","é"],["n","e\u0301"]]}"#;
 const COUNT_EMPTY_JSON: &str = r#"{"columns":["id","分類"],"rows":[]}"#;

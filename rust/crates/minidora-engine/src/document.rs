@@ -925,7 +925,8 @@ pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult
     let right_start = delimiter_start + RIGHT_DELIMITER.len();
     let left_source = &document[left_start..delimiter_start];
     let right_source = &document[right_start..];
-    if left_source.contains("--- MINIDORA RIGHT CSV ---")
+    if left_source.contains("--- MINIDORA LEFT CSV ---")
+        || left_source.contains("--- MINIDORA RIGHT CSV ---")
         || right_source.contains("--- MINIDORA RIGHT CSV ---")
         || right_source.contains("--- MINIDORA LEFT CSV ---")
     {
