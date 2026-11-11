@@ -1626,6 +1626,418 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+const EMPTY_PROJECTION_JSON: &str = r#"{"columns":["名前","値","補足"],"rows":[]}"#;
+const OBJECT_PROJECTION_JSON: &str = r#"{"drop":"未選択","a/b~c": { "n":1.2300e+40,"s":"\u732b" },"\u006et":9007199254740993,"tail":[true,null]}"#;
+
+fn check_projection_source_span(span: &Value, source: &str, physical_row: usize, column: usize) {
+    let (start, end) = conversion_fixture_token(
+        source,
+        physical_row,
+        column,
+        true,
+        source == CONVERSION_ESCAPED_JSON,
+    );
+    assert_eq!(span["source_start"], start);
+    assert_eq!(span["source_end"], end);
+    assert_eq!(
+        span["source_sha256"],
+        minidora_domain::digest(&source.as_bytes()[start..end])
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&source[start..end]).unwrap(),
+        CONVERSION_VALUES[physical_row][column]
+    );
+}
+
+fn normal_object_projection(
+    directory: &Path,
+    actor: &str,
+    result: &Value,
+    request: &str,
+    source: &str,
+) -> Value {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    assert_eq!(result["content_plan"]["text"], result["text"]);
+    assert_eq!(result["render"]["status"], "RENDERED");
+    let text = result["text"].as_str().unwrap();
+    assert_eq!(
+        result["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 1);
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let bytes = store
+        .get_bytes(actor, "normal-route", dependencies[0].as_str().unwrap())
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), dependencies[0]);
+    let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        artifact["source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    assert_eq!(
+        artifact["output_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    assert_eq!(artifact["json"], text);
+    let revision = inspect_normal_case(directory, actor);
+    assert_eq!(revision["bundle"]["request"]["text"], request);
+    assert_eq!(revision["bundle"]["meaning"]["intent"]["document"], source);
+    assert_eq!(revision["result"], *result);
+    artifact
+}
+
+fn assert_object_projection_maps(artifact: &Value, source: &str, expected: &[(&str, &str, &str)]) {
+    let output = artifact["json"].as_str().unwrap();
+    let fields = artifact["fields"].as_array().unwrap();
+    assert_eq!(fields.len(), expected.len());
+    let mut cursor = 1;
+    for (index, (field, (name, raw_key, pointer))) in fields.iter().zip(expected).enumerate() {
+        assert_eq!(field["name"], *name);
+        assert_eq!(field["source_pointer"], *pointer);
+        let key_start = source.find(raw_key).unwrap();
+        let key_end = key_start + raw_key.len();
+        assert_eq!(field["key_source"]["source_start"], key_start);
+        assert_eq!(field["key_source"]["source_end"], key_end);
+        assert_eq!(
+            field["key_source"]["source_sha256"],
+            minidora_domain::digest(raw_key.as_bytes())
+        );
+        let colon = key_end + source[key_end..].find(':').unwrap();
+        let mut value_start = colon + 1;
+        while source.as_bytes()[value_start].is_ascii_whitespace() {
+            value_start += 1;
+        }
+        let mut stream =
+            serde_json::Deserializer::from_str(&source[value_start..]).into_iter::<Value>();
+        stream.next().unwrap().unwrap();
+        let value_end = value_start + stream.byte_offset();
+        let raw_value = &source[value_start..value_end];
+        assert_eq!(field["value_source"]["source_start"], value_start);
+        assert_eq!(field["value_source"]["source_end"], value_end);
+        assert_eq!(
+            field["value_source"]["source_sha256"],
+            minidora_domain::digest(raw_value.as_bytes())
+        );
+        let encoded_key = serde_json::to_string(name).unwrap();
+        assert_eq!(field["output_key_start"], cursor);
+        assert_eq!(field["output_key_end"], cursor + encoded_key.len());
+        assert_eq!(&output[cursor..cursor + encoded_key.len()], encoded_key);
+        cursor += encoded_key.len() + 1;
+        assert_eq!(field["output_value_start"], cursor);
+        assert_eq!(field["output_value_end"], cursor + raw_value.len());
+        assert_eq!(&output[cursor..cursor + raw_value.len()], raw_value);
+        cursor += raw_value.len();
+        assert_eq!(
+            output.as_bytes()[cursor],
+            if index + 1 == expected.len() {
+                b'}'
+            } else {
+                b','
+            }
+        );
+        cursor += 1;
+    }
+    assert_eq!(cursor, output.len());
+    serde_json::from_str::<Value>(output).unwrap();
+}
+
+#[test]
+fn table_projection_column_selection_preserves_strings_and_original_positions() {
+    for empty in [false, true] {
+        let source = if empty {
+            EMPTY_PROJECTION_JSON
+        } else {
+            CONVERSION_ESCAPED_JSON
+        };
+        for (actor, header) in [
+            ("japanese", "JSON表の列「値」を選択して:"),
+            ("english", "json-table-select \"値\":"),
+            ("mixed-case", "JsOn-TaBlE-SeLeCt \"値\":"),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, source);
+            assert_eq!(report["column_name"], "値");
+            assert_eq!(report["column_index"], 1);
+            check_projection_source_span(&report["column_source"], source, 0, 1);
+            assert_eq!(
+                report["values"],
+                if empty {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!(["001", "9007199254740993"])
+                }
+            );
+            assert_eq!(
+                report["source_row_indices"],
+                if empty {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([0, 1])
+                }
+            );
+            let spans = report["source_spans"].as_array().unwrap();
+            assert_eq!(spans.len(), if empty { 0 } else { 2 });
+            for (row, span) in spans.iter().enumerate() {
+                check_projection_source_span(span, source, row + 1, 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn table_projection_reorders_named_columns_without_reordering_rows() {
+    for empty in [false, true] {
+        let source = if empty {
+            EMPTY_PROJECTION_JSON
+        } else {
+            CONVERSION_ESCAPED_JSON
+        };
+        for (actor, header) in [
+            ("japanese", "JSON表から列[\"補足\",\"名前\"]を抽出して:"),
+            ("english", "json-table-project [\"補足\",\"名前\"]:"),
+            ("mixed-case", "JsOn-TaBlE-PrOjEcT [\"補足\",\"名前\"]:"),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, source);
+            assert_eq!(report["columns"], serde_json::json!(["補足", "名前"]));
+            assert_eq!(report["selected_column_indices"], serde_json::json!([2, 0]));
+            assert_eq!(
+                report["rows"],
+                if empty {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([["1e3", "猫,\"北\""], ["", "犬\r\n南"]])
+                }
+            );
+            assert_eq!(
+                report["source_row_indices"],
+                if empty {
+                    serde_json::json!([])
+                } else {
+                    serde_json::json!([0, 1])
+                }
+            );
+            let columns = report["column_source_spans"].as_array().unwrap();
+            assert_eq!(columns.len(), 2);
+            for (span, column) in columns.iter().zip([2, 0]) {
+                check_projection_source_span(span, source, 0, column);
+            }
+            let cells = report["cell_source_spans"].as_array().unwrap();
+            assert_eq!(cells.len(), if empty { 0 } else { 2 });
+            for (row, spans) in cells.iter().enumerate() {
+                let spans = spans.as_array().unwrap();
+                assert_eq!(spans.len(), 2);
+                for (span, column) in spans.iter().zip([2, 0]) {
+                    check_projection_source_span(span, source, row + 1, column);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn table_projection_object_fields_preserve_raw_values_and_json_pointer_identity() {
+    for (actor, header) in [
+        (
+            "japanese",
+            "JSONオブジェクトからフィールド[\"nt\",\"a/b~c\"]を抽出して:",
+        ),
+        ("english", "json-object-project [\"nt\",\"a/b~c\"]:"),
+        ("mixed-case", "JsOn-ObJeCt-PrOjEcT [\"nt\",\"a/b~c\"]:"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{OBJECT_PROJECTION_JSON}");
+        let result = record(&execute(&scratch.0, actor, &[&request]));
+        assert_eq!(
+            result["text"],
+            r#"{"nt":9007199254740993,"a/b~c":{ "n":1.2300e+40,"s":"\u732b" }}"#
+        );
+        let artifact =
+            normal_object_projection(&scratch.0, actor, &result, &request, OBJECT_PROJECTION_JSON);
+        assert_object_projection_maps(
+            &artifact,
+            OBJECT_PROJECTION_JSON,
+            &[
+                ("nt", r#""\u006et""#, "/nt"),
+                ("a/b~c", r#""a/b~c""#, "/a~1b~0c"),
+            ],
+        );
+    }
+}
+
+#[test]
+fn table_projection_actual_sort_report_becomes_csv_only_after_explicit_projection() {
+    for (actor, sort_header, project_header) in [
+        (
+            "japanese",
+            "JSON表の列「順位」を昇順に並べ替えて:",
+            "JSONオブジェクトからフィールド[\"columns\",\"rows\"]を抽出して:",
+        ),
+        (
+            "english",
+            "json-table-sort \"順位\" ascending:",
+            "json-object-project [\"columns\",\"rows\"]:",
+        ),
+        (
+            "mixed-case",
+            "JsOn-TaBlE-SoRt \"順位\" AsCeNdInG:",
+            "JsOn-ObJeCt-PrOjEcT [\"columns\",\"rows\"]:",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let sort_request = format!("{sort_header}\n{ROW_JSON}");
+        let sorted = record(&execute(&scratch.0, actor, &[&sort_request]));
+        let report = normal_row_report(&scratch.0, actor, &sorted, &sort_request, ROW_JSON);
+        let order = [4, 1, 3, 0, 2, 5];
+        assert_json_row_maps(&report, ROW_JSON, &order, None);
+        let actual_report = sorted["text"].as_str().unwrap();
+        let raw_export_request = format!("json-to-csv:\n{actual_report}");
+        let raw_stop = stopped(
+            &execute(&scratch.0, actor, &[&raw_export_request]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            raw_stop["reason"]
+                .as_str()
+                .unwrap()
+                .contains("JSON_TABLE_SHAPE")
+        );
+        assert_eq!(raw_stop["dependencies"], serde_json::json!([]));
+        let failed_revision = inspect_normal_case(&scratch.0, actor);
+        assert_eq!(
+            failed_revision["bundle"]["request"]["text"],
+            raw_export_request
+        );
+        assert_eq!(failed_revision["result"], raw_stop);
+        let project_request = format!("{project_header}\n{actual_report}");
+        let projected = record(&execute(&scratch.0, actor, &[&project_request]));
+        let artifact = normal_object_projection(
+            &scratch.0,
+            actor,
+            &projected,
+            &project_request,
+            actual_report,
+        );
+        assert_object_projection_maps(
+            &artifact,
+            actual_report,
+            &[
+                ("columns", r#""columns""#, "/columns"),
+                ("rows", r#""rows""#, "/rows"),
+            ],
+        );
+        let actual_table = projected["text"].as_str().unwrap();
+        let table: Value = serde_json::from_str(actual_table).unwrap();
+        assert_eq!(
+            table,
+            serde_json::json!({"columns": report["columns"], "rows": report["rows"]})
+        );
+        let export_request = format!("json-to-csv:\n{actual_table}");
+        let exported = record(&execute(&scratch.0, actor, &[&export_request]));
+        let expected = format!(
+            "{}\r\n{}\r\n",
+            ROW_CSV_TOKENS[0].join(","),
+            order
+                .iter()
+                .map(|index| ROW_CSV_TOKENS[index + 1].join(","))
+                .collect::<Vec<_>>()
+                .join("\r\n")
+        );
+        assert_eq!(exported["text"], expected);
+        normal_document_artifact(
+            &scratch.0,
+            actor,
+            &exported,
+            &export_request,
+            actual_table,
+            "JSON_TO_CSV",
+        );
+        let revision = inspect_normal_case(&scratch.0, actor);
+        assert!(
+            revision["prior_results"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|prior| prior == &raw_stop)
+        );
+    }
+}
+
+#[test]
+fn table_projection_invalid_column_and_field_requests_stop_durably() {
+    for (header, source, code) in [
+        (
+            "json-table-select \"missing\":",
+            CONVERSION_ESCAPED_JSON,
+            "JSON_TABLE_SELECT_COLUMN",
+        ),
+        (
+            "json-table-project []:",
+            CONVERSION_ESCAPED_JSON,
+            "JSON_TABLE_PROJECT_COLUMNS",
+        ),
+        (
+            "json-table-project [\"名前\",\"名前\"]:",
+            CONVERSION_ESCAPED_JSON,
+            "JSON_TABLE_PROJECT_DUPLICATE_COLUMN",
+        ),
+        (
+            "json-table-project [\"missing\"]:",
+            CONVERSION_ESCAPED_JSON,
+            "JSON_TABLE_PROJECT_COLUMN",
+        ),
+        (
+            "json-object-project []:",
+            OBJECT_PROJECTION_JSON,
+            "JSON_OBJECT_PROJECT_FIELDS",
+        ),
+        (
+            "json-object-project [\"nt\",\"nt\"]:",
+            OBJECT_PROJECTION_JSON,
+            "JSON_OBJECT_PROJECT_DUPLICATE_FIELD",
+        ),
+        (
+            "json-object-project [\"missing\"]:",
+            OBJECT_PROJECTION_JSON,
+            "JSON_OBJECT_PROJECT_FIELD",
+        ),
+        (
+            "json-object-project [\"a\"]:",
+            r#"[{"a":1}]"#,
+            "JSON_OBJECT_PROJECT_SHAPE",
+        ),
+        (
+            "json-object-project [\"a\"]:",
+            r#"{"a":1,"\u0061":2}"#,
+            "DUPLICATE_JSON_KEY",
+        ),
+        (
+            "json-table-select \"a\":",
+            r#"{"columns":["a"],"rows":[["x"]],"extra":0}"#,
+            "JSON_TABLE_COMPARE_SHAPE",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().contains(code));
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(revision["lifecycle"], "SUSPEND");
+        assert_eq!(revision["result"], result);
+    }
+}
+
 const ROW_CSV: &str = "id,状態,順位\r\n\"猫,甲\",open,2\r\n犬,Open,10\r\n鳥,open ,2\r\n魚,open,10\r\n狐, open,01\r\n馬,open,2\r\n";
 const ROW_JSON: &str = r#"{"columns":["id","状態","順位"],"rows":[["\u732b,甲","open","2"],["犬","Open","10"],["鳥","open ","2"],["魚","\u006fpen","10"],["狐"," open","01"],["馬","open","2"]]}"#;
 const ROW_VALUES: [[&str; 3]; 7] = [
