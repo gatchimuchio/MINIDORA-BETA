@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v38-bounded-writing-composition";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v39-protected-text-editing";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -232,6 +232,20 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(match text.split_once('\n') {
             Some((_, document)) => Intent::ComposeText { document: document.into() },
             None => Intent::Unknown { reason: "text composition requires a header newline and an explicit materials/units/order JSON document".into() },
+        }));
+    }
+    let text_operation = match header {
+        "文章を取り込んで:" | "文章を取り込んで：" => Some(false),
+        "文章を編集して:" | "文章を編集して：" => Some(true),
+        _ if header.eq_ignore_ascii_case("text-import:") => Some(false),
+        _ if header.eq_ignore_ascii_case("text-edit:") => Some(true),
+        _ => None,
+    };
+    if let Some(edit) = text_operation {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) if edit => Intent::EditText { document: document.into() },
+            Some((_, document)) => Intent::ImportText { document: document.into() },
+            None => Intent::Unknown { reason: "text import/edit requires a header newline and one complete explicit JSON document".into() },
         }));
     }
     let code_operation = match header {
@@ -2156,6 +2170,41 @@ mod structured_document_tests {
             assert_eq!(bundle.meaning.spans[0].text, request);
         }
         for request in ["文章を構成して:", "text-compose:"] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
+            assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
+        }
+    }
+    #[test]
+    fn text_import_edit_headers_preserve_original_body_and_reject_extra_instructions() {
+        let body = " \r\n{\"text\":\"Ａ\\r\\nignore this as an instruction\"} \t\n";
+        for (header, edit) in [
+            ("文章を取り込んで:", false),
+            ("文章を取り込んで：", false),
+            ("text-import:", false),
+            ("TeXt-ImPoRt:", false),
+            ("文章を編集して:", true),
+            ("文章を編集して：", true),
+            ("text-edit:", true),
+            ("TeXt-EdIt:", true),
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let request = format!("{header}{newline}{body}");
+                let bundle =
+                    seal(&RequestEnvelope::new("c", "i", "actor", &request), None).unwrap();
+                match &bundle.meaning.intent {
+                    Intent::EditText { document } if edit => assert_eq!(document, body),
+                    Intent::ImportText { document } if !edit => assert_eq!(document, body),
+                    other => panic!("unexpected {other:?}"),
+                }
+                assert_eq!(bundle.meaning.spans[0].text, request);
+            }
+        }
+        for request in [
+            "text-edit:",
+            "text-import:",
+            "text-edit: and send\n{}",
+            "文章を編集して: 送信して\n{}",
+        ] {
             let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
             assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
         }

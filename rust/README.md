@@ -274,7 +274,38 @@ Literal editing replaces original nonoverlapping matches only. A supplied count 
 
 Markers are fixed by role: headings use `# `, bullets `- `, numbered blocks `1.`, quotes `> `, and condition/caveat blocks use `条件:`/`留保:` labels. Paragraphs have no prefix.
 
-The output is limited to caller-selected literal fragments, fixed layout prefixes and blank-line separators. Every output segment maps either to its exact decoded material range and containing JSON string token or to the unit directive that generated the layout token. The stored artifact includes source/output hashes, selected and omitted units, protection/required flags and complete output spans. `USER_PREMISE` describes the supplied content; it does not assert that facts are true. This route does not write original prose, summarize, infer a purpose, select facts, prove semantic equivalence, validate writing quality or satisfy the twelve-task B08 acceptance population. Editing and general writing remain open B08 work; see [the B08 route audit](audit/b08-explicit-text-composition-route-validation.json).
+The output is limited to caller-selected literal fragments, fixed layout prefixes and blank-line separators. Every output segment maps either to its exact decoded material range and containing JSON string token or to the unit directive that generated the layout token. The stored artifact includes source/output hashes, selected and omitted units, protection/required flags and complete output spans. `USER_PREMISE` describes the supplied content; it does not assert that facts are true. This route does not write original prose, summarize, infer a purpose, select facts, prove semantic equivalence, validate writing quality or satisfy the twelve-task B08 acceptance population. General drafting, inferred corrections and summaries remain open B08 work; see [the composition route audit](audit/b08-explicit-text-composition-route-validation.json).
+
+### Protected text import and editing
+
+The following ordinary CLI consumer uses the actual imported artifact and returned text hash as the next request's editing base:
+
+```bash
+python3 - "$minidora_bin" "$minidora_state" <<'PY'
+import hashlib, json, subprocess, sys
+binary, state = sys.argv[1:]
+def run(header, body):
+    request = header + "\n" + json.dumps(body, ensure_ascii=False)
+    return json.loads(subprocess.check_output(
+        [binary, "--db", state, "--case", "writing-edit", "--actor", "demo", "--json"],
+        input=request, text=True))
+base = run("text-import:", {"text": "Draft", "protected": [], "max_chars": 256})
+edited = run("text-edit:", {
+    "base_artifact": base["dependencies"][-1],
+    "expected_text_sha256": hashlib.sha256(base["text"].encode()).hexdigest(),
+    "edits": [{"id": "title", "start": 0, "end": 5, "expected": "Draft",
+               "replacement": "Final", "reason": "Requested title update"}]})
+print(edited["text"])
+PY
+```
+
+`text-import:` / `文章を取り込んで:` accepts exactly `text`, `protected` and `max_chars`. Each protected range has exactly `id`, `start`, `end` and `expected`; coordinates are half-open UTF-8 byte offsets in the decoded original text. `text-edit:` / `文章を編集して:` accepts exactly `base_artifact`, `expected_text_sha256` and `edits`. Each edit has exactly `id`, `start`, `end`, `expected`, `replacement` and `reason`. The artifact digest identifies a stored document; the expected digest identifies its text. English headers are ASCII case insensitive.
+
+Core reads bases only from the frontend's bound actor and current case. CLI actor configuration remains a trusted local identity. Supported bases are actual import, composition and earlier editing artifacts. Each base is regenerated from its original request and verified ancestry, then compared with its complete canonical stored bytes. Composition's protected quote/condition/caveat units remain protected. All edits use the same pre-edit coordinates and are validated before any replacement. Empty expected text inserts at a boundary; empty replacement text deletes. Adjacent edits are allowed; overlapping edits, equal starting positions, stale hashes, nonmatching original text, invalid UTF-8 boundaries and protected-text changes suspend. Insertions at a protected boundary preserve the protected text and update its location.
+
+The result records changed and unchanged output ranges, actual base/ancestor artifact digests and source hashes. Unchanged text points to its parent artifact; inserted text points to the current request's replacement string. Limits are 64 edits per revision, 256 protected ranges, 16 editing revisions, 256,000 request/output bytes, inherited `max_chars` up to 100,000 scalar values, 2,000,000 bytes per artifact and 8,000,000 aggregate bytes during ancestry replay. Replay and patch application poll the request deadline; in-progress cancellation polling is not implemented. Exact request retries retain the saved result and file receipt; a new explicit input version retains prior results. Local file output uses the existing exact-target write grant.
+
+These operations apply explicit corrections and preserve provenance. Discovering a correction, preserving arbitrary rewritten meaning, summarizing and satisfying an audience, style or purpose remain open requirements. The [protected-editing audit](audit/b08-protected-text-editing-route-validation.json) records scoped normal-route observations; full B08 acceptance remains `UNVERIFIED`.
 
 ## Exact-target file output
 

@@ -338,11 +338,13 @@
         "crates/minidora-domain/src/lib.rs",
         "crates/minidora-engine/src/input.rs",
         "crates/minidora-engine/src/document.rs",
+        "crates/minidora-engine/src/text_editing.rs",
         "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/lib.rs",
         "apps/cli/tests/normal_route.rs"
       ],
-      "evidence": "b08-explicit-text-composition-route-validation.json records an ordinary-CLI route from strict Japanese/English input headers through sealed ComposeText intent and Core to a source/output-mapped artifact. Three focused component/parser tests, one ordinary CLI test and one existing exact-replacement regression passed; workspace/all-target check and Clippy with warnings denied passed. The full B08 writing, editing, rewriting, summary and unseen-task acceptance remains unverified",
-      "full_acceptance_gap": "Free-form authoring, semantic editing/rewriting, summaries, purpose and style fidelity, independent unseen-task quality, and the full twelve-task B08 acceptance population remain unimplemented or unverified",
+      "evidence": "b08-explicit-text-composition-route-validation.json records the first bounded ordinary-CLI composition route. b08-protected-text-editing-route-validation.json records import and atomic editing of actual case-scoped import/composition/editing artifacts, full bounded source/ancestry replay, inherited protection and current-replacement/parent provenance. Five component tests, one input test, three ordinary CLI tests and two existing regressions passed, including actual composition-to-edit/edit-to-edit consumption, source maps, typed stops, actor/case isolation, versions and confirmed local file receipts with saved retries. An initial test-assertion Clippy warning was corrected and the affected test passed again; formatting, workspace/all-target check, Clippy with warnings denied and build passed. Full workspace runtime tests and full B08 acceptance remain unverified",
+      "full_acceptance_gap": "Free-form drafting, correction discovery, semantic rewriting and summaries, purpose/audience/style fidelity, arbitrary meaning preservation, in-progress editing cancellation polling, independent unseen-task quality and the complete twelve-task B08 acceptance population remain unimplemented or unverified",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

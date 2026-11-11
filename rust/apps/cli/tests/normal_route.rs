@@ -6124,6 +6124,362 @@ fn explicit_text_composition_normal_route_preserves_materials_and_artifact_linea
     assert!(result["dependencies"].as_array().unwrap().is_empty());
 }
 
+fn text_patch(id: &str, start: usize, end: usize, expected: &str, replacement: &str) -> Value {
+    serde_json::json!({"id":id,"start":start,"end":end,"expected":expected,"replacement":replacement,"reason":"explicit requested revision"})
+}
+
+fn text_edit_request(header: &str, base_sha: &str, text: &str, edits: Value) -> String {
+    format!(
+        "{header}\n{}",
+        serde_json::json!({"base_artifact":base_sha,"expected_text_sha256":minidora_domain::digest(text.as_bytes()),"edits":edits})
+    )
+}
+
+fn assert_text_document_artifact(directory: &Path, result: &Value, request: &str) -> Value {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "USER_PREMISE");
+    assert_eq!(result["content_plan"]["text"], result["text"]);
+    assert_eq!(result["render"]["status"], "RENDERED");
+    let saved = inspect_normal_case(directory, "owner");
+    assert_eq!(saved["result"], *result);
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    let body = saved["bundle"]["meaning"]["intent"]["document"]
+        .as_str()
+        .unwrap();
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let dependencies = result["dependencies"].as_array().unwrap();
+    let report = sequence_artifact(&store, dependencies.last().unwrap());
+    assert_eq!(report["source_document"], body);
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(body.as_bytes())
+    );
+    assert_eq!(report["text"], result["text"]);
+    let text = result["text"].as_str().unwrap();
+    assert_eq!(
+        report["output_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    assert_eq!(result["render"]["actual_sha256"], report["output_sha256"]);
+    let mut cursor = 0usize;
+    for span in report["spans"].as_array().unwrap() {
+        let start = span["output_start"].as_u64().unwrap() as usize;
+        let end = span["output_end"].as_u64().unwrap() as usize;
+        let piece = span["text"].as_str().unwrap();
+        assert_eq!(start, cursor);
+        assert_eq!(text.get(start..end), Some(piece));
+        let origin = &span["origin"];
+        if origin["kind"] == "PARENT_TEXT" {
+            let parent = sequence_artifact(&store, &origin["artifact_sha256"]);
+            let old_start = origin["start"].as_u64().unwrap() as usize;
+            let old_end = origin["end"].as_u64().unwrap() as usize;
+            assert_eq!(
+                parent["text"].as_str().unwrap().get(old_start..old_end),
+                Some(piece)
+            );
+            assert!(dependencies.contains(&origin["artifact_sha256"]));
+        } else {
+            assert!(matches!(
+                origin["kind"].as_str().unwrap(),
+                "ORIGINAL_TEXT" | "REPLACEMENT_TEXT"
+            ));
+            let json_start = origin["json_start"].as_u64().unwrap() as usize;
+            let json_end = origin["json_end"].as_u64().unwrap() as usize;
+            let literal: String = serde_json::from_str(&body[json_start..json_end]).unwrap();
+            let text_start = origin["text_start"].as_u64().unwrap() as usize;
+            let text_end = origin["text_end"].as_u64().unwrap() as usize;
+            assert_eq!(literal.get(text_start..text_end), Some(piece));
+        }
+        cursor = end;
+    }
+    assert_eq!(cursor, text.len());
+    for lock in report["protected"].as_array().unwrap() {
+        let start = lock["start"].as_u64().unwrap() as usize;
+        let end = lock["end"].as_u64().unwrap() as usize;
+        assert_eq!(text.get(start..end), lock["expected"].as_str());
+    }
+    let graph = sequence_artifact(&store, &result["execution_graph_ref"]);
+    let compute = sequence_artifact(&store, &graph[1]["compute"]);
+    assert_eq!(compute[3], result["dependencies"]);
+    report
+}
+
+#[test]
+fn text_editing_route_imports_actual_text_versions_and_confirms_file_once() {
+    let original = "draft\n条件: 雨天中止\nend";
+    let lock_start = "draft\n".len();
+    let lock_end = lock_start + "条件: 雨天中止".len();
+    let body = serde_json::json!({"text":original,"protected":[{"id":"condition","start":lock_start,"end":lock_end,"expected":"条件: 雨天中止"}],"max_chars":128}).to_string();
+    for (import_header, edit_header) in [
+        ("文章を取り込んで:", "文章を編集して:"),
+        ("TeXt-ImPoRt:", "TeXt-EdIt:"),
+    ] {
+        let scratch = Scratch::new();
+        let import_request = format!("{import_header}\r\n{body}");
+        let imported = record(&execute(&scratch.0, "owner", &[&import_request]));
+        let base = assert_text_document_artifact(&scratch.0, &imported, &import_request);
+        assert_eq!(base["operation"], "TEXT_IMPORT_EXPLICIT_V1");
+        assert_eq!(base["text"], original);
+        let base_sha = imported["dependencies"][0].as_str().unwrap();
+        let request = text_edit_request(
+            edit_header,
+            base_sha,
+            original,
+            serde_json::json!([
+                text_patch("tail", original.len() - 3, original.len(), "end", "finish"),
+                text_patch("insert", lock_start, lock_start, "", "Note\n"),
+                text_patch("title", 0, 5, "draft", "final")
+            ]),
+        );
+        let path = scratch.0.join("revised.txt");
+        let path_text = path.to_str().unwrap();
+        let args = [
+            "--input",
+            "revision",
+            "--output",
+            path_text,
+            "--allow-write",
+            path_text,
+            &request,
+        ];
+        let first = record(&execute(&scratch.0, "owner", &args));
+        let report = assert_text_document_artifact(&scratch.0, &first, &request);
+        assert_eq!(first["text"], "final\nNote\n条件: 雨天中止\nfinish");
+        assert_eq!(report["revision"], 1);
+        assert_eq!(report["consumed_artifacts"], serde_json::json!([base_sha]));
+        assert_eq!(report["protected"][0]["start"], lock_start + "Note\n".len());
+        assert_eq!(first["receipts"][0]["phase"], "CONFIRMED");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            first["text"].as_str().unwrap().as_bytes()
+        );
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+        let first_sha = first["dependencies"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap();
+        let first_text = first["text"].as_str().unwrap();
+        let finish = first_text.find("finish").unwrap();
+        let next = text_edit_request(
+            "text-edit:",
+            first_sha,
+            first_text,
+            serde_json::json!([text_patch("next", finish, finish + 6, "finish", "done")]),
+        );
+        let second = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "revision", "--version", "2", &next],
+        ));
+        let report = assert_text_document_artifact(&scratch.0, &second, &next);
+        assert_eq!(second["text"], "final\nNote\n条件: 雨天中止\ndone");
+        assert_eq!(report["revision"], 2);
+        assert_eq!(
+            report["consumed_artifacts"],
+            serde_json::json!([first_sha, base_sha])
+        );
+        assert_eq!(
+            inspect_normal_case(&scratch.0, "owner")["prior_results"]
+                [first["id"].as_str().unwrap()],
+            first
+        );
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn text_editing_route_consumes_composition_and_enforces_artifact_case_scope() {
+    let scratch = Scratch::new();
+    let composition = serde_json::json!({
+        "materials":[{"id":"m","text":"TitleKeepQuote"}],
+        "units":[
+            {"id":"title","kind":"heading","fragments":[{"material":"m","start":0,"end":5}],"with":[],"required":false,"protected":false},
+            {"id":"condition","kind":"condition","fragments":[{"material":"m","start":5,"end":9}],"with":[],"required":false,"protected":false},
+            {"id":"quotation","kind":"quote","fragments":[{"material":"m","start":9,"end":14}],"with":[],"required":false,"protected":false}
+        ],"order":["title","quotation"],"max_chars":128
+    });
+    let produced = record(&execute(
+        &scratch.0,
+        "owner",
+        &[&format!("text-compose:\n{composition}")],
+    ));
+    assert_eq!(produced["text"], "# Title\n\n> Quote\n\n条件: Keep");
+    let base_sha = produced["dependencies"][0].as_str().unwrap();
+    let request = text_edit_request(
+        "text-edit:",
+        base_sha,
+        produced["text"].as_str().unwrap(),
+        serde_json::json!([text_patch("title", 2, 7, "Title", "Updated")]),
+    );
+    let edited = record(&execute(&scratch.0, "owner", &[&request]));
+    let artifact = assert_text_document_artifact(&scratch.0, &edited, &request);
+    assert_eq!(edited["text"], "# Updated\n\n> Quote\n\n条件: Keep");
+    assert_eq!(
+        artifact["consumed_artifacts"],
+        serde_json::json!([base_sha])
+    );
+    assert_eq!(artifact["protected"].as_array().unwrap().len(), 2);
+    let edited_sha = edited["dependencies"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let text = edited["text"].as_str().unwrap();
+    let at = text.find("Quote").unwrap();
+    let locked = text_edit_request(
+        "文章を編集して:",
+        edited_sha,
+        text,
+        serde_json::json!([text_patch("quote", at, at + 5, "Quote", "Changed")]),
+    );
+    let result = stopped(&execute(&scratch.0, "owner", &[&locked]), 2, "SUSPEND");
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("TEXT_EDIT_PROTECTED:")
+    );
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+    let other = stopped(
+        &execute(&scratch.0, "owner", &["--case", "other-case", &request]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        other["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("TEXT_EDIT_BASE_UNAVAILABLE:")
+    );
+    assert_eq!(other["dependencies"], serde_json::json!([]));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(
+        store
+            .get_bytes("stranger", "normal-route", base_sha)
+            .is_err()
+    );
+    assert!(store.get_bytes("owner", "other-case", base_sha).is_err());
+    assert_eq!(
+        sequence_artifact(&store, &Value::String(edited_sha.into()))["text"],
+        edited["text"]
+    );
+}
+
+#[test]
+fn text_editing_route_persists_typed_atomic_schema_and_resource_stops() {
+    let scratch = Scratch::new();
+    let text = "猫abcLOCKend";
+    let imported = record(&execute(
+        &scratch.0,
+        "owner",
+        &[&format!(
+            "text-import:\n{}",
+            serde_json::json!({"text":text,"protected":[{"id":"lock","start":6,"end":10,"expected":"LOCK"}],"max_chars":32})
+        )],
+    ));
+    let sha = imported["dependencies"][0].as_str().unwrap();
+    let cases = [
+        (
+            serde_json::json!([
+                text_patch("valid", 3, 4, "a", "z"),
+                text_patch("bad", 10, 13, "old", "x")
+            ]),
+            "TEXT_EDIT_EXPECTED_TEXT:",
+        ),
+        (
+            serde_json::json!([
+                text_patch("one", 3, 5, "ab", "x"),
+                text_patch("two", 4, 6, "bc", "y")
+            ]),
+            "TEXT_EDIT_OVERLAP:",
+        ),
+        (
+            serde_json::json!([text_patch("lock", 7, 7, "", "x")]),
+            "TEXT_EDIT_PROTECTED:",
+        ),
+        (
+            serde_json::json!([text_patch("utf8", 1, 3, "猫", "x")]),
+            "TEXT_EDIT_EXPECTED_TEXT:",
+        ),
+        (
+            serde_json::json!([text_patch("noop", 3, 4, "a", "a")]),
+            "TEXT_EDIT_INPUT:",
+        ),
+        (
+            serde_json::json!([text_patch("expand", 3, 4, "a", &"x".repeat(64))]),
+            "TEXT_EDIT_OUTPUT_LIMIT:",
+        ),
+    ];
+    for (edits, code) in cases {
+        let request = text_edit_request("text-edit:", sha, text, edits);
+        let stopped_result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(stopped_result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(stopped_result["dependencies"], serde_json::json!([]));
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(saved["result"], stopped_result);
+    }
+    let valid = text_edit_request(
+        "text-edit:",
+        sha,
+        text,
+        serde_json::json!([text_patch("change", 3, 4, "a", "z")]),
+    );
+    let (_, body) = valid.split_once('\n').unwrap();
+    let mut stale: Value = serde_json::from_str(body).unwrap();
+    stale["expected_text_sha256"] = serde_json::json!("0".repeat(64));
+    let mut extra = stale.clone();
+    extra["unexpected"] = serde_json::json!(true);
+    let mut missing: Value = serde_json::from_str(body).unwrap();
+    missing["base_artifact"] = serde_json::json!("0".repeat(64));
+    for (body, code) in [
+        (stale.to_string(), "TEXT_EDIT_BASE_MISMATCH:"),
+        (extra.to_string(), "TEXT_EDIT_INPUT:"),
+        (missing.to_string(), "TEXT_EDIT_BASE_UNAVAILABLE:"),
+        (format!("{body} trailing"), "INVALID_JSON_DOCUMENT:"),
+        (
+            body.replacen("\"edits\":", "\"edits\":[],\"edits\":", 1),
+            "DUPLICATE_JSON_KEY:",
+        ),
+    ] {
+        let result = stopped(
+            &execute(&scratch.0, "owner", &[&format!("text-edit:\n{body}")]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            result["reason"].as_str().unwrap().starts_with(code),
+            "{}",
+            result["reason"]
+        );
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+    }
+    for args in [
+        vec!["--max-evidence-bytes", "1"],
+        vec!["--max-actions", "2"],
+        vec!["--deadline-ms", "0"],
+    ] {
+        let mut args = args;
+        args.push(&valid);
+        let result = stopped(&execute(&scratch.0, "owner", &args), 2, "SUSPEND");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+    }
+    let final_result = record(&execute(&scratch.0, "owner", &[&valid]));
+    assert_eq!(final_result["text"], "猫zbcLOCKend");
+    assert_text_document_artifact(&scratch.0, &final_result, &valid);
+}
+
 fn code_expression_documents() -> Vec<Value> {
     let mut expressions = Vec::new();
     for (kind, operations) in [

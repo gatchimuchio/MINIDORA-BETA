@@ -276,6 +276,12 @@ pub enum Intent {
     ComposeText {
         document: String,
     },
+    ImportText {
+        document: String,
+    },
+    EditText {
+        document: String,
+    },
     Search {
         provider: String,
         query: String,

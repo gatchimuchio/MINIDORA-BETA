@@ -1,0 +1,389 @@
+{
+  "work_item": "B08 continuation: protected text import and atomic artifact-based editing through the ordinary CLI",
+  "recorded_at": "2026-11-11T18:24:30.822786Z",
+  "base_commit": "57c68abff9717d9be60d03dcbde4ec3b5b9ac0dd",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Actual imported/composed/edited artifact -> sealed explicit editing request -> one Core with frontend-bound actor/case-scoped artifact reads -> bounded original/ancestry replay -> atomic protected edit -> provenance artifact -> actual content/render/file receipt and retained versions",
+  "owner_instruction_scope": "User continuation of the existing Rust implementation/QC/commit/push delegation; existing two-generation backup refs rotated once for this batch.",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "8.3",
+      "8.4",
+      "14",
+      "15",
+      "19"
+    ]
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v39-protected-text-editing",
+  "prior_parser_version": "declarative-ja-en-v38-bounded-writing-composition",
+  "capability_version": "explicit-text-import-editing-v1",
+  "version_boundary": "Two optional ImportText/EditText intents, new TEXT_IMPORT_EXPLICIT_V1 and TEXT_EDIT_EXPLICIT_PATCHES_V1 artifacts. Existing composition artifacts are consumed without serialized-schema changes. Stored bytes must reproduce exactly from their source and ancestry. No dependency/lockfile/store migration, frozen source change or old-state compatibility claim.",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_NATIVE_CAPABILITY_CONNECTION_AND_QC",
+  "product_source_changed": true,
+  "protected_refs_before_rotation": {
+    "codex/backup-main": "fbd118e183ace67b1518cd229a468800eab56488",
+    "codex/backup-main-prev": "2f72acef0e045b11aff28decbf0f72838c4f82da"
+  },
+  "protected_refs_after_authorized_rotation": {
+    "codex/backup-main": "57c68abff9717d9be60d03dcbde4ec3b5b9ac0dd",
+    "codex/backup-main-prev": "fbd118e183ace67b1518cd229a468800eab56488"
+  },
+  "backup_rotation_count_this_batch": 1,
+  "legacy_source_lineage": [
+    {
+      "path": "src/minidora/文章作成.py",
+      "git_blob_sha": "c2cc7e40dc6e0f97fea51913cba413f61269630f",
+      "sha256": "0a96082d86aed0543c19898986d65a301b99c45826c0154b51f2bd750abcf11e",
+      "public_entry": "文章を取り込む / 文章を作る",
+      "inspected_contract": "Explicit source-text import/protected ranges and material-slice composition with provenance/hashes; initial composition already connected in the preceding B08 batch.",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/文章編集.py",
+      "git_blob_sha": "859be48e12ab4aa182d33d42039424640853eb35",
+      "sha256": "66ce6efdc78b339ecc5a8e82c8376dd01d641e1f05a2c3df4619f307119ea7fc",
+      "public_entry": "文章を編集 / 編集箇所を特定",
+      "inspected_contract": "Base-record and expected-original checks, atomic nonoverlapping changes, protected-text rejection and revision provenance; correction discovery and arbitrary semantic preservation are outside this contract.",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/文章能力接続.py",
+      "git_blob_sha": "64060343698c09d1764747fc99470f037f88316f",
+      "sha256": "9262fd3bccb54e64603d4f4ad3b3f5088be0407f1c6b47c60de28bfed861e0c4",
+      "public_entry": "文章能力モジュール / 文章能力群",
+      "inspected_contract": "Typed explicit create/import/edit/locate-replacement adapters; no free-text correction inference.",
+      "original_unchanged": true
+    }
+  ],
+  "inheritance_boundary": "The Rust port uses half-open UTF-8 byte coordinates; the inspected Python editor uses character coordinates and embeds its history. Rust uses immutable same-case artifact ancestry with full bounded replay. These are explicitly versioned implementation differences, not binary old-state compatibility or full inherited-equivalence evidence. Frozen Python tests were not run or modified.",
+  "source_snapshot_sha256": "ae1fbd08d071bd4dde4f4329bd0ad4ce8645b7743da479f43afa5f8f256f4f9d",
+  "source_snapshot_method": "SHA-256 of compact JSON file inventory in code-snapshot.json, including the new text_editing.rs module.",
+  "code_snapshot_ref": "code-snapshot.json",
+  "source_snapshot_files": 30,
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "3210a0376b581983d97dd18df7b9c4df8440efa1d43c230a4ade4fc0363fd482",
+    "crates/minidora-engine/src/lib.rs": "f8b67d300082a1dfd37c262695a05a7bdc2017f4ee420a5d55a24296a9c0d030",
+    "crates/minidora-engine/src/input.rs": "41d02056f54ffb5a77b93987959b89c4af34a8b724c4007272a09d9a848cd3c2",
+    "crates/minidora-engine/src/core.rs": "9c26d8e9e4893320b11ba6f70c3c4d8440e537d69a10b8c3f5ddf7df32002561",
+    "crates/minidora-engine/src/text_editing.rs": "78918dfb2886438338e9e03c850d9c0c46ccf1e37183d1659fdada2ed0c69d71"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "7dad5e42383b956b1e168267d328625ca5596541fe77455cb905eb5b2ffd193f"
+  },
+  "changed_document_paths": [
+    "README.md",
+    "docs/IMPLEMENTATION_CHOICES.md",
+    "audit/IMPLEMENTATION_STATUS.md",
+    "audit/README.md",
+    "audit/code-snapshot.json",
+    "audit/requirements.tsv",
+    "audit/rust-requirement-observations.json",
+    "../docs/redesign/03_REQUIREMENT_TRACE.tsv"
+  ],
+  "actual_routes": [
+    "Normal CLI or shared Engine input -> input::seal/structured_intent -> Intent::ImportText -> text_editing::import_explicit_text -> ImportedText -> Core authorized artifact/content/render.",
+    "Normal CLI or shared Engine input -> input::seal/structured_intent -> Intent::EditText -> Core actor/case-scoped Store::get_bytes -> text_editing::edit_explicit_text -> bounded exact source/ancestry replay -> atomic patch -> EditedText -> consumed ancestor hashes in Core compute/content/render -> optional existing exact-grant file writer and observed receipt."
+  ],
+  "route_contract": [
+    "Headers are 文章を取り込んで:/：, 文章を編集して:/：, and ASCII-case-insensitive text-import:/text-edit:. A newline is mandatory and the complete raw JSON body is retained without Unicode or line-ending normalization.",
+    "Import requires exactly text/protected/max_chars. Protected entries require id/start/end/expected. Edit requires exactly base_artifact/expected_text_sha256/edits. Each edit requires id/start/end/expected/replacement/reason. Complete strict JSON framing, duplicate-key rejection and unknown-field/type checks precede execution.",
+    "The base digest identifies a real artifact in the frontend-bound actor and current case. Its bytes are hash-checked and its complete canonical record is regenerated from original import/composition source or verified editing ancestry. An independently hashed forged field is rejected if it does not reproduce. No unverified caller JSON or cross-case blob grants access.",
+    "All patches refer to the same pre-edit byte coordinates. Expected original text, UTF-8 boundaries, unique IDs, actual changes and nonoverlap are checked before constructing the output. Insertions use empty expected text; deletions use empty replacement text. Equal starting positions are ambiguous. Protected text rejects overlapping edits and interior insertions; boundary insertions preserve text and shift its byte ranges.",
+    "Composition quote/condition/caveat protection and explicit imported locks are inherited. Changed text points to the actual replacement string token in the current JSON request. Unchanged text points to its immediate parent artifact range; that artifact retains the earlier origins. No old provenance is silently assigned to replacement text.",
+    "The output includes source/output SHA-256, exact original request body, base/output identities, actual consumed ancestor hashes, editing revision, all changes/reasons, protection and continuous output spans. Core stores the artifact and emits exact text with USER_PREMISE guarantee.",
+    "The artifact byte budget is checked against the current request before persistence. Current requests exercise existing exact-target file permission/receipt handling. No new external effect, host runner, external neural model or dependency is introduced."
+  ],
+  "resource_envelope": {
+    "request_body_utf8_bytes": "1..=256000",
+    "output_utf8_bytes": "<=256000",
+    "root_max_chars": "1..=100000 Unicode scalar values; inherited by edits",
+    "patches_per_revision": "1..=64",
+    "protected_ranges": "0..=256",
+    "editing_revisions": "<=16",
+    "artifact_bytes": "<=2000000",
+    "aggregate_replay_bytes": "<=8000000",
+    "id_utf8_bytes": "1..=128; no whitespace/control characters",
+    "reason_scalar_values": "1..=512 non-whitespace reason",
+    "provenance_spans": "<=8192; each editing batch emits at most 129 spans",
+    "request_deadline": "Polled around ancestor loading/replay and each patch validation/application; Core also applies the overall request budget.",
+    "in_progress_cancellation_polling": "NOT_IMPLEMENTED"
+  },
+  "test_locations": {
+    "component": "crates/minidora-engine/src/text_editing.rs::tests (five unique tests)",
+    "input": "crates/minidora-engine/src/input.rs::structured_document_tests::text_import_edit_headers_preserve_original_body_and_reject_extra_instructions",
+    "normal_cli": [
+      "text_editing_route_imports_actual_text_versions_and_confirms_file_once",
+      "text_editing_route_consumes_composition_and_enforces_artifact_case_scope",
+      "text_editing_route_persists_typed_atomic_schema_and_resource_stops"
+    ],
+    "existing_cli_regressions": [
+      "explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage",
+      "exact_replace_count_failure_does_not_create_a_partial_file"
+    ]
+  },
+  "executed_commands": [
+    {
+      "command": "cargo test -p minidora-engine text_editing --locked -- --nocapture",
+      "result": "5 passed; 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-engine text_import_edit_headers --locked -- --nocapture",
+      "result": "1 passed; 0 failed"
+    },
+    {
+      "command": "MINIDORA_KEEP_TEST_STATE=1 TMPDIR=/workspace/.minidora-cloud/b08-text-editing-route/verification cargo test -p minidora-cli --test normal_route text_editing_route --locked -- --nocapture",
+      "result": "3 passed; 0 failed; four real state stores retained"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings (initial)",
+      "result": "Exit 101: cloned_ref_to_slice_refs on one component-test assertion. Initial output retained in clippy-initial.log. No product behavior failure."
+    },
+    {
+      "command": "cargo test -p minidora-engine atomic_edits_use_original_coordinates_and_shift_protected_text --locked -- --nocapture",
+      "result": "Affected test passed again after the assertion used slice::from_ref."
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings (final)",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage --locked -- --nocapture",
+      "result": "1 passed; 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route exact_replace_count_failure_does_not_create_a_partial_file --locked -- --nocapture",
+      "result": "1 passed; 0 failed"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "result": "NOT_RUN; this B08 batch used focused mechanism/parser/ordinary-route and relevant regression checks."
+    }
+  ],
+  "unique_tests_passed": 11,
+  "new_unique_tests_passed": 9,
+  "existing_unique_regressions_passed": 2,
+  "retained_cli_evidence": {
+    "root": "/workspace/.minidora-cloud/b08-text-editing-route",
+    "route_observations": {
+      "path": "route-observations.json",
+      "sha256": "76ec81bdbbb506c042a8bfadd7f337b55d8bdce20ed8762df58d76e4c820b883"
+    },
+    "manifest": {
+      "path": "evidence-manifest.json",
+      "sha256": "6911552a4e957c34630eaf7b3fb303e5fbb56b0b92d2a8a4ae3c0c0a20a8745a"
+    },
+    "collector": {
+      "path": "collect_evidence.py",
+      "sha256": "2cccff8fa9aedfb616835d142ef3d99de3cdf8fa994db5e55e75769a75be75da"
+    },
+    "logs": {
+      "cli-tests.log": "18bf3f8bee3aba395c6003f738cc86b1291694eb4bb2da7591cf29ed45e3fec8",
+      "clippy-initial.log": "e06a38e708aafb90500293e25e61ffa0a11a792061ebe08ebd15055a73dedb9b",
+      "clippy.log": "73cf966b875218a728c3dbb10dd96a9ec26b75938c7b0ff3b234febd529e005d",
+      "atomic-assertion-retest.log": "e69fc7d4ed1d12bb6351907c195b0705a8acbac14bea7aabc14bf64ef3936f8f",
+      "fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "check.log": "8983b2ddf6ce2637555817fcdb2cb421f6e38e068a44e3d0a6dc836e692af2de",
+      "composition-regression.log": "7fb2a73d3dc520ee6a11ff77dbdc456cb0ff3c3957941744740c665f2011d797",
+      "replacement-regression.log": "c6e7b1e850ba5133df96c618f6cb628ae2d401cfa8a81a43d1893f4b051213ca",
+      "build.log": "99f71393b9903dca098310bb446022a4bdee195ea9996f351a787195555210a6",
+      "checks.json": "644734db2c8114a7fafa3016601b5e14b3580e7ff5b8ca12c7d80a783572479f"
+    },
+    "stores": 4,
+    "cases": 5,
+    "accepted_input_versions": 26,
+    "exact_saved_retries": 2,
+    "total_execute_requests": 28,
+    "status_counts": {
+      "COMMIT": 10,
+      "SUSPEND": 16
+    },
+    "typed_stop_counts": {
+      "TEXT_EDIT_PROTECTED": 2,
+      "TEXT_EDIT_BASE_UNAVAILABLE": 2,
+      "TEXT_EDIT_OVERLAP": 1,
+      "TEXT_EDIT_EXPECTED_TEXT": 2,
+      "TEXT_EDIT_INPUT": 2,
+      "TEXT_EDIT_OUTPUT_LIMIT": 1,
+      "TEXT_EDIT_BASE_MISMATCH": 1,
+      "INVALID_JSON_DOCUMENT": 1,
+      "DUPLICATE_JSON_KEY": 1,
+      "RESOURCE_LIMIT": 2,
+      "ACTION_BUDGET_EXHAUSTED": 1
+    },
+    "confirmed_files": [
+      {
+        "target": "/workspace/.minidora-cloud/b08-text-editing-route/verification/minidora-cli-56056-1794420993890049249-2/revised.txt",
+        "sha256": "9f34061413c1b8d3a3fd8151d4d476f91392e75633d617110d24f06c4bf504d5",
+        "bytes": 38
+      },
+      {
+        "target": "/workspace/.minidora-cloud/b08-text-editing-route/verification/minidora-cli-56056-1794420994616385063-3/revised.txt",
+        "sha256": "9f34061413c1b8d3a3fd8151d4d476f91392e75633d617110d24f06c4bf504d5",
+        "bytes": 38
+      }
+    ]
+  },
+  "actual_edit_examples": [
+    {
+      "store": "minidora-cli-56056-1794420993889931800-0",
+      "case_id": "normal-route",
+      "input_id": "input-8",
+      "input_version": 1,
+      "text": "# Updated\n\n> Quote\n\n条件: Keep",
+      "artifact": {
+        "operation": "TEXT_EDIT_EXPLICIT_PATCHES_V1",
+        "revision": 1,
+        "base_artifact": "b365be9407f4c1b01faf21a3129411e0de399a8b020556c95b87df31f20800c3",
+        "consumed_artifacts": [
+          "b365be9407f4c1b01faf21a3129411e0de399a8b020556c95b87df31f20800c3"
+        ],
+        "output_sha256": "a98037b35a0e4f60f08499e895730244c86f63e1b95a0cae420ef168d6cfacc6",
+        "protected": [
+          {
+            "end": 18,
+            "expected": "> Quote",
+            "id": "quotation",
+            "start": 11
+          },
+          {
+            "end": 32,
+            "expected": "条件: Keep",
+            "id": "condition",
+            "start": 20
+          }
+        ],
+        "sha256": "f49a23e8bec18d0a753fa13e5b1860014b9b83b3fa062392f049c3fcb9ef5c4b",
+        "span_count": 3
+      }
+    },
+    {
+      "store": "minidora-cli-56056-1794420993889986937-1",
+      "case_id": "normal-route",
+      "input_id": "input-64",
+      "input_version": 1,
+      "text": "猫zbcLOCKend",
+      "artifact": {
+        "operation": "TEXT_EDIT_EXPLICIT_PATCHES_V1",
+        "revision": 1,
+        "base_artifact": "71249286b979e917f83a7e15786cb758711420c2aa06db093f58c16a492fd88c",
+        "consumed_artifacts": [
+          "71249286b979e917f83a7e15786cb758711420c2aa06db093f58c16a492fd88c"
+        ],
+        "output_sha256": "ea25f3a32762533c349c93dff0abda5fe27646de57b7fcde58a552742d6dd7ce",
+        "protected": [
+          {
+            "end": 10,
+            "expected": "LOCK",
+            "id": "lock",
+            "start": 6
+          }
+        ],
+        "sha256": "b8c669168eacb4feb2d108f0e3a8b384dc7bf570618d54024ffd02403339f376",
+        "span_count": 3
+      }
+    },
+    {
+      "store": "minidora-cli-56056-1794420993890049249-2",
+      "case_id": "normal-route",
+      "input_id": "revision",
+      "input_version": 1,
+      "text": "final\nNote\n条件: 雨天中止\nfinish",
+      "artifact": {
+        "operation": "TEXT_EDIT_EXPLICIT_PATCHES_V1",
+        "revision": 1,
+        "base_artifact": "df2605ad97819c478cba17f724c1a81333e21dda869f4cc15966910ccb23eefa",
+        "consumed_artifacts": [
+          "df2605ad97819c478cba17f724c1a81333e21dda869f4cc15966910ccb23eefa"
+        ],
+        "output_sha256": "9f34061413c1b8d3a3fd8151d4d476f91392e75633d617110d24f06c4bf504d5",
+        "protected": [
+          {
+            "end": 31,
+            "expected": "条件: 雨天中止",
+            "id": "condition",
+            "start": 11
+          }
+        ],
+        "sha256": "377855ec303741857cb8546dcdbaae6cd3f1f4ca8f35e91fa46105f719470d70",
+        "span_count": 5
+      }
+    },
+    {
+      "store": "minidora-cli-56056-1794420993890049249-2",
+      "case_id": "normal-route",
+      "input_id": "revision",
+      "input_version": 2,
+      "text": "final\nNote\n条件: 雨天中止\ndone",
+      "artifact": {
+        "operation": "TEXT_EDIT_EXPLICIT_PATCHES_V1",
+        "revision": 2,
+        "base_artifact": "377855ec303741857cb8546dcdbaae6cd3f1f4ca8f35e91fa46105f719470d70",
+        "consumed_artifacts": [
+          "377855ec303741857cb8546dcdbaae6cd3f1f4ca8f35e91fa46105f719470d70",
+          "df2605ad97819c478cba17f724c1a81333e21dda869f4cc15966910ccb23eefa"
+        ],
+        "output_sha256": "248f87e8add425aca48327801d9bd1f1fb47e6b7e9879093dd219c46684a8d0b",
+        "protected": [
+          {
+            "end": 31,
+            "expected": "条件: 雨天中止",
+            "id": "condition",
+            "start": 11
+          }
+        ],
+        "sha256": "cde5769a093a8a46db86fd10cb3832bd417b14cdefdb4c7e36c7c8dc910efe7b",
+        "span_count": 2
+      }
+    }
+  ],
+  "observed_checks": [
+    "Actual composition output is consumed directly by an edit; quote and condition ranges remain protected. Actual revision-1 output becomes revision-2 input with both parent and root digests retained.",
+    "Each current report span, JSON string origin, parent-text slice, source/output digest, request document and consumed artifact link was reread from saved input/result/blob records. The read-only collector independently reconstructs editing output using the recorded original coordinates and replacement text.",
+    "Two language-header cases each produced one confirmed 38-byte file with SHA-256 9f34061413c1b8d3a3fd8151d4d476f91392e75633d617110d24f06c4bf504d5. Exact retries preserved the saved result, file modification time and one action identity per store.",
+    "Negative CLI cases preserve their original requests and typed SUSPEND records with no result dependencies. They cover late expected-text mismatch after a valid patch, overlap, protected interior insertion/quote change, invalid UTF-8 range, no-op, oversized output, stale text digest, missing/cross-case base, unknown fields, duplicate keys, trailing data, evidence/action/deadline budgets.",
+    "Component cases additionally reject rehashed forged report fields/extra fields, unknown artifact types and digest-mismatched loader bytes; enforce the 16-revision history boundary; stop an already expired request before any loader call."
+  ],
+  "build_artifact": {
+    "path": "/workspace/MINIDORA-BETA/rust/target/debug/minidora-rust",
+    "sha256": "d506109e3e53845ba93eaa12c37c128658ad034f789c6ab55b77be1cedaa0393"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "quality_boundary": {
+    "public_quality_diagnostic": "NOT_RUN; the public fixed diagnostic is not an independent first-seen population and is not used as a writing-quality score.",
+    "legacy_python_tests": "NOT_RUN; no frozen Python test result is counted as Rust acceptance.",
+    "full_workspace_runtime_tests": "NOT_RUN",
+    "cross_platform_physical_tests": "NOT_RUN",
+    "acceptance_status": "UNVERIFIED",
+    "full_acceptance_gap": "Free-form drafting, correction discovery, semantic rewriting and summaries, purpose/audience/style fidelity, arbitrary meaning preservation, in-progress editing cancellation, independent unseen-task quality and the complete twelve-task B08 acceptance population remain open."
+  },
+  "traceability_update": "Only B08 actual route/current Rust paths/test-evidence entries are expanded. Its requirement identity and twelve-task observable remain unchanged; all 93 acceptance statuses remain UNVERIFIED and no scope reduction is approved.",
+  "publication_review": "Changed source/docs/evidence use the public implementation and synthetic test text only. Frozen Python hashes and manifests are unchanged; no credential, personal data, private HDS material, external-provider response or unsupported independent performance claim is added. Git push outcome is reported separately from this source/QC record.",
+  "scope_decision": "No scope reduction approved; full B08 remains required.",
+  "release_status": "NOT_RELEASED",
+  "permission_boundary": "CLI actor configuration is a trusted local frontend identity. Store actor/case partition checks are exercised; no new remote authentication or host-user filesystem isolation claim is made."
+}

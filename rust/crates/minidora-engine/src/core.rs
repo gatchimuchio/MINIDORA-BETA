@@ -918,6 +918,67 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::ImportText { document } => {
+                let value = match crate::text_editing::import_explicit_text(document) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "TEXT_IMPORT_FAILED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                if canonical(&value)?.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "imported text artifact exceeds request evidence budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::UserPremise;
+            }
+            Intent::EditText { document } => {
+                let value = match crate::text_editing::edit_explicit_text(
+                    document,
+                    |sha| {
+                        self.store.get_bytes(actor, &request.case_id, sha).map_err(|error| match error {
+                        Error::Contract { .. } => failure("TEXT_EDIT_BASE_UNAVAILABLE", "a base artifact is unavailable or unverifiable in this actor/case scope"),
+                        other => other,
+                    })
+                    },
+                    started,
+                    request.budget.deadline_ms,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "TEXT_EDIT_FAILED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                if canonical(&value)?.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "edited text artifact exceeds request evidence budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result
+                    .dependencies
+                    .extend(value.consumed_artifacts.iter().cloned());
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::Search { provider, query } => {
                 use crate::search::SearchProvider;
                 let selected = match provider.as_str() {

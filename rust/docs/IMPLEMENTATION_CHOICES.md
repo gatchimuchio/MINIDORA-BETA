@@ -76,6 +76,12 @@ The current B08 slice accepts a strict JSON composition request through the ordi
 
 This follows the inspected legacy contract for composing explicit source slices and keeps a complete source map. It does not discover content, assess the requested purpose, write or rewrite prose, summarize, prove factual truth or meaning equivalence, or measure style and quality. That bounded route is one B08 building block; the twelve-task writing, editing, rewriting and summary requirement remains open. No fixed task prompt or diagnostic answer is embedded in the route.
 
+## Artifact-based text import and protected editing
+
+`text_editing.rs` accepts explicit original text and protected ranges, or an actual composition/import/editing artifact selected by the caller. Core supplies an actor/case-scoped artifact reader. The editor checks each artifact digest and regenerates the entire canonical record from its source and ancestry before using its text. Replay is bounded by 16 editing revisions and eight million aggregate artifact bytes. This retains existing composition artifacts without changing their serialized schema.
+
+Edits specify exact original byte ranges, expected old text, replacement text and reasons. Every change is checked against one original coordinate space before the batch is applied. Protected quotes, conditions and explicit locks reject changes; insertions at their boundaries update locations. New text points to the current replacement request, while unchanged text points to its actual parent artifact. The editor polls the request deadline; in-progress cancellation polling remains open. The Core adopts the text, records actual consumed artifact hashes and checks normal rendering and any requested local file receipt. This is explicit editing with provenance; correction discovery, semantic equivalence and general writing quality remain open B08 obligations.
+
 ## Effects and frontend authority
 
 The local file writer receives a persisted authorized `ATTEMPTED` record binding exact target/bytes/action identity. It reports actual observations. Core alone validates content/render/write outcomes and changes the goal state. Existing different files are not overwritten; uncertain physical outcomes remain unknown rather than generating a fresh action identity.
