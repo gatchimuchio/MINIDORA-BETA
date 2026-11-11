@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v32-inner-join-case-admission";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v33-table-conversion-case-admission";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -276,9 +276,9 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || regex(r"(?i)^csv-inner-join")?.is_match(header)
         || header.starts_with("csv-statistics ")
         || header.starts_with("CSVをJSONに変換して")
-        || header.starts_with("csv-to-json")
+        || regex(r"(?i)^csv-to-json")?.is_match(header)
         || header.starts_with("JSONをCSVに変換して")
-        || header.starts_with("json-to-csv")
+        || regex(r"(?i)^json-to-csv")?.is_match(header)
         || header == "JSONを比較して:"
         || header.starts_with("JSONオブジェクトからフィールド")
         || header

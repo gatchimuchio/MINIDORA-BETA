@@ -1,0 +1,255 @@
+{
+  "work_item": "B04 ordinary CLI CSV/JSON table conversion follow-up and English header admission correction",
+  "recorded_at": "2026-11-11T03:10:00Z",
+  "base_commit": "44dc4fc0972dab1ace4164f0c72c1e89c9c1261d",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Explicit table input -> sealed input -> unique Core -> string-preserving CSV/JSON output with exact source/output ranges, downstream actual-output consumption and typed stops",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v33-table-conversion-case-admission",
+  "prior_parser_version": "declarative-ja-en-v32-inner-join-case-admission",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "6c08473c1c98e274e28f4af950b8bb8ca19a60b756145edbbe87aeb328a969f9",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-engine/src/input.rs": "55bf125b70edf25e7f0e0bb49b095eb1d60689dd291e050db21efdd9ff18e953"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "3c84548bbde80005f0eedb4177ad1014de1067f63a6d0737e2b57360cdc9277a"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "ae8dca4bbc0217ef3c0ebabdb44656ce05936ff1e11b37c34bd48f0e27c27d03"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b04-table-conversion-route/final MINIDORA_KEEP_TEST_STATE=1",
+  "pre_correction_observation": {
+    "production_source": "Base commit; only the new normal-route assertions had been added.",
+    "test_command": "cargo test --locked -p minidora-cli --test normal_route table_conversion -- --nocapture",
+    "exit_code": 101,
+    "passed": 2,
+    "failed": 2,
+    "log": "pre/conversion-tests.log",
+    "observed_result": "Mixed-case CSV-to-JSON header-mode and JSON-to-CSV headers returned SUSPEND with CAPABILITY_UNAVAILABLE. Japanese/lowercase roundtrip assertions preceding those cases passed. The formula-policy and schema/missing-mode tests passed.",
+    "not_reached": "The no-header variants in the first test were not reached before its mixed-case header-mode failure; all are observed in the corrected final run.",
+    "cause": "The coarse document admission guard used case-sensitive starts_with for both conversion commands, while the complete header parsers already used (?i)."
+  },
+  "correction": "Match csv-to-json and json-to-csv prefix admission using (?i), consistent with their existing complete header regexes. Advance parser revision; exact body bytes, header-mode declaration, string values, formula policy, schema and resource bounds remain under their existing contracts.",
+  "tests_and_route": {
+    "tests_added": true,
+    "normal_cli_route_executed": true,
+    "route_method": "Integration tests launch minidora-rust with --json and fresh real stores. Each subsequent conversion receives the actual previous CLI text as a new explicit request. Returned DocumentResult dependencies are read with actor/case-checked Store::get_bytes, and separate inspect processes verify original requests and complete persisted results. No action or result is synthesized; this is explicit caller-fed composition, not an automatic Core multi-step plan.",
+    "final_scoped_unique_tests_passed": 19,
+    "normal_cli_tests_passed": 4,
+    "input_unit_tests_passed": 7,
+    "document_unit_tests_passed": 8,
+    "normal_cli_scenarios": 21,
+    "normal_cli_execute_requests": 35,
+    "full_workspace_tests": "NOT_RUN; scoped bidirectional normal routes, formula/schema stops and affected input/document component tests were run with workspace all-target compile/lint. Earlier full-suite records belong to their own snapshots."
+  },
+  "command_results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "final/fmt.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "final/check.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "final/clippy.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route table_conversion -- --nocapture",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0,
+      "log": "final/conversion-tests.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --lib input::tests",
+      "exit_code": 0,
+      "passed": 7,
+      "failed": 0,
+      "log": "final/input-tests.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --lib document::tests",
+      "exit_code": 0,
+      "passed": 8,
+      "failed": 0,
+      "log": "final/document-tests.log"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "final/build.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "route_observations": [
+    {
+      "route": "CsvToJson -> explicit next JsonToCsv request",
+      "roundtrip_scenarios": 6,
+      "languages": [
+        "Japanese",
+        "lowercase English",
+        "mixed-case English"
+      ],
+      "header_modes": [
+        "header",
+        "no-header"
+      ],
+      "input_document": "名前,値,補足\r\n\"猫,\"\"北\"\"\",001,1e3\r\n\"犬\r\n南\",9007199254740993,\"\"\r\n",
+      "header_mode_result": {
+        "rows": [
+          [
+            "猫,\"北\"",
+            "001",
+            "1e3"
+          ],
+          [
+            "犬\r\n南",
+            "9007199254740993",
+            ""
+          ]
+        ],
+        "columns": [
+          "名前",
+          "値",
+          "補足"
+        ]
+      },
+      "no_header_result": {
+        "columns": null,
+        "rows": [
+          [
+            "名前",
+            "値",
+            "補足"
+          ],
+          [
+            "猫,\"北\"",
+            "001",
+            "1e3"
+          ],
+          [
+            "犬\r\n南",
+            "9007199254740993",
+            ""
+          ]
+        ]
+      },
+      "observed": "COMMIT/COMPUTED for both stages; the canonical fixture returns byte-identical CSV. Headerless mode retains the first row as data and emits columns:null. 001, 9007199254740993, 1e3 and the empty cell remain strings."
+    },
+    {
+      "route": "JsonToCsv -> explicit next CsvToJson header-mode request",
+      "roundtrip_scenarios": 3,
+      "languages": [
+        "Japanese",
+        "lowercase English",
+        "mixed-case English"
+      ],
+      "input_document": "{\"rows\":[[\"\\u732b,\\\"北\\\"\",\"001\",\"1e3\"],[\"犬\\r\\n南\",\"9007199254740993\",\"\"]],\"columns\":[\"名前\",\"値\",\"補足\"]}",
+      "observed": "Rows-first field order and an escaped cat lexeme decode correctly. CSV equals the canonical fixture, and parsing the restored JSON equals the original decoded table value; original JSON raw-byte equality is not claimed."
+    },
+    {
+      "route": "CsvToJson -> explicit next JsonToCsv request with formula-leading content",
+      "scenario_count": 5,
+      "values": [
+        "=1+1",
+        "  +cmd",
+        "﻿-2",
+        "@command"
+      ],
+      "header_case": {
+        "column": "=header",
+        "value": "safe"
+      },
+      "observed": "The first stage COMMITs inert JSON strings without changing values or header text. Export of that actual JSON SUSPENDs with CSV_FORMULA_RISK, UNKNOWN and no result dependencies. Original request bytes and prior successful conversion remain persisted; no spreadsheet process is executed."
+    },
+    {
+      "route": "CsvToJson/JsonToCsv schema and explicit-mode errors",
+      "scenario_count": 7,
+      "cases": [
+        {
+          "input": "bare LF CSV records",
+          "reason_code": "CSV_LINE_ENDING"
+        },
+        {
+          "input": "inconsistent CSV row width",
+          "reason_code": "CSV_SHAPE"
+        },
+        {
+          "input": "csv-to-json without header/no-header mode",
+          "reason_code": "CAPABILITY_UNAVAILABLE"
+        },
+        {
+          "input": "nonstring JSON cell",
+          "reason_code": "JSON_TABLE_SYNTAX"
+        },
+        {
+          "input": "duplicate decoded headers a and escaped a",
+          "reason_code": "DUPLICATE_COLUMNS"
+        },
+        {
+          "input": "duplicate rows field",
+          "reason_code": "DUPLICATE_JSON_KEY"
+        },
+        {
+          "input": "unknown JSON field",
+          "reason_code": "JSON_TABLE_SHAPE"
+        }
+      ],
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "dependencies": [],
+      "fresh_inspection_matches_request_and_complete_stop": true
+    }
+  ],
+  "span_and_persistence_evidence": "Each of the 18 successful fixture conversion stages checks the exact nine unique (kind,row,column) span tuples, raw source start/end and text, decoded string value and actual output start/end. Independent known row fragments locate quoted CRLF, double quotes and empty tokens without matching an unrelated quote pair. Header/no-header row identities, JSON header row:null, full source/output hashes, returned dependency hash, render hash, content-plan equality and fresh-process inspection are checked.",
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b04-table-conversion-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b04-table-conversion-route/asset-inventory.json",
+    "manifest_sha256": "5843c4eaffd70110bbf8317e2d9df9a4931622993a25fa9e7a77c76f84a1514c",
+    "file_count_including_manifest": 1123,
+    "stores_by_phase": {
+      "pre": 18,
+      "final": 21
+    },
+    "remote_storage_verification": "NOT_RUN; local diagnostic-state/log retention only, no OneDrive storage claim"
+  },
+  "known_limits": [
+    "These authored cases are scoped QC evidence, not independent held-out B04 acceptance.",
+    "Byte-identical CSV roundtrip is observed for this canonical fixture only. General conversion may normalize quoting and final CRLF; decoded value preservation and original source-artifact retention are distinct contracts.",
+    "The declared leading-marker guard was exercised locally; no external spreadsheet, formula execution or arbitrary export-policy acceptance was performed.",
+    "Broader schema transformations, other structured routes, full workspace runtime regression, external LIVE evaluation, Windows/macOS, physical 8 GB QA, release and deployment are NOT_RUN."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; selected bidirectional conversion, source/output mapping and typed stop routes observed, not the complete B04 contract",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

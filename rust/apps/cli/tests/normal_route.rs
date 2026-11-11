@@ -1626,6 +1626,361 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+const CONVERSION_CSV: &str =
+    "名前,値,補足\r\n\"猫,\"\"北\"\"\",001,1e3\r\n\"犬\r\n南\",9007199254740993,\"\"\r\n";
+const CONVERSION_VALUES: [[&str; 3]; 3] = [
+    ["名前", "値", "補足"],
+    ["猫,\"北\"", "001", "1e3"],
+    ["犬\r\n南", "9007199254740993", ""],
+];
+const CONVERSION_CSV_TOKENS: [[&str; 3]; 3] = [
+    ["名前", "値", "補足"],
+    ["\"猫,\"\"北\"\"\"", "001", "1e3"],
+    ["\"犬\r\n南\"", "9007199254740993", "\"\""],
+];
+const CONVERSION_ESCAPED_JSON: &str = r#"{"rows":[["\u732b,\"北\"","001","1e3"],["犬\r\n南","9007199254740993",""]],"columns":["名前","値","補足"]}"#;
+
+fn normal_document_artifact(
+    directory: &Path,
+    actor: &str,
+    result: &Value,
+    request: &str,
+    source: &str,
+    operation: &str,
+) -> Value {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    assert_eq!(result["content_plan"]["text"], result["text"]);
+    assert_eq!(result["render"]["status"], "RENDERED");
+    let text = result["text"].as_str().unwrap();
+    assert_eq!(
+        result["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 1);
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let bytes = store
+        .get_bytes(actor, "normal-route", dependencies[0].as_str().unwrap())
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), dependencies[0]);
+    let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(artifact["operation"], operation);
+    assert_eq!(artifact["source_document"], source);
+    assert_eq!(
+        artifact["source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    assert_eq!(artifact["text"], text);
+    assert_eq!(
+        artifact["output_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let revision = inspect_normal_case(directory, actor);
+    assert_eq!(revision["bundle"]["request"]["text"], request);
+    assert_eq!(revision["bundle"]["meaning"]["intent"]["document"], source);
+    assert_eq!(revision["result"], *result);
+    artifact
+}
+
+// Expected positions come from the known fixture row/cell, including quoted
+// empty strings that also occur inside other escaped tokens.
+fn conversion_fixture_token(
+    text: &str,
+    physical_row: usize,
+    column: usize,
+    json: bool,
+    escaped_cat: bool,
+) -> (usize, usize) {
+    let mut tokens: Vec<String> = if json {
+        CONVERSION_VALUES[physical_row]
+            .iter()
+            .map(|value| serde_json::to_string(value).unwrap())
+            .collect()
+    } else {
+        CONVERSION_CSV_TOKENS[physical_row]
+            .iter()
+            .map(|value| value.to_string())
+            .collect()
+    };
+    if json && escaped_cat && physical_row == 1 {
+        tokens[0] = r#""\u732b,\"北\"""#.into();
+    }
+    let row_text = if json {
+        format!("[{}]", tokens.join(","))
+    } else {
+        tokens.join(",")
+    };
+    let start = text.find(&row_text).unwrap()
+        + usize::from(json)
+        + tokens
+            .iter()
+            .take(column)
+            .map(|value| value.len() + 1)
+            .sum::<usize>();
+    (start, start + tokens[column].len())
+}
+
+fn assert_conversion_fixture_spans(
+    artifact: &Value,
+    has_header: bool,
+    to_json: bool,
+    escaped_cat: bool,
+) {
+    let source = artifact["source_document"].as_str().unwrap();
+    let output = artifact["text"].as_str().unwrap();
+    let spans = artifact["spans"].as_array().unwrap();
+    assert_eq!(spans.len(), 9);
+    assert_eq!(artifact["parameters"]["has_header"], has_header.to_string());
+    let mut expected = std::collections::BTreeSet::new();
+    for physical_row in 0..3 {
+        let header = has_header && physical_row == 0;
+        let kind = match (to_json, header) {
+            (true, true) => "CSV_HEADER",
+            (true, false) => "CSV_CELL",
+            (false, true) => "JSON_HEADER",
+            (false, false) => "JSON_CELL",
+        };
+        let row = if to_json {
+            Some(physical_row)
+        } else if header {
+            None
+        } else {
+            Some(physical_row - usize::from(has_header))
+        };
+        for column in 0..3 {
+            expected.insert((kind, row, column));
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for span in spans {
+        let kind = span["kind"].as_str().unwrap();
+        let row = span["row"].as_u64().map(|value| value as usize);
+        let column = span["column"].as_u64().unwrap() as usize;
+        assert!(expected.contains(&(kind, row, column)));
+        assert!(seen.insert((kind, row, column)));
+        let physical_row = if to_json {
+            row.unwrap()
+        } else if kind == "JSON_HEADER" {
+            0
+        } else {
+            row.unwrap() + usize::from(has_header)
+        };
+        let (start, end) =
+            conversion_fixture_token(source, physical_row, column, !to_json, escaped_cat);
+        assert_eq!(span["source_start"], start);
+        assert_eq!(span["source_end"], end);
+        assert_eq!(span["source_text"], &source[start..end]);
+        assert_eq!(
+            span["decoded_value"],
+            CONVERSION_VALUES[physical_row][column]
+        );
+        let (output_start, output_end) =
+            conversion_fixture_token(output, physical_row, column, to_json, false);
+        assert_eq!(span["output_start"], output_start);
+        assert_eq!(span["output_end"], output_end);
+    }
+    assert_eq!(seen, expected);
+}
+
+#[test]
+fn table_conversion_csv_roundtrips_use_actual_outputs_in_both_header_modes() {
+    for (has_header, headers) in [
+        (
+            true,
+            [
+                ("japanese", "CSVをJSONに変換して（先頭行をヘッダーとして）:"),
+                ("english", "csv-to-json header:"),
+                ("mixed-case", "CsV-To-JsOn HeAdEr:"),
+            ],
+        ),
+        (
+            false,
+            [
+                ("japanese", "CSVをJSONに変換して（ヘッダーなし）:"),
+                ("english", "csv-to-json no-header:"),
+                ("mixed-case", "CsV-To-JsOn No-HeAdEr:"),
+            ],
+        ),
+    ] {
+        for (actor, header) in headers {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{CONVERSION_CSV}");
+            let converted = record(&execute(&scratch.0, actor, &[&request]));
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                actor,
+                &converted,
+                &request,
+                CONVERSION_CSV,
+                "CSV_TO_JSON",
+            );
+            assert_conversion_fixture_spans(&artifact, has_header, true, false);
+            let table: Value = serde_json::from_str(converted["text"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                table,
+                serde_json::json!({
+                    "columns": if has_header { serde_json::json!(CONVERSION_VALUES[0]) } else { Value::Null },
+                    "rows": if has_header { serde_json::json!(&CONVERSION_VALUES[1..]) } else { serde_json::json!(CONVERSION_VALUES) }
+                })
+            );
+            let actual_json = converted["text"].as_str().unwrap();
+            let back_request = format!("json-to-csv:\n{actual_json}");
+            let back = record(&execute(&scratch.0, actor, &[&back_request]));
+            assert_eq!(back["text"], CONVERSION_CSV);
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                actor,
+                &back,
+                &back_request,
+                actual_json,
+                "JSON_TO_CSV",
+            );
+            assert_conversion_fixture_spans(&artifact, has_header, false, false);
+        }
+    }
+}
+
+#[test]
+fn table_conversion_json_escapes_roundtrip_through_actual_csv_output() {
+    for (actor, json_header, csv_header) in [
+        (
+            "japanese",
+            "JSONをCSVに変換して:",
+            "CSVをJSONに変換して（先頭行をヘッダーとして）:",
+        ),
+        ("english", "json-to-csv:", "csv-to-json header:"),
+        ("mixed-case", "JsOn-To-CsV:", "CsV-To-JsOn HeAdEr:"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{json_header}\n{CONVERSION_ESCAPED_JSON}");
+        let converted = record(&execute(&scratch.0, actor, &[&request]));
+        assert_eq!(converted["text"], CONVERSION_CSV);
+        let artifact = normal_document_artifact(
+            &scratch.0,
+            actor,
+            &converted,
+            &request,
+            CONVERSION_ESCAPED_JSON,
+            "JSON_TO_CSV",
+        );
+        assert_conversion_fixture_spans(&artifact, true, false, true);
+        let actual_csv = converted["text"].as_str().unwrap();
+        let back_request = format!("{csv_header}\n{actual_csv}");
+        let back = record(&execute(&scratch.0, actor, &[&back_request]));
+        let artifact = normal_document_artifact(
+            &scratch.0,
+            actor,
+            &back,
+            &back_request,
+            actual_csv,
+            "CSV_TO_JSON",
+        );
+        assert_conversion_fixture_spans(&artifact, true, true, false);
+        let restored: Value = serde_json::from_str(back["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            restored,
+            serde_json::from_str::<Value>(CONVERSION_ESCAPED_JSON).unwrap()
+        );
+    }
+}
+
+#[test]
+fn table_conversion_formula_strings_are_inert_json_and_withheld_on_csv_export() {
+    for (header, value) in [
+        ("値", "=1+1"),
+        ("値", "  +cmd"),
+        ("値", "\u{feff}-2"),
+        ("値", "@command"),
+        ("=header", "safe"),
+    ] {
+        let scratch = Scratch::new();
+        let csv = format!("{header}\r\n{value}\r\n");
+        let request = format!("CSVをJSONに変換して（先頭行をヘッダーとして）:\n{csv}");
+        let converted = record(&execute(&scratch.0, "owner", &[&request]));
+        normal_document_artifact(
+            &scratch.0,
+            "owner",
+            &converted,
+            &request,
+            &csv,
+            "CSV_TO_JSON",
+        );
+        let table: Value = serde_json::from_str(converted["text"].as_str().unwrap()).unwrap();
+        assert_eq!(table["columns"], serde_json::json!([header]));
+        assert_eq!(table["rows"], serde_json::json!([[value]]));
+        let actual_json = converted["text"].as_str().unwrap();
+        let export_request = format!("JSONをCSVに変換して:\n{actual_json}");
+        let stopped = stopped(
+            &execute(&scratch.0, "owner", &[&export_request]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            stopped["reason"]
+                .as_str()
+                .unwrap()
+                .contains("CSV_FORMULA_RISK")
+        );
+        assert_eq!(stopped["guarantee"], "UNKNOWN");
+        assert_eq!(stopped["dependencies"], serde_json::json!([]));
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(revision["bundle"]["request"]["text"], export_request);
+        assert_eq!(
+            revision["bundle"]["meaning"]["intent"]["document"],
+            actual_json
+        );
+        assert_eq!(revision["result"], stopped);
+        assert!(
+            revision["prior_results"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|prior| prior == &converted)
+        );
+    }
+}
+
+#[test]
+fn table_conversion_schema_errors_and_missing_header_mode_stop_durably() {
+    for (header, document, code) in [
+        ("csv-to-json header:", "a,b\nx,y\n", "CSV_LINE_ENDING"),
+        ("csv-to-json header:", "a,b\r\nx", "CSV_SHAPE"),
+        ("csv-to-json:", "a,b\r\nx,y\r\n", "CAPABILITY_UNAVAILABLE"),
+        (
+            "json-to-csv:",
+            r#"{"columns":["a"],"rows":[[1]]}"#,
+            "JSON_TABLE_SYNTAX",
+        ),
+        (
+            "json-to-csv:",
+            r#"{"columns":["a","\u0061"],"rows":[["x","y"]]}"#,
+            "DUPLICATE_COLUMNS",
+        ),
+        (
+            "json-to-csv:",
+            r#"{"columns":["a"],"rows":[],"rows":[]}"#,
+            "DUPLICATE_JSON_KEY",
+        ),
+        (
+            "json-to-csv:",
+            r#"{"columns":["a"],"rows":[["x"]],"extra":0}"#,
+            "JSON_TABLE_SHAPE",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().contains(code));
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(revision["lifecycle"], "SUSPEND");
+        assert_eq!(revision["result"], result);
+    }
+}
+
 #[test]
 fn csv_inner_join_preserves_left_order_and_two_sided_source_locations() {
     let left = "名前,id\r\n\"犬,大\",2\r\n猫,1\r\n狐,4";
