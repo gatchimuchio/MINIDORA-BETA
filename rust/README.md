@@ -84,7 +84,24 @@ A quantity reference must occupy a complete number-and-unit operand of the exist
 
 Every IR object has exactly its listed fields plus `種別`; empty blocks emit `pass`. The source target is Python 3.12 with canonical Unicode 15.0 identifier properties, at most 15 unique user parameters, and reserved-name/keyword checks. The report retains the exact input, specification/constants byte ranges, source hash and constructed syntax bounds. Constants retain original JSON lexemes and support null, booleans, 256-bit integers, strings, lists and string-keyed dictionaries; floats and duplicate decoded keys stop. Other finite limits are recorded in [the B07 audit](audit/b07-code-generation-route-validation.json).
 
-The generated source and report explicitly mark execution and input/output tests `NOT_RUN`. `COMPUTED` describes generation from the supplied IR. Name binding, argument/result types and runtime success require separate checks; an unbound name can still generate source. The current product does not run Python. Independent development QC parsed nine actual generated sources and checked 20 finite cases: 19 outputs matched, and one unbound-name case produced the expected `NameError`. General free-form code creation, explanation, repair, the bounded interpreter and full B07 acceptance remain `UNVERIFIED`.
+The generated source and report explicitly mark host-Python parsing, execution and input/output tests `NOT_RUN`. `COMPUTED` describes generation from the supplied IR. Name binding, argument/result types and runtime success require separate checks; an unbound name can still generate source. Independent development QC parsed nine actual generated sources and checked 20 finite cases: 19 outputs matched, and one unbound-name case produced the expected `NameError`. General free-form code creation, explanation, repair, complete Python compatibility and full B07 acceptance remain `UNVERIFIED`.
+
+## Bounded Python function reading and evaluation
+
+```bash
+"$minidora_bin" --db "$minidora_state" --actor demo --case code-reading \
+  $'code-read:\n{"情報源":"def square(x):\\n    return x * x\\n"}'
+"$minidora_bin" --db "$minidora_state" --actor demo --case code-evaluation \
+  $'code-evaluate:\n{"情報源":"def square(x):\\n    return x * x\\n","引数":{"x":4}}'
+"$minidora_bin" --db "$minidora_state" --actor demo --case code-check \
+  $'code-verify:\n{"情報源":"def square(x):\\n    return x * x\\n","試験":[{"引数":{"x":4},"期待値":16}]}'
+```
+
+Japanese headers `コードを読んで:`, `コードを評価して:` and `コードを検証して:` are also supported. Each request contains one JSON document with `情報源`; evaluation adds `引数`, and verification adds a `試験` array. Both evaluation and verification accept an optional `最大手数` from 1 to 200,000 (default 50,000). The reader reports the function signature, bounded syntax counts and selected statement/call/comparison source spans. Evaluation and checking use a native Rust interpreter for one top-level Python-function subset: scalar/list/dictionary expressions, subscripting, arithmetic and comparisons, short-circuit logic, conditional expressions, assignments, `if`/`elif`/`else`, `for`/`else`, loop control, `return`, and an allowlist of `abs`, `len`, `min`, `max`, `sum`, `range`, `sorted`, `list`, `all` and `any`.
+
+The parser validates the whole source before evaluation. Imports, attributes, nested functions, indirect calls, annotations, unsupported syntax, and out-of-envelope values stop with a diagnostic. Source is limited to 32,768 UTF-8 bytes; integers to 256 bits; verification to 1–32 cases. Reports retain the original source, digest, AST/source-span observations, actual evaluation status and finite case outcomes as an authorized artifact in the normal Core/content/render/history route. `STOPPED` records a step or request-deadline stop; `FAILED` records a bounded evaluation failure; unsupported source/settings suspend before evaluation. A finite verification result describes only the supplied cases and distinguishes `true` from integer `1`.
+
+This evaluator does not invoke host Python, `exec`, `eval`, a compiler, subprocesses or external effects. Generated source is not executed by this route. The evaluator checks its step limit and request deadline, but does not poll an in-progress cancellation request. Eleven development-only comparisons matched the frozen evaluator's typed results/failure kinds and eleven CPython 3.11 AST structure/span comparisons; those finite observations do not establish general Python compatibility, static name/type analysis, all-input correctness or general code quality. Full B07 acceptance remains `UNVERIFIED`; see the [B07 continuation audit](audit/b07-bounded-code-capability-route-validation.json).
 
 ## Statistics, linear systems and probability
 

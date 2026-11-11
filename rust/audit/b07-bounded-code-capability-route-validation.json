@@ -1,0 +1,237 @@
+{
+  "work_item": "B07 continuation: bounded code reading, native evaluation and finite verification through the ordinary CLI route",
+  "recorded_at": "2026-11-11T17:00:09Z",
+  "base_commit": "2f72acef0e045b11aff28decbf0f72838c4f82da",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Original Python-function source/settings JSON -> sealed ReadCode/EvaluateCode/VerifyCode intent -> whole-source bounded Rust parser -> AST/source-span report and optional native finite evaluation/check -> authorized artifact -> Core compute/content/render/history",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "9",
+      "14",
+      "15",
+      "18"
+    ]
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v37-bounded-code-capabilities",
+  "prior_parser_version": "declarative-ja-en-v36-structured-code-generation",
+  "capability_version": "bounded-python-function-reader-interpreter-v1",
+  "version_boundary": "Add three optional intents and exact JA/ASCII-case-insensitive EN headers on the existing alpha-8 store/schema. Source/settings bodies are preserved verbatim. New reports are separately versioned; exact retries keep their saved result and a new input version recomputes. No dependency, lockfile, old API, package, schema or store migration change.",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_NATIVE_CAPABILITY_CONNECTION_AND_QC",
+  "product_source_changed": true,
+  "base_origin_main": "2f72acef0e045b11aff28decbf0f72838c4f82da",
+  "protected_refs_at_start": {
+    "codex/backup-main": "2f72acef0e045b11aff28decbf0f72838c4f82da",
+    "codex/backup-main-prev": "60bcb8669ed5e8b4d1745e8db69675b0c4e63395"
+  },
+  "read_set_identity_sha256": "d67f8d261d13a7907ca84a7ea1aa2ce67028f1cad1006cc11a543e4bf0aaca73",
+  "legacy_source_lineage": [
+    {
+      "path": "src/minidora/コード生成.py",
+      "git_blob_sha": "1a34d447777e30e86c1274394206f0fd7de256f5",
+      "sha256": "e5654ff08efd6626efd58bcc8311bed20edd30f9125fe684d4bd4d020506c6ad",
+      "public_entry": "関数を生成",
+      "observed_contract": "Exact structured algorithm forms -> generated limited Python function; constants separate; generation does not validate input/output behavior",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/コード能力.py",
+      "git_blob_sha": "6837bb82b7bb8bc4edbaa692a7d0b494ddf4a8d7",
+      "sha256": "65fe01a67139f5f76179a5ee98cc1892992f7b9de5436095be4e316553c06b58",
+      "public_entry": "コードを読む / コードを評価 / コードを検証",
+      "observed_contract": "Whole-source AST admission and custom bounded evaluation/checks; this continuation ports a scoped function subset into a native Rust parser/evaluator",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/コード能力接続.py",
+      "git_blob_sha": "9ecb4ef3719e004cef5392f28f7558550ec848ab",
+      "sha256": "07292d6724a94ee6ff667dd17a299c011880e8d01cf39dfbcbdc409aaa739518",
+      "public_entry": "コード能力モジュール / コード能力群",
+      "observed_contract": "Typed adapter accepts one actual successful upstream result and explicit settings",
+      "original_unchanged": true
+    }
+  ],
+  "legacy_test_boundary": "Frozen source/tests were inspected but not changed. The Python custom evaluator was imported only in a separate development comparison; no frozen suite or historical case count is claimed as current Rust acceptance.",
+  "source_snapshot_sha256": "0fda85fc8075b8a76cf6691e43b472e22f0be039d68a64dc5477386941511a22",
+  "source_snapshot_method": "SHA-256 of compact JSON first-party code inventory in code-snapshot.json, updated with code_capability.rs",
+  "code_snapshot_ref": "code-snapshot.json",
+  "source_snapshot_files": 29,
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "19dd03b663bc9322018587e3027887e8f61704410cdbea5e1c47039a204dbcd5",
+    "crates/minidora-engine/src/code_capability.rs": "957758f0be088840c4c9f71c5f321dc85056e410027f01bfa6feca5498106534",
+    "crates/minidora-engine/src/core.rs": "261886b7fb9ec8f46bc040fb64b717b081d4fd2bc2940955c9995288faef0e90",
+    "crates/minidora-engine/src/input.rs": "f13e7115fab95d65db21602f233300b89cf11e859b907a219c414d7a50dccd49",
+    "crates/minidora-engine/src/lib.rs": "b31d33b2b4f3d582dff0c35530fa313704a2dd4a7ac84b241601a575280bc8db"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "ae81af97dfef35a7e146c998c7d505b585c57cb531b31588aaf556e80913647a"
+  },
+  "changed_document_paths": [
+    "README.md",
+    "docs/IMPLEMENTATION_CHOICES.md",
+    "audit/IMPLEMENTATION_STATUS.md",
+    "audit/rust-requirement-observations.json",
+    "../docs/redesign/03_REQUIREMENT_TRACE.tsv"
+  ],
+  "component_test_locations": [
+    "crates/minidora-engine/src/code_capability.rs::tests (6 passing)",
+    "crates/minidora-engine/src/input.rs::tests::bounded_code_capability_headers_preserve_original_body (1 passing)"
+  ],
+  "normal_route_test_locations": [
+    "apps/cli/tests/normal_route.rs::bounded_code_reader_uses_normal_cli_and_reports_utf8_structure",
+    "apps/cli/tests/normal_route.rs::bounded_code_evaluator_uses_native_python_subset_semantics",
+    "apps/cli/tests/normal_route.rs::bounded_code_verifier_checks_only_declared_cases_and_preserves_typed_results",
+    "apps/cli/tests/normal_route.rs::bounded_code_route_rejects_unsafe_syntax_and_reports_finite_stops",
+    "apps/cli/tests/normal_route.rs::bounded_code_reader_retries_saved_results_and_versions_new_source"
+  ],
+  "existing_generation_regression_tests": "Four structured_code_generation_route_* CLI tests passed after parser/header additions.",
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "b4d2cde67a674e72b0b904c6706a356952e1823b1ba06ced38aad1810c86f0c8"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b07-code-capability/verification MINIDORA_KEEP_TEST_STATE=1",
+  "route_contract": [
+    "Input recognizes コードを読んで:/：, コードを評価して:/：, コードを検証して:/： and ASCII-case-insensitive code-read:, code-evaluate:, code-verify:. It preserves every body byte after the header newline; malformed trailing JSON is never trimmed into a new request.",
+    "Read accepts exactly 情報源. Evaluate accepts 情報源, 引数 and optional 最大手数. Verify accepts 情報源, 1–32 試験 cases and optional 最大手数. Root/source/value schemas and duplicate JSON keys are checked before execution.",
+    "Whole-source parser admits exactly one top-level function with simple arguments; validates dead branches and all syntax before interpretation; emits selected structure rows for statements, calls and comparisons with UTF-8 byte columns/source segments.",
+    "Native evaluator supports bounded scalar/list/dictionary expressions, subscripts, + - * // %, unary + - not, and/or, chained comparisons including membership, conditional expressions, assignments, if/elif/else, for/else, break/continue/pass/return, first docstring, and allowlisted abs/len/min/max/sum/range/sorted/list/all/any.",
+    "Imports, attributes, decorators, annotations, defaults, nested functions, special arguments, indirect/keyword calls, unsupported syntax and out-of-envelope values are rejected. No host Python, exec, eval, subprocess, compiler or external effect is used by the product route.",
+    "Reports contain exact source and source digest, function signature, AST metrics/structure, operation result, argument/case digests, actual JSON/status, branch rows, diagnostics, line and step count. Core stores the report artifact and sends the report through the existing content/render/history path.",
+    "Verification reports per-case matching only. Canonical typed comparison distinguishes bool from int. A finite match is not universal correctness or static type safety."
+  ],
+  "resource_envelope": {
+    "request_document_bytes": 256000,
+    "source_utf8_bytes": 32768,
+    "ast_nodes": 2048,
+    "ast_depth": 40,
+    "function_arguments": 16,
+    "integer_bits": 256,
+    "value_nodes": 4096,
+    "value_depth": 16,
+    "list_or_dictionary_entries": 2048,
+    "string_codepoints": 8192,
+    "aggregate_value_text_utf8_bytes": 65536,
+    "range_length": 2048,
+    "verification_cases": "1..=32",
+    "max_steps": "1..=200000; default 50000; each verification case receives that finite step limit",
+    "request_deadline": "Observed at evaluator step boundaries; Core also enforces its overall request deadline",
+    "mid_evaluation_cancellation": "No polling callback is currently passed to the evaluator; not implemented"
+  },
+  "runtime_claim_boundary": {
+    "native_subset_parse": "RUNS_IN_PRODUCT",
+    "native_subset_evaluation": "RUNS_IN_PRODUCT_WITH_FINITE_STEP_AND_DEADLINE_BOUNDS",
+    "generated_source_host_python_parse": "NOT_RUN",
+    "generated_source_host_python_execution": "NOT_RUN",
+    "generated_source_input_output_tests": "NOT_RUN",
+    "meaning_of_COMPUTED": "The declared bounded read/evaluation/check operation completed as recorded. Verification all_matched concerns only supplied finite cases.",
+    "host_runner_or_new_execution_permission": "NONE; no product Python, exec, eval, compiler, subprocess or external-effect adapter",
+    "static_name_and_type_analysis": "NOT_IMPLEMENTED; runtime failures such as unbound names are diagnosed only on evaluated paths"
+  },
+  "reference_comparison": {
+    "evidence": "verification/reference-observations-final.json and route/reference-check-final/",
+    "python_runtime": "3.12.14",
+    "unicode_database": "15.0.0",
+    "legacy_evaluator_version": "MINIDORA-コード能力-v0.1",
+    "native_reader_version": "bounded-python-function-reader-interpreter-v1",
+    "evaluation_fixture_count": 11,
+    "typed_result_or_failure_matches": 11,
+    "cp311_ast_sources": 11,
+    "ast_count_depth_structure_span_matches": 11,
+    "host_execution_in_product": "NONE",
+    "scope": "Authored finite QC against the frozen custom evaluator and CPython ast.parse(feature_version=(3,11)); not independent held-out acceptance or general Python compatibility."
+  },
+  "resolved_observations": [
+    "The first normal CLI reference run used a stale pre-build executable; the binary was rebuilt and the final comparison rerun against the current executable.",
+    "Parenthesized expressions initially shortened parent statement source spans. AST node spans and full surface spans were separated; focused unit and CPython comparison now match.",
+    "Large integer sequence indexes initially produced TypeError instead of IndexError. BigInt-based normalization now distinguishes type errors from out-of-range errors; component test and legacy comparison pass.",
+    "An input test initially treated a valid header with trailing invalid JSON body text as Unknown. The test now asserts the exact body is retained for strict downstream rejection, avoiding silent text loss.",
+    "The first strict Clippy pass reported two style diagnostics; both were corrected and the final warning-denied pass passed.",
+    "An early json! fixture sorted dictionary keys before testing insertion order; final order fixtures use raw JSON text, and the native route preserves insertion order."
+  ],
+  "tests_and_gates": {
+    "component_code_capability_tests": {
+      "passed": 6,
+      "failed": 0,
+      "log": "verification/engine-code-capability-verified.log"
+    },
+    "input_header_test": {
+      "passed": 1,
+      "failed": 0,
+      "log": "verification/input-bounded-code-header-verified.log"
+    },
+    "normal_route_code_capability_tests": {
+      "passed": 5,
+      "failed": 0,
+      "log": "verification/cli-bounded-code-verified.log"
+    },
+    "normal_route_generation_regressions": {
+      "passed": 4,
+      "failed": 0,
+      "log": "verification/generation-regression-verified.log"
+    },
+    "cargo_fmt_check": {
+      "exit_code": 0,
+      "log": "verification/fmt-check-verified.log"
+    },
+    "cargo_check_workspace_all_targets_locked": {
+      "exit_code": 0,
+      "log": "verification/check-workspace-verified.log"
+    },
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": {
+      "exit_code": 0,
+      "log": "verification/clippy-workspace-verified.log"
+    },
+    "cargo_build_workspace_locked": {
+      "exit_code": 0,
+      "log": "verification/build-workspace-verified.log"
+    },
+    "full_workspace_runtime_tests": "NOT_RUN",
+    "initial_failed_runs": [
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "exit_code": 101,
+        "log": "verification/clippy-workspace-first-failed.log",
+        "resolution": "Two style diagnostics corrected; final warning-denied Clippy passed."
+      },
+      {
+        "command": "cargo test -p minidora-engine bounded_code_capability_headers --lib --locked",
+        "exit_code": 101,
+        "log": "verification/input-bounded-code-header-first-failed.log",
+        "resolution": "Input test oracle corrected to assert exact preservation of trailing body text; production parser correctly did not discard it."
+      }
+    ]
+  },
+  "retained_evidence": {
+    "root": "/workspace/.minidora-cloud/b07-code-capability",
+    "asset_manifest": {
+      "path": "verification/assets-manifest.json",
+      "sha256": "b76db199338c2d26111a03641ac5c4a11d8405da9cd985e5f868f67e8881a688",
+      "file_count": 5908,
+      "total_bytes": 86008956
+    },
+    "retained_cli_test_state_directories": 162,
+    "keep_test_state": true,
+    "failed_attempts_and_previous_reference_snapshots": "Included in the asset manifest; no state/evidence directories were deleted."
+  },
+  "requirement_boundary": {
+    "capability_id": "B07",
+    "acceptance_status": "UNVERIFIED",
+    "release_status": "NOT_RELEASED",
+    "full_acceptance_gap": "General code creation/explanation/revision/repair; complete inherited parser/interpreter/checker and Python runtime compatibility; static name/type analysis; mid-evaluation cancellation; unseen task quality; full resource/target/Unicode compatibility and the complete required B07 population remain unverified.",
+    "scope_reduction_approved": false,
+    "B08_writing_changed": false
+  }
+}

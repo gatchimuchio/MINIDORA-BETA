@@ -317,13 +317,14 @@
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
         "crates/minidora-engine/src/code_generation.rs",
+        "crates/minidora-engine/src/code_capability.rs",
         "crates/minidora-engine/src/input.rs",
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-engine/src/ports.rs",
         "crates/minidora-domain/src/lib.rs"
       ],
-      "evidence": "b07-code-generation-route-validation.json records an ordinary CLI connection for the inspected inherited structured function-generation IR, including all expression/statement forms, exact separate constants and source/root spans, actual source/render/report/file receipts, typed stops and retry/version history. Product Python parse/execution/input-output status is NOT_RUN. Seven new tests and six existing regressions pass; separate development QC parses nine generated sources and checks 20 finite cases (19 matching outputs, one expected unbound-name NameError). This is partial generation evidence, not full B07 acceptance",
-      "full_acceptance_gap": "General free-form code generation, explanation, repair, the inherited bounded source parser/interpreter/checker, name binding/type analysis, unseen task quality and full target/resource/Unicode compatibility remain unverified. Structured algorithm input supplies the algorithm; generation alone does not establish successful execution or usable code for every input",
+      "evidence": "b07-code-generation-route-validation.json records the earlier ordinary-CLI structured algorithm-to-source route, exact constants and source spans, artifact/render/file receipts and version history. b07-bounded-code-capability-route-validation.json records the normal-CLI whole-source reader, native bounded evaluator and finite checker continuation. Six new component tests and five normal-route tests pass; development-only QC matched 11 typed results/failure kinds against the frozen evaluator and 11 AST count/depth/structure/span cases against CPython 3.11. Generated-source host-Python parse/exec/I/O checks remain NOT_RUN. These scoped results do not establish full B07 acceptance",
+      "full_acceptance_gap": "General free-form code generation, explanation, revision and repair; complete inherited Python parser/interpreter/checker semantics and runtime compatibility; static name/type analysis; in-progress cancellation polling; unseen-task code quality; full target/resource/Unicode compatibility and the complete B07 acceptance population remain unverified. The native evaluator is finite and does not execute generated source or establish correctness for all inputs",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

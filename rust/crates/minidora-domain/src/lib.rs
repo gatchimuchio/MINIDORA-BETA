@@ -173,6 +173,15 @@ pub enum Intent {
     GenerateCode {
         document: String,
     },
+    ReadCode {
+        document: String,
+    },
+    EvaluateCode {
+        document: String,
+    },
+    VerifyCode {
+        document: String,
+    },
     CsvSelect {
         document: String,
         column: String,

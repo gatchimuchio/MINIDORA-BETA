@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v36-structured-code-generation";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v37-bounded-code-capabilities";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -224,6 +224,25 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(match text.split_once('\n') {
             Some((_, document)) => Intent::GenerateCode { document: document.into() },
             None => Intent::Unknown { reason: "code generation requires a header newline and explicit structured algorithm/constants document".into() },
+        }));
+    }
+    let code_operation = match header {
+        "コードを読んで:" | "コードを読んで：" => Some(0),
+        "コードを評価して:" | "コードを評価して：" => Some(1),
+        "コードを検証して:" | "コードを検証して：" => Some(2),
+        _ if header.eq_ignore_ascii_case("code-read:") => Some(0),
+        _ if header.eq_ignore_ascii_case("code-evaluate:") => Some(1),
+        _ if header.eq_ignore_ascii_case("code-verify:") => Some(2),
+        _ => None,
+    };
+    if let Some(operation) = code_operation {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) => match operation {
+                0 => Intent::ReadCode { document: document.into() },
+                1 => Intent::EvaluateCode { document: document.into() },
+                _ => Intent::VerifyCode { document: document.into() },
+            },
+            None => Intent::Unknown { reason: "code capability requires a header newline and one explicit source/settings JSON document".into() },
         }));
     }
     if header.starts_with("検索 ") || header.starts_with("search ") {
@@ -1685,6 +1704,44 @@ mod tests {
                 interpret(request).unwrap(),
                 Intent::Unknown { .. }
             ));
+        }
+    }
+    #[test]
+    fn bounded_code_capability_headers_preserve_original_body() {
+        let document =
+            " \r\n{\"情報源\":\"def add(x):\\n    return x + 1\\n\",\"引数\":{\"x\":2}} \t\n";
+        for (header, expected) in [
+            ("コードを読んで:", 0),
+            ("コードを読んで：", 0),
+            ("CoDe-ReAd:", 0),
+            ("コードを評価して:", 1),
+            ("code-evaluate:", 1),
+            ("CoDe-EvAlUaTe:", 1),
+            ("コードを検証して:", 2),
+            ("コードを検証して：", 2),
+            ("CoDe-VeRiFy:", 2),
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let request = format!("{header}{newline}{document}");
+                let intent = interpret(&request).unwrap();
+                let actual = match intent {
+                    Intent::ReadCode { document } => (0, document),
+                    Intent::EvaluateCode { document } => (1, document),
+                    Intent::VerifyCode { document } => (2, document),
+                    other => panic!("unexpected intent: {other:?}"),
+                };
+                assert_eq!(actual, (expected, document.into()));
+            }
+        }
+        for request in ["code-read:", "code-evaluate: then execute\n{}"] {
+            assert!(matches!(
+                interpret(request).unwrap(),
+                Intent::Unknown { .. }
+            ));
+        }
+        match interpret("code-verify:\n{}\nthen run").unwrap() {
+            Intent::VerifyCode { document } => assert_eq!(document, "{}\nthen run"),
+            other => panic!("unexpected intent: {other:?}"),
         }
     }
     #[test]

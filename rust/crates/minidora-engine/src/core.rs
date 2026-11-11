@@ -3,7 +3,7 @@ use crate::{input, language, output, ports, relations, store::Store};
 use minidora_domain::*;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(serde::Serialize)]
 struct CalculationSequenceStepArtifact {
@@ -1154,6 +1154,40 @@ impl Engine {
                 let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
                 result.dependencies.push(artifact);
                 units.push(report.source);
+                result.guarantee = Guarantee::Computed;
+            }
+            Intent::ReadCode { document }
+            | Intent::EvaluateCode { document }
+            | Intent::VerifyCode { document } => {
+                let operation = match &bundle.meaning.intent {
+                    Intent::ReadCode { .. } => crate::code_capability::CodeOperation::Read,
+                    Intent::EvaluateCode { .. } => crate::code_capability::CodeOperation::Evaluate,
+                    Intent::VerifyCode { .. } => crate::code_capability::CodeOperation::Verify,
+                    _ => unreachable!("matched code capability intent"),
+                };
+                let deadline =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
+                let report = match crate::code_capability::run(document, operation, deadline) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CODE_CAPABILITY_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                if serde_json::to_vec(&report)?.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "code capability report exceeds request evidence budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
+                result.dependencies.push(artifact);
+                units.push(serde_json::to_string_pretty(&report)?);
                 result.guarantee = Guarantee::Computed;
             }
             Intent::JsonPointer { document, pointer } => {

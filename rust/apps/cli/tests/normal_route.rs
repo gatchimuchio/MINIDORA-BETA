@@ -6356,3 +6356,305 @@ fn structured_code_generation_route_file_retry_and_source_revision() {
         1
     );
 }
+
+fn assert_code_capability_artifact(
+    directory: &Path,
+    result: &Value,
+    request: &str,
+    document: &str,
+    source: &str,
+) -> Value {
+    basic_raw_result(directory, result, request, Some(document));
+    assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let sha = result["dependencies"][0].as_str().unwrap();
+    let bytes = store.get_bytes("owner", "normal-route", sha).unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), sha);
+    let report: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        report["version"],
+        "bounded-python-function-reader-interpreter-v1"
+    );
+    assert_eq!(report["source"], source);
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    assert_eq!(
+        report["assurance"],
+        "限定Python AST読解・ネイティブ評価。ホストPython、exec、eval、コンパイラ、外部作用は使用していない"
+    );
+    let saved = inspect_normal_case(directory, "owner");
+    let kind = match report["operation"].as_str().unwrap() {
+        "READ" => "READ_CODE",
+        "EVALUATE" => "EVALUATE_CODE",
+        "VERIFY" => "VERIFY_CODE",
+        other => panic!("unknown code capability operation {other}"),
+    };
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["kind"], kind);
+    assert_eq!(saved["result"], *result);
+    let read = |sha: &Value| -> Value {
+        let sha = sha.as_str().unwrap();
+        let bytes = store.get_bytes("owner", "normal-route", sha).unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), sha);
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    let graph = read(&result["execution_graph_ref"]);
+    let observed = &graph[1];
+    assert_eq!(
+        read(&observed["compute"]),
+        serde_json::json!([null, [result["text"]], [], result["dependencies"]])
+    );
+    assert_eq!(read(&observed["content"]), result["content_plan"]);
+    assert_eq!(read(&observed["render"]), result["render"]);
+    assert!(store.get_bytes("stranger", "normal-route", sha).is_err());
+    report
+}
+
+#[test]
+fn bounded_code_reader_uses_normal_cli_and_reports_utf8_structure() {
+    let source = "# bounded example\ndef 合計(xs):\n    \"合計を返す\"\n    total = 0\n    for x in xs:\n        if x > 0:\n            total += x\n    return total\n";
+    let document = serde_json::json!({"情報源":source}).to_string();
+    for (header, newline) in [("コードを読んで：", "\n"), ("CoDe-ReAd:", "\r\n")] {
+        let scratch = Scratch::new();
+        let request = format!("{header}{newline}{document}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        let report =
+            assert_code_capability_artifact(&scratch.0, &result, &request, &document, source);
+        assert_eq!(report["operation"], "READ");
+        assert_eq!(report["function_name"], "合計");
+        assert_eq!(report["parameters"], serde_json::json!(["xs"]));
+        assert!(
+            report["ast_nodes"].as_u64().unwrap()
+                > report["structure"].as_array().unwrap().len() as u64
+        );
+        let structure = report["structure"].as_array().unwrap();
+        let branch = structure
+            .iter()
+            .find(|node| node["syntax"] == "If")
+            .unwrap();
+        assert_eq!(branch["line"], 6);
+        assert_eq!(branch["utf8_column"], 8);
+        assert!(
+            branch["source_segment"]
+                .as_str()
+                .unwrap()
+                .contains("if x > 0")
+        );
+        assert!(
+            report["summary"]
+                .as_str()
+                .unwrap()
+                .contains("型・値・仕様適合は未検証")
+        );
+    }
+}
+
+#[test]
+fn bounded_code_evaluator_uses_native_python_subset_semantics() {
+    let source = "def analyze(xs):\n    total = 0\n    for x in xs:\n        if x < 0:\n            total += x\n        else:\n            total += x // -2\n    return [total, -7 // 3, -7 % 3, True + True, sum(xs), len(xs), sorted(xs)]\n";
+    let document = serde_json::json!({"情報源":source,"引数":{"xs":[1,-3,4]}}).to_string();
+    let scratch = Scratch::new();
+    let request = format!("code-evaluate:\n{document}");
+    let result = record(&execute(&scratch.0, "owner", &[&request]));
+    let report = assert_code_capability_artifact(&scratch.0, &result, &request, &document, source);
+    assert_eq!(report["operation"], "EVALUATE");
+    assert_eq!(report["evaluation"]["status"], "COMPUTED");
+    assert_eq!(
+        report["evaluation"]["actual_json"],
+        "[-6,-3,2,2,2,3,[-3,1,4]]"
+    );
+    assert!(report["evaluation"]["steps"].as_u64().unwrap() > 10);
+
+    let ordered_source = "def keys(d):\n    return list(d)\n";
+    let ordered_document = format!(
+        "{{\"情報源\":{},\"引数\":{{\"d\":{{\"z\":1,\"a\":2}}}}}}",
+        serde_json::to_string(ordered_source).unwrap()
+    );
+    let ordered_request = format!("code-evaluate:\n{ordered_document}");
+    let ordered = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "dict-order", &ordered_request],
+    ));
+    let ordered_report = assert_code_capability_artifact(
+        &scratch.0,
+        &ordered,
+        &ordered_request,
+        &ordered_document,
+        ordered_source,
+    );
+    assert_eq!(ordered_report["evaluation"]["actual_json"], "[\"z\",\"a\"]");
+}
+
+#[test]
+fn bounded_code_verifier_checks_only_declared_cases_and_preserves_typed_results() {
+    let source = "def odd(x):\n    return x % 2 != 0\n";
+    let document = serde_json::json!({"情報源":source,"試験":[
+        {"引数":{"x":3},"期待値":true}, {"引数":{"x":2},"期待値":false}
+    ]})
+    .to_string();
+    let scratch = Scratch::new();
+    let request = format!("コードを検証して:\n{document}");
+    let result = record(&execute(&scratch.0, "owner", &[&request]));
+    let report = assert_code_capability_artifact(&scratch.0, &result, &request, &document, source);
+    assert_eq!(report["operation"], "VERIFY");
+    assert_eq!(report["verification"]["case_count"], 2);
+    assert_eq!(report["verification"]["all_matched"], true);
+    assert_eq!(report["verification"]["cases"][0]["actual_json"], "true");
+    assert!(
+        report["verification"]["assurance"]
+            .as_str()
+            .unwrap()
+            .contains("全入力")
+    );
+
+    let mismatch = serde_json::json!({"情報源":"def answer():\n    return True\n","試験":[
+        {"引数":{},"期待値":1}
+    ]})
+    .to_string();
+    let mismatch_request = format!("CoDe-VeRiFy:\n{mismatch}");
+    let mismatch_result = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "typed-mismatch", &mismatch_request],
+    ));
+    let mismatch_source = "def answer():\n    return True\n";
+    let mismatch_report = assert_code_capability_artifact(
+        &scratch.0,
+        &mismatch_result,
+        &mismatch_request,
+        &mismatch,
+        mismatch_source,
+    );
+    assert_eq!(mismatch_report["verification"]["all_matched"], false);
+    assert_eq!(
+        mismatch_report["verification"]["cases"][0]["actual_json"],
+        "true"
+    );
+    assert_eq!(
+        mismatch_report["verification"]["cases"][0]["expected_json"],
+        "1"
+    );
+}
+
+#[test]
+fn bounded_code_route_rejects_unsafe_syntax_and_reports_finite_stops() {
+    for source in [
+        "def f(x):\n    if False:\n        import os\n    return x\n",
+        "def f(x):\n    return x.__class__\n",
+        "def f(xs):\n    for x in xs:\n        pass\n    else:\n        break\n    return 0\n",
+        "@decorator\ndef f():\n    return 1\n",
+    ] {
+        let document = serde_json::json!({"情報源":source}).to_string();
+        let request = format!("code-read:\n{document}");
+        let output = execute(&Scratch::new().0, "owner", &[&request]);
+        let result = stopped(&output, 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("CODE_CAPABILITY_INPUT:")
+        );
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+    }
+    let duplicate = "{\"情報源\":\"def f():\\n    return 1\\n\",\"引数\":{},\"\\u5f15\\u6570\":{}}";
+    let request = format!("code-evaluate:\n{duplicate}");
+    let result = stopped(
+        &execute(&Scratch::new().0, "owner", &[&request]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("DUPLICATE_JSON_KEY:")
+    );
+
+    let source =
+        "def loop(xs):\n    total = 0\n    for x in xs:\n        total += x\n    return total\n";
+    let document =
+        serde_json::json!({"情報源":source,"引数":{"xs":[1,2,3]},"最大手数":2}).to_string();
+    let step_request = format!("code-evaluate:\n{document}");
+    let step_scratch = Scratch::new();
+    let step_result = record(&execute(&step_scratch.0, "owner", &[&step_request]));
+    let step_report = assert_code_capability_artifact(
+        &step_scratch.0,
+        &step_result,
+        &step_request,
+        &document,
+        source,
+    );
+    assert_eq!(step_report["evaluation"]["status"], "STOPPED");
+    assert_eq!(
+        step_report["evaluation"]["diagnostic"],
+        "STEP_LIMIT: evaluation step budget exceeded"
+    );
+
+    for (args, expected) in [
+        (vec!["--max-actions", "2"], "ACTION_BUDGET_EXHAUSTED"),
+        (vec!["--deadline-ms", "0"], "RESOURCE_LIMIT"),
+        (vec!["--max-evidence-bytes", "1"], "RESOURCE_LIMIT"),
+    ] {
+        let body = serde_json::json!({"情報源":"def f():\n    return 1\n"}).to_string();
+        let request = format!("code-read:\n{body}");
+        let mut argv = args;
+        argv.push(&request);
+        let result = stopped(&execute(&Scratch::new().0, "owner", &argv), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().starts_with(expected));
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+    }
+}
+
+#[test]
+fn bounded_code_reader_retries_saved_results_and_versions_new_source() {
+    let scratch = Scratch::new();
+    let first_source = "def f(x):\n    return x + 1\n";
+    let first_document = serde_json::json!({"情報源":first_source}).to_string();
+    let first_request = format!("code-read:\n{first_document}");
+    let args = [
+        "--input",
+        "reader-history",
+        "--version",
+        "1",
+        &first_request,
+    ];
+    let first = record(&execute(&scratch.0, "owner", &args));
+    let first_report = assert_code_capability_artifact(
+        &scratch.0,
+        &first,
+        &first_request,
+        &first_document,
+        first_source,
+    );
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+
+    let second_source = "def f(x):\n    return x * 2\n";
+    let second_document = serde_json::json!({"情報源":second_source}).to_string();
+    let second_request = format!("code-read:\n{second_document}");
+    let second = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "reader-history",
+            "--version",
+            "2",
+            &second_request,
+        ],
+    ));
+    let report = assert_code_capability_artifact(
+        &scratch.0,
+        &second,
+        &second_request,
+        &second_document,
+        second_source,
+    );
+    assert_ne!(report["source_sha256"], first_report["source_sha256"]);
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+    assert_eq!(
+        inspect_normal_case(&scratch.0, "owner")["prior_results"][first["id"].as_str().unwrap()],
+        first
+    );
+}
