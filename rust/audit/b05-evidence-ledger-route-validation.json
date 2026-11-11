@@ -1,0 +1,337 @@
+{
+  "work_item": "B05 ordinary CLI explicit evidence-ledger classification and declared-inference links with English admission correction",
+  "recorded_at": "2026-11-11T05:30:01Z",
+  "base_commit": "5022b5bbcbbf334bcc6167ad065a15273d69df8a",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Caller-supplied source/claim/inference ledger -> sealed input -> unique Core -> scoped metadata classification with original source maps and typed stops -> actual report projection/Pointer consumers",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "7",
+      "8",
+      "14"
+    ]
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v35-evidence-ledger-admission",
+  "prior_parser_version": "declarative-ja-en-v34-extraction-number-identity",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_QC_CORRECTION_AND_EVIDENCE",
+  "product_source_changed": true,
+  "source_snapshot_sha256": "519fb79ac65774f8d1dfb59f4d1f67f2c9cce09b912cde13867f605554e69a05",
+  "source_snapshot_method": "SHA-256 of compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-engine/src/input.rs": "686c25036741216cb24a97da0dc88db46f688283b3367493a8e74a7946fe85cd"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "bfbe6842fbb5d856075e935091fbbb1c67079231b1c6bb837fe83d4d49d5fe80"
+  },
+  "component_test_location": "crates/minidora-engine/src/input.rs::tests",
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "213bc58f992edd6d8258b871ddef10717b60bd61d4a4f49c66b2984f7a26c631"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b05-evidence-ledger-route/verification MINIDORA_KEEP_TEST_STATE=1",
+  "baseline_defect": {
+    "evidence": "baseline/observations.json",
+    "stores": 3,
+    "execute_requests": 3,
+    "binary_sha256": "248fcc9b5e6167c1c831634b476a93938b775271e0f69e0242c14e5763530a4b",
+    "observed": "The same strict two-source ledger reached COMMIT/COMPUTED in Japanese, but lowercase and mixed-case English stopped with CAPABILITY_UNAVAILABLE, UNKNOWN and no dependency. All original requests and complete saved results were checked by separate inspect.",
+    "cause": "The coarse document-admission guard compared an 18-byte prefix with the 19-byte ASCII command evidence-synthesize, so English requests never reached the existing case-insensitive complete header parser."
+  },
+  "correction": "Use the command literal length in the case-insensitive admission prefix check, removing the incorrect magic length; advance parser revision to v35. Full-header validation and ledger algorithms/report schema are unchanged. Unsupported suffixes still suspend.",
+  "tests_and_route": {
+    "normal_cli_route_executed": true,
+    "route_method": "Real minidora-rust --json processes and fresh stores; actual report dependencies read using actor/case-authorized Store::get_bytes; separate inspect matches original request/body and complete result. Actual report bytes become explicit projection and Pointer inputs.",
+    "final_scoped_unique_tests_passed": 5,
+    "cli_unique_tests_passed": 4,
+    "input_unique_tests_passed": 1,
+    "primary_cli_run": {
+      "passed": 4,
+      "failed": 0,
+      "stores": 41,
+      "execute_requests": 47,
+      "breakdown": {
+        "main_fixture": 3,
+        "exact_metadata_variants": 7,
+        "actual_report_chains": 2,
+        "typed_stops": 29
+      }
+    },
+    "post_review": "Reverse the second inference premise order to differ from lexical order, including the raw escaped ID token. The two affected fixture/pipeline tests are rerun successfully (5 stores/11 requests), with workspace fmt/check/clippy. Product source, input test and the other two CLI tests are unchanged.",
+    "corrected_cli_run_totals": {
+      "stores": 46,
+      "execute_requests": 58,
+      "input_identities": 58
+    },
+    "all_batch_runtime_totals": {
+      "stores": 49,
+      "stored_input_identities": 64,
+      "execute_requests_including_three_exact_retries": 67,
+      "baseline_requests": 3,
+      "versioned_recompute_requests": 6
+    },
+    "first_pass_runtime_checks": true,
+    "full_workspace_tests": "NOT_RUN; one input and four focused normal-route tests plus affected fixture/pipeline reruns, with workspace all-target compile/lint. No full B05 or R2 acceptance claim."
+  },
+  "command_results": [
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "verification/build.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-review.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy-review.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy.log"
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt-review.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine evidence_ledger -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/input-tests.log",
+      "passed": 1,
+      "failed": 0,
+      "filtered_out": 113
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route evidence_ledger_normal_routes -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/main-fixture-review.log",
+      "passed": 1,
+      "failed": 0,
+      "filtered_out": 72
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route evidence_ledger_actual_report_projection -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/projection-review.log",
+      "passed": 1,
+      "failed": 0,
+      "filtered_out": 72
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route evidence_ledger -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/route-tests.log",
+      "passed": 4,
+      "failed": 0,
+      "filtered_out": 69
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "fixtures": {
+    "main_document": " \r\n{\"sources\":[{\"source_id\":\"資料/甲~0\",\"independence_group\":\"出版社 A\",\"claims\":[{\"id\":\"z-single\",\"text\":\"雨\\n仮説\",\"stance\":\"REFUTES\"},{\"id\":\"a-agree\",\"text\":\"橋は開いた。\",\"stance\":\"SUPPORTS\"},{\"id\":\"b-repeat\",\"text\":\"同じ観測。\",\"stance\":\"SUPPORTS\"},{\"id\":\"c-conflict\",\"text\":\"日時は未確定。\",\"stance\":\"SUPPORTS\"},{\"id\":\"d-refute\",\"text\":\"水温は10度。\",\"stance\":\"REFUTES\"}]},{\"source_id\":\"資料乙\",\"independence_group\":\"\\u51fa版社 A\",\"claims\":[{\"id\":\"b-repeat\",\"text\":\"\\u540cじ観測。\",\"stance\":\"SUPPORTS\"},{\"id\":\"\\u0061-agree\",\"text\":\"\\u6a4bは開いた。\",\"stance\":\"SUPPORTS\"},{\"id\":\"c-conflict\",\"text\":\"日時は未確定。\",\"stance\":\"REFUTES\"},{\"id\":\"d-refute\",\"text\":\"水温は10度。\",\"stance\":\"REFUTES\"}]},{\"source_id\":\"資料丙\",\"independence_group\":\"独立B\",\"claims\":[{\"id\":\"a-agree\",\"text\":\"橋は開いた。\",\"stance\":\"SUPPORTS\"},{\"id\":\"c-conflict\",\"text\":\"日時は未確定。\",\"stance\":\"SUPPORTS\"},{\"id\":\"d-refute\",\"text\":\"水温は10度。\",\"stance\":\"REFUTES\"}]},{\"source_id\":\"資料丁\",\"independence_group\":\"独立C\",\"claims\":[{\"id\":\"c-conflict\",\"text\":\"日時は未確定。\",\"stance\":\"SUPPORTS\"}]}],\"inferences\":[{\"id\":\"i-contradiction\",\"text\":\"争点があると申告。\",\"premises\":[\"c-conflict\"]},{\"id\":\"i-chain\",\"text\":\"前提は全て真だと申告。\",\"premises\":[\"\\u0069-contradiction\",\"d-refute\"]}]} \t\n",
+    "main_document_sha256": "33da2df1acb3ba7c5ab19df4fcde24ccad6f84f22ac97b26f8a95f2a47f55e6c",
+    "saved_fixture_state": "verification/review-states/minidora-cli-35483-1794374721264459924-0",
+    "purpose": "Authored source/claim labels for metadata classification; no assertion that any synthetic claim is a true external-world statement."
+  },
+  "route_observations": [
+    {
+      "route": "Main ledger through Japanese, lowercase and mixed-case English",
+      "stores": 3,
+      "source_count": 4,
+      "evidence_record_count": 13,
+      "claim_count": 5,
+      "declared_inference_count": 2,
+      "expected_claims": [
+        {
+          "id": "a-agree",
+          "status": "AGREEMENT",
+          "consensus": "SUPPORTS",
+          "support_groups": 2,
+          "refute_groups": 0,
+          "support_source_indices": [
+            0,
+            1,
+            2
+          ],
+          "refute_source_indices": []
+        },
+        {
+          "id": "b-repeat",
+          "status": "SAME_GROUP_REPETITION",
+          "consensus": "SUPPORTS",
+          "support_groups": 1,
+          "refute_groups": 0,
+          "support_source_indices": [
+            0,
+            1
+          ],
+          "refute_source_indices": []
+        },
+        {
+          "id": "c-conflict",
+          "status": "CONTRADICTION",
+          "consensus": null,
+          "support_groups": 3,
+          "refute_groups": 1,
+          "support_source_indices": [
+            0,
+            2,
+            3
+          ],
+          "refute_source_indices": [
+            1
+          ]
+        },
+        {
+          "id": "d-refute",
+          "status": "AGREEMENT",
+          "consensus": "REFUTES",
+          "support_groups": 0,
+          "refute_groups": 2,
+          "support_source_indices": [],
+          "refute_source_indices": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "id": "z-single",
+          "status": "SINGLE_SOURCE",
+          "consensus": "REFUTES",
+          "support_groups": 0,
+          "refute_groups": 1,
+          "support_source_indices": [],
+          "refute_source_indices": [
+            0
+          ]
+        }
+      ],
+      "source_maps": "All 41 exposed source spans are checked exactly: 8 source-ID/group maps + 26 citation text/stance maps + 7 inference ID/text/premise maps. Ranges/digests come from independent unique fixture containers/raw tokens. Decoded-equal raw/escaped text, claim IDs and group labels are included. Claim-ID maps and output offsets are not provided by the synthesis report and are not claimed.",
+      "ordering": "Sources/citations retain input order; claims have exact ID lexical order. Inference IDs and final premise order differ from lexical sorting, so source/caller order is explicitly tested.",
+      "inference_boundary": "Both declared inferences remain USER_DECLARED_INFERENCE_NOT_VALIDATED, including a chain referencing a contradiction and refuting agreement. No support, truth or entailment is propagated."
+    },
+    {
+      "route": "Exact supplied independence labels and explicit claim identity",
+      "stores": 7,
+      "evidence": "Same-group repetitions count one group. Trailing space, case and precomposed/decomposed Unicode differences remain distinct labels. Same-group opposite stances still contradict; same-group refutations repeat. Identical text under different explicit claim IDs stays separate SINGLE_SOURCE records. These exact-label counts do not establish real source independence."
+    },
+    {
+      "route": "Actual report -> ordered declared_inferences/claims projection -> raw classification Pointers",
+      "stores": 2,
+      "execute_requests": 8,
+      "evidence": "Both language variants use actual report text, selected raw root-field/source-output maps and actual projected JSON as the next input. Pointer results retain CONTRADICTION and USER_DECLARED_INFERENCE_NOT_VALIDATED. This is caller-fed composition, not an inferred Core plan or validated logical derivation."
+    },
+    {
+      "route": "Strict schema/identity/link/header/budget stops",
+      "stores": 29,
+      "languages": [
+        "English headers"
+      ],
+      "breakdown": {
+        "ledger_source_claim_inference_mutations": 25,
+        "duplicate_JSON_key": 1,
+        "malformed_JSON": 1,
+        "unsupported_suffix": 1,
+        "request_evidence_budget_32_bytes": 1
+      },
+      "evidence": "Every case is SUSPEND/UNKNOWN with no result dependency and durable original request/complete result. Cases include ID collisions, label conflict, invalid stance, source-only premise references, self/forward/duplicate premises, empty lists and unknown fields. A cycle is rejected by the ordered forward-reference constraint; no general cycle/entailment solver is claimed."
+    }
+  ],
+  "render_and_persistence_evidence": "Positive synthesis cases check COMMIT/COMPUTED, RENDERED, actual text hash, content-plan equality, one authorized dependency equal to displayed report, source document digest and full original request/body/result via separate inspect. COMPUTED describes the ledger-classification result, not claim truth.",
+  "versioned_recomputation": {
+    "new_binary_sha256": "213bc58f992edd6d8258b871ddef10717b60bd61d4a4f49c66b2984f7a26c631",
+    "new_parser_version": "declarative-ja-en-v35-evidence-ledger-admission",
+    "execute_requests": 6,
+    "new_input_identities": 3,
+    "stores_reused": 3,
+    "observations": [
+      {
+        "case": "english",
+        "old_lifecycle": "SUSPEND",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "COMMIT",
+        "original_retained_in_prior_results": true,
+        "same_report_text_and_dependency_as_original_Japanese_case": true
+      },
+      {
+        "case": "japanese",
+        "old_lifecycle": "COMMIT",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "COMMIT",
+        "original_retained_in_prior_results": true,
+        "same_report_text_and_dependency_as_original_Japanese_case": true
+      },
+      {
+        "case": "mixed-case",
+        "old_lifecycle": "SUSPEND",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "COMMIT",
+        "original_retained_in_prior_results": true,
+        "same_report_text_and_dependency_as_original_Japanese_case": true
+      }
+    ]
+  },
+  "versioned_recomputation_boundary": "Three explicit input-ID/version-1 retries preserve original Japanese success and English stops. Explicit version 2 reaches COMMIT for all three while retaining originals in prior_results. All recomputed report text and dependency digests equal the original Japanese result, confirming language admission rather than a changed classification algorithm.",
+  "traceability_update": "B05 retains the existing concrete entry route and removes its leading UNMAPPED placeholder in the actual-entry field; baseline source lineage remains UNMAPPED. Only B05 runtime evidence/gap text and test results change; requirement/disposition/acceptance and 93-record population are preserved.",
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b05-evidence-ledger-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b05-evidence-ledger-route/asset-inventory.json",
+    "manifest_sha256": "f283c1ee54b01cceb658aabec821472cdfe65fa23671917caf0ae629e0653995",
+    "file_count_including_manifest": 1132,
+    "stores": 49,
+    "stored_input_identities": 64,
+    "remote_storage_verification": "NOT_RUN; local state/log retention only, no OneDrive storage claim"
+  },
+  "known_limits": [
+    "These authored examples are scoped QC, not an independent held-out B05 acceptance population.",
+    "Source identities, independence labels, texts, stances and links are caller-supplied. The route does not fetch/extract documents, verify source identity or independence, prove claim truth or validate inference entailment.",
+    "UNKNOWN stances and general natural-language evidence synthesis are not supplied by this ledger grammar.",
+    "Full resource-boundary matrices, full workspace runtime regression, external LIVE, Windows/macOS, physical 8 GB QA, release and deployment are NOT_RUN. B04 residual populations remain unverified and are not closed by this B05 follow-up."
+  ],
+  "acceptance": {
+    "B05": "UNVERIFIED; selected explicit-ledger normal routes and one admission correction observed, not complete multi-document evidence synthesis",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

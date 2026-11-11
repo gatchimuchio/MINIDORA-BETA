@@ -1626,6 +1626,488 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+struct LedgerSourceFixture {
+    raw_id: &'static str,
+    raw_group: &'static str,
+    claims: Vec<(&'static str, &'static str, &'static str)>,
+}
+
+fn ledger_source_fixtures() -> Vec<LedgerSourceFixture> {
+    vec![
+        LedgerSourceFixture {
+            raw_id: r#""資料/甲~0""#,
+            raw_group: r#""出版社 A""#,
+            claims: vec![
+                (r#""z-single""#, r#""雨\n仮説""#, "REFUTES"),
+                (r#""a-agree""#, r#""橋は開いた。""#, "SUPPORTS"),
+                (r#""b-repeat""#, r#""同じ観測。""#, "SUPPORTS"),
+                (r#""c-conflict""#, r#""日時は未確定。""#, "SUPPORTS"),
+                (r#""d-refute""#, r#""水温は10度。""#, "REFUTES"),
+            ],
+        },
+        LedgerSourceFixture {
+            raw_id: r#""資料乙""#,
+            raw_group: r#""\u51fa版社 A""#,
+            claims: vec![
+                (r#""b-repeat""#, r#""\u540cじ観測。""#, "SUPPORTS"),
+                (r#""\u0061-agree""#, r#""\u6a4bは開いた。""#, "SUPPORTS"),
+                (r#""c-conflict""#, r#""日時は未確定。""#, "REFUTES"),
+                (r#""d-refute""#, r#""水温は10度。""#, "REFUTES"),
+            ],
+        },
+        LedgerSourceFixture {
+            raw_id: r#""資料丙""#,
+            raw_group: r#""独立B""#,
+            claims: vec![
+                (r#""a-agree""#, r#""橋は開いた。""#, "SUPPORTS"),
+                (r#""c-conflict""#, r#""日時は未確定。""#, "SUPPORTS"),
+                (r#""d-refute""#, r#""水温は10度。""#, "REFUTES"),
+            ],
+        },
+        LedgerSourceFixture {
+            raw_id: r#""資料丁""#,
+            raw_group: r#""独立C""#,
+            claims: vec![(r#""c-conflict""#, r#""日時は未確定。""#, "SUPPORTS")],
+        },
+    ]
+}
+
+fn ledger_claim_json(raw_id: &str, raw_text: &str, stance: &str) -> String {
+    format!(r#"{{"id":{raw_id},"text":{raw_text},"stance":"{stance}"}}"#)
+}
+
+fn ledger_source_json(source: &LedgerSourceFixture) -> String {
+    let claims = source
+        .claims
+        .iter()
+        .map(|(id, text, stance)| ledger_claim_json(id, text, stance))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"source_id":{},"independence_group":{},"claims":[{claims}]}}"#,
+        source.raw_id, source.raw_group
+    )
+}
+
+const LEDGER_INFERENCE_1: &str =
+    r#"{"id":"i-contradiction","text":"争点があると申告。","premises":["c-conflict"]}"#;
+const LEDGER_INFERENCE_2: &str = r#"{"id":"i-chain","text":"前提は全て真だと申告。","premises":["\u0069-contradiction","d-refute"]}"#;
+
+fn ledger_document() -> String {
+    let sources = ledger_source_fixtures()
+        .iter()
+        .map(ledger_source_json)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        " \r\n{{\"sources\":[{sources}],\"inferences\":[{LEDGER_INFERENCE_1},{LEDGER_INFERENCE_2}]}} \t\n"
+    )
+}
+
+fn ledger_decode(raw: &str) -> String {
+    serde_json::from_str(raw).unwrap()
+}
+
+fn assert_ledger_report(report: &Value, document: &str) {
+    assert_eq!(report["source_count"], 4);
+    assert_eq!(report["evidence_record_count"], 13);
+    assert_eq!(
+        report["independence_basis"],
+        "independence_group labels are caller-supplied and not independently verified"
+    );
+    assert_eq!(
+        report["guarantee"],
+        "explicit evidence ledger classification only; source identities, claim text, stances and inference links are caller-supplied; no source fact extraction, claim truth or inference validity is asserted"
+    );
+    let fixtures = ledger_source_fixtures();
+    let containers = fixtures.iter().map(ledger_source_json).collect::<Vec<_>>();
+    let expected_sources=fixtures.iter().zip(&containers).map(|(source,container)| {
+        serde_json::json!({
+            "source_id":ledger_decode(source.raw_id),"independence_group":ledger_decode(source.raw_group),
+            "source_id_span":comparison_fixture_span(document,container,&format!(r#""source_id":{}"#,source.raw_id),source.raw_id),
+            "independence_group_span":comparison_fixture_span(document,container,&format!(r#""independence_group":{}"#,source.raw_group),source.raw_group)
+        })
+    }).collect::<Vec<_>>();
+    assert_eq!(report["sources"], serde_json::json!(expected_sources));
+    let citation = |index: usize, id: &str| {
+        let (raw_id, raw_text, stance) = fixtures[index]
+            .claims
+            .iter()
+            .find(|(raw_id, _, _)| ledger_decode(raw_id) == id)
+            .unwrap();
+        let fragment = ledger_claim_json(raw_id, raw_text, stance);
+        serde_json::json!({
+            "source_index":index,
+            "claim_text_span":comparison_fixture_span(document,&containers[index],&fragment,raw_text),
+            "stance_span":comparison_fixture_span(document,&containers[index],&fragment,&serde_json::to_string(stance).unwrap())
+        })
+    };
+    let expected_claims=[
+        ("a-agree","橋は開いた。","AGREEMENT",Some("SUPPORTS"),2,0,vec![0,1,2],vec![]),
+        ("b-repeat","同じ観測。","SAME_GROUP_REPETITION",Some("SUPPORTS"),1,0,vec![0,1],vec![]),
+        ("c-conflict","日時は未確定。","CONTRADICTION",None,3,1,vec![0,2,3],vec![1]),
+        ("d-refute","水温は10度。","AGREEMENT",Some("REFUTES"),0,2,vec![],vec![0,1,2]),
+        ("z-single","雨\n仮説","SINGLE_SOURCE",Some("REFUTES"),0,1,vec![],vec![0]),
+    ].into_iter().map(|(id,text,status,consensus,support_groups,refute_groups,support,refute)|serde_json::json!({
+        "claim_id":id,"text":text,"status":status,"consensus_stance":consensus,
+        "supporting_independence_group_count":support_groups,"refuting_independence_group_count":refute_groups,
+        "supporting":support.into_iter().map(|index|citation(index,id)).collect::<Vec<_>>(),
+        "refuting":refute.into_iter().map(|index|citation(index,id)).collect::<Vec<_>>()
+    })).collect::<Vec<_>>();
+    assert_eq!(report["claims"], serde_json::json!(expected_claims));
+    let expected_inferences=[
+        (LEDGER_INFERENCE_1,r#""i-contradiction""#,r#""争点があると申告。""#,vec![r#""c-conflict""#]),
+        (LEDGER_INFERENCE_2,r#""i-chain""#,r#""前提は全て真だと申告。""#,vec![r#""\u0069-contradiction""#,r#""d-refute""#]),
+    ].into_iter().map(|(container,id,text,premises)|{
+        let premise_fragment=format!(r#""premises":[{}]"#,premises.join(","));
+        serde_json::json!({
+            "inference_id":ledger_decode(id),"text":ledger_decode(text),
+            "premise_ids":premises.iter().map(|raw|ledger_decode(raw)).collect::<Vec<_>>(),
+            "classification":"USER_DECLARED_INFERENCE_NOT_VALIDATED",
+            "inference_id_span":comparison_fixture_span(document,container,&format!(r#""id":{id}"#),id),
+            "text_span":comparison_fixture_span(document,container,&format!(r#""text":{text}"#),text),
+            "premise_spans":premises.iter().map(|raw|comparison_fixture_span(document,container,&premise_fragment,raw)).collect::<Vec<_>>()
+        })
+    }).collect::<Vec<_>>();
+    assert_eq!(
+        report["declared_inferences"],
+        serde_json::json!(expected_inferences)
+    );
+}
+
+#[test]
+fn evidence_ledger_normal_routes_preserve_supplied_classifications_and_all_reported_source_maps() {
+    let document = ledger_document();
+    for header in [
+        "証拠を整理して:",
+        "evidence-synthesize:",
+        "EvIdEnCe-SyNtHeSiZe:",
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        let report = normal_row_report(&scratch.0, "owner", &result, &request, &document);
+        assert_ledger_report(&report, &document);
+    }
+}
+
+fn ledger_pair(groups: [&str; 2], stances: [&str; 2], different_ids: bool) -> Value {
+    serde_json::json!({"sources":[
+        {"source_id":"s0","independence_group":groups[0],"claims":[{"id":if different_ids {"a"} else {"c"},"text":"猫の記録。","stance":stances[0]}]},
+        {"source_id":"s1","independence_group":groups[1],"claims":[{"id":if different_ids {"b"} else {"c"},"text":"猫の記録。","stance":stances[1]}]}
+    ],"inferences":[]})
+}
+
+#[test]
+fn evidence_ledger_independence_labels_and_claim_identity_are_exact_unverified_metadata() {
+    for (groups, stances, different_ids, status, consensus, support_count, refute_count) in [
+        (
+            ["同群", "同群"],
+            ["SUPPORTS", "SUPPORTS"],
+            false,
+            "SAME_GROUP_REPETITION",
+            Some("SUPPORTS"),
+            1,
+            0,
+        ),
+        (
+            ["同群", "同群 "],
+            ["SUPPORTS", "SUPPORTS"],
+            false,
+            "AGREEMENT",
+            Some("SUPPORTS"),
+            2,
+            0,
+        ),
+        (
+            ["Group", "group"],
+            ["SUPPORTS", "SUPPORTS"],
+            false,
+            "AGREEMENT",
+            Some("SUPPORTS"),
+            2,
+            0,
+        ),
+        (
+            ["é", "e\u{301}"],
+            ["SUPPORTS", "SUPPORTS"],
+            false,
+            "AGREEMENT",
+            Some("SUPPORTS"),
+            2,
+            0,
+        ),
+        (
+            ["同群", "同群"],
+            ["SUPPORTS", "REFUTES"],
+            false,
+            "CONTRADICTION",
+            None,
+            1,
+            1,
+        ),
+        (
+            ["同群", "同群"],
+            ["REFUTES", "REFUTES"],
+            false,
+            "SAME_GROUP_REPETITION",
+            Some("REFUTES"),
+            0,
+            1,
+        ),
+        (
+            ["A", "B"],
+            ["SUPPORTS", "SUPPORTS"],
+            true,
+            "SINGLE_SOURCE",
+            Some("SUPPORTS"),
+            1,
+            0,
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let document = ledger_pair(groups, stances, different_ids).to_string();
+        let request = format!("evidence-synthesize:\n{document}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        let report = normal_row_report(&scratch.0, "owner", &result, &request, &document);
+        assert_eq!(report["source_count"], 2);
+        assert_eq!(report["evidence_record_count"], 2);
+        assert_eq!(report["sources"][0]["independence_group"], groups[0]);
+        assert_eq!(report["sources"][1]["independence_group"], groups[1]);
+        assert_eq!(report["declared_inferences"], serde_json::json!([]));
+        let claims = report["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), if different_ids { 2 } else { 1 });
+        for (index, claim) in claims.iter().enumerate() {
+            assert_eq!(
+                claim["claim_id"],
+                if different_ids {
+                    ["a", "b"][index]
+                } else {
+                    "c"
+                }
+            );
+            assert_eq!(claim["text"], "猫の記録。");
+            assert_eq!(claim["status"], status);
+            assert_eq!(claim["consensus_stance"], serde_json::json!(consensus));
+            assert_eq!(claim["supporting_independence_group_count"], support_count);
+            assert_eq!(claim["refuting_independence_group_count"], refute_count);
+            let supports = claim["supporting"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["source_index"].as_u64().unwrap())
+                .collect::<Vec<_>>();
+            let refutes = claim["refuting"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| c["source_index"].as_u64().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                supports,
+                if different_ids {
+                    vec![index as u64]
+                } else {
+                    (0..2)
+                        .filter(|i| stances[*i] == "SUPPORTS")
+                        .map(|i| i as u64)
+                        .collect()
+                }
+            );
+            assert_eq!(
+                refutes,
+                (0..2)
+                    .filter(|i| stances[*i] == "REFUTES")
+                    .map(|i| i as u64)
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            report["independence_basis"]
+                .as_str()
+                .unwrap()
+                .contains("not independently verified")
+        );
+    }
+}
+
+#[test]
+fn evidence_ledger_actual_report_projection_retains_conflicts_and_unvalidated_inference_labels() {
+    let document = ledger_document();
+    for header in ["証拠を整理して:", "evidence-synthesize:"] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        let report = normal_row_report(&scratch.0, "owner", &result, &request, &document);
+        assert_ledger_report(&report, &document);
+        let actual = result["text"].as_str().unwrap();
+        let next = format!("json-object-project [\"declared_inferences\",\"claims\"]:\n{actual}");
+        let projected = record(&execute(&scratch.0, "owner", &[&next]));
+        let artifact = normal_object_projection(&scratch.0, "owner", &projected, &next, actual);
+        assert_object_projection_maps(
+            &artifact,
+            actual,
+            &[
+                (
+                    "declared_inferences",
+                    r#""declared_inferences""#,
+                    "/declared_inferences",
+                ),
+                ("claims", r#""claims""#, "/claims"),
+            ],
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(projected["text"].as_str().unwrap()).unwrap(),
+            serde_json::json!({"declared_inferences":report["declared_inferences"],"claims":report["claims"]})
+        );
+        let selected = projected["text"].as_str().unwrap();
+        for (pointer, expected) in [
+            ("/claims/2/status", r#""CONTRADICTION""#),
+            (
+                "/declared_inferences/1/classification",
+                r#""USER_DECLARED_INFERENCE_NOT_VALIDATED""#,
+            ),
+        ] {
+            let pointer_request = format!("json-pointer {pointer}\n{selected}");
+            let value = record(&execute(&scratch.0, "owner", &[&pointer_request]));
+            basic_raw_result(&scratch.0, &value, &pointer_request, Some(selected));
+            assert_eq!(value["text"], expected);
+            assert_eq!(value["dependencies"], serde_json::json!([]));
+        }
+    }
+}
+
+#[test]
+fn evidence_ledger_invalid_schemas_identities_and_inference_links_stop_durably() {
+    let mut base = ledger_pair(["A", "B"], ["SUPPORTS", "SUPPORTS"], false);
+    base["inferences"] = serde_json::json!([
+        {"id":"i1","text":"申告した推論。","premises":["c"]},
+        {"id":"i2","text":"後続の申告。","premises":["i1"]}
+    ]);
+    let mut cases = Vec::new();
+    let mut bad = base.clone();
+    bad["extra"] = serde_json::json!(0);
+    cases.push((bad, "EVIDENCE_LEDGER_SHAPE"));
+    let mut bad = base.clone();
+    bad["sources"].as_array_mut().unwrap().truncate(1);
+    cases.push((bad, "EVIDENCE_LEDGER_SOURCE_LIMIT"));
+    let mut bad = base.clone();
+    bad["sources"][0]["extra"] = serde_json::json!(0);
+    cases.push((bad, "EVIDENCE_SOURCE_SHAPE"));
+    let mut bad = base.clone();
+    bad["sources"][0]["source_id"] = serde_json::json!(" ");
+    cases.push((bad, "EVIDENCE_SOURCE_ID"));
+    let mut bad = base.clone();
+    bad["sources"][0]["independence_group"] = serde_json::json!(1);
+    cases.push((bad, "EVIDENCE_INDEPENDENCE_GROUP"));
+    let mut bad = base.clone();
+    bad["sources"][1]["source_id"] = serde_json::json!("s0");
+    cases.push((bad, "EVIDENCE_DUPLICATE_SOURCE_ID"));
+    let mut bad = base.clone();
+    bad["sources"][0]["claims"] = serde_json::json!([]);
+    cases.push((bad, "EVIDENCE_SOURCE_NO_CLAIMS"));
+    let mut bad = base.clone();
+    let duplicate = bad["sources"][0]["claims"][0].clone();
+    bad["sources"][0]["claims"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    cases.push((bad, "EVIDENCE_DUPLICATE_SOURCE_CLAIM"));
+    let mut bad = base.clone();
+    bad["sources"][1]["claims"][0]["text"] = serde_json::json!("異なる主張。");
+    cases.push((bad, "EVIDENCE_CLAIM_LABEL_CONFLICT"));
+    let mut bad = base.clone();
+    bad["sources"][0]["claims"][0]["stance"] = serde_json::json!("UNKNOWN");
+    cases.push((bad, "EVIDENCE_STANCE"));
+    let mut bad = base.clone();
+    bad["sources"][0]["claims"][0]["stance"] = serde_json::json!("supports");
+    cases.push((bad, "EVIDENCE_STANCE"));
+    let mut bad = base.clone();
+    bad["sources"][0]["claims"][0]["text"] = serde_json::json!(" ");
+    cases.push((bad, "EVIDENCE_CLAIM_TEXT"));
+    let mut bad = base.clone();
+    bad["sources"][0]["claims"][0]["extra"] = serde_json::json!(0);
+    cases.push((bad, "EVIDENCE_CLAIM_SHAPE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["id"] = serde_json::json!("c");
+    cases.push((bad, "EVIDENCE_DUPLICATE_INFERENCE_ID"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["id"] = serde_json::json!("s0");
+    cases.push((bad, "EVIDENCE_DUPLICATE_INFERENCE_ID"));
+    let mut bad = base.clone();
+    bad["inferences"][1]["id"] = serde_json::json!("i1");
+    cases.push((bad, "EVIDENCE_DUPLICATE_INFERENCE_ID"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!([]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISES"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!(["absent"]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!(["s0"]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!(["i1"]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!(["i2"]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!(["i2"]);
+    bad["inferences"][1]["premises"] = serde_json::json!(["i1"]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["premises"] = serde_json::json!(["c", "c"]);
+    cases.push((bad, "EVIDENCE_INFERENCE_PREMISE"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["text"] = serde_json::json!(" ");
+    cases.push((bad, "EVIDENCE_INFERENCE_TEXT"));
+    let mut bad = base.clone();
+    bad["inferences"][0]["extra"] = serde_json::json!(0);
+    cases.push((bad, "EVIDENCE_INFERENCE_SHAPE"));
+    assert_eq!(cases.len(), 25);
+    for (document, code) in cases {
+        assert_comparison_stop("evidence-synthesize:", &document.to_string(), code);
+    }
+    assert_comparison_stop(
+        "evidence-synthesize:",
+        r#"{"sources":[],"sources":[],"inferences":[]}"#,
+        "DUPLICATE_JSON_KEY",
+    );
+    assert_comparison_stop(
+        "evidence-synthesize:",
+        r#"{"sources":"#,
+        "INVALID_JSON_DOCUMENT",
+    );
+    assert_comparison_stop(
+        "evidence-synthesize and send:",
+        &base.to_string(),
+        "CAPABILITY_UNAVAILABLE",
+    );
+    let scratch = Scratch::new();
+    let request = format!("evidence-synthesize:\n{base}");
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--max-evidence-bytes", "32", &request],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("RESOURCE_LIMIT")
+    );
+    assert_eq!(result["guarantee"], "UNKNOWN");
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    assert_eq!(saved["result"], result);
+}
+
 const BASIC_SELECTION_CSV: &str = "id,\"値 名前\"\r\na,\"猫,北\"\r\nb,\"犬\r\n南\"\r\nc,\"\"\r\nd,\r\ne,9007199254740993\r\nf,\"say \"\"hi\"\"\"\r\n";
 const BASIC_NUMERIC_ARRAY: &str = "[1.20,-0,3e-1,2]";
 const BASIC_POINTER_JSON: &str = " \r\n {\"前\":\"猫\",\"a/b\":{\"~key\":[1.2300e+40,1e400,\"\\u732b\"]},\"samples\":[1.20,-0,3e-1,2]} \t\n";

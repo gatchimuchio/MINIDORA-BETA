@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v34-extraction-number-identity";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v35-evidence-ledger-admission";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -316,7 +316,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header.starts_with("JSON表から列")
         || header == "証拠を整理して:"
         || header
-            .get(..18)
+            .get(.."evidence-synthesize".len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("evidence-synthesize"))
         || header.starts_with("JSONの配列")
         || header == "json-statistics"
@@ -1649,6 +1649,34 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn evidence_ledger_headers_preserve_the_complete_body_and_constraints() {
+        let document = " \r\n{\"sources\":[{\"source_id\":\"a\",\"independence_group\":\"g\",\"claims\":[{\"id\":\"c\",\"text\":\"猫\",\"stance\":\"SUPPORTS\"}]},{\"source_id\":\"b\",\"independence_group\":\"g\",\"claims\":[{\"id\":\"c\",\"text\":\"\\u732b\",\"stance\":\"REFUTES\"}]}],\"inferences\":[]} \t\n";
+        for header in [
+            "証拠を整理して:",
+            "evidence-synthesize:",
+            "EvIdEnCe-SyNtHeSiZe:",
+            "EVIDENCE-SYNTHESIZE:",
+        ] {
+            let request = RequestEnvelope::new("c", "i", "actor", &format!("{header}\n{document}"));
+            let bundle = seal(&request, None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent,Intent::EvidenceSynthesize {document:body} if body==document)
+            );
+            assert_eq!(bundle.request.text, request.text);
+        }
+        for header in [
+            "evidence-synthesize and send:",
+            "EvIdEnCe-SyNtHeSiZe: and send",
+            "evidence-synthesize",
+        ] {
+            let request = RequestEnvelope::new("c", "i", "actor", &format!("{header}\n{document}"));
+            assert!(matches!(
+                seal(&request, None).unwrap().meaning.intent,
+                Intent::Unknown { .. }
+            ));
+        }
+    }
     #[test]
     fn basic_document_pointer_body_and_scientific_statistics_identity_are_preserved() {
         let document = " \r\n {\"数\":1e400,\"s\":\"\\u732b\"} \t\n";

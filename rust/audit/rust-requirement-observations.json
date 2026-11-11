@@ -286,8 +286,8 @@
         "crates/minidora-engine/src/ports.rs",
         "crates/minidora-engine/src/core.rs"
       ],
-      "evidence": "explicit-evidence-synthesis-validation.json records source implementation and format/check/lint/build evidence for a caller-supplied ledger; no test or ordinary-route execution and no full B05 acceptance are claimed",
-      "full_acceptance_gap": "External document claim extraction, verified source identities/independence, source-grounded contradiction checking and logical entailment validity remain unverified",
+      "evidence": "explicit-evidence-synthesis-validation.json records source implementation and format/check/lint/build evidence for a caller-supplied ledger; no test or ordinary-route execution and no full B05 acceptance are claimed; b05-evidence-ledger-route-validation.json records Japanese/lowercase/mixed-case English normal classification of a caller-supplied ledger, all four statuses, exact group-label counts, 41 exposed source ranges/hashes, ordered unvalidated inference links and actual projection/Pointer consumers. It corrects the English prefix-length admission error (parser v35). Four focused CLI tests and one input test passed; two affected tests were rerun after improving the premise-order oracle. Twenty-nine English-header stops and three saved-state explicit-version recomputations are retained. This remains scoped authored metadata-classification evidence, not external independence, claim-truth or entailment validation.",
+      "full_acceptance_gap": "External document claim extraction, independently verified source identities/independence, source-grounded contradiction checking, inference entailment validity and broader independent normal-route task populations remain unverified; selected caller-supplied explicit-ledger cases now have ordinary-route evidence",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },
