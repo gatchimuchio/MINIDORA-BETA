@@ -1,0 +1,308 @@
+{
+  "work_item": "B04 ordinary CLI CSV/JSON first-seen group-count routes and explicit groups projection follow-up",
+  "recorded_at": "2026-11-11T04:32:15Z",
+  "base_commit": "fa547ef781f9e3be1de78fdf08c0bdd1e304a263",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Explicit table input -> sealed input -> unique Core -> first-seen exact-string group counts with original member evidence and typed stops -> caller-declared downstream consumption",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v33-table-conversion-case-admission",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_QC_EVIDENCE",
+  "product_source_changed": false,
+  "source_snapshot_sha256": "6472b71b12b98152c9c66c8db57dba2a2671e92c640943b6cc625db799847444",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {},
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "8e233cc4c1aa4f5612e4a1e02404d656f4e402dfe303bb63e8bac2a4105262b3"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "d0e0cc447d5f3dd211f78055671119b8ccc0c834b567b774d3aff6f938af70ca"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b04-table-group-count-route/verification MINIDORA_KEEP_TEST_STATE=1",
+  "initial_state": "CSV and JSON table group-count operations existed through ordinary Core intents; their initial validation records were build-only. This follow-up adds tests/evidence only and makes no production implementation or grammar change.",
+  "tests_and_route": {
+    "tests_added": true,
+    "normal_cli_route_executed": true,
+    "route_method": "Tests launch minidora-rust with --json and fresh real stores, read actual dependencies with actor/case-checked Store::get_bytes, and inspect original requests and complete results in separate CLI processes. Actual displayed count-report bytes become new explicit groups-projection requests.",
+    "final_scoped_unique_tests_passed": 4,
+    "normal_cli_scenarios": 23,
+    "normal_cli_execute_requests": 25,
+    "scenario_breakdown": {
+      "csv_count": 6,
+      "json_count": 6,
+      "actual_report_projection_chains": 2,
+      "typed_stops": 9
+    },
+    "first_pass": true,
+    "full_workspace_tests": "NOT_RUN; tests/evidence-only batch with four focused normal-route tests and workspace all-target compile/lint."
+  },
+  "command_results": [
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route table_count -- --nocapture",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0,
+      "filtered_out": 53,
+      "log": "verification/count-tests.log"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "verification/build.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "fixtures": {
+    "csv": "id,分類\r\na,猫\r\nb,open\r\nc,\"猫\"\r\nd,Open\r\ne,open \r\nf, open\r\ng,001\r\nh,1\r\ni,\"\"\r\nj,猫\r\nk,\"open\"\r\nl,\r\nm,é\r\nn,é\r\n",
+    "json_table": "{\"columns\":[\"id\",\"分類\"],\"rows\":[[\"a\",\"猫\"],[\"b\",\"open\"],[\"c\",\"\\u732b\"],[\"d\",\"Open\"],[\"e\",\"open \"],[\"f\",\" open\"],[\"g\",\"001\"],[\"h\",\"1\"],[\"i\",\"\"],[\"j\",\"猫\"],[\"k\",\"\\u006fpen\"],[\"l\",\"\"],[\"m\",\"é\"],[\"n\",\"e\\u0301\"]]}",
+    "header_only_csv": "id,分類\r\n",
+    "empty_json_table": "{\"columns\":[\"id\",\"分類\"],\"rows\":[]}",
+    "decoded_keys": [
+      "猫",
+      "open",
+      "猫",
+      "Open",
+      "open ",
+      " open",
+      "001",
+      "1",
+      "",
+      "猫",
+      "open",
+      "",
+      "é",
+      "é"
+    ],
+    "expected_first_seen_groups": [
+      {
+        "value": "猫",
+        "count": 3,
+        "source_row_indices": [
+          0,
+          2,
+          9
+        ]
+      },
+      {
+        "value": "open",
+        "count": 2,
+        "source_row_indices": [
+          1,
+          10
+        ]
+      },
+      {
+        "value": "Open",
+        "count": 1,
+        "source_row_indices": [
+          3
+        ]
+      },
+      {
+        "value": "open ",
+        "count": 1,
+        "source_row_indices": [
+          4
+        ]
+      },
+      {
+        "value": " open",
+        "count": 1,
+        "source_row_indices": [
+          5
+        ]
+      },
+      {
+        "value": "001",
+        "count": 1,
+        "source_row_indices": [
+          6
+        ]
+      },
+      {
+        "value": "1",
+        "count": 1,
+        "source_row_indices": [
+          7
+        ]
+      },
+      {
+        "value": "",
+        "count": 2,
+        "source_row_indices": [
+          8,
+          11
+        ]
+      },
+      {
+        "value": "é",
+        "count": 1,
+        "source_row_indices": [
+          12
+        ]
+      },
+      {
+        "value": "é",
+        "count": 1,
+        "source_row_indices": [
+          13
+        ]
+      }
+    ],
+    "expected_row_count": 14,
+    "expected_group_count": 10,
+    "expected_count_sum": 14
+  },
+  "route_observations": [
+    {
+      "intent": "CsvGroupCount",
+      "scenarios": 6,
+      "languages": [
+        "Japanese",
+        "lowercase English",
+        "mixed-case English"
+      ],
+      "populations": [
+        "14 rows",
+        "header-only table"
+      ],
+      "group_by": "分類",
+      "column_index": 1,
+      "group_order": "first_seen",
+      "span_contract": "One CSV_GROUP_COLUMN plus N CSV_GROUP_MEMBER plus G CSV_GROUP_VALUE spans: 25 for 14 rows/10 groups, 1 for header-only. Every expected (kind,row) occurs exactly once, with exact original UTF-8 byte ranges/raw text/decoded values and column 1. Header/representative spans have exact displayed JSON token offsets; member output offsets are null.",
+      "empty_member": "The unquoted empty cell in row 12 (1-based CSV data row) has a legitimate zero-width source range and joins the quoted empty cell. This is checked without requiring positive span length.",
+      "report_shape": "Displayed groups contain value/count, not explicit member-index arrays; the DocumentResult dependency retains member source spans. Header-only input yields groups=[] and counts 0."
+    },
+    {
+      "intent": "JsonTableGroupCount",
+      "scenarios": 6,
+      "languages": [
+        "Japanese",
+        "lowercase English",
+        "mixed-case English"
+      ],
+      "populations": [
+        "14 rows",
+        "empty rows"
+      ],
+      "group_by": "分類",
+      "column_index": 1,
+      "member_evidence": "Each group has the exact independent value/count/source_row_indices in first-seen order; every original 0-based row 0..13 appears exactly once. Every header/member range and SHA-256 is checked against the original JSON raw token, including Unicode escapes. Empty rows retain the group-by header range and yield groups=[]."
+    },
+    {
+      "route": "CSV or JSON actual group-count report -> explicit JsonObjectProject groups",
+      "scenarios": 2,
+      "execute_requests": 4,
+      "evidence": "Actual count text is submitted as json-object-project [\"groups\"] input. The projected JSON equals the actual report groups, including JSON member metadata where present. Stored source/output hashes and complete root-field raw value/output maps are checked.",
+      "composition_boundary": "Caller-fed explicit composition; no inferred Core plan, automatic report-to-table adaptation or strict columns/rows table output is claimed."
+    },
+    {
+      "route": "Missing columns, malformed inputs and unsupported header suffixes",
+      "scenarios": 9,
+      "cases": [
+        {
+          "input": "CSV missing column",
+          "reason_code": "CSV_COLUMN"
+        },
+        {
+          "input": "JSON missing column",
+          "reason_code": "JSON_TABLE_COUNT_COLUMN"
+        },
+        {
+          "input": "CSV bare LF",
+          "reason_code": "CSV_LINE_ENDING"
+        },
+        {
+          "input": "CSV duplicate header",
+          "reason_code": "DUPLICATE_COLUMNS"
+        },
+        {
+          "input": "JSON numeric cell",
+          "reason_code": "JSON_TABLE_COMPARE_CELL"
+        },
+        {
+          "input": "JSON decoded duplicate header",
+          "reason_code": "DUPLICATE_COLUMNS"
+        },
+        {
+          "input": "JSON extra root field",
+          "reason_code": "JSON_TABLE_COMPARE_SHAPE"
+        },
+        {
+          "input": "CSV header with and send suffix",
+          "reason_code": "CAPABILITY_UNAVAILABLE"
+        },
+        {
+          "input": "JSON header with and send suffix",
+          "reason_code": "CAPABILITY_UNAVAILABLE"
+        }
+      ],
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "dependencies": [],
+      "fresh_inspection_preserves_original_request_and_complete_stop": true
+    }
+  ],
+  "key_semantics_observed": "Quoted/unquoted CSV lexemes and raw/escaped JSON strings group by their decoded string. Case, leading/trailing spaces, numeric-looking 001 versus 1, and precomposed versus decomposed Unicode remain distinct. No trimming, case folding, numeric conversion or Unicode normalization is inferred.",
+  "render_and_persistence_evidence": "All positive cases check COMMIT/COMPUTED, RENDERED, displayed text hash/content-plan equality, one actor/case-authorized dependency, original request/body and complete result via separate inspect. Actual groups projection checks exact stored source/output hashes and selected raw value bytes.",
+  "oracle_scope": "Explicit fixed groups/member indices are independent expected values. Unique row IDs locate raw cell tokens; quoted empty and zero-width unquoted empty are both covered. CSV group JSON tokens are unique within these reports. JSON raw key-token spelling is supplied explicitly for escaped rows. Claims apply to these authored fixtures, not a held-out population.",
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b04-table-group-count-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b04-table-group-count-route/asset-inventory.json",
+    "manifest_sha256": "1dc2b7217adab53f61facfe0a1da7815430957cae3099d48284b78c0be54640e",
+    "file_count_including_manifest": 493,
+    "states": 23,
+    "remote_storage_verification": "NOT_RUN; local diagnostic-state/log retention only, no OneDrive storage claim"
+  },
+  "known_limits": [
+    "These authored examples are scoped QC, not an independent held-out B04 acceptance population.",
+    "Count reports are metadata-bearing objects and are not strict columns/rows tables. Only explicit groups root-field projection is observed as downstream consumption here.",
+    "General aggregation/structured transformation populations, unobserved operations, full workspace runtime regression, external LIVE evaluation, Windows/macOS, physical 8 GB QA, release and deployment are NOT_RUN."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; selected ordinary group-count and typed-stop routes observed, not the complete B04 contract",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

@@ -61,6 +61,8 @@ The [ordinary table filter/sort follow-up](b04-table-filter-sort-route-validatio
 
 The [ordinary table/object selection and projection follow-up](b04-table-projection-route-validation.json) observes named-column selection, caller-ordered table/root-field projection, empty rows, exact string/raw value preservation and complete selected source/output maps in Japanese and English. A real sort report first fails direct CSV export, then explicit columns/rows projection produces strict table data consumed by a new CSV request; the earlier failure remains recorded. Five focused normal-CLI tests passed. This batch changes tests/evidence only; full workspace runtime regression is `NOT_RUN` and B04 remains `UNVERIFIED`.
 
+The [ordinary CSV/JSON group-count follow-up](b04-table-group-count-route-validation.json) observes first-seen exact-string counts, 14 rows across 10 groups, quoted/escaped key equality, distinct case/space/numeric-looking/Unicode-normalization forms, complete original-member locations and empty tables in Japanese and English. Actual count reports feed explicit groups projection, and nine malformed or unsupported requests retain typed stops. Four focused normal-CLI tests passed across 23 real stores and 25 execute requests. This batch changes tests/evidence only; full workspace runtime regression is `NOT_RUN` and B04 remains `UNVERIFIED`.
+
 Earlier scoped actual-source checks of mathematical components are component evidence only. They do not close the 93-requirement population, count as independent evaluation or replace ordinary-route execution of the current workspace.
 
 ## Resource defect, correction and exact observation boundaries

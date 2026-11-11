@@ -1626,6 +1626,322 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+const COUNT_CSV: &str = "id,分類\r\na,猫\r\nb,open\r\nc,\"猫\"\r\nd,Open\r\ne,open \r\nf, open\r\ng,001\r\nh,1\r\ni,\"\"\r\nj,猫\r\nk,\"open\"\r\nl,\r\nm,é\r\nn,e\u{301}\r\n";
+const COUNT_JSON: &str = r#"{"columns":["id","分類"],"rows":[["a","猫"],["b","open"],["c","\u732b"],["d","Open"],["e","open "],["f"," open"],["g","001"],["h","1"],["i",""],["j","猫"],["k","\u006fpen"],["l",""],["m","é"],["n","e\u0301"]]}"#;
+const COUNT_EMPTY_JSON: &str = r#"{"columns":["id","分類"],"rows":[]}"#;
+const COUNT_KEYS: [&str; 14] = [
+    "猫", "open", "猫", "Open", "open ", " open", "001", "1", "", "猫", "open", "", "é", "e\u{301}",
+];
+const COUNT_CSV_KEYS: [&str; 14] = [
+    "猫", "open", "\"猫\"", "Open", "open ", " open", "001", "1", "\"\"", "猫", "\"open\"", "",
+    "é", "e\u{301}",
+];
+const COUNT_GROUPS: [(&str, &[usize]); 10] = [
+    ("猫", &[0, 2, 9]),
+    ("open", &[1, 10]),
+    ("Open", &[3]),
+    ("open ", &[4]),
+    (" open", &[5]),
+    ("001", &[6]),
+    ("1", &[7]),
+    ("", &[8, 11]),
+    ("é", &[12]),
+    ("e\u{301}", &[13]),
+];
+
+fn expected_count_groups(empty: bool) -> Value {
+    let groups: Vec<_> = if empty {
+        Vec::new()
+    } else {
+        COUNT_GROUPS
+            .iter()
+            .map(|(value, rows)| serde_json::json!({"value": value, "count": rows.len()}))
+            .collect()
+    };
+    serde_json::json!(groups)
+}
+
+fn count_csv_key_range(source: &str, row: usize) -> (usize, usize) {
+    if row == 0 {
+        let start = source.find("id,分類").unwrap() + 3;
+        (start, start + "分類".len())
+    } else {
+        let id = char::from(b'a' + (row - 1) as u8);
+        let raw = COUNT_CSV_KEYS[row - 1];
+        let fragment = format!("{id},{raw}");
+        let start = source.find(&fragment).unwrap() + 2;
+        (start, start + raw.len())
+    }
+}
+
+fn assert_csv_count_maps(artifact: &Value, source: &str, empty: bool) {
+    let text = artifact["text"].as_str().unwrap();
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["group_by"], "分類");
+    assert_eq!(report["groups"], expected_count_groups(empty));
+    assert_eq!(artifact["parameters"]["column_index"], "1");
+    assert_eq!(artifact["parameters"]["column_name"], "分類");
+    assert_eq!(artifact["parameters"]["group_order"], "first_seen");
+    assert_eq!(
+        artifact["parameters"]["row_count"],
+        if empty { "0" } else { "14" }
+    );
+    assert_eq!(
+        artifact["parameters"]["group_count"],
+        if empty { "0" } else { "10" }
+    );
+    let mut expected = std::collections::BTreeSet::from([("CSV_GROUP_COLUMN", 0)]);
+    if !empty {
+        for row in 1..=14 {
+            expected.insert(("CSV_GROUP_MEMBER", row));
+        }
+        for (_, rows) in COUNT_GROUPS {
+            expected.insert(("CSV_GROUP_VALUE", rows[0] + 1));
+        }
+    }
+    let spans = artifact["spans"].as_array().unwrap();
+    assert_eq!(spans.len(), expected.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for span in spans {
+        let kind = span["kind"].as_str().unwrap();
+        let row = span["row"].as_u64().unwrap() as usize;
+        assert_eq!(span["column"], 1);
+        assert!(expected.contains(&(kind, row)));
+        assert!(seen.insert((kind, row)));
+        let (start, end) = count_csv_key_range(source, row);
+        assert_eq!(span["source_start"], start);
+        assert_eq!(span["source_end"], end);
+        assert_eq!(span["source_text"], &source[start..end]);
+        let decoded = if row == 0 {
+            "分類"
+        } else {
+            COUNT_KEYS[row - 1]
+        };
+        assert_eq!(span["decoded_value"], decoded);
+        if kind == "CSV_GROUP_MEMBER" {
+            assert_eq!(span["output_start"], Value::Null);
+            assert_eq!(span["output_end"], Value::Null);
+        } else {
+            let token = serde_json::to_string(decoded).unwrap();
+            let output_start = text.find(&token).unwrap();
+            assert_eq!(span["output_start"], output_start);
+            assert_eq!(span["output_end"], output_start + token.len());
+        }
+    }
+    assert_eq!(seen, expected);
+    assert_eq!(
+        report["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| group["count"].as_u64().unwrap())
+            .sum::<u64>(),
+        if empty { 0 } else { 14 }
+    );
+}
+
+fn check_count_json_key_span(span: &Value, source: &str, row: Option<usize>) {
+    let (fragment, raw, offset) = if let Some(index) = row {
+        let raw = match index {
+            2 => r#""\u732b""#.to_string(),
+            10 => r#""\u006fpen""#.to_string(),
+            13 => r#""e\u0301""#.to_string(),
+            _ => serde_json::to_string(COUNT_KEYS[index]).unwrap(),
+        };
+        let id = serde_json::to_string(&char::from(b'a' + index as u8).to_string()).unwrap();
+        (format!("[{id},{raw}]"), raw, id.len() + 2)
+    } else {
+        (r#"["id","分類"]"#.to_string(), r#""分類""#.to_string(), 6)
+    };
+    let start = source.find(&fragment).unwrap() + offset;
+    let end = start + raw.len();
+    assert_eq!(span["source_start"], start);
+    assert_eq!(span["source_end"], end);
+    assert_eq!(
+        span["source_sha256"],
+        minidora_domain::digest(&source.as_bytes()[start..end])
+    );
+    assert_eq!(
+        serde_json::from_str::<String>(&source[start..end]).unwrap(),
+        row.map_or("分類", |index| COUNT_KEYS[index])
+    );
+}
+
+fn assert_json_count_maps(report: &Value, source: &str, empty: bool) {
+    assert_eq!(report["group_by"], "分類");
+    assert_eq!(report["group_by_index"], 1);
+    assert_eq!(report["row_count"], if empty { 0 } else { 14 });
+    check_count_json_key_span(&report["group_by_source"], source, None);
+    let groups = report["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), if empty { 0 } else { 10 });
+    let mut seen = std::collections::BTreeSet::new();
+    for (group, (value, rows)) in groups.iter().zip(COUNT_GROUPS) {
+        assert_eq!(group["value"], value);
+        assert_eq!(group["count"], rows.len());
+        assert_eq!(group["source_row_indices"], serde_json::json!(rows));
+        let spans = group["member_source_spans"].as_array().unwrap();
+        assert_eq!(spans.len(), rows.len());
+        for (span, row) in spans.iter().zip(rows) {
+            assert!(seen.insert(*row));
+            check_count_json_key_span(span, source, Some(*row));
+        }
+    }
+    assert_eq!(
+        seen,
+        if empty {
+            std::collections::BTreeSet::new()
+        } else {
+            (0..14).collect()
+        }
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| group["count"].as_u64().unwrap())
+            .sum::<u64>(),
+        if empty { 0 } else { 14 }
+    );
+}
+
+#[test]
+fn table_count_csv_groups_preserve_first_seen_keys_and_every_original_member() {
+    for empty in [false, true] {
+        let source = if empty { "id,分類\r\n" } else { COUNT_CSV };
+        for (actor, header) in [
+            ("japanese", "CSVを列「分類」で件数集計して:"),
+            ("english", "csv-count-by \"分類\":"),
+            ("mixed-case", "CsV-CoUnT-By \"分類\":"),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                actor,
+                &result,
+                &request,
+                source,
+                "CSV_GROUP_COUNT",
+            );
+            assert_csv_count_maps(&artifact, source, empty);
+        }
+    }
+}
+
+#[test]
+fn table_count_json_groups_preserve_decoded_equality_and_original_member_ranges() {
+    for empty in [false, true] {
+        let source = if empty { COUNT_EMPTY_JSON } else { COUNT_JSON };
+        for (actor, header) in [
+            ("japanese", "JSON表を列「分類」で件数集計して:"),
+            ("english", "json-table-count-by \"分類\":"),
+            ("mixed-case", "JsOn-TaBlE-CoUnT-By \"分類\":"),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, source);
+            assert_json_count_maps(&report, source, empty);
+        }
+    }
+}
+
+#[test]
+fn table_count_actual_reports_feed_explicit_groups_projection() {
+    for (header, source, csv) in [
+        ("csv-count-by \"分類\":", COUNT_CSV, true),
+        ("json-table-count-by \"分類\":", COUNT_JSON, false),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let counted = record(&execute(&scratch.0, "owner", &[&request]));
+        let report = if csv {
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                "owner",
+                &counted,
+                &request,
+                source,
+                "CSV_GROUP_COUNT",
+            );
+            assert_csv_count_maps(&artifact, source, false);
+            serde_json::from_str::<Value>(counted["text"].as_str().unwrap()).unwrap()
+        } else {
+            let report = normal_row_report(&scratch.0, "owner", &counted, &request, source);
+            assert_json_count_maps(&report, source, false);
+            report
+        };
+        let actual = counted["text"].as_str().unwrap();
+        let projection_request = format!("json-object-project [\"groups\"]:\n{actual}");
+        let projected = record(&execute(&scratch.0, "owner", &[&projection_request]));
+        let artifact =
+            normal_object_projection(&scratch.0, "owner", &projected, &projection_request, actual);
+        assert_object_projection_maps(&artifact, actual, &[("groups", r#""groups""#, "/groups")]);
+        assert_eq!(
+            serde_json::from_str::<Value>(projected["text"].as_str().unwrap()).unwrap(),
+            serde_json::json!({"groups": report["groups"]})
+        );
+    }
+}
+
+#[test]
+fn table_count_missing_columns_and_invalid_shapes_stop_durably() {
+    for (header, source, code) in [
+        ("csv-count-by \"missing\":", COUNT_CSV, "CSV_COLUMN"),
+        (
+            "json-table-count-by \"missing\":",
+            COUNT_JSON,
+            "JSON_TABLE_COUNT_COLUMN",
+        ),
+        (
+            "csv-count-by \"分類\":",
+            "id,分類\na,x\n",
+            "CSV_LINE_ENDING",
+        ),
+        (
+            "csv-count-by \"分類\":",
+            "分類,分類\r\nx,y\r\n",
+            "DUPLICATE_COLUMNS",
+        ),
+        (
+            "json-table-count-by \"分類\":",
+            r#"{"columns":["id","分類"],"rows":[["a",1]]}"#,
+            "JSON_TABLE_COMPARE_CELL",
+        ),
+        (
+            "json-table-count-by \"分類\":",
+            r#"{"columns":["分類","\u5206\u985e"],"rows":[["x","y"]]}"#,
+            "DUPLICATE_COLUMNS",
+        ),
+        (
+            "json-table-count-by \"分類\":",
+            r#"{"columns":["id","分類"],"rows":[["a","x"]],"extra":0}"#,
+            "JSON_TABLE_COMPARE_SHAPE",
+        ),
+        (
+            "csv-count-by \"分類\" and send:",
+            COUNT_CSV,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "json-table-count-by \"分類\" and send:",
+            COUNT_JSON,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().contains(code));
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(revision["lifecycle"], "SUSPEND");
+        assert_eq!(revision["result"], result);
+    }
+}
+
 const EMPTY_PROJECTION_JSON: &str = r#"{"columns":["名前","値","補足"],"rows":[]}"#;
 const OBJECT_PROJECTION_JSON: &str = r#"{"drop":"未選択","a/b~c": { "n":1.2300e+40,"s":"\u732b" },"\u006et":9007199254740993,"tail":[true,null]}"#;
 
