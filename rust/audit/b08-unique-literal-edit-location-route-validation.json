@@ -1,0 +1,277 @@
+{
+  "work_item": "B08 continuation: unique literal edit-location proposal through the ordinary CLI",
+  "recorded_at": "2026-11-11T19:25:18Z",
+  "base_commit": "11c3499eece8f19839ec931533cada96e5240dc4",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Resolve one caller-supplied literal in a replay-verified text artifact and emit a source-linked edit proposal; a separate explicit editor request applies it.",
+  "owner_instruction_scope": "User continuation of the existing Rust implementation/QC/commit/push delegation. The two existing backup refs were rotated once at batch start.",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "8.3",
+      "8.4",
+      "14",
+      "15",
+      "19"
+    ]
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v40-unique-text-edit-location",
+  "prior_parser_version": "declarative-ja-en-v39-protected-text-editing",
+  "capability_version": "explicit-unique-literal-location-proposal-v1",
+  "artifact_operation": "TEXT_EDIT_LOCATE_UNIQUE_LITERAL_V1",
+  "version_boundary": "Adds LocateTextReplacement to the existing Intent schema and one source-linked proposal artifact. The parser version advances to v40; no dependency, persistence schema, lockfile or prior artifact format changes. Existing composed/imported/edited text artifacts remain the only text-document bases. The proposal operation itself is not accepted as an editable text base.",
+  "environment": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64",
+    "network": "Unrestricted, enforced; no credentials or outbound identities used"
+  },
+  "protected_refs_before_rotation": {
+    "refs/tags/codex/backup-main": "57c68abff9717d9be60d03dcbde4ec3b5b9ac0dd",
+    "refs/tags/codex/backup-main-prev": "fbd118e183ace67b1518cd229a468800eab56488"
+  },
+  "protected_refs_after_authorized_rotation": {
+    "refs/tags/codex/backup-main": "11c3499eece8f19839ec931533cada96e5240dc4",
+    "refs/tags/codex/backup-main-prev": "57c68abff9717d9be60d03dcbde4ec3b5b9ac0dd"
+  },
+  "backup_rotation_count_this_batch": 1,
+  "backup_ref_observation": "Remote has the two existing backup tags and no backup branch refs. An initial atomic push also naming absent remote branches was rejected without changing remote refs; the existing tags were then rotated with exact leases. No new ref was created.",
+  "legacy_source_lineage": [
+    {
+      "path": "src/minidora/文章編集.py",
+      "git_blob_sha": "859be48e12ab4aa182d33d42039424640853eb35",
+      "sha256": "66ce6efdc78b339ecc5a8e82c8376dd01d641e1f05a2c3df4619f307119ea7fc",
+      "public_entries": [
+        "文章を編集",
+        "編集箇所を特定"
+      ],
+      "inspected_contract": "Atomic exact-original edits preserve protected spans and history; 編集箇所を特定 returns a proposal only when a literal search is unique.",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/文章作成.py",
+      "git_blob_sha": "c2cc7e40dc6e0f97fea51913cba413f61269630f",
+      "sha256": "0a96082d86aed0543c19898986d65a301b99c45826c0154b51f2bd750abcf11e",
+      "public_entries": [
+        "文章を取り込む",
+        "文章を作る"
+      ],
+      "inspected_contract": "Explicit input text, protected ranges, composition source mappings and digests.",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/文章能力接続.py",
+      "git_blob_sha": "64060343698c09d1764747fc99470f037f88316f",
+      "sha256": "9262fd3bccb54e64603d4f4ad3b3f5088be0407f1c6b47c60de28bfed861e0c4",
+      "public_entries": [
+        "文章能力モジュール",
+        "文章能力群"
+      ],
+      "inspected_contract": "Connects typed create/import/edit/location adapters; does not infer corrections from free text.",
+      "original_unchanged": true
+    }
+  ],
+  "inheritance_boundary": "The Rust implementation locates half-open UTF-8 byte offsets; the predecessor uses character offsets and embeds history. Rust replays immutable case-scoped artifacts. This is a bounded operation-level correspondence, not full legacy compatibility or full B08 acceptance. Frozen Python source/tests were not modified or run.",
+  "source_snapshot_sha256": "649520ef1ef215155173d2b8e6dedd8ecbae7ad9db3b3940f28e13b05afcfddc",
+  "source_snapshot_method": "SHA-256 of compact JSON inventory in code-snapshot.json.",
+  "source_snapshot_files": 30,
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "ef5a8961f5cc2532db405666c2adc0090f07204e9df2d313636174c92a7b4b53",
+    "crates/minidora-engine/src/input.rs": "2835c0a4458306adb8adb0117f81dac7b021eea52e52028b94eb28ceff424318",
+    "crates/minidora-engine/src/core.rs": "73784b286b9dddd2dc4ac9445be1cd84766fc9dc817225259ef43b2e6fdd8bbe",
+    "crates/minidora-engine/src/text_editing.rs": "4b930b3d5fe8ccbf034b8d3da0ffc7783d99d9b5f7f6ca18bbd1cd2663ca3c47"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "605ef57f2c0fe2e54cb40dc297c82a9c98e0d9e06bf94aae194fdfa306d15a29"
+  },
+  "changed_document_paths": [
+    "README.md",
+    "docs/IMPLEMENTATION_CHOICES.md",
+    "audit/IMPLEMENTATION_STATUS.md",
+    "audit/README.md",
+    "audit/code-snapshot.json",
+    "audit/requirements.tsv",
+    "audit/rust-requirement-observations.json",
+    "audit/source_contract_reviews.tsv",
+    "../docs/redesign/03_REQUIREMENT_TRACE.tsv"
+  ],
+  "actual_routes": [
+    "Ordinary CLI/Engine -> input::seal/structured_intent -> Intent::LocateTextReplacement -> Core actor/case-scoped Store::get_bytes -> Replay verifies actual artifact bytes and regenerates supported text document ancestry -> locate_explicit_replacement finds one unique exact literal -> LocatedTextEdit artifact -> Core dependency/content/render/history.",
+    "The caller may separately submit the proposal object to ordinary text-edit input -> existing edit_explicit_text replays the base and rechecks digest, exact original text, protection, overlap and resource limits -> EditedText artifact -> Core content/render/history."
+  ],
+  "route_contract": [
+    "Headers are 文章の置換箇所を特定して: and its fullwidth-colon form, plus ASCII-case-insensitive text-locate-replacement:. A newline is required; the complete JSON body is preserved.",
+    "Exact schema: {base_artifact, expected_text_sha256, search, replacement, id, reason}. Unknown fields, duplicate JSON keys, invalid digests, empty searches, no-op replacements, unsupported controls and invalid reason/ID limits stop.",
+    "The base is loaded only through the frontend-bound actor and current case. Its hash and entire canonical composition/import/edit ancestry are verified before searching.",
+    "Search is literal, case-sensitive and not normalized. Exactly one match is required. Repeated and overlapping matches are ambiguous; a missing match and any protected overlap suspend.",
+    "The proposal records the actual base artifact and text hashes, consumed ancestors, half-open UTF-8 byte range, matched text, search/replacement JSON token spans and a complete atomic text-edit request. It does not alter the document. The existing editor independently rechecks the proposal when explicitly submitted.",
+    "The Core stores the proposal artifact, carries its consumed artifact hashes into dependencies, renders the canonical report and checks the caller evidence budget. The location capability itself does not apply a document edit or initiate a provider action. Any explicitly requested local file output remains governed by the existing exact-target permission and receipt path."
+  ],
+  "resource_envelope": {
+    "request_body": "1..=256000 UTF-8 bytes",
+    "artifact_document": "<=256000 UTF-8 bytes; imported max_chars <=100000 Unicode scalar values",
+    "search_and_replacement": "<=100000 Unicode scalar values each; search must be nonempty",
+    "history": "<=16 editing revisions; <=8000000 aggregate bytes; <=2000000 bytes per artifact",
+    "deadline": "Polled before/after ancestry replay and around the search operation; no in-progress cancellation polling.",
+    "output": "proposal artifact is limited by the existing artifact and request evidence budgets; the existing editor rechecks inherited output limits when applied."
+  },
+  "test_locations": {
+    "component": [
+      "crates/minidora-engine/src/text_editing.rs::tests::unique_literal_location_returns_a_source_linked_proposal_without_applying_it",
+      "crates/minidora-engine/src/text_editing.rs::tests::literal_location_rejects_missing_ambiguous_and_protected_ranges",
+      "crates/minidora-engine/src/text_editing.rs::tests::literal_location_rejects_stale_hashes_and_invalid_schemas"
+    ],
+    "input": "crates/minidora-engine/src/input.rs::structured_document_tests::unique_text_location_headers_preserve_original_body_and_reject_added_instructions",
+    "normal_cli": [
+      "text_location_route_proposes_one_unicode_patch_and_requires_explicit_apply",
+      "text_location_route_suspends_for_missing_ambiguous_or_protected_literals"
+    ],
+    "existing_regressions": [
+      "text_editing_route_imports_actual_text_versions_and_confirms_file_once",
+      "text_editing_route_consumes_composition_and_enforces_artifact_case_scope",
+      "text_editing_route_persists_typed_atomic_schema_and_resource_stops",
+      "explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage",
+      "exact_replace_count_failure_does_not_create_a_partial_file"
+    ]
+  },
+  "executed_commands": [
+    {
+      "command": "cargo test -p minidora-engine text_editing --locked -- --nocapture",
+      "result": "8 passed; 0 failed; five prior import/edit tests plus three new location tests."
+    },
+    {
+      "command": "cargo test -p minidora-engine literal_location --locked -- --nocapture",
+      "result": "3 passed; 0 failed; location uniqueness/protection, stale hash and strict schema checks."
+    },
+    {
+      "command": "cargo test -p minidora-engine unique_literal_location --locked -- --nocapture",
+      "result": "1 passed; 0 failed after using a non-ASCII replacement token to verify byte-accurate source spans."
+    },
+    {
+      "command": "cargo test -p minidora-engine text_import_edit_headers --locked -- --nocapture",
+      "result": "1 passed; 0 failed."
+    },
+    {
+      "command": "cargo test -p minidora-engine unique_text_location_headers --locked -- --nocapture",
+      "result": "1 passed; 0 failed."
+    },
+    {
+      "command": "MINIDORA_KEEP_TEST_STATE=1 TMPDIR=/workspace/.minidora-cloud/b08-text-location/verification cargo test -p minidora-cli --test normal_route text_editing_route --locked -- --nocapture",
+      "result": "3 passed; 0 failed; four latest-run CLI state stores retained."
+    },
+    {
+      "command": "MINIDORA_KEEP_TEST_STATE=1 TMPDIR=/workspace/.minidora-cloud/b08-text-location/verification cargo test -p minidora-cli --test normal_route text_location_route --locked -- --nocapture",
+      "result": "2 passed; 0 failed; four latest-run CLI state stores retained."
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage --locked -- --nocapture",
+      "result": "1 passed; 0 failed."
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route exact_replace_count_failure_does_not_create_a_partial_file --locked -- --nocapture",
+      "result": "1 passed; 0 failed."
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS."
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS."
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "PASS; no warnings."
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "PASS."
+    },
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "result": "NOT_RUN; full workspace runtime testing was outside this scoped batch."
+    },
+    {
+      "command": "Initial normal-route test invocation with TMPDIR pointing to a not-yet-created directory",
+      "result": "Harness setup failure in Scratch::new before test bodies. The directory was created and the same tests were rerun successfully; initial failure was not a product behavior result."
+    }
+  ],
+  "unique_tests_passed": 17,
+  "new_unique_tests_passed": 6,
+  "existing_unique_tests_and_regressions_passed": 11,
+  "retained_cli_evidence": {
+    "root": "/workspace/.minidora-cloud/b08-text-location",
+    "route_observations": {
+      "path": "route-observations.json",
+      "sha256": "b9fc9ede609b533dc9d8ac95e6b598075388fc017201ae5148bcd9d993e101c8"
+    },
+    "manifest": {
+      "path": "evidence-manifest.json",
+      "sha256": "a68043f56428ce12ab2b9a3b713f39658fdf97a0a4861c3c7d7588f38c90d7bb"
+    },
+    "collector": {
+      "path": "collect_evidence.py",
+      "sha256": "cea0237efd77a457bd4d3b9e3aee999d6c00aacd83f6ed16b815cd98a36ef666"
+    },
+    "test_logs": {
+      "build.log": "4dfdd9b87e703db07d84981813f42cdbc1e15cd7d3934643ec4fed5c27d8d649",
+      "check.log": "07f52ab0de4dfbf14b99689656ae94ebcc0e5512d1d686e5f51cda5fc29abf6a",
+      "cli-editing.log": "ba57831ed296f6ff665c5652e30ca7621688354424178080a9dc395748fbefa1",
+      "cli-location.log": "81b916f8ab3a2a3f1ebf884d2542fab33f9115da892252c9e03571bfab1c48c7",
+      "clippy.log": "4219cc83c936aad46c79801358b24ac1c2bd147826039b7117537ea79f800bb4",
+      "composition-regression.log": "e5b939b7b1b57dd381f26cccdd13545b1f5e31ec1147c19a16ceb166904d8bfe",
+      "engine-component.log": "cee7c8f7c4d0d766ba870dccee8b7365bfe7e7d9160636d9b9bc2e61dc9ff53e",
+      "engine-unicode-token-span.log": "e9e0f384e8b4a17d2cde78cf5996d1bebc85bbc1e08fed0215fec19e64cf2c96",
+      "fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "input-location.log": "93aee8d4e69ae30491b8b7386f5f35d6669f79090b5355827bbba15bde3fe82a",
+      "input-regression.log": "c39e04dd34e6a3e28cdf38a3265b45d4f8de9a135ac4f6875cf3eb5d757594bf",
+      "replacement-regression.log": "b79b04403a02b63e433a4a1c6cbdaee56a0e4fd789d8b2bbb85214aa085e47cd"
+    },
+    "primary_observed_population": {
+      "stores": 9,
+      "accepted_input_versions": 37,
+      "COMMIT": 17,
+      "SUSPEND": 20
+    },
+    "location_observations": {
+      "successful_proposal_count": 1,
+      "proposal_application_count": 1,
+      "typed_stops": [
+        "TEXT_EDIT_LOCATION_NOT_FOUND",
+        "TEXT_EDIT_LOCATION_AMBIGUOUS",
+        "TEXT_EDIT_PROTECTED",
+        "RESOURCE_LIMIT"
+      ],
+      "proposal_base_artifact": "1d0f44ad3190800e4b851b383516bcb50c8d14c7860445e21518e0054b6bebc5",
+      "proposal_artifact": "0a388003c44def8f375a820e7d80fb499fae38bba9da597bef7e7c07b7a0f73c",
+      "applied_edit_artifact": "0e02aba415f9941ba1548e48de398aa9a0bbaa2a1a02c9dd25c063ecec36597c",
+      "base_text_sha256": "45215a6990ba21d38f0904cacf58f1f9a4167c030569631dc8f42fd07249904b",
+      "matched_byte_range": [
+        4,
+        9
+      ],
+      "matched_text": "Draft",
+      "replacement": "Final",
+      "no_document_edit_or_file_action_requested_in_test": true
+    }
+  },
+  "full_acceptance_gap": "B08 remains UNVERIFIED. Free-form drafting, corrections inferred from natural-language requests, semantic rewriting, summaries, purpose/audience/style fidelity, arbitrary meaning preservation, in-progress cancellation polling, independent unseen-task writing quality, and all twelve previously unseen B08 tasks remain unimplemented or unverified. No benchmark or public quality corpus was run.",
+  "acceptance_status": "UNVERIFIED",
+  "full_workspace_runtime_tests": "NOT_RUN",
+  "frozen_python_source_tests": "NOT_RUN",
+  "source_scope_check": "Python src/, legacy tests, release archives/manifests and old checksums remained unchanged.",
+  "publication_review": "No secrets, personal data, private HDS, unsupported independent performance claims, or third-party copyrighted content were added to repository sources. Retained external evidence contains authored test inputs and local test state only.",
+  "traceability_update": "B08 route, code paths and evidence entries were expanded only. Requirement identity, twelve-task observable, 93-row population and UNVERIFIED acceptance statuses remain unchanged.",
+  "scope_decision": "No scope reduction approved; full B08 remains required.",
+  "release_scope": "No release, PR, deployment or publication action.",
+  "build_artifact": {
+    "path": "rust/target/debug/minidora-rust",
+    "sha256": "9156b9b81dd5c177c931a733b29505afa64fedd213aa5fd696d19272e5335b0e"
+  }
+}

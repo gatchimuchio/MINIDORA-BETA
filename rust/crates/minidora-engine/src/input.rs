@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v39-protected-text-editing";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v40-unique-text-edit-location";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -246,6 +246,16 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
             Some((_, document)) if edit => Intent::EditText { document: document.into() },
             Some((_, document)) => Intent::ImportText { document: document.into() },
             None => Intent::Unknown { reason: "text import/edit requires a header newline and one complete explicit JSON document".into() },
+        }));
+    }
+    if matches!(
+        header,
+        "文章の置換箇所を特定して:" | "文章の置換箇所を特定して："
+    ) || header.eq_ignore_ascii_case("text-locate-replacement:")
+    {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) => Intent::LocateTextReplacement { document: document.into() },
+            None => Intent::Unknown { reason: "text location requires a header newline and one complete explicit JSON document".into() },
         }));
     }
     let code_operation = match header {
@@ -2204,6 +2214,35 @@ mod structured_document_tests {
             "text-import:",
             "text-edit: and send\n{}",
             "文章を編集して: 送信して\n{}",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
+            assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
+        }
+    }
+    #[test]
+    fn unique_text_location_headers_preserve_original_body_and_reject_added_instructions() {
+        let body = " {\"search\":\"Draft\",\"replacement\":\"Final\"} \r\n";
+        for header in [
+            "文章の置換箇所を特定して:",
+            "文章の置換箇所を特定して：",
+            "text-locate-replacement:",
+            "TeXt-LoCaTe-RePlAcEmEnT:",
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let request = format!("{header}{newline}{body}");
+                let bundle =
+                    seal(&RequestEnvelope::new("c", "i", "actor", &request), None).unwrap();
+                assert!(matches!(
+                    &bundle.meaning.intent,
+                    Intent::LocateTextReplacement { document } if document == body
+                ));
+                assert_eq!(bundle.meaning.spans[0].text, request);
+            }
+        }
+        for request in [
+            "text-locate-replacement:",
+            "text-locate-replacement: and send\n{}",
+            "文章の置換箇所を特定して: 送信して\n{}",
         ] {
             let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
             assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));

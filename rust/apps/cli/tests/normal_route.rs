@@ -6135,6 +6135,26 @@ fn text_edit_request(header: &str, base_sha: &str, text: &str, edits: Value) -> 
     )
 }
 
+fn text_locate_request(
+    header: &str,
+    base_sha: &str,
+    text: &str,
+    search: &str,
+    replacement: &str,
+) -> String {
+    format!(
+        "{header}\n{}",
+        serde_json::json!({
+            "base_artifact":base_sha,
+            "expected_text_sha256":minidora_domain::digest(text.as_bytes()),
+            "search":search,
+            "replacement":replacement,
+            "id":"located-change",
+            "reason":"explicitly requested literal replacement"
+        })
+    )
+}
+
 fn assert_text_document_artifact(directory: &Path, result: &Value, request: &str) -> Value {
     assert_eq!(result["lifecycle"], "COMMIT");
     assert_eq!(result["guarantee"], "USER_PREMISE");
@@ -6478,6 +6498,172 @@ fn text_editing_route_persists_typed_atomic_schema_and_resource_stops() {
     let final_result = record(&execute(&scratch.0, "owner", &[&valid]));
     assert_eq!(final_result["text"], "猫zbcLOCKend");
     assert_text_document_artifact(&scratch.0, &final_result, &valid);
+}
+
+#[test]
+fn text_location_route_proposes_one_unicode_patch_and_requires_explicit_apply() {
+    let scratch = Scratch::new();
+    let original = "猫 Draft を確認";
+    let imported = record(&execute(
+        &scratch.0,
+        "owner",
+        &[&format!(
+            "text-import:\n{}",
+            serde_json::json!({"text":original,"protected":[],"max_chars":64})
+        )],
+    ));
+    let base_sha = imported["dependencies"][0].as_str().unwrap();
+    let locate = text_locate_request(
+        "文章の置換箇所を特定して:",
+        base_sha,
+        original,
+        "Draft",
+        "Final",
+    );
+    let located = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "locate", &locate],
+    ));
+    assert_eq!(located["lifecycle"], "COMMIT");
+    assert_eq!(located["guarantee"], "USER_PREMISE");
+    assert_eq!(located["receipts"], serde_json::json!([]));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "LOCATE_TEXT_REPLACEMENT"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["document"],
+        locate.split_once('\n').unwrap().1
+    );
+    let report: Value = serde_json::from_str(located["text"].as_str().unwrap()).unwrap();
+    assert_eq!(report["operation"], "TEXT_EDIT_LOCATE_UNIQUE_LITERAL_V1");
+    assert_eq!(report["base_artifact"], base_sha);
+    assert_eq!(report["consumed_artifacts"], serde_json::json!([base_sha]));
+    assert_eq!(report["location"]["artifact_sha256"], base_sha);
+    assert_eq!(report["location"]["start"], "猫 ".len());
+    assert_eq!(report["location"]["end"], "猫 Draft".len());
+    assert_eq!(report["location"]["text"], "Draft");
+    assert_eq!(report["proposed_edit"]["edits"][0]["replacement"], "Final");
+    let body = saved["bundle"]["meaning"]["intent"]["document"]
+        .as_str()
+        .unwrap();
+    let search_start = report["location"]["search_json_start"].as_u64().unwrap() as usize;
+    let search_end = report["location"]["search_json_end"].as_u64().unwrap() as usize;
+    assert_eq!(
+        serde_json::from_str::<String>(&body[search_start..search_end]).unwrap(),
+        "Draft"
+    );
+    let dependencies = located["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 2);
+    assert_eq!(dependencies[0], base_sha);
+    let location_sha = dependencies[1].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let report_bytes = store
+        .get_bytes("owner", "normal-route", location_sha)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&report_bytes), location_sha);
+    assert_eq!(report_bytes, located["text"].as_str().unwrap().as_bytes());
+    let base: Value =
+        serde_json::from_slice(&store.get_bytes("owner", "normal-route", base_sha).unwrap())
+            .unwrap();
+    assert_eq!(base["text"], original);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
+    let apply = format!("text-edit:\n{}", report["proposed_edit"]);
+    let applied = record(&execute(&scratch.0, "owner", &["--input", "apply", &apply]));
+    assert_eq!(applied["text"], "猫 Final を確認");
+    assert_eq!(applied["lifecycle"], "COMMIT");
+    let edited = assert_text_document_artifact(&scratch.0, &applied, &apply);
+    assert_eq!(edited["changes"][0]["old_start"], "猫 ".len());
+    assert_eq!(edited["changes"][0]["expected"], "Draft");
+}
+
+#[test]
+fn text_location_route_suspends_for_missing_ambiguous_or_protected_literals() {
+    for (case, text, protected, search, code) in [
+        (
+            "missing",
+            "draft",
+            serde_json::json!([]),
+            "absent",
+            "TEXT_EDIT_LOCATION_NOT_FOUND:",
+        ),
+        (
+            "ambiguous",
+            "draft draft",
+            serde_json::json!([]),
+            "draft",
+            "TEXT_EDIT_LOCATION_AMBIGUOUS:",
+        ),
+        (
+            "protected",
+            "quote",
+            serde_json::json!([{"id":"quote","start":0,"end":5,"expected":"quote"}]),
+            "quote",
+            "TEXT_EDIT_PROTECTED:",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let imported = record(&execute(
+            &scratch.0,
+            "owner",
+            &[&format!(
+                "text-import:\n{}",
+                serde_json::json!({"text":text,"protected":protected,"max_chars":64})
+            )],
+        ));
+        let base_sha = imported["dependencies"][0].as_str().unwrap();
+        let request = text_locate_request(
+            "TeXt-LoCaTe-RePlAcEmEnT:",
+            base_sha,
+            text,
+            search,
+            "replacement",
+        );
+        let result = stopped(
+            &execute(&scratch.0, "owner", &["--input", case, &request]),
+            2,
+            "SUSPEND",
+        );
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+    }
+
+    let scratch = Scratch::new();
+    let text = "draft";
+    let imported = record(&execute(
+        &scratch.0,
+        "owner",
+        &[&format!(
+            "text-import:\n{}",
+            serde_json::json!({"text":text,"protected":[],"max_chars":64})
+        )],
+    ));
+    let request = text_locate_request(
+        "text-locate-replacement:",
+        imported["dependencies"][0].as_str().unwrap(),
+        text,
+        "draft",
+        "final",
+    );
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--max-evidence-bytes", "1", "--input", "budget", &request],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert_eq!(result["dependencies"], serde_json::json!([]));
 }
 
 fn code_expression_documents() -> Vec<Value> {

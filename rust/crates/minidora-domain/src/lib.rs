@@ -282,6 +282,9 @@ pub enum Intent {
     EditText {
         document: String,
     },
+    LocateTextReplacement {
+        document: String,
+    },
     Search {
         provider: String,
         query: String,

@@ -979,6 +979,47 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::LocateTextReplacement { document } => {
+                let value = match crate::text_editing::locate_explicit_replacement(
+                    document,
+                    |sha| {
+                        self.store.get_bytes(actor, &request.case_id, sha).map_err(|error| match error {
+                        Error::Contract { .. } => failure("TEXT_EDIT_BASE_UNAVAILABLE", "a base artifact is unavailable or unverifiable in this actor/case scope"),
+                        other => other,
+                    })
+                    },
+                    started,
+                    request.budget.deadline_ms,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "TEXT_EDIT_LOCATION_FAILED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let report_bytes = canonical(&value)?;
+                if report_bytes.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "text location artifact exceeds request evidence budget",
+                    );
+                }
+                let display = std::str::from_utf8(&report_bytes)
+                    .map_err(|error| failure("TEXT_LOCATION_ENCODING", error.to_string()))?
+                    .to_owned();
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result
+                    .dependencies
+                    .extend(value.consumed_artifacts.iter().cloned());
+                result.dependencies.push(artifact);
+                units.push(display);
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::Search { provider, query } => {
                 use crate::search::SearchProvider;
                 let selected = match provider.as_str() {

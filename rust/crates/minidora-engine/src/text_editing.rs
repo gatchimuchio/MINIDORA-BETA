@@ -14,7 +14,9 @@ const MAX_REPLAY_BYTES: usize = 8_000_000;
 const MAX_REVISIONS: usize = 16;
 const IMPORT_OPERATION: &str = "TEXT_IMPORT_EXPLICIT_V1";
 const EDIT_OPERATION: &str = "TEXT_EDIT_EXPLICIT_PATCHES_V1";
+const LOCATE_OPERATION: &str = "TEXT_EDIT_LOCATE_UNIQUE_LITERAL_V1";
 const GUARANTEE: &str = "explicit caller text and atomic expected-original edits with protected ranges and byte provenance; no inferred correction, factual truth or semantic-equivalence claim";
+const LOCATE_GUARANTEE: &str = "one exact unique caller-supplied literal location and a proposed atomic edit request; no edit is applied, no correction is inferred, and no semantic-equivalence claim is made";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,6 +105,52 @@ pub struct EditedText {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposedTextPatch {
+    pub id: String,
+    pub start: usize,
+    pub end: usize,
+    pub expected: String,
+    pub replacement: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProposedTextEditRequest {
+    pub base_artifact: String,
+    pub expected_text_sha256: String,
+    pub edits: Vec<ProposedTextPatch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocatedTextRange {
+    pub artifact_sha256: String,
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+    pub search_json_start: usize,
+    pub search_json_end: usize,
+    pub replacement_json_start: usize,
+    pub replacement_json_end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocatedTextEdit {
+    pub operation: String,
+    pub source_document: String,
+    pub source_sha256: String,
+    pub base_artifact: String,
+    pub base_output_sha256: String,
+    pub consumed_artifacts: Vec<String>,
+    pub location: LocatedTextRange,
+    pub proposed_edit: ProposedTextEditRequest,
+    pub guarantee: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ImportRequest {
@@ -128,6 +176,23 @@ struct ExplicitEdit {
     expected: String,
     replacement: String,
     reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocateRequest {
+    base_artifact: String,
+    expected_text_sha256: String,
+    search: String,
+    replacement: String,
+    id: String,
+    reason: String,
+}
+
+struct ParsedLocate {
+    request: LocateRequest,
+    search_json_span: Range<usize>,
+    replacement_json_span: Range<usize>,
 }
 
 struct ParsedEdit {
@@ -325,6 +390,37 @@ fn parse_edit(document: &str) -> Result<ParsedEdit> {
     Ok(ParsedEdit {
         request,
         replacement_json_spans,
+    })
+}
+
+fn parse_locate(document: &str) -> Result<ParsedLocate> {
+    let root = admission(document)?;
+    let request: LocateRequest =
+        serde_json::from_str(document).map_err(|error| input_error(error.to_string()))?;
+    if !is_digest(&request.base_artifact) || !is_digest(&request.expected_text_sha256) {
+        return Err(input_error(
+            "base_artifact and expected_text_sha256 must be lowercase SHA-256 digests",
+        ));
+    }
+    name(&request.id)?;
+    text_characters(&request.search)?;
+    text_characters(&request.replacement)?;
+    text_characters(&request.reason)?;
+    if request.search.is_empty()
+        || request.search.chars().count() > 100_000
+        || request.replacement.chars().count() > 100_000
+        || request.reason.trim().is_empty()
+        || request.reason.chars().count() > 512
+        || request.search == request.replacement
+    {
+        return Err(input_error(
+            "search must be nonempty, replacement must change it, and reason must contain at most 512 scalar values",
+        ));
+    }
+    Ok(ParsedLocate {
+        request,
+        search_json_span: field_span(&root, "search")?,
+        replacement_json_span: field_span(&root, "replacement")?,
     })
 }
 
@@ -671,6 +767,99 @@ pub fn edit_explicit_text<F: FnMut(&str) -> Result<Vec<u8>>>(
     apply_edits(document, &parsed, &base, started, deadline_ms)
 }
 
+/// Find one unique literal in an actual authorized text artifact. It returns
+/// a ready-to-submit explicit edit request but does not apply or persist it.
+pub fn locate_explicit_replacement<F: FnMut(&str) -> Result<Vec<u8>>>(
+    document: &str,
+    load: F,
+    started: Instant,
+    deadline_ms: u64,
+) -> Result<LocatedTextEdit> {
+    deadline(started, deadline_ms)?;
+    let parsed = parse_locate(document)?;
+    let request = &parsed.request;
+    let mut replay = Replay {
+        load,
+        seen: BTreeSet::new(),
+        loaded_bytes: 0,
+        started,
+        deadline_ms,
+    };
+    let base = replay.resolve(&request.base_artifact, 0)?;
+    let base_output_sha256 = digest(base.text.as_bytes());
+    if base_output_sha256 != request.expected_text_sha256 {
+        return Err(failure(
+            "TEXT_EDIT_BASE_MISMATCH",
+            "expected_text_sha256 differs from the actual base artifact text",
+        ));
+    }
+    deadline(started, deadline_ms)?;
+    let Some(start) = base.text.find(&request.search) else {
+        return Err(failure(
+            "TEXT_EDIT_LOCATION_NOT_FOUND",
+            "the exact search text does not occur in the base artifact",
+        ));
+    };
+    let next_boundary = start
+        + base.text[start..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+    if base.text[next_boundary..].find(&request.search).is_some() {
+        return Err(failure(
+            "TEXT_EDIT_LOCATION_AMBIGUOUS",
+            "the exact search text occurs more than once, including overlapping occurrences",
+        ));
+    }
+    deadline(started, deadline_ms)?;
+    let end = start + request.search.len();
+    if base
+        .protected
+        .iter()
+        .any(|lock| start < lock.end && lock.start < end)
+    {
+        return Err(failure(
+            "TEXT_EDIT_PROTECTED",
+            "the uniquely located text overlaps a protected range",
+        ));
+    }
+    let proposed_edit = ProposedTextEditRequest {
+        base_artifact: request.base_artifact.clone(),
+        expected_text_sha256: base_output_sha256.clone(),
+        edits: vec![ProposedTextPatch {
+            id: request.id.clone(),
+            start,
+            end,
+            expected: request.search.clone(),
+            replacement: request.replacement.clone(),
+            reason: request.reason.clone(),
+        }],
+    };
+    let result = LocatedTextEdit {
+        operation: LOCATE_OPERATION.into(),
+        source_document: document.into(),
+        source_sha256: digest(document.as_bytes()),
+        base_artifact: request.base_artifact.clone(),
+        base_output_sha256,
+        consumed_artifacts: base.consumed,
+        location: LocatedTextRange {
+            artifact_sha256: request.base_artifact.clone(),
+            start,
+            end,
+            text: request.search.clone(),
+            search_json_start: parsed.search_json_span.start,
+            search_json_end: parsed.search_json_span.end,
+            replacement_json_start: parsed.replacement_json_span.start,
+            replacement_json_end: parsed.replacement_json_span.end,
+        },
+        proposed_edit,
+        guarantee: LOCATE_GUARANTEE.into(),
+    };
+    artifact_limit(&result)?;
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,8 +889,34 @@ mod tests {
             .to_string()
     }
 
+    fn locate_request(base: &str, text: &str, search: &str, replacement: &str) -> String {
+        json!({
+            "base_artifact":base,
+            "expected_text_sha256":digest(text.as_bytes()),
+            "search":search,
+            "replacement":replacement,
+            "id":"located-change",
+            "reason":"explicitly requested literal replacement"
+        })
+        .to_string()
+    }
+
     fn run(store: &BTreeMap<String, Vec<u8>>, source: &str) -> Result<EditedText> {
         edit_explicit_text(
+            source,
+            |sha| {
+                store
+                    .get(sha)
+                    .cloned()
+                    .ok_or_else(|| failure("MISSING_TEST_ARTIFACT", sha))
+            },
+            Instant::now(),
+            30_000,
+        )
+    }
+
+    fn locate(store: &BTreeMap<String, Vec<u8>>, source: &str) -> Result<LocatedTextEdit> {
+        locate_explicit_replacement(
             source,
             |sha| {
                 store
@@ -875,6 +1090,126 @@ mod tests {
                 .unwrap();
         stale["expected_text_sha256"] = json!("0".repeat(64));
         code(run(&store, &stale.to_string()), "TEXT_EDIT_BASE_MISMATCH");
+    }
+
+    #[test]
+    fn unique_literal_location_returns_a_source_linked_proposal_without_applying_it() {
+        let text = "猫 Draft を確認";
+        let base = import(text, json!([]), 64);
+        let mut store = BTreeMap::new();
+        let sha = save(&mut store, &base);
+        let source = locate_request(&sha, text, "Draft", "最終");
+        let located = locate(&store, &source).unwrap();
+        assert_eq!(located.operation, LOCATE_OPERATION);
+        assert_eq!(located.base_artifact, sha);
+        assert_eq!(
+            located.consumed_artifacts.as_slice(),
+            std::slice::from_ref(&sha)
+        );
+        assert_eq!(located.location.artifact_sha256, located.base_artifact);
+        assert_eq!(located.location.start, "猫 ".len());
+        assert_eq!(located.location.end, "猫 Draft".len());
+        assert_eq!(located.location.text, "Draft");
+        assert_eq!(
+            &source[located.location.search_json_start..located.location.search_json_end],
+            r#""Draft""#
+        );
+        assert_eq!(
+            &source[located.location.replacement_json_start..located.location.replacement_json_end],
+            r#""最終""#
+        );
+        assert_eq!(
+            located.proposed_edit.edits[0],
+            ProposedTextPatch {
+                id: "located-change".into(),
+                start: "猫 ".len(),
+                end: "猫 Draft".len(),
+                expected: "Draft".into(),
+                replacement: "最終".into(),
+                reason: "explicitly requested literal replacement".into(),
+            }
+        );
+        assert_eq!(store[&sha], canonical(&base).unwrap());
+
+        let suggested_request = serde_json::to_string(&located.proposed_edit).unwrap();
+        let applied = run(&store, &suggested_request).unwrap();
+        assert_eq!(applied.text, "猫 最終 を確認");
+        assert_eq!(applied.consumed_artifacts, [sha]);
+    }
+
+    #[test]
+    fn literal_location_rejects_missing_ambiguous_and_protected_ranges() {
+        let text = "aba aba";
+        let base = import(text, json!([]), 32);
+        let mut store = BTreeMap::new();
+        let sha = save(&mut store, &base);
+        code(
+            locate(&store, &locate_request(&sha, text, "absent", "new")),
+            "TEXT_EDIT_LOCATION_NOT_FOUND",
+        );
+        code(
+            locate(&store, &locate_request(&sha, text, "aba", "new")),
+            "TEXT_EDIT_LOCATION_AMBIGUOUS",
+        );
+
+        let overlap_text = "あああ";
+        let overlap = import(overlap_text, json!([]), 32);
+        let overlap_sha = save(&mut store, &overlap);
+        code(
+            locate(
+                &store,
+                &locate_request(&overlap_sha, overlap_text, "ああ", "い"),
+            ),
+            "TEXT_EDIT_LOCATION_AMBIGUOUS",
+        );
+
+        let protected_text = "引用:保持";
+        let protected = import(
+            protected_text,
+            json!([{"id":"quote","start":0,"end":protected_text.len(),"expected":protected_text}]),
+            32,
+        );
+        let protected_sha = save(&mut store, &protected);
+        code(
+            locate(
+                &store,
+                &locate_request(&protected_sha, protected_text, "保持", "変更"),
+            ),
+            "TEXT_EDIT_PROTECTED",
+        );
+    }
+
+    #[test]
+    fn literal_location_rejects_stale_hashes_and_invalid_schemas() {
+        let text = "Draft";
+        let base = import(text, json!([]), 32);
+        let mut store = BTreeMap::new();
+        let sha = save(&mut store, &base);
+        let valid = locate_request(&sha, text, "Draft", "Final");
+
+        let mut stale: Value = serde_json::from_str(&valid).unwrap();
+        stale["expected_text_sha256"] = json!("0".repeat(64));
+        code(
+            locate(&store, &stale.to_string()),
+            "TEXT_EDIT_BASE_MISMATCH",
+        );
+
+        let mut no_op: Value = serde_json::from_str(&valid).unwrap();
+        no_op["replacement"] = json!("Draft");
+        code(locate(&store, &no_op.to_string()), "TEXT_EDIT_INPUT");
+
+        let mut empty_search: Value = serde_json::from_str(&valid).unwrap();
+        empty_search["search"] = json!("");
+        code(locate(&store, &empty_search.to_string()), "TEXT_EDIT_INPUT");
+
+        let extra = valid.replacen("{", "{\"unexpected\":true,", 1);
+        code(locate(&store, &extra), "TEXT_EDIT_INPUT");
+        let duplicate = valid.replacen(
+            "\"search\":\"Draft\"",
+            "\"search\":\"Draft\",\"search\":\"Draft\"",
+            1,
+        );
+        code(locate(&store, &duplicate), "DUPLICATE_JSON_KEY");
     }
 
     #[test]
