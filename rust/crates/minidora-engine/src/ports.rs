@@ -592,22 +592,28 @@ pub fn fetch(
 }
 
 #[derive(Debug)]
-enum JsonKind {
+pub(crate) enum JsonKind {
     Object(BTreeMap<String, JsonNode>),
     Array(Vec<JsonNode>),
     Scalar,
     Number,
 }
 #[derive(Debug)]
-struct JsonNode {
-    span: Range<usize>,
-    kind: JsonKind,
+pub(crate) struct JsonNode {
+    pub(crate) span: Range<usize>,
+    pub(crate) kind: JsonKind,
     object_key_spans: BTreeMap<String, Range<usize>>,
 }
 struct JsonParser<'a> {
     text: &'a str,
     position: usize,
     count: usize,
+}
+
+/// Internal consumers share strict framing, duplicate-key rejection and exact
+/// numeric lexemes. The returned tree grants no execution or effect authority.
+pub(crate) fn strict_json_document(document: &str) -> Result<JsonNode> {
+    JsonParser::new(document).parse()
 }
 impl<'a> JsonParser<'a> {
     fn new(text: &'a str) -> Self {

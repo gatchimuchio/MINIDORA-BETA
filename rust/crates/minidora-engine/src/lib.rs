@@ -1,6 +1,7 @@
 //! Independently versioned Rust successor development implementation.
 //! Core alone binds goals, adopts content, mutates memory and reconciles effects.
 #![forbid(unsafe_code)]
+pub mod code_generation;
 pub mod core;
 pub mod document;
 pub mod input;

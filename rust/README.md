@@ -65,6 +65,27 @@ Each line declares one unique step ID and exact arithmetic expression. `@{earlie
 
 A quantity reference must occupy a complete number-and-unit operand of the existing binary addition/subtraction grammar. Numeric prefixes, exponent fragments, unit suffixes and other operators suspend with `CALCULATION_REFERENCE_CONTEXT`. The minimum action budget is the number of declared steps plus three, or plus four when a file is required. Scoped CLI observations, artifact consumption, typed stops, version history and a confirmed local file receipt are recorded in [the B06 route audit](audit/b06-calculation-sequence-route-validation.json); B02 and B06 acceptance remain `UNVERIFIED`.
 
+## Structured Python function generation
+
+```bash
+"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function \
+  'code-generate:
+{"仕様":{"名前":"増分","引数":["x"],"手順":[{"種別":"返却","式":{"種別":"算術","演算":"加算","左":{"種別":"参照","名前":"x"},"右":{"種別":"定数参照","キー":"幅"}}}]},"定数":{"幅":1}}'
+```
+
+`code-generate:` (ASCII case insensitive) and `コードを生成して:` accept the original JSON body with exactly `仕様` and `定数`. This ports the existing explicit algorithm-generation contract. The specification has exactly `名前`, `引数` and `手順`; it supplies the algorithm. The function receives the declared arguments followed by the separate `定数` dictionary. Changing constant values preserves the generated source. The output is Python source; an exact `--output` / `--allow-write` grant can save those same bytes as a file.
+
+| IR category | Supported forms |
+|---|---|
+| Expressions | `参照` (`名前`), `定数参照` (`キー`), `算術`/`比較` (`演算`, `左`, `右`), `選択` (`条件`, `真`, `偽`), `リスト` (`要素`), `添字` (`対象`, `位置`), `呼出` (`関数`, `引数`) |
+| Arithmetic / comparison | `加算`, `減算`, `乗算`, `整数商`, `剰余` / `等値`, `非等値`, `未満`, `以下`, `超`, `以上` |
+| Calls | `合計`, `長さ`, `範囲`, `絶対値`, `最小`, `最大`, `整列`, `リスト化`, `すべて`, `いずれか` |
+| Statements | `代入` (`名前`, `式`), `返却` (`式`), `分岐` (`条件`, `真`, `偽`), `反復` (`変数`, `対象`, `手順`) |
+
+Every IR object has exactly its listed fields plus `種別`; empty blocks emit `pass`. The source target is Python 3.12 with canonical Unicode 15.0 identifier properties, at most 15 unique user parameters, and reserved-name/keyword checks. The report retains the exact input, specification/constants byte ranges, source hash and constructed syntax bounds. Constants retain original JSON lexemes and support null, booleans, 256-bit integers, strings, lists and string-keyed dictionaries; floats and duplicate decoded keys stop. Other finite limits are recorded in [the B07 audit](audit/b07-code-generation-route-validation.json).
+
+The generated source and report explicitly mark execution and input/output tests `NOT_RUN`. `COMPUTED` describes generation from the supplied IR. Name binding, argument/result types and runtime success require separate checks; an unbound name can still generate source. The current product does not run Python. Independent development QC parsed nine actual generated sources and checked 20 finite cases: 19 outputs matched, and one unbound-name case produced the expected `NameError`. General free-form code creation, explanation, repair, the bounded interpreter and full B07 acceptance remain `UNVERIFIED`.
+
 ## Statistics, linear systems and probability
 
 ```bash

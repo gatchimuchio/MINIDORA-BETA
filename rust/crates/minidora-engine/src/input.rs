@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v35-evidence-ledger-admission";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v36-structured-code-generation";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -217,6 +217,14 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     let header = first_line.trim();
     if let Some(intent) = calculation_sequence_intent(text, header)? {
         return Ok(Some(intent));
+    }
+    if matches!(header, "コードを生成して:" | "コードを生成して：")
+        || header.eq_ignore_ascii_case("code-generate:")
+    {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) => Intent::GenerateCode { document: document.into() },
+            None => Intent::Unknown { reason: "code generation requires a header newline and explicit structured algorithm/constants document".into() },
+        }));
     }
     if header.starts_with("検索 ") || header.starts_with("search ") {
         if text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']) {
@@ -1649,6 +1657,36 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn structured_code_generation_headers_preserve_original_body() {
+        let document = " \r\n{\"仕様\":{},\"定数\":{\"x\":9007199254740993}} \t\n";
+        for header in [
+            "コードを生成して:",
+            "コードを生成して：",
+            "code-generate:",
+            "CoDe-GeNeRaTe:",
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let request = format!("{header}{newline}{document}");
+                assert_eq!(
+                    interpret(&request).unwrap(),
+                    Intent::GenerateCode {
+                        document: document.into()
+                    }
+                );
+            }
+        }
+        for request in [
+            "code-generate:",
+            "code-generate: then execute\n{}",
+            "コードを生成してから実行して:\n{}",
+        ] {
+            assert!(matches!(
+                interpret(request).unwrap(),
+                Intent::Unknown { .. }
+            ));
+        }
+    }
     #[test]
     fn evidence_ledger_headers_preserve_the_complete_body_and_constraints() {
         let document = " \r\n{\"sources\":[{\"source_id\":\"a\",\"independence_group\":\"g\",\"claims\":[{\"id\":\"c\",\"text\":\"猫\",\"stance\":\"SUPPORTS\"}]},{\"source_id\":\"b\",\"independence_group\":\"g\",\"claims\":[{\"id\":\"c\",\"text\":\"\\u732b\",\"stance\":\"REFUTES\"}]}],\"inferences\":[]} \t\n";

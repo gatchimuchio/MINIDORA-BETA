@@ -170,6 +170,9 @@ pub enum Intent {
         replacement: String,
     },
     ExplainPrevious,
+    GenerateCode {
+        document: String,
+    },
     CsvSelect {
         document: String,
         column: String,

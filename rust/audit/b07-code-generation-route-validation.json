@@ -1,0 +1,421 @@
+{
+  "work_item": "B07 first ordinary CLI structured algorithm-to-Python function generation route",
+  "recorded_at": "2026-11-11T15:33:44Z",
+  "base_commit": "60bcb8669ed5e8b4d1745e8db69675b0c4e63395",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Original explicit algorithm/constants document -> sealed GenerateCode intent -> unique Core -> actual Python source and provenance report -> exact render and authorized file receipt -> retained input/result versions",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "9",
+      "14",
+      "15",
+      "18"
+    ]
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v36-structured-code-generation",
+  "prior_parser_version": "declarative-ja-en-v35-evidence-ledger-admission",
+  "version_boundary": "Add an optional GENERATE_CODE intent and explicit header grammar, with a separately versioned structured-python-generator-v1-ucd15 report. Existing alpha-8 records remain readable and immutable. Exact identity retries return their saved result; a new identity/version recomputes. This evidence uses version 2. No old API/source/store migration or package/dependency/toolchain change is made.",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_NATIVE_CAPABILITY_CONNECTION_AND_QC",
+  "product_source_changed": true,
+  "legacy_source_lineage": [
+    {
+      "path": "src/minidora/コード生成.py",
+      "git_blob_sha": "1a34d447777e30e86c1274394206f0fd7de256f5",
+      "sha256": "e5654ff08efd6626efd58bcc8311bed20edd30f9125fe684d4bd4d020506c6ad",
+      "public_entry": "関数を生成",
+      "observed_contract": "Exact structured algorithm forms -> generated limited Python function; constants separate; generation does not validate input/output behavior",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/コード能力.py",
+      "git_blob_sha": "6837bb82b7bb8bc4edbaa692a7d0b494ddf4a8d7",
+      "sha256": "65fe01a67139f5f76179a5ee98cc1892992f7b9de5436095be4e316553c06b58",
+      "public_entry": "コードを読む / コードを評価 / コードを検証",
+      "observed_contract": "Whole-source AST admission and custom bounded evaluation/checks; not implemented by this Rust generation slice",
+      "original_unchanged": true
+    },
+    {
+      "path": "src/minidora/コード能力接続.py",
+      "git_blob_sha": "9ecb4ef3719e004cef5392f28f7558550ec848ab",
+      "sha256": "07292d6724a94ee6ff667dd17a299c011880e8d01cf39dfbcbdc409aaa739518",
+      "public_entry": "コード能力モジュール / コード能力群",
+      "observed_contract": "Typed adapter accepts one actual successful upstream result and explicit settings",
+      "original_unchanged": true
+    }
+  ],
+  "legacy_test_boundary": "Frozen source/tests were read, not executed or modified. The referenced tools/コード能力デモ.py and saved upstream-reference/src are unavailable in this workspace; no old suite or historical 313-case result is claimed as current Rust evidence.",
+  "source_snapshot_sha256": "1c2cee4bac17f47978f347b6bc8c7c65b995ce44a421380a6d88d41a9f0b95c3",
+  "source_snapshot_method": "SHA-256 of compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "source_snapshot_files": 28,
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "a350e8c5b65295d5535ea84dc9da164f574ab487aa51d5060edec32b9dec85e3",
+    "crates/minidora-engine/src/code_generation.rs": "e7425a4e7dfa13e5243d9c76c5ce6737633d990dfa5d415ccd8931b7d01c80f1",
+    "crates/minidora-engine/src/core.rs": "6f1c3eb8163fdb8ff38ec3b6af98c580194a347d996a9d0b7f53b2686bd30343",
+    "crates/minidora-engine/src/input.rs": "9b6cd2067ebecb32a913f4a83415cd5888b10bf0558140df05f86bdfaf7aaae0",
+    "crates/minidora-engine/src/lib.rs": "989474baf1388af2a7f3cfb846b92fb6c3a13874e8768c23ec133091bfe8fe7b",
+    "crates/minidora-engine/src/ports.rs": "8c62c227e152167b62def452dc334019fce62b3af0f67d5c53e85238206b8d39"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "860c5d88c2d351a83ecb5f60df84d37bd59e9aaed68d35ce06930291ff1c7d69"
+  },
+  "component_test_locations": [
+    "crates/minidora-engine/src/code_generation.rs::tests",
+    "crates/minidora-engine/src/input.rs::tests::structured_code_generation_headers_preserve_original_body"
+  ],
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "78cf0d31bccbfe8dd2c386eef51083f6beeb8d879c386f9bd0300c5c2e85abbb"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b07-code-generation-route/verification MINIDORA_KEEP_TEST_STATE=1",
+  "baseline_observation": {
+    "evidence": "baseline/observations.json",
+    "binary_sha256": "b8dcb4798003716e17dc047ef09e7350798ceb6e03894254263e54a06c259b8d",
+    "stores": 3,
+    "execute_requests": 3,
+    "observed": "Japanese, lowercase English and mixed-case English structured generation requests all SUSPEND/UNKNOWN with CAPABILITY_UNAVAILABLE and no dependency. Separate inspect preserves the exact request and full result."
+  },
+  "implemented_route": [
+    "Input recognizes exact Japanese headers コードを生成して: / ： and ASCII-case-insensitive code-generate:, retaining the original JSON body including CRLF/padding. Unsupported extra requests remain unresolved.",
+    "Core invokes a pure native generator. Shared strict JSON framing rejects duplicate decoded keys and retains original numeric lexemes; root fields are exactly 仕様 and 定数. The explicit specification supplies the algorithm and no example/expected result selects it.",
+    "The generator supports every inherited structured expression/statement form, with fixed operator/builtin mappings and parenthesized text. Constants remain a raw separate dictionary; source contains constant-key lookups. Reserved/noncanonical identifiers, unknown fields/operators/calls, missing constants and finite-bound violations stop explicitly.",
+    "A digest-bound report stores exact input/specification/constants spans, actual source/SHA, signature and constructed AST bounds. Core emits the exact Python source through its compute/content/render graph and checks any requested authorized local file receipt before COMMIT."
+  ],
+  "runtime_claim_boundary": {
+    "product_python_parse": "NOT_RUN",
+    "product_code_execution": "NOT_RUN",
+    "product_input_output_tests": "NOT_RUN",
+    "meaning_of_COMPUTED": "The explicit algorithm was transformed into source and provenance, not that the generated function passed execution or tests",
+    "host_runner_or_new_execution_permission": "NONE; no product exec/eval/subprocess/compiler/interpreter adapter",
+    "source_preamble": "# Python 3.12; execution and input/output tests: NOT_RUN.",
+    "name_and_type_analysis": "NOT_IMPLEMENTED; an unbound reference can generate source and then fail at runtime, as observed in separate QC"
+  },
+  "resource_envelope": {
+    "document_bytes": 256000,
+    "ir_nodes": 512,
+    "expression_depth": 24,
+    "block_depth": 16,
+    "statements_per_block": 128,
+    "constructed_AST_nodes": 2048,
+    "constructed_AST_depth": 40,
+    "generated_source_bytes": 32768,
+    "user_parameters": 15,
+    "identifier_codepoints": 80,
+    "constant_integer_bits": 256,
+    "constant_nodes_including_keys": 4096,
+    "constant_depth": 16,
+    "list_or_dictionary_entries": 2048,
+    "constant_string_codepoints": 8192,
+    "total_constant_text_bytes": 65536,
+    "shared_JSON_parser": "depth <=64; nodes <=32768; framing helper input <=2000000 bytes, with this port imposing 256000 first",
+    "Core_budgets": "Existing max_input_bytes, max_evidence_bytes, finite actions/deadline and exact write grants still apply; minimum 3 actions plain, 4 with file",
+    "render_limit": "The current shared surface model has a 16384-byte admission limit and may stop before the generator source limit; the full boundary matrix is NOT_RUN"
+  },
+  "identifier_observation": {
+    "python": "Python 3.12.14",
+    "unicode": "15.0.0",
+    "codepoint_positions_compared_including_surrogates": 1114112,
+    "regex_extra_start": [],
+    "regex_extra_continue": [
+      "0x200c",
+      "0x200d",
+      "0x30fb",
+      "0xff65"
+    ],
+    "regex_missing_start": [],
+    "regex_missing_continue": [],
+    "first_compile_attempt": "NOT_RUN; rustup proxy outside rust workspace had no configured default. Resolved by invoking the existing pinned 1.99.1 rustc directly; no toolchain change.",
+    "evidence": [
+      "identifier-probe.rs",
+      "identifier-ranges.txt",
+      "identifier-observations.json"
+    ],
+    "product_rule": "Locked regex XID intersected with Age <=15.0, exclude U+200C/U+200D/U+30FB/U+FF65, require complete-name NFKC stability, then keyword/reserved-name/80-codepoint checks",
+    "dependency_tables": {
+      "regex_syntax": "0.8.11 / Unicode 16.0",
+      "unicode_normalization": "0.1.26 / Unicode 18.0"
+    },
+    "limit": "This compares individual start/continuation properties to this pinned CPython/UCD version. It is not full all-string/normalization/runtime portability acceptance."
+  },
+  "tests_and_route": {
+    "normal_cli_route_executed": true,
+    "route_method": "Real minidora-rust --json child processes, fresh stores, separate inspect and actor/case-authorized Store::get_bytes; actual report/compute/content/render/required-graph/goal/file artifacts are read and digests compared.",
+    "final_scoped_unique_tests_passed": 13,
+    "new_generator_component_tests": 2,
+    "new_input_component_tests": 1,
+    "new_cli_tests": 4,
+    "existing_B06_cli_regressions": 5,
+    "existing_strict_JSON_regression": 1,
+    "successful_Rust_test_executions": 16,
+    "initial_failed_Rust_test_executions": 1,
+    "initial_cli_run": {
+      "passed": 3,
+      "failed": 1,
+      "stores": 43,
+      "stored_input_identities": 45,
+      "execute_requests": 47,
+      "failure": "Duplicate-key test oracle only; no product change needed"
+    },
+    "final_cli_run": {
+      "passed": 4,
+      "failed": 0,
+      "stores": 46,
+      "stored_input_identities": 48,
+      "execute_requests": 50,
+      "breakdown": {
+        "headers_and_newlines": 6,
+        "all_IR_forms": 6,
+        "constant_version_store": 1,
+        "constant_version_requests": 2,
+        "typed_stop_stores": 32,
+        "file_and_source_revision_store": 1,
+        "file_and_source_revision_requests": 4
+      }
+    },
+    "regression_cli_run": {
+      "passed": 5,
+      "failed": 0,
+      "stores": 63,
+      "stored_input_identities": 65,
+      "execute_requests": 68
+    },
+    "all_batch_runtime_totals": {
+      "stores": 155,
+      "stored_input_identities": 164,
+      "execute_requests": 174,
+      "exact_retries": 10
+    },
+    "full_workspace_tests": "NOT_RUN; focused tests with workspace all-target check/lint/build. No full B07/R2 acceptance claim."
+  },
+  "command_results": [
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check.log"
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply-tests.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-tests.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine structured_code_generation -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/component-tests.log",
+      "passed": 3,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route structured_code_generation_route -- --nocapture",
+      "exit_code": 101,
+      "log": "verification/route-tests.log",
+      "passed": 3,
+      "failed": 1,
+      "cause_and_resolution": "The test incorrectly expected INVALID_JSON_DOCUMENT for a decoded duplicate key. Existing strict parser returns DUPLICATE_JSON_KEY; the oracle was corrected, the failed state/log retained and all four new CLI tests passed. Product source was unchanged."
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply-review.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-review.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route structured_code_generation_route -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/route-tests-review.log",
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route calculation_sequence_route -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/sequence-regression.log",
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine ports::tests::duplicates_nonfinite_and_malformed_documents_fail -- --exact --nocapture",
+      "exit_code": 0,
+      "log": "verification/json-regression.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "verification/build.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "route_observations": [
+    {
+      "route": "Japanese/lowercase/mixed-case English through LF/CRLF",
+      "cases": 6,
+      "evidence": "Padded exact JSON body is retained in the sealed intent and report. An independently written complete expected source for the conditional square-sum algorithm matches actual rendered bytes; signature, 17 IR nodes, 45 AST nodes/depth 8, source/root spans, parent report and compute/content/render artifacts are checked."
+    },
+    {
+      "route": "Every inherited expression/statement form",
+      "cases": 6,
+      "evidence": "Five arithmetic operators, six comparisons, conditional expressions, lists, subscript and ten builtin mappings generate source; empty root/branch/loop blocks, escaped constant keys, inert code-looking constant values and an unbound reference are covered. These CLI tests check generation and NOT_RUN status. Independent finite semantics observations are recorded separately below."
+    },
+    {
+      "route": "Separate constants and actual source revision",
+      "evidence": "Changing threshold 2 to 731 leaves source bytes and source SHA unchanged while raw constants differ. An explicit version-2 algorithm change from addition to subtraction creates new source/SHA, preserves the original result in prior_results, and an exact old retry returns that original without replacing the current projection."
+    },
+    {
+      "route": "Actual granted local Python file",
+      "evidence": "The file equals actual generated UTF-8 source and its CONFIRMED receipt target/hash/observed bytes. Required file graph consumption reads the actual receipt. Exact retry preserves bytes/mtime, and changing the source under a new version without a file request leaves the old file and single original action intact. This does not establish physical/remote exactly-once semantics."
+    },
+    {
+      "route": "Strict inputs and budget stops",
+      "cases": 32,
+      "breakdown": {
+        "IR_shape_identifier_value_and_depth_size_mutations": 27,
+        "trailing_JSON": 1,
+        "decoded_duplicate_key": 1,
+        "action_deadline_evidence_budgets": 3
+      },
+      "evidence": "All are SUSPEND/UNKNOWN with no result dependency and persisted complete results. Unknown syntax in a false branch is still rejected. Duplicate decoded keys retain DUPLICATE_JSON_KEY; trailing bytes retain INVALID_JSON_DOCUMENT. Selected large/deep/list/text inputs stop; this is not a complete admission/failure matrix."
+    }
+  ],
+  "independent_development_consumer": {
+    "scope": "Development QC of actual generated fixtures only; not a product host runner, execution grant, general-code acceptance or historical benchmark",
+    "product_report_execution_status_unchanged": "NOT_RUN",
+    "generated_input_identities_observed": 35,
+    "unique_source_digests": 9,
+    "source_constant_pairs": 10,
+    "cases": 20,
+    "matched_outputs": 19,
+    "expected_runtime_gaps": 1,
+    "python": "3.12.14",
+    "limits": "Each known fixture pair: isolated CPython -I -S, one CPU second, 256 MiB address space, three-second parent timeout; fixed pure builtins, no product execution permission or OS-sandbox claim"
+  },
+  "independent_consumer_evidence": [
+    "verify-generated-code.py",
+    "check-generated-consumer.py",
+    "independent-generated-consumer/consumer-input.json",
+    "independent-generated-consumer/observations.json"
+  ],
+  "independent_consumer_interpretation": "Nine actual source digests across ten source/constant pairs are parsed with CPython 3.12.14; actual AST counts/depth/signatures equal the report for every pair. Twenty known finite cases yield nineteen exact JSON-distinguished matching outputs and one expected unbound-variable NameError. These authored fixtures and pure builtin namespace are isolated development QC; the product never receives expected outputs, invokes CPython or retroactively changes its NOT_RUN report.",
+  "versioned_recomputation": {
+    "binary_sha256": "78cf0d31bccbfe8dd2c386eef51083f6beeb8d879c386f9bd0300c5c2e85abbb",
+    "stores_reused": 3,
+    "execute_requests": 6,
+    "new_input_identities": 3,
+    "observations": [
+      {
+        "case": "english",
+        "original_lifecycle": "SUSPEND",
+        "exact_retry_preserves_original": true,
+        "version_2_lifecycle": "COMMIT",
+        "original_retained_in_prior_results": true,
+        "raw_CRLF_body_preserved": true
+      },
+      {
+        "case": "japanese",
+        "original_lifecycle": "SUSPEND",
+        "exact_retry_preserves_original": true,
+        "version_2_lifecycle": "COMMIT",
+        "original_retained_in_prior_results": true,
+        "raw_CRLF_body_preserved": true
+      },
+      {
+        "case": "mixed-case",
+        "original_lifecycle": "SUSPEND",
+        "exact_retry_preserves_original": true,
+        "version_2_lifecycle": "COMMIT",
+        "original_retained_in_prior_results": true,
+        "raw_CRLF_body_preserved": true
+      }
+    ]
+  },
+  "traceability_update": "B07 observations now name the new partial native generator and paths with implementation_disposition NEW; full acceptance remains UNVERIFIED. Only B07 actual entry/test fields change in the R2 trace. All other 92 observation rows, all 93 requirements/acceptance statuses, baseline source-route UNMAPPED and historical records remain; there is no scope reduction.",
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b07-code-generation-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b07-code-generation-route/asset-inventory.json",
+    "manifest_sha256": "c583711e96e2f2c6665543b62c8dec096b932c81b8bad8b0f1b651803877154c",
+    "file_count_including_manifest": 3189,
+    "bytes_including_manifest": 50114364,
+    "stores": 155,
+    "stored_input_identities": 164,
+    "remote_storage_verification": "NOT_RUN; local evidence only, no OneDrive claim"
+  },
+  "asset_accounting": {
+    "scope": "Current evidence root files (including manifest) plus existing retained installer; changed verified Git files; three existing active cache/target directory units. Prior evidence roots remain retained outside this batch count.",
+    "保持": 3190,
+    "保管済み": 15,
+    "稼働中": 3,
+    "ゴミ箱移動済み": 0,
+    "保留": 0,
+    "total": 3208,
+    "reclaimed_bytes": 0,
+    "pending_disposal": 0,
+    "online_only_conversion": "NOT_PERFORMED"
+  },
+  "rollback_refs": {
+    "codex/backup-main": "60bcb8669ed5e8b4d1745e8db69675b0c4e63395",
+    "codex/backup-main-prev": "999fc813a723b93b6b2ca1d8f68b3358fa3a6fd3"
+  },
+  "known_limits": [
+    "This is a native connection of the explicit structured generation contract. The caller supplies the algorithm; it does not establish free-form code creation, semantic explanation, repair, general reasoning or unseen code quality.",
+    "The inherited limited Python source parser, custom bounded interpreter and finite checker remain unimplemented in Rust. Generation is not name/type analysis or proof of execution success; the unbound-variable NameError is retained as an explicit generation-only limit.",
+    "Parenthesized source formatting and target Unicode envelope differ from legacy ast.unparse bytes/runtime versions. Every IR form is represented; full inherited input acceptance, arbitrary Unicode-string combinations and all-runtime semantic equivalence are unverified.",
+    "All admission thresholds, huge output/render paths, late B07-specific denied-file matrices, cancellation/deadline injection, long-history and hostile-concurrency/resource limits are not exhaustively tested. Existing B06 regressions include the shared late file-permission stop.",
+    "Full workspace runtime regression, frozen Python suites, external LIVE, Windows/macOS, physical 8 GB QA, product host-code execution, release and deployment are NOT_RUN."
+  ],
+  "publication_review": {
+    "public_boundary_sha256": "9080ebacee267660cf903105db8385ab7ee7a0cbeb09e2046b1a50e27cc9072b",
+    "secret_private_theory_or_personal_data_in_new_diff": "NONE_OBSERVED",
+    "frozen_baseline_and_original581_files_changed": false,
+    "dependency_or_toolchain_change": false,
+    "new_workflow_PR_feature_branch": "NONE"
+  },
+  "acceptance": {
+    "B07": "UNVERIFIED; partial structured generation route only",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

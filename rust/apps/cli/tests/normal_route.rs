@@ -5885,3 +5885,474 @@ fn cancelled_effect_reconciliation_preserves_case_cancel_with_no_new_goal() {
     assert_eq!(revision["lifecycle"], "CANCEL");
     assert_eq!(revision["result"], cancelled);
 }
+
+fn code_ref(name: &str) -> Value {
+    serde_json::json!({"種別":"参照","名前":name})
+}
+fn code_constant(key: &str) -> Value {
+    serde_json::json!({"種別":"定数参照","キー":key})
+}
+fn code_binary(kind: &str, operation: &str, a: Value, b: Value) -> Value {
+    serde_json::json!({"種別":kind,"演算":operation,"左":a,"右":b})
+}
+fn code_return(expression: Value) -> Value {
+    serde_json::json!({"種別":"返却","式":expression})
+}
+fn code_call(name: &str, arguments: Vec<Value>) -> Value {
+    serde_json::json!({"種別":"呼出","関数":name,"引数":arguments})
+}
+fn code_document(name: &str, args: &[&str], body: Vec<Value>, constants: Value) -> Value {
+    serde_json::json!({"仕様":{"名前":name,"引数":args,"手順":body},"定数":constants})
+}
+fn code_square_sum_document() -> Value {
+    code_document(
+        "条件付き二乗和",
+        &["数列"],
+        vec![
+            serde_json::json!({"種別":"代入","名前":"累計","式":code_constant("初期値")}),
+            serde_json::json!({"種別":"反復","変数":"数","対象":code_ref("数列"),"手順":[
+                {"種別":"分岐","条件":code_binary("比較","超",code_ref("数"),code_constant("閾値")),"真":[
+                    {"種別":"代入","名前":"累計","式":code_binary("算術","加算",code_ref("累計"),code_binary("算術","乗算",code_ref("数"),code_ref("数")))}
+                ],"偽":[]}
+            ]}),
+            code_return(code_ref("累計")),
+        ],
+        serde_json::json!({"初期値":0,"閾値":2}),
+    )
+}
+
+fn assert_generated_code_artifact(
+    directory: &Path,
+    result: &Value,
+    request: &str,
+    document: &str,
+) -> Value {
+    basic_raw_result(directory, result, request, Some(document));
+    assert!(result["calculation"].is_null());
+    assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let read = |sha: &Value| -> Value {
+        let sha = sha.as_str().unwrap();
+        let bytes = store.get_bytes("owner", "normal-route", sha).unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), sha);
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    let report = read(&result["dependencies"][0]);
+    assert_eq!(report["source"], result["text"]);
+    assert_eq!(report["source_document"], document);
+    assert_eq!(
+        report["source_document_sha256"],
+        minidora_domain::digest(document.as_bytes())
+    );
+    assert_eq!(report["source_sha256"], result["render"]["actual_sha256"]);
+    assert_eq!(report["version"], "structured-python-generator-v1-ucd15");
+    assert_eq!(
+        report["target_runtime"],
+        "Python 3.12 / Unicode 15.0.0 identifiers"
+    );
+    assert_eq!(
+        report["validation"],
+        "EXPLICIT_IR_STRUCTURE_AND_CONSTRUCTED_AST_BOUNDS"
+    );
+    for field in ["python_parse", "execution", "input_output_tests"] {
+        assert_eq!(report[field], "NOT_RUN");
+    }
+    assert!(
+        report["source"]
+            .as_str()
+            .unwrap()
+            .starts_with("# Python 3.12; execution and input/output tests: NOT_RUN.\n")
+    );
+    let doc: Value = serde_json::from_str(document).unwrap();
+    for (field, key) in [("specification", "仕様"), ("constants", "定数")] {
+        let expected = serde_json::to_string(&doc[key]).unwrap();
+        let start = document.find(&expected).unwrap();
+        assert_eq!(
+            report[field],
+            serde_json::json!({"start":start,"end":start+expected.len(),"text":expected})
+        );
+    }
+    let saved = inspect_normal_case(directory, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "GENERATE_CODE"
+    );
+    let graph = read(&result["execution_graph_ref"]);
+    let observed = &graph[1];
+    assert_eq!(
+        read(&observed["compute"]),
+        serde_json::json!([null, [report["source"]], [], result["dependencies"]])
+    );
+    assert_eq!(read(&observed["content"]), result["content_plan"]);
+    assert_eq!(read(&observed["render"]), result["render"]);
+    assert_eq!(graph[5]["compute"], serde_json::json!({}));
+    assert_eq!(
+        graph[5]["content"],
+        serde_json::json!({"compute":observed["compute"]})
+    );
+    assert_eq!(
+        graph[5]["render"],
+        serde_json::json!({"content":observed["content"]})
+    );
+    let goal = read(&saved["goal_sha256"]);
+    assert_eq!(goal["intent"], saved["bundle"]["meaning"]["intent"]);
+    assert_eq!(read(&goal["required_graph_ref"]), graph[0]);
+    if !saved["bundle"]["request"]["output_path"].is_null() {
+        assert_eq!(
+            graph[5]["file"],
+            serde_json::json!({"render":observed["render"]})
+        );
+        assert_eq!(read(&observed["file"]), result["receipts"][0]);
+    }
+    assert!(
+        store
+            .get_bytes(
+                "stranger",
+                "normal-route",
+                result["dependencies"][0].as_str().unwrap()
+            )
+            .is_err()
+    );
+    report
+}
+
+#[test]
+fn structured_code_generation_route_headers_and_actual_artifacts() {
+    let value = code_square_sum_document();
+    let document = format!(" \r\n{} \t\n", serde_json::to_string(&value).unwrap());
+    let expected = "# Python 3.12; execution and input/output tests: NOT_RUN.\ndef 条件付き二乗和(数列, 定数):\n    累計 = 定数[\"初期値\"]\n    for 数 in 数列:\n        if (数 > 定数[\"閾値\"]):\n            累計 = (累計 + (数 * 数))\n        else:\n            pass\n    return 累計\n";
+    for header in ["コードを生成して:", "code-generate:", "CoDe-GeNeRaTe:"] {
+        for newline in ["\n", "\r\n"] {
+            let scratch = Scratch::new();
+            let request = format!("{header}{newline}{document}");
+            let result = record(&execute(
+                &scratch.0,
+                "owner",
+                &["--max-actions", "3", &request],
+            ));
+            let report = assert_generated_code_artifact(&scratch.0, &result, &request, &document);
+            assert_eq!(result["text"], expected);
+            assert_eq!(report["function_name"], "条件付き二乗和");
+            assert_eq!(report["parameters"], serde_json::json!(["数列", "定数"]));
+            assert_eq!(report["ir_nodes"], 17);
+            assert_eq!(report["constructed_ast_nodes"], 45);
+            assert_eq!(report["constructed_ast_depth"], 8);
+        }
+    }
+}
+
+fn code_expression_documents() -> Vec<Value> {
+    let mut expressions = Vec::new();
+    for (kind, operations) in [
+        ("算術", vec!["加算", "減算", "乗算", "整数商", "剰余"]),
+        ("比較", vec!["等値", "非等値", "未満", "以下", "超", "以上"]),
+    ] {
+        for operation in operations {
+            expressions.push(code_binary(
+                kind,
+                operation,
+                code_ref("x"),
+                code_constant("除数"),
+            ));
+        }
+    }
+    expressions.push(serde_json::json!({"種別":"選択","条件":code_binary("比較","未満",code_ref("x"),code_constant("除数")),"真":code_constant("真値"),"偽":code_constant("偽値")}));
+    expressions.push(
+        serde_json::json!({"種別":"添字","対象":code_ref("xs"),"位置":code_constant("位置")}),
+    );
+    let arithmetic = code_document(
+        "算術一覧",
+        &["x", "xs"],
+        vec![code_return(
+            serde_json::json!({"種別":"リスト","要素":expressions}),
+        )],
+        serde_json::json!({"除数":3,"真値":"yes","偽値":"no","位置":-1}),
+    );
+    let functions = vec![
+        code_call("合計", vec![code_ref("xs")]),
+        code_call("長さ", vec![code_ref("xs")]),
+        code_call(
+            "リスト化",
+            vec![code_call("範囲", vec![code_constant("回数")])],
+        ),
+        code_call("絶対値", vec![code_ref("x")]),
+        code_call("最小", vec![code_ref("xs")]),
+        code_call("最大", vec![code_ref("xs")]),
+        code_call("整列", vec![code_ref("xs")]),
+        code_call("リスト化", vec![code_ref("xs")]),
+        code_call("すべて", vec![code_ref("xs")]),
+        code_call("いずれか", vec![code_ref("xs")]),
+    ];
+    let builtins = code_document(
+        "組込一覧",
+        &["x", "xs"],
+        vec![code_return(
+            serde_json::json!({"種別":"リスト","要素":functions}),
+        )],
+        serde_json::json!({"回数":3}),
+    );
+    let key = "引用\"\\\n]; import os #";
+    let inert = code_document(
+        "資料",
+        &[],
+        vec![code_return(code_constant(key))],
+        serde_json::json!({key:"__import__('os').system('not executed')"}),
+    );
+    let empty = code_document("空処理", &[], vec![], serde_json::json!({}));
+    let empty_branches = code_document(
+        "空分岐",
+        &["xs"],
+        vec![
+            serde_json::json!({"種別":"分岐","条件":code_constant("条件"),"真":[],"偽":[{"種別":"反復","変数":"x","対象":code_ref("xs"),"手順":[]}]}),
+        ],
+        serde_json::json!({"条件":false}),
+    );
+    let unbound = code_document(
+        "未束縛",
+        &[],
+        vec![code_return(code_ref("未定義"))],
+        serde_json::json!({}),
+    );
+    vec![arithmetic, builtins, inert, empty, empty_branches, unbound]
+}
+
+#[test]
+fn structured_code_generation_route_all_ir_forms_and_separate_constants() {
+    for value in code_expression_documents() {
+        let scratch = Scratch::new();
+        let document = serde_json::to_string(&value).unwrap();
+        let request = format!("code-generate:\n{document}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        let report = assert_generated_code_artifact(&scratch.0, &result, &request, &document);
+        assert!(
+            !report["source"]
+                .as_str()
+                .unwrap()
+                .contains("system('not executed')")
+        );
+    }
+    let scratch = Scratch::new();
+    let first = code_square_sum_document();
+    let mut changed = first.clone();
+    changed["定数"]["閾値"] = serde_json::json!(731);
+    let mut sources = Vec::new();
+    for (version, value) in [("1", first), ("2", changed)] {
+        let document = serde_json::to_string(&value).unwrap();
+        let request = format!("code-generate:\n{document}");
+        let result = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "constants", "--version", version, &request],
+        ));
+        let report = assert_generated_code_artifact(&scratch.0, &result, &request, &document);
+        assert!(!report["source"].as_str().unwrap().contains("731"));
+        sources.push(report);
+    }
+    assert_eq!(sources[0]["source"], sources[1]["source"]);
+    assert_eq!(sources[0]["source_sha256"], sources[1]["source_sha256"]);
+    assert_ne!(sources[0]["constants"], sources[1]["constants"]);
+}
+
+#[test]
+fn structured_code_generation_route_strict_inputs_and_budget_stops() {
+    let valid = code_document(
+        "増分",
+        &["x"],
+        vec![code_return(code_binary(
+            "算術",
+            "加算",
+            code_ref("x"),
+            code_constant("幅"),
+        ))],
+        serde_json::json!({"幅":1}),
+    );
+    let mut variants = vec![serde_json::json!([]), serde_json::json!({"仕様":{}})];
+    for (pointer, replacement) in [
+        ("/余剰", serde_json::json!(true)),
+        ("/仕様/追加", serde_json::json!(true)),
+        ("/仕様/引数", serde_json::json!(["x", "x"])),
+        ("/仕様/引数", serde_json::json!(["sum"])),
+        ("/仕様/名前", serde_json::json!("x\nimport os")),
+        ("/仕様/名前", serde_json::json!("def")),
+        ("/仕様/名前", serde_json::json!("__x")),
+        ("/仕様/名前", serde_json::json!("Ａ")),
+        ("/仕様/名前", serde_json::json!("a\u{200c}")),
+        ("/仕様/名前", serde_json::json!("a・b")),
+        ("/仕様/引数", serde_json::json!(false)),
+        ("/仕様/手順", serde_json::json!({})),
+        ("/仕様/手順/0/追加", serde_json::json!(1)),
+        ("/仕様/手順/0/種別", serde_json::json!("実行")),
+        ("/仕様/手順/0/式/種別", serde_json::json!("eval")),
+        ("/仕様/手順/0/式/演算", serde_json::json!("累乗")),
+        ("/仕様/手順/0/式/右/キー", serde_json::json!("不足")),
+        ("/仕様/手順/0/式/左/名前", serde_json::json!("定数")),
+        ("/定数", serde_json::json!([])),
+        ("/定数/幅", serde_json::json!(1.0)),
+        ("/定数/幅", serde_json::json!("x".repeat(8193))),
+        ("/定数/幅", serde_json::json!(vec![0; 2049])),
+    ] {
+        let mut variant = valid.clone();
+        if pointer == "/余剰" {
+            variant["余剰"] = replacement;
+        } else if pointer == "/仕様/追加" {
+            variant["仕様"]["追加"] = replacement;
+        } else if pointer == "/仕様/手順/0/追加" {
+            variant["仕様"]["手順"][0]["追加"] = replacement;
+        } else {
+            *variant.pointer_mut(pointer).unwrap() = replacement;
+        }
+        variants.push(variant);
+    }
+    // Build mutations without deriving any expected source from the generator.
+    let mut depth = code_ref("x");
+    for _ in 0..25 {
+        depth = code_binary("算術", "加算", depth, code_ref("x"));
+    }
+    variants.push(code_document(
+        "深い式",
+        &["x"],
+        vec![code_return(depth)],
+        serde_json::json!({}),
+    ));
+    variants.push(code_document(
+        "多手順",
+        &[],
+        vec![code_return(code_constant("幅")); 129],
+        serde_json::json!({"幅":1}),
+    ));
+    let mut dead = valid.clone();
+    dead["仕様"]["手順"] = serde_json::json!([{"種別":"分岐","条件":code_constant("幅"),"真":[],"偽":[{"種別":"import"}]}]);
+    variants.push(dead);
+    for value in variants {
+        let scratch = Scratch::new();
+        let document = serde_json::to_string(&value).unwrap();
+        let request = format!("code-generate:\n{document}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("CODE_GENERATION_INPUT:"),
+            "{}",
+            result["reason"]
+        );
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(saved["result"], result);
+    }
+    let document = serde_json::to_string(&valid).unwrap();
+    for (body, code) in [
+        (format!("{document} trailing"), "INVALID_JSON_DOCUMENT:"),
+        (
+            document.replacen("\"幅\":1", "\"幅\":1,\"\\u5e45\":2", 1),
+            "DUPLICATE_JSON_KEY:",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("code-generate:\n{body}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        assert_eq!(inspect_normal_case(&scratch.0, "owner")["result"], result);
+    }
+    for (args, code) in [
+        (vec!["--max-actions", "2"], "ACTION_BUDGET_EXHAUSTED"),
+        (vec!["--deadline-ms", "0"], "RESOURCE_LIMIT"),
+        (vec!["--max-evidence-bytes", "1"], "RESOURCE_LIMIT"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("code-generate:\n{document}");
+        let mut args = args;
+        args.push(&request);
+        let result = stopped(&execute(&scratch.0, "owner", &args), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        assert_eq!(inspect_normal_case(&scratch.0, "owner")["result"], result);
+    }
+}
+
+#[test]
+fn structured_code_generation_route_file_retry_and_source_revision() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("generated.py");
+    let path_text = path.to_str().unwrap();
+    let mut value = code_document(
+        "増分",
+        &["x"],
+        vec![code_return(code_binary(
+            "算術",
+            "加算",
+            code_ref("x"),
+            code_constant("幅"),
+        ))],
+        serde_json::json!({"幅":1}),
+    );
+    let document = serde_json::to_string(&value).unwrap();
+    let request = format!("code-generate:\n{document}");
+    let args = [
+        "--input",
+        "source-history",
+        "--max-actions",
+        "4",
+        "--output",
+        path_text,
+        "--allow-write",
+        path_text,
+        &request,
+    ];
+    let first = record(&execute(&scratch.0, "owner", &args));
+    let report = assert_generated_code_artifact(&scratch.0, &first, &request, &document);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes, report["source"].as_str().unwrap().as_bytes());
+    assert_eq!(first["receipts"][0]["phase"], "CONFIRMED");
+    assert_eq!(first["receipts"][0]["target"], path_text);
+    assert_eq!(
+        first["receipts"][0]["content_sha256"],
+        report["source_sha256"]
+    );
+    assert_eq!(first["receipts"][0]["observed_bytes"], bytes.len());
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    value["仕様"]["手順"][0]["式"]["演算"] = serde_json::json!("減算");
+    let changed_document = serde_json::to_string(&value).unwrap();
+    let changed_request = format!("code-generate:\n{changed_document}");
+    let second = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "source-history",
+            "--version",
+            "2",
+            &changed_request,
+        ],
+    ));
+    let second_report =
+        assert_generated_code_artifact(&scratch.0, &second, &changed_request, &changed_document);
+    assert_ne!(report["source_sha256"], second_report["source_sha256"]);
+    assert_eq!(
+        inspect_normal_case(&scratch.0, "owner")["prior_results"][first["id"].as_str().unwrap()],
+        first
+    );
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+    assert_eq!(inspect_normal_case(&scratch.0, "owner")["result"], second);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    assert_eq!(
+        minidora_engine::store::Store::open(&scratch.0)
+            .unwrap()
+            .actions("owner", "normal-route")
+            .unwrap()
+            .len(),
+        1
+    );
+}

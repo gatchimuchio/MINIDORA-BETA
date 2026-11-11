@@ -313,11 +313,17 @@
       "capability_id": "B07",
       "requirement": "Coding, code explanation, revision and bounded executable checks",
       "required_observable": "Novel code request produces usable output and scoped diagnostics; never asserts unrun tests",
-      "implementation_disposition": "UNVERIFIED",
+      "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
-      "current_rust_paths": [],
-      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
-      "full_acceptance_gap": "Novel code request produces usable output and scoped diagnostics; never asserts unrun tests",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/code_generation.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/ports.rs",
+        "crates/minidora-domain/src/lib.rs"
+      ],
+      "evidence": "b07-code-generation-route-validation.json records an ordinary CLI connection for the inspected inherited structured function-generation IR, including all expression/statement forms, exact separate constants and source/root spans, actual source/render/report/file receipts, typed stops and retry/version history. Product Python parse/execution/input-output status is NOT_RUN. Seven new tests and six existing regressions pass; separate development QC parses nine generated sources and checks 20 finite cases (19 matching outputs, one expected unbound-name NameError). This is partial generation evidence, not full B07 acceptance",
+      "full_acceptance_gap": "General free-form code generation, explanation, repair, the inherited bounded source parser/interpreter/checker, name binding/type analysis, unseen task quality and full target/resource/Unicode compatibility remain unverified. Structured algorithm input supplies the algorithm; generation alone does not establish successful execution or usable code for every input",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
     },

@@ -1132,6 +1132,30 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::SourceReport;
             }
+            Intent::GenerateCode { document } => {
+                let report = match crate::code_generation::generate(document) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CODE_GENERATION_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                if serde_json::to_vec(&report)?.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "generated code report exceeds request evidence budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
+                result.dependencies.push(artifact);
+                units.push(report.source);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::JsonPointer { document, pointer } => {
                 match ports::json_pointer(document, pointer) {
                     Ok(value) => units.push(value),
