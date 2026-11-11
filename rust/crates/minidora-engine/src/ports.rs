@@ -5,7 +5,6 @@
 use minidora_domain::{
     EvidencePacket, Permissions, ResourceBudget, Result, digest, failure, identity,
 };
-use regex::Regex;
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
@@ -13,7 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::ops::Range;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1840,13 +1838,6 @@ pub fn json_table_group_statistics(
     group_column: &str,
     value_column: &str,
 ) -> Result<JsonTableGroupStatisticsReport> {
-    static QUANTITY: OnceLock<Regex> = OnceLock::new();
-    let quantity = QUANTITY.get_or_init(|| {
-        Regex::new(
-            r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
-        )
-        .expect("constant JSON table grouped-statistics quantity pattern")
-    });
     if document.len() > MAX_JSON_COMPARE_BYTES {
         return Err(failure(
             "JSON_TABLE_GROUP_STATISTICS_INPUT_LIMIT",
@@ -1948,10 +1939,10 @@ pub fn json_table_group_statistics(
             source_row_indices.push(*row_index);
             group_source_spans.push(json_comparison_span(document, group_node));
             value_source_spans.push(json_comparison_span(document, value_node));
-            if let Some(capture) = quantity.captures(&measured) {
+            if let Some((number, unit)) = crate::language::decimal_quantity_parts(&measured) {
                 quantity_count += 1;
-                values.push(capture[1].trim().to_string());
-                units.push(capture[2].to_string());
+                values.push(number.to_string());
+                units.push(unit.to_string());
             } else {
                 values.push(measured);
                 units.push(String::new());

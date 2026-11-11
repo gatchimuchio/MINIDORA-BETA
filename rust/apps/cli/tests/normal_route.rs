@@ -1626,6 +1626,618 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+const BASIC_SELECTION_CSV: &str = "id,\"値 名前\"\r\na,\"猫,北\"\r\nb,\"犬\r\n南\"\r\nc,\"\"\r\nd,\r\ne,9007199254740993\r\nf,\"say \"\"hi\"\"\"\r\n";
+const BASIC_NUMERIC_ARRAY: &str = "[1.20,-0,3e-1,2]";
+const BASIC_POINTER_JSON: &str = " \r\n {\"前\":\"猫\",\"a/b\":{\"~key\":[1.2300e+40,1e400,\"\\u732b\"]},\"samples\":[1.20,-0,3e-1,2]} \t\n";
+
+fn basic_raw_result(directory: &Path, result: &Value, request: &str, document: Option<&str>) {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    assert_eq!(result["render"]["status"], "RENDERED");
+    assert_eq!(result["content_plan"]["text"], result["text"]);
+    assert_eq!(
+        result["render"]["actual_sha256"],
+        minidora_domain::digest(result["text"].as_str().unwrap().as_bytes())
+    );
+    let saved = inspect_normal_case(directory, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    assert_eq!(saved["result"], *result);
+    if let Some(source) = document {
+        assert_eq!(saved["bundle"]["meaning"]["intent"]["document"], source);
+    }
+}
+
+fn assert_basic_csv_maps(
+    artifact: &Value,
+    source: &str,
+    raw: &[&str],
+    decoded: &[&str],
+    selection: bool,
+) {
+    assert_eq!(raw.len(), decoded.len());
+    let spans = artifact["spans"].as_array().unwrap();
+    assert_eq!(spans.len(), raw.len());
+    let mut cursor = 1;
+    for (row, span) in spans.iter().enumerate() {
+        let prefix = if row == 0 {
+            "id".to_string()
+        } else {
+            char::from(b'a' + (row - 1) as u8).to_string()
+        };
+        let fragment = if row == 0 {
+            format!("{prefix},{}", raw[row])
+        } else {
+            format!("\r\n{prefix},{}", raw[row])
+        };
+        let start = source.find(&fragment).unwrap() + usize::from(row > 0) * 2 + prefix.len() + 1;
+        let output_start = if selection && row > 0 {
+            Some(cursor)
+        } else {
+            None
+        };
+        let token = serde_json::to_string(decoded[row]).unwrap();
+        assert_eq!(
+            *span,
+            serde_json::json!({
+                "kind":if row==0 {"CSV_HEADER"} else if selection {"CSV_SELECTED_CELL"} else {"CSV_NUMERIC_OBSERVATION"},
+                "row":row,"column":1,"source_start":start,"source_end":start+raw[row].len(),
+                "source_text":raw[row],"decoded_value":decoded[row],"output_start":output_start,
+                "output_end":output_start.map(|p|p+token.len())
+            })
+        );
+        if output_start.is_some() {
+            let text = artifact["text"].as_str().unwrap();
+            assert_eq!(&text[cursor..cursor + token.len()], token);
+            cursor += token.len() + 1;
+        }
+    }
+    if selection && raw.len() > 1 {
+        assert_eq!(cursor, artifact["text"].as_str().unwrap().len());
+    }
+}
+
+#[test]
+fn basic_document_csv_selection_preserves_all_original_and_output_maps() {
+    for empty in [false, true] {
+        let source = if empty {
+            "id,\"値 名前\"\r\n"
+        } else {
+            BASIC_SELECTION_CSV
+        };
+        for header in ["CSVの列「値 名前」を選択して:", "csv-select \"値 名前\""] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, "owner", &[&request]));
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                "owner",
+                &result,
+                &request,
+                source,
+                "CSV_SELECT",
+            );
+            let raw = if empty {
+                vec!["\"値 名前\""]
+            } else {
+                vec![
+                    "\"値 名前\"",
+                    "\"猫,北\"",
+                    "\"犬\r\n南\"",
+                    "\"\"",
+                    "",
+                    "9007199254740993",
+                    "\"say \"\"hi\"\"\"",
+                ]
+            };
+            let decoded = if empty {
+                vec!["値 名前"]
+            } else {
+                vec![
+                    "値 名前",
+                    "猫,北",
+                    "犬\r\n南",
+                    "",
+                    "",
+                    "9007199254740993",
+                    "say \"hi\"",
+                ]
+            };
+            assert_eq!(
+                serde_json::from_str::<Value>(result["text"].as_str().unwrap()).unwrap(),
+                serde_json::json!(&decoded[1..])
+            );
+            assert_eq!(
+                artifact["parameters"],
+                serde_json::json!({"column_index":"1","has_header":"true","value_type":"STRING","column_name":"値 名前"})
+            );
+            assert_basic_csv_maps(&artifact, source, &raw, &decoded, true);
+        }
+    }
+}
+
+fn assert_basic_statistics(
+    stats: &Value,
+    inputs: &[&str],
+    normalized: &[&str],
+    sorted: &[&str],
+    expected: [&str; 7],
+    units: Option<(&str, &[&str])>,
+) {
+    assert_eq!(stats["count"], inputs.len());
+    assert_eq!(stats["input_values"], serde_json::json!(inputs));
+    assert_eq!(stats["normalized_values"], serde_json::json!(normalized));
+    assert_eq!(stats["sorted_values"], serde_json::json!(sorted));
+    assert_eq!(
+        stats["unit"],
+        serde_json::json!(units.map(|(unit, _)| unit))
+    );
+    assert_eq!(
+        stats["input_units"],
+        serde_json::json!(units.map(|(_, items)| items))
+    );
+    assert_eq!(
+        stats["variance_unit"],
+        serde_json::json!(units.map(|(unit, _)| format!("({unit})^2")))
+    );
+    for (field, value) in [
+        "sum",
+        "mean",
+        "median",
+        "min",
+        "max",
+        "population_variance",
+        "sample_variance",
+    ]
+    .into_iter()
+    .zip(expected)
+    {
+        assert_eq!(
+            stats[field],
+            if value.is_empty() {
+                Value::Null
+            } else {
+                serde_json::json!(value)
+            },
+            "{field}"
+        );
+    }
+    assert!(stats["scope"].as_str().unwrap().contains("no inference"));
+}
+
+#[test]
+fn basic_document_csv_statistics_keep_exact_expressions_units_and_source_cells() {
+    for (inputs, normalized, sorted, expected, units) in [
+        (
+            ["0.1", "0.2"],
+            ["1/10", "1/5"],
+            ["1/10", "1/5"],
+            ["3/10", "3/20", "3/20", "1/10", "1/5", "1/400", "1/200"],
+            None,
+        ),
+        (
+            ["1e3", "2e3"],
+            ["1000", "2000"],
+            ["1000", "2000"],
+            ["3000", "1500", "1500", "1000", "2000", "250000", "500000"],
+            None,
+        ),
+        (
+            ["1 km", "500 m"],
+            ["1000", "500"],
+            ["500", "1000"],
+            ["1500", "750", "750", "500", "1000", "62500", "125000"],
+            Some(("m", ["km", "m"])),
+        ),
+        (
+            ["1e3/2", "1e3-2e3"],
+            ["500", "-1000"],
+            ["-1000", "500"],
+            ["-500", "-250", "-250", "-1000", "500", "562500", "1125000"],
+            None,
+        ),
+    ] {
+        let source = format!("id,v\r\na,{}\r\nb,{}\r\n", inputs[0], inputs[1]);
+        for header in ["CSVの列「v」の統計量を計算して:", "csv-statistics v"] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, "owner", &[&request]));
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                "owner",
+                &result,
+                &request,
+                &source,
+                "CSV_STATISTICS",
+            );
+            let report: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                report["source_sha256"],
+                minidora_domain::digest(source.as_bytes())
+            );
+            assert_eq!(report["column_name"], "v");
+            assert_eq!(report["column_index"], 1);
+            assert_eq!(report["source_spans"], artifact["spans"]);
+            assert_basic_csv_maps(
+                &artifact,
+                &source,
+                &["v", inputs[0], inputs[1]],
+                &["v", inputs[0], inputs[1]],
+                false,
+            );
+            let input_values = if units.is_some() {
+                ["1", "500"]
+            } else {
+                inputs
+            };
+            assert_basic_statistics(
+                &report["statistics"],
+                &input_values,
+                &normalized,
+                &sorted,
+                expected,
+                units.as_ref().map(|(u, items)| (*u, items.as_slice())),
+            );
+            assert_eq!(artifact["parameters"]["observation_count"], "2");
+            assert_eq!(
+                artifact["parameters"]["interpretation"],
+                if units.is_some() {
+                    "exact_numeric_literal_with_unit"
+                } else {
+                    "exact_unitless_expression"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn basic_document_json_pointer_preserves_body_and_large_raw_lexemes() {
+    let root = BASIC_POINTER_JSON.trim();
+    for (pointer, expected) in [
+        ("/a~1b/~0key/0", "1.2300e+40"),
+        ("/a~1b/~0key/1", "1e400"),
+        ("/a~1b/~0key/2", r#""\u732b""#),
+        ("/samples", BASIC_NUMERIC_ARRAY),
+        ("", root),
+    ] {
+        for header in [
+            format!("json-pointer {pointer}\n"),
+            format!("JsOn-PoInTeR {pointer}\r\n"),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}{BASIC_POINTER_JSON}");
+            let result = record(&execute(&scratch.0, "owner", &[&request]));
+            assert_eq!(result["text"], expected);
+            assert_eq!(result["dependencies"], serde_json::json!([]));
+            basic_raw_result(&scratch.0, &result, &request, Some(BASIC_POINTER_JSON));
+        }
+    }
+}
+
+fn assert_basic_json_statistics(report: &Value, source: &str, pointer: &str, singleton: bool) {
+    assert_eq!(report["pointer"], pointer);
+    let array = if singleton {
+        "[5e-1]"
+    } else {
+        BASIC_NUMERIC_ARRAY
+    };
+    let tokens = if singleton {
+        vec!["5e-1"]
+    } else {
+        vec!["1.20", "-0", "3e-1", "2"]
+    };
+    let start = source.find(array).unwrap();
+    let mut expected = vec![
+        serde_json::json!({"kind":"JSON_ARRAY","source_start":start,"source_end":start+array.len(),"source_text":array,"array_index":null}),
+    ];
+    let mut cursor = start + 1;
+    for (index, token) in tokens.iter().enumerate() {
+        let at = cursor + source[cursor..].find(token).unwrap();
+        expected.push(serde_json::json!({"kind":"JSON_NUMBER","source_start":at,"source_end":at+token.len(),"source_text":token,"array_index":index}));
+        cursor = at + token.len();
+    }
+    assert_eq!(report["spans"], serde_json::json!(expected));
+    if singleton {
+        assert_basic_statistics(
+            &report["statistics"],
+            &["5e-1"],
+            &["1/2"],
+            &["1/2"],
+            ["1/2", "1/2", "1/2", "1/2", "1/2", "0", ""],
+            None,
+        );
+    } else {
+        assert_basic_statistics(
+            &report["statistics"],
+            &tokens,
+            &["6/5", "0", "3/10", "2"],
+            &["0", "3/10", "6/5", "2"],
+            ["7/2", "7/8", "3/4", "0", "2", "987/1600", "329/400"],
+            None,
+        );
+    }
+}
+
+#[test]
+fn basic_document_json_statistics_preserve_selected_array_and_number_lexemes() {
+    let nested = format!(" \r\n{{\"前\":\"猫\",\"a/b\":{{\"~key\":{BASIC_NUMERIC_ARRAY}}}}} \t");
+    for (source, pointer) in [
+        (nested.as_str(), "/a~1b/~0key"),
+        (BASIC_NUMERIC_ARRAY, ""),
+        ("[5e-1]", ""),
+    ] {
+        let singleton = source == "[5e-1]";
+        for header in [
+            format!("JSONの配列「{pointer}」の統計量を計算して:"),
+            format!(
+                "json-statistics {}",
+                serde_json::to_string(pointer).unwrap()
+            ),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let result = record(&execute(&scratch.0, "owner", &[&request]));
+            let report = normal_row_report(&scratch.0, "owner", &result, &request, source);
+            assert_basic_json_statistics(&report, source, pointer, singleton);
+        }
+    }
+}
+
+#[test]
+fn basic_document_actual_extractions_feed_statistics_and_explicit_report_projection() {
+    for japanese in [false, true] {
+        let scratch = Scratch::new();
+        let request = format!("json-pointer /samples\n{BASIC_POINTER_JSON}");
+        let extracted = record(&execute(&scratch.0, "owner", &[&request]));
+        assert_eq!(extracted["text"], BASIC_NUMERIC_ARRAY);
+        basic_raw_result(&scratch.0, &extracted, &request, Some(BASIC_POINTER_JSON));
+        let actual = extracted["text"].as_str().unwrap();
+        let statistics_request = format!(
+            "{}\n{actual}",
+            if japanese {
+                "JSONの配列「」の統計量を計算して:"
+            } else {
+                "json-statistics"
+            }
+        );
+        let result = record(&execute(&scratch.0, "owner", &[&statistics_request]));
+        let report = normal_row_report(&scratch.0, "owner", &result, &statistics_request, actual);
+        assert_basic_json_statistics(&report, actual, "", false);
+        let report_text = result["text"].as_str().unwrap();
+        let projection_request = format!("json-object-project [\"statistics\"]:\n{report_text}");
+        let projected = record(&execute(&scratch.0, "owner", &[&projection_request]));
+        let artifact = normal_object_projection(
+            &scratch.0,
+            "owner",
+            &projected,
+            &projection_request,
+            report_text,
+        );
+        assert_object_projection_maps(
+            &artifact,
+            report_text,
+            &[("statistics", r#""statistics""#, "/statistics")],
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(projected["text"].as_str().unwrap()).unwrap(),
+            serde_json::json!({"statistics":report["statistics"]})
+        );
+    }
+    let scratch = Scratch::new();
+    let request = format!("csv-select \"値 名前\"\n{BASIC_SELECTION_CSV}");
+    let selected = record(&execute(&scratch.0, "owner", &[&request]));
+    normal_document_artifact(
+        &scratch.0,
+        "owner",
+        &selected,
+        &request,
+        BASIC_SELECTION_CSV,
+        "CSV_SELECT",
+    );
+    let actual = selected["text"].as_str().unwrap();
+    let next = format!("json-pointer /0\n{actual}");
+    let result = record(&execute(&scratch.0, "owner", &[&next]));
+    basic_raw_result(&scratch.0, &result, &next, Some(actual));
+    assert_eq!(result["text"], serde_json::to_string("猫,北").unwrap());
+}
+
+#[test]
+fn basic_document_grouped_and_direct_statistics_use_the_same_numeric_classification() {
+    for (inputs, normalized, sorted, expected) in [
+        (
+            ["1e3", "2e3"],
+            ["1000", "2000"],
+            ["1000", "2000"],
+            ["3000", "1500", "1500", "1000", "2000", "250000", "500000"],
+        ),
+        (
+            ["1e-3", "2e-3"],
+            ["1/1000", "1/500"],
+            ["1/1000", "1/500"],
+            [
+                "3/1000",
+                "3/2000",
+                "3/2000",
+                "1/1000",
+                "1/500",
+                "1/4000000",
+                "1/2000000",
+            ],
+        ),
+        (
+            ["1e3/2", "1e3-2e3"],
+            ["500", "-1000"],
+            ["-1000", "500"],
+            ["-500", "-250", "-250", "-1000", "500", "562500", "1125000"],
+        ),
+    ] {
+        let csv = format!("g,v\r\na,{}\r\na,{}", inputs[0], inputs[1]);
+        let json =
+            serde_json::json!({"columns":["g","v"],"rows":[["a",inputs[0]],["a",inputs[1]]]})
+                .to_string();
+        for (kind, request, source) in [
+            (
+                0,
+                if inputs[0].contains('/') {
+                    format!("statistics {}", serde_json::to_string(&inputs).unwrap())
+                } else {
+                    format!("statistics [{},{}]", inputs[0], inputs[1])
+                },
+                String::new(),
+            ),
+            (1, format!("csv-group-statistics \"g\" \"v\":\n{csv}"), csv),
+            (
+                2,
+                format!("json-table-group-statistics \"g\" \"v\":\n{json}"),
+                json,
+            ),
+        ] {
+            let scratch = Scratch::new();
+            let result = record(&execute(&scratch.0, "owner", &[&request]));
+            let report = if kind == 0 {
+                basic_raw_result(&scratch.0, &result, &request, None);
+                serde_json::from_str::<Value>(result["text"].as_str().unwrap()).unwrap()
+            } else if kind == 1 {
+                normal_document_artifact(
+                    &scratch.0,
+                    "owner",
+                    &result,
+                    &request,
+                    &source,
+                    "CSV_GROUP_STATISTICS",
+                );
+                serde_json::from_str::<Value>(result["text"].as_str().unwrap()).unwrap()
+            } else {
+                normal_row_report(&scratch.0, "owner", &result, &request, &source)
+            };
+            let stats = if kind == 0 {
+                &report
+            } else {
+                assert_eq!(report["groups"].as_array().unwrap().len(), 1);
+                &report["groups"][0]["statistics"]
+            };
+            assert_basic_statistics(stats, &inputs, &normalized, &sorted, expected, None);
+        }
+    }
+    for (request, expected) in [("1e3+2e3", "3000"), ("1/2e3+1/4e3", "3/4000")] {
+        let scratch = Scratch::new();
+        let result = record(&execute(&scratch.0, "owner", &[request]));
+        basic_raw_result(&scratch.0, &result, request, None);
+        assert_eq!(result["calculation"]["exact_value"], expected);
+    }
+}
+
+#[test]
+fn basic_document_invalid_inputs_and_exponent_limit_bypasses_stop_durably() {
+    for (header, source, code) in [
+        ("csv-select missing", "id,v\r\na,1", "CSV_COLUMN"),
+        ("csv-select v", "v,v\r\n1,2", "DUPLICATE_COLUMNS"),
+        ("csv-select v", "id,v\na,1", "CSV_LINE_ENDING"),
+        ("csv-statistics missing", "id,v\r\na,1", "CSV_COLUMN"),
+        ("csv-statistics v", "id,v", "STATISTICS_INPUT_LIMIT"),
+        ("csv-statistics v", "id,v\r\na,", "MATH_INPUT_LIMIT"),
+        (
+            "csv-statistics v",
+            "id,v\r\na,1 m\r\nb,2",
+            "CSV_STATISTICS_MIXED_VALUES",
+        ),
+        (
+            "csv-statistics v",
+            "id,v\r\na,1 m\r\nb,2 s",
+            "UNIT_MISMATCH",
+        ),
+        ("json-pointer /x~2", "{\"x\":1}", "INVALID_JSON_POINTER"),
+        ("json-pointer /a/01", "{\"a\":[1]}", "INVALID_JSON_POINTER"),
+        (
+            "json-pointer /missing",
+            "{\"a\":1}",
+            "JSON_POINTER_NOT_FOUND",
+        ),
+        (
+            "json-pointer /a",
+            "{\"a\":1,\"x\":0,\"\\u0078\":2}",
+            "DUPLICATE_JSON_KEY",
+        ),
+        ("json-pointer /a", "{\"a\":1}x", "INVALID_JSON_DOCUMENT"),
+        (
+            "json-pointer /a",
+            "\u{a0}{\"a\":1}",
+            "INVALID_JSON_DOCUMENT",
+        ),
+        (
+            "json-statistics /a",
+            "{\"a\":1}",
+            "JSON_STATISTICS_NOT_ARRAY",
+        ),
+        (
+            "json-statistics /a",
+            "{\"a\":[]}",
+            "JSON_STATISTICS_INPUT_LIMIT",
+        ),
+        (
+            "json-statistics /a",
+            "{\"a\":[1,\"2\"]}",
+            "JSON_STATISTICS_NON_NUMERIC",
+        ),
+        (
+            "json-statistics /a",
+            "{\"a\":[[1]]}",
+            "JSON_STATISTICS_NON_NUMERIC",
+        ),
+        (
+            "json-statistics /missing",
+            "{\"a\":[1]}",
+            "JSON_POINTER_NOT_FOUND",
+        ),
+        (
+            "csv-select v and send",
+            "id,v\r\na,1",
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "csv-statistics v and send",
+            "id,v\r\na,1",
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "json-statistics /a and send",
+            "{\"a\":[1]}",
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "json-pointer /a and send",
+            "{\"a\":1}",
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        assert_comparison_stop(header, source, code);
+    }
+    for value in ["1e1025", "1e1025/m"] {
+        let csv = format!("g,v\r\na,{value}\r\na,{value}");
+        let json =
+            serde_json::json!({"columns":["g","v"],"rows":[["a",value],["a",value]]}).to_string();
+        for (header, source) in [
+            ("csv-statistics v".to_string(), csv.clone()),
+            ("csv-group-statistics \"g\" \"v\":".to_string(), csv),
+            ("json-table-group-statistics \"g\" \"v\":".to_string(), json),
+            (
+                if value.contains('/') {
+                    format!(
+                        "statistics {}",
+                        serde_json::to_string(&[value, value]).unwrap()
+                    )
+                } else {
+                    format!("statistics [{value},{value}]")
+                },
+                String::new(),
+            ),
+            (format!("{value}+{value}"), String::new()),
+        ] {
+            assert_comparison_stop(&header, &source, "EXPONENT_LIMIT");
+        }
+    }
+}
+
 const COMPARE_LEFT_JSON: &str = r#"{"columns":["id","名前","値"],"rows":[["2","猫","001"],["gone","犬\r\n南",""],["1","同じ","1"]]}"#;
 const COMPARE_RIGHT_JSON: &str = r#"{"columns":["\u0069d","名前","値"],"rows":[["1","\u540cじ","1"],["\u0032","狐","1"],["new","鳥","9"]]}"#;
 const COMPARE_EQUAL_JSON: &str = r#"{"columns":["id","名前","値"],"rows":[["1","\u540cじ","1"],["2","\u732b","001"],["gone","犬\r\n南",""]]}"#;

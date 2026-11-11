@@ -1,0 +1,411 @@
+{
+  "work_item": "B04 ordinary CLI basic extraction/statistics, shared scientific-number identity and raw JSON Pointer correction",
+  "recorded_at": "2026-11-11T05:11:11Z",
+  "base_commit": "a1169e4a8d6de1411d54ab516787fd9baeea875e",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Original CSV/JSON input -> sealed input -> unique Core -> exact selected data/statistics with original source evidence and typed stops -> actual caller-declared downstream consumption",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v34-extraction-number-identity",
+  "prior_parser_version": "declarative-ja-en-v33-table-conversion-case-admission",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_QC_CORRECTION_AND_EVIDENCE",
+  "product_source_changed": true,
+  "source_snapshot_sha256": "a7559a3a44126f95617dc45b35e763a6fa3fb804fe7d1d22d7aa505f4ffd7371",
+  "source_snapshot_method": "SHA-256 of compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-engine/src/document.rs": "1b81551ac9729ad89e0f7abf3eb1b4f0c363abd18b7577cfb645b63eaa4c683f",
+    "crates/minidora-engine/src/input.rs": "63d53a95f0b1adef2739575626ff041aeaa94220e183af9e99659591162c0c5a",
+    "crates/minidora-engine/src/language.rs": "15294a16f48efb50ce1449d4b494a1da077428f7679ec5e6c34fe531e1978199",
+    "crates/minidora-engine/src/ports.rs": "928230efaf5fd3a46869b1ff51282c03adc027031ecd835c9da33b40fc0ad49d"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "69ae50e4139eb7f55ca58ce462588475140a78ab4a475cf76d8f5823b1e65d2f"
+  },
+  "component_test_locations": [
+    "crates/minidora-engine/src/input.rs::tests",
+    "crates/minidora-engine/src/language.rs::tests"
+  ],
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "248fcc9b5e6167c1c831634b476a93938b775271e0f69e0242c14e5763530a4b"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b04-basic-extraction-statistics-route/verification MINIDORA_KEEP_TEST_STATE=1",
+  "baseline_defects": {
+    "evidence": "baseline/observations.json",
+    "stores": 8,
+    "execute_requests": 8,
+    "binary_sha256": "a3068e1e02eca54d803f3c3a3e75d911ef83b228680d586c32db9aeaa1936bdf",
+    "observations": [
+      "CSV statistics, CSV/JSON grouped statistics and direct statistics misread 1e3/2e3 as values 1/2 with unit e3, returning mean 3/2 e3 under COMMIT.",
+      "1e3+2e3 returned 3 e3 under COMMIT.",
+      "CSV values 1e1025/2e1025 returned a unit e1025 result, bypassing the scalar exponent limit.",
+      "JSON Pointer raw 1e400 failed in preliminary serde_json::Value parsing with INPUT_FAILURE/FAIL and no sealed bundle.",
+      "A successful Pointer preserved its selected raw 1.2300e+40 lexeme but trimmed original body whitespace in MeaningIR."
+    ],
+    "driver_note": "The initial diagnostic driver assumed every result had a sealed bundle and stopped after saving pointer-large. Existing seven results were recovered from saved stdout/inspection and only the remaining whitespace case was then executed; no baseline request was rerun."
+  },
+  "corrections": [
+    "Share decimal quantity classification across CSV statistics, CSV grouped statistics, JSON grouped statistics and direct-statistics intent. Unitless numeric tokens are delegated to the existing exact parser; maximal numeric prefixes cannot be shortened to invent a unit.",
+    "Apply the same precedence/maximal-prefix guard before unit addition, including ratios whose denominator has an exponent. Existing syntax, exponent, depth, operation and rational-bit bounds remain in the exact evaluators.",
+    "Preserve explicit unit suffixes such as 1e3m, 1 eV, 1e3 e3, 1/2m and 1/2 e3. No unit-name blacklist or floating-point conversion is introduced.",
+    "Separate Pointer header/body with horizontal whitespace and explicit LF/CRLF, retain the complete body, and remove preliminary serde_json::Value parsing. The source-preserving port parser validates the entire document and returns the selected raw lexeme.",
+    "Advance parser revision to v34 because Pointer body identity/admission and statistical intent classification change. No schema or persisted historical result is rewritten."
+  ],
+  "failure_and_return": [
+    {
+      "log": "verification/fmt-apply.log",
+      "cause": "New test JSON macro omitted one outer rows-array closing bracket.",
+      "correction": "Restore the missing bracket; production code and expected results unchanged."
+    },
+    {
+      "log": "verification/identity-unit-tests.log",
+      "result": "1 pass/1 fail",
+      "cause": "The new direct-statistics fixture supplied arithmetic expressions as bare JSON numeric elements; the existing contract requires quoted exact expressions.",
+      "correction": "Quote expressions in direct-statistics arrays; retain bare scientific number literals and the same mathematical expectations. Corrected component run passes both tests."
+    },
+    {
+      "log": "verification/basic-route-tests.log",
+      "result": "6 pass/1 fail",
+      "cause": "The test oracle searched d, without a row boundary and matched the header id, rather than the unquoted empty data row. Product span was correctly zero-width at byte 52.",
+      "correction": "Anchor data-row fragments to CRLF. Same raw/output and numeric expectations; all seven focused CLI tests then pass."
+    }
+  ],
+  "tests_and_route": {
+    "normal_cli_route_executed": true,
+    "route_method": "Real CLI processes with fresh stores, actual authorized returned dependency reads and separate inspect of original requests/complete results. Pointer has no result-artifact dependency; CSV and JSON statistics retain their declared artifacts. Actual output bytes become new explicit requests.",
+    "final_new_cli_unique_tests_passed": 7,
+    "final_new_component_unique_tests_passed": 2,
+    "existing_unique_regression_tests_passed": 3,
+    "final_scoped_unique_tests_passed": 12,
+    "final_primary_cli_run": {
+      "fresh_stores": 75,
+      "execute_requests": 80,
+      "breakdown": {
+        "csv_selection": 4,
+        "csv_statistics": 8,
+        "json_pointer": 10,
+        "json_statistics": 6,
+        "actual_output_pipelines": 3,
+        "shared_numeric_regression": 11,
+        "typed_stops": 33
+      }
+    },
+    "earlier_failed_cli_run": {
+      "fresh_stores": 72,
+      "execute_requests": 77,
+      "passed": 6,
+      "failed": 1
+    },
+    "additional_grouped_filter_run": {
+      "tests_passed": 2,
+      "fresh_stores": 14,
+      "execute_requests": 14,
+      "overlap": "One new shared-numeric test reruns; one existing three-case CSV grouped-statistics test is distinct. These are not two additional unique new tests."
+    },
+    "component_regression": "Two existing exact arithmetic/unit-addition tests pass. New component tests cover source/body identity, scientific-statistics intent, quantity classification, rational/unit controls, exponent limits and correction.",
+    "all_batch_runtime_totals": {
+      "stores": 169,
+      "stored_input_identities": 187,
+      "execute_requests_including_eight_exact_retries": 195,
+      "baseline_execute_requests": 8,
+      "versioned_recompute_execute_requests": 16
+    },
+    "full_workspace_tests": "NOT_RUN; focused new routes, affected numeric components and selected existing regressions with workspace all-target compile/lint. No complete B04, R2 or current-workspace runtime acceptance claim."
+  },
+  "command_results": [
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route basic_document -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/basic-route-tests-final.log",
+      "passed": 7,
+      "failed": 0,
+      "filtered_out": 62
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route basic_document -- --nocapture",
+      "exit_code": 101,
+      "log": "verification/basic-route-tests.log",
+      "passed": 6,
+      "failed": 1,
+      "filtered_out": 62
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "verification/build.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-contract-fixture.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-final.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy-contract-fixture.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy-final.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy.log"
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply-contract-fixture.log"
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply-corrected.log"
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 1,
+      "log": "verification/fmt-apply.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt-contract-fixture.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt-final.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route grouped_ -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/grouped-regression-tests.log",
+      "passed": 2,
+      "failed": 0,
+      "filtered_out": 67
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine basic_document -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/identity-unit-tests-contract-fixture.log",
+      "passed": 2,
+      "failed": 0,
+      "filtered_out": 111
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine basic_document -- --nocapture",
+      "exit_code": 101,
+      "log": "verification/identity-unit-tests.log",
+      "passed": 1,
+      "failed": 1,
+      "filtered_out": 111
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine language::tests::exact_ -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/unit-regression-tests.log",
+      "passed": 2,
+      "failed": 0,
+      "filtered_out": 111
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "fixtures": {
+    "BASIC_SELECTION_CSV": "id,\"値 名前\"\r\na,\"猫,北\"\r\nb,\"犬\r\n南\"\r\nc,\"\"\r\nd,\r\ne,9007199254740993\r\nf,\"say \"\"hi\"\"\"\r\n",
+    "BASIC_NUMERIC_ARRAY": "[1.20,-0,3e-1,2]",
+    "BASIC_POINTER_JSON": " \r\n {\"前\":\"猫\",\"a/b\":{\"~key\":[1.2300e+40,1e400,\"\\u732b\"]},\"samples\":[1.20,-0,3e-1,2]} \t\n"
+  },
+  "route_observations": [
+    {
+      "intent": "CsvSelect",
+      "cases": 4,
+      "languages": [
+        "Japanese",
+        "lowercase English"
+      ],
+      "evidence": "Non-first quoted header with a space; six exact string cells including comma, quoted CRLF, quoted empty, unquoted zero-width empty, large integer-looking string and escaped quotes. Header-only returns []. Every complete source/output span and exact parameters are checked."
+    },
+    {
+      "intent": "CsvStatistics",
+      "cases": 8,
+      "languages": [
+        "Japanese",
+        "lowercase English"
+      ],
+      "evidence": "Two-value exact decimals, 1e3/2e3 scientific numbers, 1 km/500 m with exact conversion, and expressions 1e3/2 plus 1e3-2e3. All numeric fields, input/normalized/sorted values, units, original header/member spans and report/artifact equality are checked. CSV report spans have no output offsets."
+    },
+    {
+      "intent": "JsonPointer",
+      "cases": 10,
+      "languages": [
+        "lowercase English",
+        "mixed-case English"
+      ],
+      "evidence": "LF and CRLF headers preserve the entire padded UTF-8 body. Five selections check exact 1.2300e+40, 1e400, escaped string, numeric array and root lexemes. COMMIT/COMPUTED, render hash, dependencies=[], original request/body and complete result match separate inspect. No Japanese Pointer grammar is claimed."
+    },
+    {
+      "intent": "JsonStatistics",
+      "cases": 6,
+      "languages": [
+        "Japanese",
+        "lowercase English"
+      ],
+      "evidence": "Escaped nested Pointer, root array and singleton retain complete source hash and array/number spans. [1.20,-0,3e-1,2] yields sum 7/2, mean 7/8, median 3/4, population variance 987/1600 and sample variance 329/400. Singleton has null sample variance. Spans carry raw text/index, not individual digest fields."
+    },
+    {
+      "route": "Actual extractions -> downstream consumers",
+      "stores": 3,
+      "execute_requests": 8,
+      "evidence": "Two real Pointer-selected arrays feed root JSON statistics and then actual report statistics-field projection, checking raw source/output field maps. A real CSV-selected string array feeds Pointer /0. These are caller-fed explicit requests, not automatic numeric coercion or an inferred Core plan."
+    },
+    {
+      "route": "Shared scientific classification",
+      "cases": 11,
+      "evidence": "CSV/JSON grouped and direct statistics share explicit numeric expectations for positive/negative exponents and quoted exact expressions. Two normal arithmetic cases verify 3000 and 3/4000. Component controls preserve explicit e3/eV, scientific quantities and rational quantities."
+    },
+    {
+      "route": "Typed stops",
+      "cases": 33,
+      "languages": [
+        "English headers or ASCII arithmetic/statistics inputs"
+      ],
+      "baseline_cases": 23,
+      "exponent_limit_cases": 10,
+      "evidence": "Missing/duplicate CSV headers, bare LF, empty/mixed/incompatible statistics, Pointer escape/index/missing/duplicate/outside-selected/malformed/Unicode-whitespace errors, non-array/empty/mixed/nested JSON statistics and unsupported suffixes. Ten exponent stops exercise five shared callers with 1e1025 and 1e1025/m. Every stop is SUSPEND/UNKNOWN with no result dependency and original request/complete durable inspection."
+    }
+  ],
+  "versioned_recomputation": {
+    "new_binary_sha256": "248fcc9b5e6167c1c831634b476a93938b775271e0f69e0242c14e5763530a4b",
+    "new_parser_version": "declarative-ja-en-v34-extraction-number-identity",
+    "execute_requests": 16,
+    "new_input_identities": 8,
+    "stores_reused": 8,
+    "observations": [
+      {
+        "case": "calculation-exponent",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      },
+      {
+        "case": "csv-exponent",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      },
+      {
+        "case": "csv-exponent-limit",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "SUSPEND",
+        "old_result_retained": true,
+        "version_2_exit": 2
+      },
+      {
+        "case": "csv-group-exponent",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      },
+      {
+        "case": "json-group-exponent",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      },
+      {
+        "case": "pointer-large",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "FAIL",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      },
+      {
+        "case": "pointer-whitespace",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      },
+      {
+        "case": "statistics-exponent",
+        "exact_retry_preserves_old_result": true,
+        "old_lifecycle": "COMMIT",
+        "version_2_lifecycle": "COMMIT",
+        "old_result_retained": true,
+        "version_2_exit": 0
+      }
+    ]
+  },
+  "versioned_recomputation_boundary": "All eight exact input-ID/version-1 retries preserve their historical result, including wrong COMMIT and old input FAIL. Explicit version 2 uses v34, produces corrected values/raw selection or EXPONENT_LIMIT suspension, and retains every original result in prior_results.",
+  "observable_classification_change": "Malformed Pointer bodies previously failed during input pre-parsing; they now reach the document port and suspend as DOCUMENT_OPERATION_FAILURE with the underlying document code. Invalid Pointer prefixes still fail at input admission; that unchanged prefix-failure path was not part of the final 33 CLI stop cases.",
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b04-basic-extraction-statistics-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b04-basic-extraction-statistics-route/asset-inventory.json",
+    "manifest_sha256": "fde916938a832334e2e163cd639c39c11f2ec6efef11608aee56a327ade1a7c9",
+    "file_count_including_manifest": 3655,
+    "stores": 169,
+    "stored_input_identities": 187,
+    "remote_storage_verification": "NOT_RUN; local state/log retention only, no OneDrive storage claim"
+  },
+  "known_limits": [
+    "Authored fixed examples are scoped QC, not an independent held-out B04 acceptance population.",
+    "Symbolic unit labels such as e and e- remain part of the existing quantity grammar; this work does not claim rejection of every incomplete exponent-like spelling.",
+    "Pointer reports raw selected JSON and no result artifact; no synthetic per-value source-map artifact or implicit chained Core plan was added.",
+    "Broader extraction/statistical populations, resource-boundary matrices, full workspace runtime regression, external LIVE, Windows/macOS, physical 8 GB QA, release and deployment are NOT_RUN."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; selected normal extraction/statistics and typed-stop routes plus two observed causes corrected, not complete capability acceptance",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  },
+  "traceability_update": "B04 trace adds the observed CsvSelect and legacy JsonPointer entry-to-consumer routes and current scoped results; the observation paths add language.rs for shared numeric classification. Requirement/disposition/acceptance and population are preserved."
+}

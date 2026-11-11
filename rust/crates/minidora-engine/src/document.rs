@@ -2,10 +2,8 @@
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
 use minidora_domain::{Result, digest, failure};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
 
 const MAX_DOCUMENT_BYTES: usize = 256_000;
 const MAX_RESULT_BYTES: usize = 256_000;
@@ -359,13 +357,6 @@ pub fn csv_select(document: &str, column: &str) -> Result<DocumentResult> {
 /// decimal literal plus a unit in every row; mixed/ambiguous interpretation
 /// stops before producing a result.
 pub fn csv_statistics(document: &str, column: &str) -> Result<DocumentResult> {
-    static QUANTITY: OnceLock<Regex> = OnceLock::new();
-    let quantity = QUANTITY.get_or_init(|| {
-        Regex::new(
-            r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
-        )
-        .expect("constant CSV quantity pattern")
-    });
     let table = parse_csv(document, true)?;
     let header = table.header.as_ref().expect("explicit CSV header");
     let index = header
@@ -385,10 +376,10 @@ pub fn csv_statistics(document: &str, column: &str) -> Result<DocumentResult> {
     )];
     for (row_index, row) in table.rows.iter().enumerate() {
         let cell = &row[index];
-        if let Some(capture) = quantity.captures(&cell.value) {
+        if let Some((number, unit)) = crate::language::decimal_quantity_parts(&cell.value) {
             quantity_count += 1;
-            values.push(capture[1].trim().to_string());
-            units.push(capture[2].to_string());
+            values.push(number.to_string());
+            units.push(unit.to_string());
         } else {
             values.push(cell.value.clone());
             units.push(String::new());
@@ -739,13 +730,6 @@ pub fn csv_group_statistics(
     group_column: &str,
     value_column: &str,
 ) -> Result<DocumentResult> {
-    static QUANTITY: OnceLock<Regex> = OnceLock::new();
-    let quantity = QUANTITY.get_or_init(|| {
-        Regex::new(
-            r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
-        )
-        .expect("constant CSV grouped-statistics quantity pattern")
-    });
     let table = parse_csv(document, true)?;
     if table.rows.is_empty() {
         return Err(failure(
@@ -836,10 +820,11 @@ pub fn csv_group_statistics(
                 group_index,
                 None,
             ));
-            if let Some(capture) = quantity.captures(&value_cell.value) {
+            if let Some((number, unit)) = crate::language::decimal_quantity_parts(&value_cell.value)
+            {
                 quantity_count += 1;
-                values.push(capture[1].trim().to_string());
-                units.push(capture[2].to_string());
+                values.push(number.to_string());
+                units.push(unit.to_string());
             } else {
                 values.push(value_cell.value.clone());
                 units.push(String::new());

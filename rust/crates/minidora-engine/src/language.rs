@@ -268,6 +268,51 @@ pub fn calculate_sequence_expression(
     })
 }
 
+/// Numeric tokens take precedence over an inferred unit suffix. This does not
+/// certify expression syntax: the exact calculator still validates the entire
+/// expression and enforces magnitude, exponent, depth and operation limits.
+fn is_unitless_numeric_text(text: &str) -> bool {
+    static NUMERIC: OnceLock<Regex> = OnceLock::new();
+    NUMERIC
+        .get_or_init(|| {
+            Regex::new(
+                r"^(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[-+*/%^()]|[ \t\r\n])+$",
+            )
+            .expect("unitless numeric token pattern is static")
+        })
+        .is_match(text.trim())
+}
+
+pub(crate) fn decimal_quantity_parts(text: &str) -> Option<(&str, &str)> {
+    if is_unitless_numeric_text(text) {
+        return None;
+    }
+    static QUANTITY: OnceLock<Regex> = OnceLock::new();
+    let captures = QUANTITY
+        .get_or_init(|| {
+            Regex::new(r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$")
+                .expect("decimal quantity pattern is static")
+        })
+        .captures(text)?;
+    let number = captures.get(1)?.as_str();
+    if numeric_operand_prefix_len(text.trim_start()) > number.len() {
+        return None;
+    }
+    Some((number, captures.get(2)?.as_str()))
+}
+
+// A quantity match must not shorten an exponent or a ratio to invent a unit.
+fn numeric_operand_prefix_len(text: &str) -> usize {
+    static PREFIX: OnceLock<Regex> = OnceLock::new();
+    PREFIX
+        .get_or_init(|| {
+            Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:/[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)?")
+                .expect("numeric operand prefix pattern is static")
+        })
+        .find(text)
+        .map_or(0, |value| value.end())
+}
+
 fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Calculation>> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     let pattern = PATTERN.get_or_init(|| {
@@ -277,6 +322,14 @@ fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Ca
     let Some(captures) = pattern.captures(normalized) else {
         return Ok(None);
     };
+    for (number_index, unit_index) in [(1, 2), (4, 5)] {
+        let number = captures.get(number_index).expect("operand number exists");
+        let unit = captures.get(unit_index).expect("operand unit exists");
+        let operand = &normalized[number.start()..unit.end()];
+        if is_unitless_numeric_text(operand) || numeric_operand_prefix_len(operand) > number.len() {
+            return Ok(None);
+        }
+    }
     let left = exact_rational(captures.get(1).expect("left value exists").as_str())?;
     let left_unit = captures.get(2).expect("left unit exists").as_str();
     let operation = captures.get(3).expect("operator exists").as_str();
@@ -1373,6 +1426,58 @@ impl SequenceModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn basic_document_numeric_tokens_cannot_be_reclassified_as_unit_suffixes() {
+        for text in [
+            "1e3",
+            "1e-3",
+            "1e3/2",
+            "1e3-2e3",
+            "1/2e3",
+            "1e1025/m",
+            "1/2e1025/m",
+        ] {
+            assert_eq!(decimal_quantity_parts(text), None, "{text}");
+        }
+        for (text, number, unit) in [
+            ("1e3m", "1e3", "m"),
+            ("1e3 e3", "1e3", "e3"),
+            ("1 eV", "1", "eV"),
+            ("1 e1025/m", "1", "e1025/m"),
+        ] {
+            assert_eq!(decimal_quantity_parts(text), Some((number, unit)));
+        }
+        for (text, expected) in [
+            ("1e3+2e3", "3000"),
+            ("1e3-2e3", "-1000"),
+            ("1/2e3+1/4e3", "3/4000"),
+            ("1e3/2+1e3/4", "750"),
+            ("1e3m+2e3m", "3000 m"),
+            ("1e3 e3+2e3 e3", "3000 e3"),
+            ("1 eV+2 eV", "3 eV"),
+            ("1/2m+1/4m", "3/4 m"),
+            ("1/2 e3+1/4 e3", "3/4 e3"),
+        ] {
+            assert_eq!(calculate(text).unwrap().exact_value, expected, "{text}");
+        }
+        for text in [
+            "1e1025+2e1025",
+            "1e1025/m+2e1025/m",
+            "1/2e1025/m+1/4e1025/m",
+        ] {
+            assert!(
+                matches!(calculate(text), Err(minidora_domain::Error::Contract {code,..}) if code=="EXPONENT_LIMIT"),
+                "{text}"
+            );
+        }
+        let prior = calculate("1e3+2e3").unwrap();
+        assert_eq!(
+            correct_binary_operand(&prior, 1, "3e3")
+                .unwrap()
+                .exact_value,
+            "4000"
+        );
+    }
     #[test]
     fn exact_arithmetic_and_precedence() {
         for (input, expected) in [

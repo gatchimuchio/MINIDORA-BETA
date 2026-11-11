@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v33-table-conversion-case-admission";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v34-extraction-number-identity";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -805,10 +805,9 @@ fn interpret(text: &str) -> Result<Intent> {
             id: capture[1].into(),
         });
     }
-    if let Some(capture) = regex(r"(?is)^json-pointer\s+(\S*)\s*\n(.*)$")?.captures(text) {
+    if let Some(capture) = regex(r"(?is)^json-pointer[ \t]+(\S*)[ \t]*\r?\n(.*)$")?.captures(text) {
         let pointer = capture[1].to_string();
-        let document = capture[2].trim().to_string();
-        let _: serde_json::Value = serde_json::from_str(&document)?;
+        let document = capture[2].to_string();
         if !pointer.is_empty() && !pointer.starts_with('/') {
             return Err(failure(
                 "INVALID_JSON_POINTER",
@@ -1143,17 +1142,14 @@ fn quantity_statistics_intent(text: &str) -> Result<Option<Intent>> {
     else {
         return Ok(None);
     };
-    let quantity = regex(
-        r"^\s*([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$",
-    )?;
     let mut values = Vec::new();
     let mut units = Vec::new();
     for item in payload.split(',') {
-        let Some(capture) = quantity.captures(item) else {
+        let Some((number, unit)) = crate::language::decimal_quantity_parts(item) else {
             return Ok(None);
         };
-        values.push(capture[1].to_string());
-        units.push(capture[2].to_string());
+        values.push(number.to_string());
+        units.push(unit.to_string());
         if values.len() > 4096 {
             return Ok(Some(Intent::Unknown {
                 reason: "statistical input exceeds the 4096-observation limit".into(),
@@ -1653,6 +1649,29 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn basic_document_pointer_body_and_scientific_statistics_identity_are_preserved() {
+        let document = " \r\n {\"数\":1e400,\"s\":\"\\u732b\"} \t\n";
+        for header in [
+            "json-pointer /数\n",
+            "JsOn-PoInTeR /数\r\n",
+            "json-pointer \n",
+        ] {
+            let request = RequestEnvelope::new("c", "i", "actor", &format!("{header}{document}"));
+            let bundle = seal(&request, None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent,Intent::JsonPointer {document:body,..} if body==document)
+            );
+            assert_eq!(bundle.request.text, request.text);
+        }
+        for text in ["statistics [1e3,2e3]", r#"統計 ["1e3/2","1e3-2e3"]"#] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(matches!(
+                &bundle.meaning.intent,
+                Intent::Statistics { units: None, .. }
+            ));
+        }
+    }
     #[test]
     fn arithmetic_and_one_time_source_capture() {
         let request = RequestEnvelope::new("c", "i", "actor", "２＋３を計算して");
