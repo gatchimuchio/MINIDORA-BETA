@@ -521,6 +521,8 @@ fn named_rows_as_json(
     mut spans: Vec<DocumentSpan>,
 ) -> Result<DocumentResult> {
     let mut text = String::from("{\"columns\":[");
+    let header_kind = format!("{operation}_HEADER");
+    let cell_kind = format!("{operation}_CELL");
     for (index, cell) in header.iter().enumerate() {
         if index > 0 {
             text.push(',');
@@ -529,7 +531,7 @@ fn named_rows_as_json(
             &mut text,
             document,
             cell,
-            "CSV_FILTER_HEADER",
+            &header_kind,
             Some(0),
             index,
             &mut spans,
@@ -549,7 +551,7 @@ fn named_rows_as_json(
                 &mut text,
                 document,
                 cell,
-                "CSV_FILTER_CELL",
+                &cell_kind,
                 Some(source_row + 1),
                 index,
                 &mut spans,

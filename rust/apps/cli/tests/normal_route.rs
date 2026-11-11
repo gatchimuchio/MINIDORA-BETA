@@ -1626,6 +1626,406 @@ fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
     )
 }
 
+const ROW_CSV: &str = "id,状態,順位\r\n\"猫,甲\",open,2\r\n犬,Open,10\r\n鳥,open ,2\r\n魚,open,10\r\n狐, open,01\r\n馬,open,2\r\n";
+const ROW_JSON: &str = r#"{"columns":["id","状態","順位"],"rows":[["\u732b,甲","open","2"],["犬","Open","10"],["鳥","open ","2"],["魚","\u006fpen","10"],["狐"," open","01"],["馬","open","2"]]}"#;
+const ROW_VALUES: [[&str; 3]; 7] = [
+    ["id", "状態", "順位"],
+    ["猫,甲", "open", "2"],
+    ["犬", "Open", "10"],
+    ["鳥", "open ", "2"],
+    ["魚", "open", "10"],
+    ["狐", " open", "01"],
+    ["馬", "open", "2"],
+];
+const ROW_CSV_TOKENS: [[&str; 3]; 7] = [
+    ["id", "状態", "順位"],
+    ["\"猫,甲\"", "open", "2"],
+    ["犬", "Open", "10"],
+    ["鳥", "open ", "2"],
+    ["魚", "open", "10"],
+    ["狐", " open", "01"],
+    ["馬", "open", "2"],
+];
+
+fn assert_csv_row_maps(artifact: &Value, selected: &[usize], filter: Option<&str>) {
+    let source = artifact["source_document"].as_str().unwrap();
+    let text = artifact["text"].as_str().unwrap();
+    let table: Value = serde_json::from_str(text).unwrap();
+    let rows: Vec<_> = selected.iter().map(|index| ROW_VALUES[index + 1]).collect();
+    assert_eq!(
+        table,
+        serde_json::json!({"columns": ROW_VALUES[0], "rows": rows})
+    );
+    let operation = if filter.is_some() {
+        "CSV_FILTER"
+    } else {
+        "CSV_SORT"
+    };
+    let mut expected = std::collections::BTreeSet::new();
+    for column in 0..3 {
+        expected.insert((format!("{operation}_HEADER"), 0, column));
+        for index in selected {
+            expected.insert((format!("{operation}_CELL"), index + 1, column));
+        }
+    }
+    if let Some(query) = filter {
+        assert_eq!(artifact["parameters"]["equals"], query);
+        assert_eq!(
+            artifact["parameters"]["matched_rows"],
+            selected.len().to_string()
+        );
+        for row in 1..7 {
+            expected.insert(("CSV_FILTER_DECISION".to_string(), row, 1));
+        }
+    }
+    let spans = artifact["spans"].as_array().unwrap();
+    assert_eq!(spans.len(), expected.len());
+    let mut seen = std::collections::BTreeSet::new();
+    for span in spans {
+        let kind = span["kind"].as_str().unwrap();
+        let row = span["row"].as_u64().unwrap() as usize;
+        let column = span["column"].as_u64().unwrap() as usize;
+        let key = (kind.to_string(), row, column);
+        assert!(
+            expected.contains(&key),
+            "unexpected source-span kind/row/column: {key:?}"
+        );
+        assert!(seen.insert(key));
+        let raw = ROW_CSV_TOKENS[row][column];
+        let record = ROW_CSV_TOKENS[row].join(",");
+        let start = source.find(&record).unwrap()
+            + ROW_CSV_TOKENS[row]
+                .iter()
+                .take(column)
+                .map(|cell| cell.len() + 1)
+                .sum::<usize>();
+        assert_eq!(span["source_start"], start);
+        assert_eq!(span["source_end"], start + raw.len());
+        assert_eq!(span["source_text"], &source[start..start + raw.len()]);
+        assert_eq!(span["decoded_value"], ROW_VALUES[row][column]);
+        if kind == "CSV_FILTER_DECISION" {
+            assert_eq!(span["output_start"], Value::Null);
+            assert_eq!(span["output_end"], Value::Null);
+        } else {
+            let array = if row == 0 {
+                &table["columns"]
+            } else {
+                let output_row = selected.iter().position(|index| index + 1 == row).unwrap();
+                &table["rows"][output_row]
+            };
+            let fragment = serde_json::to_string(array).unwrap();
+            let output_start = text.find(&fragment).unwrap()
+                + 1
+                + array
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .take(column)
+                    .map(|cell| serde_json::to_string(cell).unwrap().len() + 1)
+                    .sum::<usize>();
+            let token = serde_json::to_string(&array[column]).unwrap();
+            assert_eq!(span["output_start"], output_start);
+            assert_eq!(span["output_end"], output_start + token.len());
+            assert_eq!(&text[output_start..output_start + token.len()], token);
+        }
+    }
+    assert_eq!(seen, expected);
+}
+
+fn normal_row_report(
+    directory: &Path,
+    actor: &str,
+    result: &Value,
+    request: &str,
+    source: &str,
+) -> Value {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    assert_eq!(result["content_plan"]["text"], result["text"]);
+    assert_eq!(result["render"]["status"], "RENDERED");
+    let text = result["text"].as_str().unwrap();
+    assert_eq!(
+        result["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let report: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 1);
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let bytes = store
+        .get_bytes(actor, "normal-route", dependencies[0].as_str().unwrap())
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), dependencies[0]);
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), report);
+    let revision = inspect_normal_case(directory, actor);
+    assert_eq!(revision["bundle"]["request"]["text"], request);
+    assert_eq!(revision["bundle"]["meaning"]["intent"]["document"], source);
+    assert_eq!(revision["result"], *result);
+    report
+}
+
+fn check_row_json_span(span: &Value, source: &str, row: Option<usize>, column: usize) {
+    let table: Value = serde_json::from_str(source).unwrap();
+    let array = row.map_or(&table["columns"], |index| &table["rows"][index]);
+    let mut tokens: Vec<_> = array
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cell| serde_json::to_string(cell).unwrap())
+        .collect();
+    if source == ROW_JSON {
+        if row == Some(0) {
+            tokens[0] = r#""\u732b,甲""#.to_string();
+        }
+        if row == Some(3) {
+            tokens[1] = r#""\u006fpen""#.to_string();
+        }
+    }
+    let fragment = format!("[{}]", tokens.join(","));
+    let start = source.find(&fragment).unwrap()
+        + 1
+        + tokens
+            .iter()
+            .take(column)
+            .map(|token| token.len() + 1)
+            .sum::<usize>();
+    let end = start + tokens[column].len();
+    assert_eq!(span["source_start"], start);
+    assert_eq!(span["source_end"], end);
+    assert_eq!(
+        serde_json::from_str::<Value>(&source[start..end]).unwrap(),
+        array[column]
+    );
+    assert_eq!(
+        span["source_sha256"],
+        minidora_domain::digest(&source.as_bytes()[start..end])
+    );
+}
+
+fn assert_json_row_maps(report: &Value, source: &str, selected: &[usize], filter: Option<&str>) {
+    let table: Value = serde_json::from_str(source).unwrap();
+    let expected_rows: Vec<_> = selected
+        .iter()
+        .map(|index| table["rows"][*index].clone())
+        .collect();
+    assert_eq!(report["columns"], table["columns"]);
+    assert_eq!(report["rows"], serde_json::json!(expected_rows));
+    assert_eq!(report["source_row_indices"], serde_json::json!(selected));
+    let columns = report["column_source_spans"].as_array().unwrap();
+    assert_eq!(columns.len(), 3);
+    for (column, span) in columns.iter().enumerate() {
+        check_row_json_span(span, source, None, column);
+    }
+    let cells = report["cell_source_spans"].as_array().unwrap();
+    assert_eq!(cells.len(), selected.len());
+    for (spans, index) in cells.iter().zip(selected) {
+        let spans = spans.as_array().unwrap();
+        assert_eq!(spans.len(), 3);
+        for (column, span) in spans.iter().enumerate() {
+            check_row_json_span(span, source, Some(*index), column);
+        }
+    }
+    if let Some(query) = filter {
+        assert_eq!(report["filter_column"], "状態");
+        assert_eq!(report["filter_column_index"], 1);
+        assert_eq!(report["equals"], query);
+        let decisions = report["decisions"].as_array().unwrap();
+        assert_eq!(decisions.len(), table["rows"].as_array().unwrap().len());
+        for (index, decision) in decisions.iter().enumerate() {
+            assert_eq!(decision["source_row_index"], index);
+            assert_eq!(decision["value"], table["rows"][index][1]);
+            assert_eq!(
+                decision["matched"],
+                table["rows"][index][1].as_str().unwrap() == query
+            );
+            check_row_json_span(&decision["source"], source, Some(index), 1);
+        }
+    } else {
+        assert_eq!(report["sort_column"], "順位");
+        assert_eq!(report["sort_column_index"], 2);
+    }
+}
+
+#[test]
+fn table_row_csv_filter_retains_predicates_and_feeds_actual_output_to_json_sort() {
+    for (actor, format) in [
+        ("japanese", "ja"),
+        ("english", "en"),
+        ("mixed-case", "mixed"),
+    ] {
+        for query in ["open", "missing"] {
+            let header = match format {
+                "ja" => format!("CSVの列「状態」が値「{query}」の行を選択して:"),
+                "en" => format!("csv-filter \"状態\" equals \"{query}\":"),
+                _ => format!("CsV-FiLtEr \"状態\" EqUaLs \"{query}\":"),
+            };
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{ROW_CSV}");
+            let filtered = record(&execute(&scratch.0, actor, &[&request]));
+            let artifact = normal_document_artifact(
+                &scratch.0,
+                actor,
+                &filtered,
+                &request,
+                ROW_CSV,
+                "CSV_FILTER",
+            );
+            let selected: &[usize] = if query == "open" { &[0, 3, 5] } else { &[] };
+            assert_csv_row_maps(&artifact, selected, Some(query));
+            let actual = filtered["text"].as_str().unwrap();
+            let sort_request = format!("json-table-sort \"順位\" ascending:\n{actual}");
+            let sorted = record(&execute(&scratch.0, actor, &[&sort_request]));
+            let report = normal_row_report(&scratch.0, actor, &sorted, &sort_request, actual);
+            let order: &[usize] = if query == "open" { &[1, 0, 2] } else { &[] };
+            assert_json_row_maps(&report, actual, order, None);
+            assert_eq!(report["sort_order"], "ascending");
+        }
+    }
+}
+
+#[test]
+fn table_row_csv_sort_is_stable_in_both_string_directions() {
+    for descending in [false, true] {
+        for (actor, format) in [
+            ("japanese", "ja"),
+            ("english", "en"),
+            ("mixed-case", "mixed"),
+        ] {
+            let direction = if descending {
+                "descending"
+            } else {
+                "ascending"
+            };
+            let header = match format {
+                "ja" => format!(
+                    "CSVの列「順位」を{}に並べ替えて:",
+                    if descending { "降順" } else { "昇順" }
+                ),
+                "en" => format!("csv-sort \"順位\" {direction}:"),
+                _ => format!("CsV-SoRt \"順位\" {direction}:"),
+            };
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{ROW_CSV}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let artifact =
+                normal_document_artifact(&scratch.0, actor, &result, &request, ROW_CSV, "CSV_SORT");
+            let order: &[usize] = if descending {
+                &[0, 2, 5, 1, 3, 4]
+            } else {
+                &[4, 1, 3, 0, 2, 5]
+            };
+            assert_csv_row_maps(&artifact, order, None);
+            assert_eq!(artifact["parameters"]["sort_order"], direction);
+        }
+    }
+}
+
+#[test]
+fn table_row_json_filter_and_sort_preserve_exact_values_and_source_ranges() {
+    for (actor, format) in [
+        ("japanese", "ja"),
+        ("english", "en"),
+        ("mixed-case", "mixed"),
+    ] {
+        for query in ["open", "missing"] {
+            let header = match format {
+                "ja" => format!("JSON表の列「状態」が値「{query}」の行を選択して:"),
+                "en" => format!("json-table-filter \"状態\" equals \"{query}\":"),
+                _ => format!("JsOn-TaBlE-FiLtEr \"状態\" EqUaLs \"{query}\":"),
+            };
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{ROW_JSON}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, ROW_JSON);
+            let selected: &[usize] = if query == "open" { &[0, 3, 5] } else { &[] };
+            assert_json_row_maps(&report, ROW_JSON, selected, Some(query));
+        }
+        for descending in [false, true] {
+            let direction = if descending {
+                "descending"
+            } else {
+                "ascending"
+            };
+            let header = match format {
+                "ja" => format!(
+                    "JSON表の列「順位」を{}に並べ替えて:",
+                    if descending { "降順" } else { "昇順" }
+                ),
+                "en" => format!("json-table-sort \"順位\" {direction}:"),
+                _ => format!("JsOn-TaBlE-SoRt \"順位\" {direction}:"),
+            };
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{ROW_JSON}");
+            let result = record(&execute(&scratch.0, actor, &[&request]));
+            let report = normal_row_report(&scratch.0, actor, &result, &request, ROW_JSON);
+            let order: &[usize] = if descending {
+                &[0, 2, 5, 1, 3, 4]
+            } else {
+                &[4, 1, 3, 0, 2, 5]
+            };
+            assert_json_row_maps(&report, ROW_JSON, order, None);
+            assert_eq!(report["sort_order"], direction);
+        }
+    }
+}
+
+#[test]
+fn table_row_missing_columns_and_unsupported_operators_stop_durably() {
+    for (header, document, code) in [
+        (
+            "csv-filter \"missing\" equals \"open\":",
+            ROW_CSV,
+            "CSV_COLUMN",
+        ),
+        ("csv-sort \"missing\" ascending:", ROW_CSV, "CSV_COLUMN"),
+        (
+            "json-table-filter \"missing\" equals \"open\":",
+            ROW_JSON,
+            "JSON_TABLE_FILTER_COLUMN",
+        ),
+        (
+            "json-table-sort \"missing\" ascending:",
+            ROW_JSON,
+            "JSON_TABLE_SORT_COLUMN",
+        ),
+        (
+            "csv-sort \"順位\" natural:",
+            ROW_CSV,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "json-table-sort \"順位\" natural:",
+            ROW_JSON,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "csv-filter \"状態\" contains \"open\":",
+            ROW_CSV,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+        (
+            "json-table-filter \"状態\" contains \"open\":",
+            ROW_JSON,
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(result["reason"].as_str().unwrap().contains(code));
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(revision["lifecycle"], "SUSPEND");
+        assert_eq!(revision["result"], result);
+    }
+}
+
 const CONVERSION_CSV: &str =
     "名前,値,補足\r\n\"猫,\"\"北\"\"\",001,1e3\r\n\"犬\r\n南\",9007199254740993,\"\"\r\n";
 const CONVERSION_VALUES: [[&str; 3]; 3] = [
