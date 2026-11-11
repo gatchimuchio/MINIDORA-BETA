@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v30-csv-inner-join";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v31-grouped-statistics-case-admission";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -268,7 +268,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..12)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-count-by"))
-        || header.starts_with("csv-group-statistics")
+        || regex(r"(?i)^csv-group-statistics")?.is_match(header)
         || header.starts_with("CSVを列")
         || header
             .get(..14)
@@ -302,7 +302,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..19)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-count-by"))
-        || header.starts_with("json-table-group-statistics")
+        || regex(r"(?i)^json-table-group-statistics")?.is_match(header)
         || (header.starts_with("JSON表の「")
             && header.contains("ごとに")
             && header.contains("統計量"))

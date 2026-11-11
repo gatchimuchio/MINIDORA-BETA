@@ -30,7 +30,10 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Explicit diagnostic runs can retain real CLI state for later inspection.
+        if std::env::var_os("MINIDORA_KEEP_TEST_STATE").is_none() {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
     }
 }
 
@@ -1321,6 +1324,7 @@ fn grouped_csv_statistics_report_exact_results_and_source_spans_on_the_normal_ro
     for (actor, header) in [
         ("japanese", "CSVの「地域」ごとに「売上」の統計量を計算して:"),
         ("english", "csv-group-statistics \"地域\" \"売上\":"),
+        ("uppercase", "CSV-GROUP-STATISTICS \"地域\" \"売上\":"),
     ] {
         let scratch = Scratch::new();
         let request = format!("{header}\n{csv}");
@@ -1409,6 +1413,165 @@ fn grouped_csv_statistics_report_exact_results_and_source_spans_on_the_normal_ro
         assert_eq!(revision["bundle"]["meaning"]["intent"]["document"], csv);
         assert_eq!(revision["result"]["dependencies"], result["dependencies"]);
     }
+}
+
+#[test]
+fn json_table_group_statistics_preserve_exact_values_and_original_lexemes() {
+    let document = r#"{"columns":["注記","売上","地域"],"rows":[["非数値","0.1","北"],["未選択","1.0","南"],["文字列","0.3","\u5317"],["別の注記","2.0","南"]]}"#;
+    for (actor, header) in [
+        (
+            "japanese",
+            "JSON表の「地域」ごとに「売上」の統計量を計算して:",
+        ),
+        ("english", "json-table-group-statistics \"地域\" \"売上\":"),
+        (
+            "mixed-case",
+            "JsOn-TaBlE-GrOuP-StAtIsTiCs \"地域\" \"売上\":",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = record(&execute(&scratch.0, actor, &[&request]));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "COMPUTED");
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+        assert_eq!(result["content_plan"]["text"], result["text"]);
+        assert_eq!(result["render"]["status"], "RENDERED");
+        assert_eq!(
+            result["render"]["actual_sha256"],
+            minidora_domain::digest(result["text"].as_str().unwrap().as_bytes())
+        );
+        let report: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            report["source_sha256"],
+            minidora_domain::digest(document.as_bytes())
+        );
+        assert_eq!(report["group_by"], "地域");
+        assert_eq!(report["group_by_index"], 2);
+        assert_eq!(report["value_column"], "売上");
+        assert_eq!(report["value_column_index"], 1);
+        assert_eq!(report["row_count"], 4);
+        let check_span = |span: &Value, expected: &str| {
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            assert!(start < end && end <= document.len());
+            let raw = &document.as_bytes()[start..end];
+            assert_eq!(serde_json::from_slice::<String>(raw).unwrap(), expected);
+            assert_eq!(span["source_sha256"], minidora_domain::digest(raw));
+        };
+        check_span(&report["group_by_source"], "地域");
+        check_span(&report["value_column_source"], "売上");
+        let groups = report["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+        for (index, key, rows, values, expected) in [
+            (
+                0,
+                "北",
+                [0, 2],
+                ["0.1", "0.3"],
+                ["2/5", "1/5", "1/5", "1/10", "3/10", "1/100", "1/50"],
+            ),
+            (
+                1,
+                "南",
+                [1, 3],
+                ["1.0", "2.0"],
+                ["3", "3/2", "3/2", "1", "2", "1/4", "1/2"],
+            ),
+        ] {
+            let group = &groups[index];
+            assert_eq!(group["value"], key);
+            assert_eq!(group["source_row_indices"], serde_json::json!(rows));
+            assert_eq!(group["statistics"]["count"], 2);
+            for (field, value) in [
+                "sum",
+                "mean",
+                "median",
+                "min",
+                "max",
+                "population_variance",
+                "sample_variance",
+            ]
+            .into_iter()
+            .zip(expected)
+            {
+                assert_eq!(group["statistics"][field], value);
+            }
+            let key_spans = group["group_source_spans"].as_array().unwrap();
+            let value_spans = group["value_source_spans"].as_array().unwrap();
+            assert_eq!(key_spans.len(), 2);
+            assert_eq!(value_spans.len(), 2);
+            for spans in [key_spans, value_spans] {
+                assert!(spans.windows(2).all(|pair| {
+                    pair[0]["source_end"].as_u64().unwrap()
+                        <= pair[1]["source_start"].as_u64().unwrap()
+                }));
+            }
+            for (span, value) in value_spans.iter().zip(values) {
+                check_span(span, value);
+            }
+            for span in key_spans {
+                check_span(span, key);
+            }
+        }
+        let escaped = &groups[0]["group_source_spans"][1];
+        let start = escaped["source_start"].as_u64().unwrap() as usize;
+        let end = escaped["source_end"].as_u64().unwrap() as usize;
+        assert_eq!(&document[start..end], r#""\u5317""#);
+
+        let inspected = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args([
+                "inspect",
+                "--db",
+                scratch.0.to_str().unwrap(),
+                "--case",
+                "normal-route",
+                "--actor",
+                actor,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        let revision = record(&inspected);
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(
+            revision["bundle"]["meaning"]["intent"]["document"],
+            document
+        );
+        assert_eq!(revision["result"], result);
+    }
+}
+
+#[test]
+fn json_table_group_statistics_mixed_values_suspend_with_a_durable_typed_error() {
+    let scratch = Scratch::new();
+    let document = r#"{"columns":["region","sales"],"rows":[["north","1 m"],["north","2"]]}"#;
+    let request = format!("JSON表の「region」ごとに「sales」の統計量を計算して:\n{document}");
+    let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("JSON_TABLE_GROUP_STATISTICS_MIXED_VALUES")
+    );
+    assert_eq!(result["guarantee"], "UNKNOWN");
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+    let inspected = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args([
+            "inspect",
+            "--db",
+            scratch.0.to_str().unwrap(),
+            "--case",
+            "normal-route",
+            "--actor",
+            "owner",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let revision = record(&inspected);
+    assert_eq!(revision["lifecycle"], "SUSPEND");
+    assert_eq!(revision["result"], result);
 }
 
 #[test]
