@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v31-grouped-statistics-case-admission";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v32-inner-join-case-admission";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -273,7 +273,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..14)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-compare-by"))
-        || header.starts_with("csv-inner-join")
+        || regex(r"(?i)^csv-inner-join")?.is_match(header)
         || header.starts_with("csv-statistics ")
         || header.starts_with("CSVをJSONに変換して")
         || header.starts_with("csv-to-json")
@@ -292,7 +292,7 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         || header
             .get(..18)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-compare"))
-        || header.starts_with("json-table-inner-join")
+        || regex(r"(?i)^json-table-inner-join")?.is_match(header)
         || header
             .get(..17)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("json-table-filter"))

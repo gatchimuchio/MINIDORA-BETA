@@ -1,0 +1,288 @@
+{
+  "work_item": "B04 ordinary CLI CSV/JSON table inner-join follow-up, CSV row serialization and English admission corrections",
+  "recorded_at": "2026-11-11T02:50:55Z",
+  "base_commit": "3070488ec0c7afacb38e76fb4c4af2a2f73cabf3",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Supplied tables -> sealed input -> unique Core -> schema-valid joined table with source locations, unmatched rows and durable typed stops",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v32-inner-join-case-admission",
+  "prior_parser_version": "declarative-ja-en-v31-grouped-statistics-case-admission",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "source_snapshot_sha256": "d1f10abc93c9d197e976c4a7df5ffbfe8eb5880c29937225dee80b9d7ba92799",
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-engine/src/input.rs": "135da6de5d793bdfa030c084548bf5cb169e5e916de96d939c156164394d8d70",
+    "crates/minidora-engine/src/document.rs": "32801686352bdba7eca3f5c294ed4863b256280cc8126f0c461a4c1c7cb6a039"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "1e83c0fcbfbd2e765f9cc38474ccfd3fe47d71a496f1759b4d2a4dfff705236f"
+  },
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "3cef0bce5c86a7e048b7eb4647592bb70b4687eafff562cdfb99564d5c482eb0"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b04-table-inner-join-route/final MINIDORA_KEEP_TEST_STATE=1",
+  "pre_correction_observation": {
+    "production_source": "Base commit; new normal-route assertions were added before production edits. The CSV span oracle was strengthened after independent review.",
+    "test_command": "cargo test --locked -p minidora-cli --test normal_route inner_join -- --nocapture",
+    "exit_code": 101,
+    "passed": 1,
+    "failed": 2,
+    "log": "pre/joins-tests.log",
+    "csv_observed": {
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "joined_text_valid_json": false,
+      "joined_text": "{\"columns\":[\"left.名前\",\"left.id\",\"right.record_id\",\"right.分類\"],\"rows\":[[\"犬,大\",\"2\"\"2\",\"イヌ科\"],[\"猫\",\"1\"\"1\",\"猫科\"]],\"left_source_record_numbers\":[1,2],\"right_source_record_numbers\":[3,1],\"unmatched_left\":[{\"key\":\"4\",\"source_record_number\":3}],\"unmatched_right\":[{\"key\":\"3\",\"source_record_number\":2}]}",
+      "persisted_inspect_matches_result": true,
+      "direct_probe_result": "pre/csv-probe-result.json",
+      "direct_probe_inspect": "pre/csv-probe-inspect.json",
+      "probe_result_sha256": "33d8aa8a08bce224b4055270814d43b83ea5a92ab5a905d19793cd7c41ef2787"
+    },
+    "json_observed": "Japanese and lowercase English positive cases passed their assertions; mixed-case English returned SUSPEND/CAPABILITY_UNAVAILABLE before the complete parser. The separate duplicate-key test passed all four format/side cases.",
+    "csv_case_evidence": "The CSV admission/full-header case-rule mismatch was found statically. Its cased-English pre-fix variant was not reached because the Japanese case first failed JSON parsing.",
+    "causes": [
+      "The right-side CSV serialization loop emitted no comma before its first cell, joining two JSON string tokens without a separator. The generic DocumentResult validator checked spans and byte budgets, not JSON syntax, so the invalid table was committed.",
+      "CSV and JSON join coarse admission guards were case-sensitive while their existing complete header parsers used (?i)."
+    ]
+  },
+  "corrections": [
+    "Emit a comma before each right-side CSV cell, since a validated named left-key column guarantees an already emitted nonempty left side. This preserves every right-side output span at its actual newly emitted token.",
+    "Use (?i) join prefix admission matching the existing complete header regexes, retaining exact bodies and column/key values; advance the parser revision."
+  ],
+  "tests_and_route": {
+    "tests_added": true,
+    "normal_cli_route_executed": true,
+    "route_method": "Tests launch minidora-rust with --json and real fresh stores; fresh inspect processes verify persisted results. CSV source/output spans are read from the actual dependency returned by CLI via actor/case-checked Store::get_bytes; no action or result is synthesized.",
+    "final_scoped_unique_tests_passed": 18,
+    "normal_cli_tests_passed": 3,
+    "input_unit_tests_passed": 7,
+    "document_unit_tests_passed": 8,
+    "normal_cli_test_scenarios": 10,
+    "post_review_verification": "The CSV oracle gained exact span tuple coverage/uniqueness and row/column output offsets; the CLI suite plus workspace format/check/lint were rerun. Product source was unchanged from the successful input/document unit tests and build.",
+    "full_workspace_tests": "NOT_RUN; scoped joined-table normal routes and affected input/document components were exercised with workspace all-target compile/lint. Prior full-workspace records belong to their own snapshots."
+  },
+  "command_results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "final/fmt-complete-spans.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "final/check-complete-spans.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "final/clippy-complete-spans.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route inner_join -- --nocapture",
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0,
+      "log": "final/joins-tests-complete-spans.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --lib input::tests",
+      "exit_code": 0,
+      "passed": 7,
+      "failed": 0,
+      "log": "final/input-tests.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --lib document::tests",
+      "exit_code": 0,
+      "passed": 8,
+      "failed": 0,
+      "log": "final/document-tests.log"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "final/build.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "route_observations": [
+    {
+      "intent": "CsvInnerJoin",
+      "headers": [
+        "CSVを「id」と「record_id」で内部結合して:",
+        "csv-inner-join \"id\" \"record_id\":",
+        "CSV-INNER-JOIN \"id\" \"record_id\":"
+      ],
+      "left_document": "名前,id\r\n\"犬,大\",2\r\n猫,1\r\n狐,4",
+      "right_document": "record_id,分類\r\n1,猫科\r\n3,鳥類\r\n2,イヌ科\r\n",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "columns": [
+        "left.名前",
+        "left.id",
+        "right.record_id",
+        "right.分類"
+      ],
+      "rows": [
+        [
+          "犬,大",
+          "2",
+          "2",
+          "イヌ科"
+        ],
+        [
+          "猫",
+          "1",
+          "1",
+          "猫科"
+        ]
+      ],
+      "left_source_record_numbers": [
+        1,
+        2
+      ],
+      "right_source_record_numbers": [
+        3,
+        1
+      ],
+      "unmatched_left": [
+        {
+          "key": "4",
+          "source_record_number": 3
+        }
+      ],
+      "unmatched_right": [
+        {
+          "key": "3",
+          "source_record_number": 2
+        }
+      ],
+      "span_evidence": "The actual persisted DocumentResult dependency has the exact expected 14 unique header/cell/unmatched-key span tuples. Every source start/end is checked against the known row/cell in the correct side; output offsets are checked against the expected output array/object row and column, including equal left/right key values. Quoted UTF-8 cells and namespace header tokens are checked."
+    },
+    {
+      "intent": "JsonTableInnerJoin",
+      "headers": [
+        "JSON表を「id」と「record_id」で内部結合して:",
+        "json-table-inner-join \"id\" \"record_id\":",
+        "JsOn-TaBlE-InNeR-JoIn \"id\" \"record_id\":"
+      ],
+      "left_document": "{\"columns\":[\"名前\",\"id\"],\"rows\":[[\"犬\",\"北\"],[\"猫\",\"南\"],[\"狐\",\"西\"]]}",
+      "right_document": "{\"columns\":[\"record_id\",\"分類\"],\"rows\":[[\"南\",\"猫科\"],[\"東\",\"鳥類\"],[\"\\u5317\",\"イヌ科\"]]}",
+      "lifecycle": "COMMIT",
+      "guarantee": "SOURCE_REPORT",
+      "rows": [
+        [
+          "犬",
+          "北",
+          "北",
+          "イヌ科"
+        ],
+        [
+          "猫",
+          "南",
+          "南",
+          "猫科"
+        ]
+      ],
+      "left_source_row_indices": [
+        0,
+        1
+      ],
+      "right_source_row_indices": [
+        2,
+        0
+      ],
+      "unmatched_left": [
+        {
+          "key": "西",
+          "source_row_index": 2
+        }
+      ],
+      "unmatched_right": [
+        {
+          "key": "東",
+          "source_row_index": 1
+        }
+      ],
+      "span_evidence": "Exact full-wrapper and per-side hashes, all selected/header cell ranges, both sides of every emitted row and unmatched-key ranges are checked against unique raw lexemes within the expected side. Raw north and escaped north join by decoded equality while retaining different original byte ranges."
+    },
+    {
+      "intents": [
+        "CsvInnerJoin",
+        "JsonTableInnerJoin"
+      ],
+      "duplicate_sides": [
+        "left",
+        "right"
+      ],
+      "scenario_count": 4,
+      "lifecycle": "SUSPEND",
+      "reason_codes": [
+        "CSV_INNER_JOIN_DUPLICATE_KEY",
+        "JSON_TABLE_INNER_JOIN_DUPLICATE_KEY"
+      ],
+      "guarantee": "UNKNOWN",
+      "dependencies": [],
+      "persisted_inspection_matches_original_request_and_stopped_result": true
+    }
+  ],
+  "render_and_persistence_evidence": "All positive cases check RENDERED, render SHA-256 equal to actual text bytes, content-plan text equality, one result dependency and original request/document plus complete result in a separate inspect process.",
+  "versioned_recomputation_probe": {
+    "method": "Copy the closed actual pre-correction CSV CLI store byte-for-byte into a separate recovery store; use the same actor/case/input. This restores real prior state, without synthesizing an earlier action or result.",
+    "exact_version_1_retry": "Returns the original invalid committed result unchanged.",
+    "explicit_version_2": "COMMIT with schema-valid corrected joined rows; the previous invalid result remains in prior_results.",
+    "prior_case_revision": 7,
+    "new_case_revision": 15,
+    "old_result_preserved": true,
+    "manual_normal_cli_probe_passed": true,
+    "outputs": [
+      "final/recovery-version1-retry.json",
+      "final/recovery-version2-result.json",
+      "final/recovery-version2-inspect.json"
+    ]
+  },
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b04-table-inner-join-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b04-table-inner-join-route/asset-inventory.json",
+    "manifest_sha256": "faf442852a4f58deb03d755915957689a6d361d448f874b89a74f4d8d54e8a8c",
+    "file_count_including_manifest": 596,
+    "stores_by_phase": {
+      "pre": 9,
+      "final": 21
+    },
+    "remote_storage_verification": "NOT_RUN; local diagnostic state/log retention only, no OneDrive storage claim"
+  },
+  "known_limits": [
+    "Scoped authored cases do not establish an independent held-out population or complete B04 acceptance.",
+    "Previously persisted invalid CSV COMMIT results are not silently rewritten; exact retries preserve their historical bytes. Explicit versioned recomputation was observed, not automatic store migration.",
+    "Only exact unique-key inner joins are covered; outer joins, duplicate-key expansion, inferred schemas, other structured routes and wider transformations remain outside this follow-up.",
+    "Full workspace runtime regression, external LIVE evaluation, Windows/macOS, physical 8 GB QA, release and deployment are NOT_RUN."
+  ],
+  "acceptance": {
+    "B04": "UNVERIFIED; selected normal CSV/JSON join routes and typed duplicate stops observed, not the complete B04 contract",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

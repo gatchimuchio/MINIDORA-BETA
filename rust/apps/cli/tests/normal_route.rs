@@ -1608,6 +1608,386 @@ fn mixed_csv_group_values_suspend_with_a_durable_typed_error_and_no_artifact() {
     assert_eq!(revision["result"]["dependencies"], serde_json::json!([]));
 }
 
+fn inspect_normal_case(directory: &Path, actor: &str) -> Value {
+    record(
+        &Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args([
+                "inspect",
+                "--db",
+                directory.to_str().unwrap(),
+                "--case",
+                "normal-route",
+                "--actor",
+                actor,
+                "--json",
+            ])
+            .output()
+            .unwrap(),
+    )
+}
+
+#[test]
+fn csv_inner_join_preserves_left_order_and_two_sided_source_locations() {
+    let left = "名前,id\r\n\"犬,大\",2\r\n猫,1\r\n狐,4";
+    let right = "record_id,分類\r\n1,猫科\r\n3,鳥類\r\n2,イヌ科\r\n";
+    let document =
+        format!("--- MINIDORA LEFT CSV ---\n{left}\r\n--- MINIDORA RIGHT CSV ---\n{right}");
+    for (actor, header) in [
+        ("japanese", "CSVを「id」と「record_id」で内部結合して:"),
+        ("english", "csv-inner-join \"id\" \"record_id\":"),
+        ("uppercase", "CSV-INNER-JOIN \"id\" \"record_id\":"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = record(&execute(&scratch.0, actor, &[&request]));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "COMPUTED");
+        assert_eq!(result["render"]["status"], "RENDERED");
+        assert_eq!(result["content_plan"]["text"], result["text"]);
+        let text = result["text"].as_str().unwrap();
+        assert_eq!(
+            result["render"]["actual_sha256"],
+            minidora_domain::digest(text.as_bytes())
+        );
+        let joined: Value = serde_json::from_str(text)
+            .unwrap_or_else(|error| panic!("invalid joined JSON: {error}; text={text}"));
+        assert_eq!(
+            joined["columns"],
+            serde_json::json!(["left.名前", "left.id", "right.record_id", "right.分類"])
+        );
+        assert_eq!(
+            joined["rows"],
+            serde_json::json!([["犬,大", "2", "2", "イヌ科"], ["猫", "1", "1", "猫科"]])
+        );
+        assert_eq!(
+            joined["left_source_record_numbers"],
+            serde_json::json!([1, 2])
+        );
+        assert_eq!(
+            joined["right_source_record_numbers"],
+            serde_json::json!([3, 1])
+        );
+        assert_eq!(
+            joined["unmatched_left"],
+            serde_json::json!([{"key":"4","source_record_number":3}])
+        );
+        assert_eq!(
+            joined["unmatched_right"],
+            serde_json::json!([{"key":"3","source_record_number":2}])
+        );
+        let dependencies = result["dependencies"].as_array().unwrap();
+        assert_eq!(dependencies.len(), 1);
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let bytes = store
+            .get_bytes(actor, "normal-route", dependencies[0].as_str().unwrap())
+            .unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), dependencies[0]);
+        let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(artifact["source_document"], document);
+        assert_eq!(
+            artifact["source_sha256"],
+            minidora_domain::digest(document.as_bytes())
+        );
+        assert_eq!(artifact["text"], text);
+        assert_eq!(
+            artifact["output_sha256"],
+            minidora_domain::digest(text.as_bytes())
+        );
+        let spans = artifact["spans"].as_array().unwrap();
+        assert_eq!(spans.len(), 14);
+        let mut seen = std::collections::BTreeSet::new();
+        for span in spans {
+            let kind = span["kind"].as_str().unwrap();
+            let is_left = kind.contains("_LEFT_");
+            assert!(is_left || kind.contains("_RIGHT_"));
+            let source = if is_left { left } else { right };
+            let base = document.find(source).unwrap();
+            let rows = if is_left {
+                [["名前", "id"], ["\"犬,大\"", "2"], ["猫", "1"], ["狐", "4"]]
+            } else {
+                [
+                    ["record_id", "分類"],
+                    ["1", "猫科"],
+                    ["3", "鳥類"],
+                    ["2", "イヌ科"],
+                ]
+            };
+            let row = span["row"].as_u64().unwrap() as usize;
+            let column = span["column"].as_u64().unwrap() as usize;
+            assert!(seen.insert((kind, row, column)));
+            let record_text = rows[row].join(",");
+            let start = base
+                + source.find(&record_text).unwrap()
+                + rows[row]
+                    .iter()
+                    .take(column)
+                    .map(|cell| cell.len() + 1)
+                    .sum::<usize>();
+            let raw = rows[row][column];
+            let end = start + raw.len();
+            assert_eq!(span["source_start"], start);
+            assert_eq!(span["source_end"], end);
+            assert_eq!(&document[start..end], raw);
+            assert_eq!(span["source_text"], raw);
+            let decoded = raw.trim_matches('"');
+            assert_eq!(span["decoded_value"], decoded);
+            let output_start = span["output_start"].as_u64().unwrap() as usize;
+            let output_end = span["output_end"].as_u64().unwrap() as usize;
+            let expected_output_start = if kind.contains("_UNMATCHED_") {
+                let field = if is_left {
+                    "unmatched_left"
+                } else {
+                    "unmatched_right"
+                };
+                let fragment = serde_json::to_string(&joined[field][0]).unwrap();
+                text.find(&fragment).unwrap()
+                    + fragment
+                        .find(&serde_json::to_string(decoded).unwrap())
+                        .unwrap()
+            } else {
+                let (array, index) = if kind.ends_with("_HEADER") {
+                    (
+                        &joined["columns"],
+                        if is_left { column } else { 2 + column },
+                    )
+                } else if is_left {
+                    (&joined["rows"][row - 1], column)
+                } else {
+                    let output_row = match row {
+                        3 => 0,
+                        1 => 1,
+                        _ => panic!("unexpected matched right row"),
+                    };
+                    (&joined["rows"][output_row], 2 + column)
+                };
+                let fragment = serde_json::to_string(array).unwrap();
+                text.find(&fragment).unwrap()
+                    + 1
+                    + array
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .take(index)
+                        .map(|value| serde_json::to_string(value).unwrap().len() + 1)
+                        .sum::<usize>()
+            };
+            assert_eq!(output_start, expected_output_start);
+            let output_value: String =
+                serde_json::from_str(&text[output_start..output_end]).unwrap();
+            let expected = if kind.ends_with("_HEADER") {
+                format!("{}{decoded}", if is_left { "left." } else { "right." })
+            } else {
+                decoded.to_string()
+            };
+            assert_eq!(output_value, expected);
+            assert_eq!(
+                output_end,
+                output_start + serde_json::to_string(&expected).unwrap().len()
+            );
+        }
+        assert_eq!(
+            seen,
+            std::collections::BTreeSet::from([
+                ("CSV_INNER_JOIN_LEFT_HEADER", 0, 0),
+                ("CSV_INNER_JOIN_LEFT_HEADER", 0, 1),
+                ("CSV_INNER_JOIN_RIGHT_HEADER", 0, 0),
+                ("CSV_INNER_JOIN_RIGHT_HEADER", 0, 1),
+                ("CSV_INNER_JOIN_LEFT_CELL", 1, 0),
+                ("CSV_INNER_JOIN_LEFT_CELL", 1, 1),
+                ("CSV_INNER_JOIN_LEFT_CELL", 2, 0),
+                ("CSV_INNER_JOIN_LEFT_CELL", 2, 1),
+                ("CSV_INNER_JOIN_RIGHT_CELL", 3, 0),
+                ("CSV_INNER_JOIN_RIGHT_CELL", 3, 1),
+                ("CSV_INNER_JOIN_RIGHT_CELL", 1, 0),
+                ("CSV_INNER_JOIN_RIGHT_CELL", 1, 1),
+                ("CSV_INNER_JOIN_UNMATCHED_LEFT_KEY", 3, 1),
+                ("CSV_INNER_JOIN_UNMATCHED_RIGHT_KEY", 2, 0),
+            ])
+        );
+        let revision = inspect_normal_case(&scratch.0, actor);
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(
+            revision["bundle"]["meaning"]["intent"]["document"],
+            document
+        );
+        assert_eq!(revision["result"], result);
+    }
+}
+
+#[test]
+fn json_table_inner_join_preserves_decoded_keys_and_original_source_ranges() {
+    let left = r#"{"columns":["名前","id"],"rows":[["犬","北"],["猫","南"],["狐","西"]]}"#;
+    let right = r#"{"columns":["record_id","分類"],"rows":[["南","猫科"],["東","鳥類"],["\u5317","イヌ科"]]}"#;
+    let document = format!(r#"{{"left":{left},"right":{right}}}"#);
+    for (actor, header) in [
+        ("japanese", "JSON表を「id」と「record_id」で内部結合して:"),
+        ("english", "json-table-inner-join \"id\" \"record_id\":"),
+        ("mixed-case", "JsOn-TaBlE-InNeR-JoIn \"id\" \"record_id\":"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{document}");
+        let result = record(&execute(&scratch.0, actor, &[&request]));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "SOURCE_REPORT");
+        assert_eq!(result["render"]["status"], "RENDERED");
+        assert_eq!(result["content_plan"]["text"], result["text"]);
+        assert_eq!(
+            result["render"]["actual_sha256"],
+            minidora_domain::digest(result["text"].as_str().unwrap().as_bytes())
+        );
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+        let joined: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            joined["columns"],
+            serde_json::json!(["left.名前", "left.id", "right.record_id", "right.分類"])
+        );
+        assert_eq!(
+            joined["rows"],
+            serde_json::json!([["犬", "北", "北", "イヌ科"], ["猫", "南", "南", "猫科"]])
+        );
+        assert_eq!(joined["left_source_row_indices"], serde_json::json!([0, 1]));
+        assert_eq!(
+            joined["right_source_row_indices"],
+            serde_json::json!([2, 0])
+        );
+        assert_eq!(joined["left_key_column"], "id");
+        assert_eq!(joined["left_key_column_index"], 1);
+        assert_eq!(joined["right_key_column"], "record_id");
+        assert_eq!(joined["right_key_column_index"], 0);
+        assert_eq!(
+            joined["source_sha256"],
+            minidora_domain::digest(document.as_bytes())
+        );
+        assert_eq!(
+            joined["left_sha256"],
+            minidora_domain::digest(left.as_bytes())
+        );
+        assert_eq!(
+            joined["right_sha256"],
+            minidora_domain::digest(right.as_bytes())
+        );
+        let check_span = |span: &Value, source: &str, raw: &str, expected: &str| {
+            let start = document.find(source).unwrap() + source.find(raw).unwrap();
+            let end = start + raw.len();
+            assert_eq!(span["source_start"], start);
+            assert_eq!(span["source_end"], end);
+            let bytes = &document.as_bytes()[start..end];
+            assert_eq!(serde_json::from_slice::<String>(bytes).unwrap(), expected);
+            assert_eq!(span["source_sha256"], minidora_domain::digest(bytes));
+        };
+        let column_spans = joined["column_source_spans"].as_array().unwrap();
+        assert_eq!(column_spans.len(), 4);
+        for (index, source, name) in [
+            (0, left, "名前"),
+            (1, left, "id"),
+            (2, right, "record_id"),
+            (3, right, "分類"),
+        ] {
+            check_span(
+                &column_spans[index],
+                source,
+                &serde_json::to_string(name).unwrap(),
+                name,
+            );
+        }
+        assert_eq!(joined["left_key_column_source"], column_spans[1]);
+        assert_eq!(joined["right_key_column_source"], column_spans[2]);
+        for (side, source, expected_rows) in [
+            ("left_cell_source_spans", left, [["犬", "北"], ["猫", "南"]]),
+            (
+                "right_cell_source_spans",
+                right,
+                [["北", "イヌ科"], ["南", "猫科"]],
+            ),
+        ] {
+            let rows = joined[side].as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            for (spans, expected) in rows.iter().zip(expected_rows) {
+                let spans = spans.as_array().unwrap();
+                assert_eq!(spans.len(), 2);
+                for (span, value) in spans.iter().zip(expected) {
+                    let raw = if side == "right_cell_source_spans" && value == "北" {
+                        r#""\u5317""#.to_string()
+                    } else {
+                        serde_json::to_string(value).unwrap()
+                    };
+                    check_span(span, source, &raw, value);
+                }
+            }
+        }
+        for (field, source, key, row) in [
+            ("unmatched_left", left, "西", 2),
+            ("unmatched_right", right, "東", 1),
+        ] {
+            let unmatched = joined[field].as_array().unwrap();
+            assert_eq!(unmatched.len(), 1);
+            assert_eq!(unmatched[0]["key"], key);
+            assert_eq!(unmatched[0]["source_row_index"], row);
+            check_span(
+                &unmatched[0]["key_source"],
+                source,
+                &serde_json::to_string(key).unwrap(),
+                key,
+            );
+        }
+        let revision = inspect_normal_case(&scratch.0, actor);
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(
+            revision["bundle"]["meaning"]["intent"]["document"],
+            document
+        );
+        assert_eq!(revision["result"], result);
+    }
+}
+
+#[test]
+fn inner_joins_duplicate_keys_suspend_without_result_dependencies() {
+    for duplicate_side in ["left", "right"] {
+        let left_rows = if duplicate_side == "left" {
+            "1\r\n1"
+        } else {
+            "1"
+        };
+        let right_rows = if duplicate_side == "right" {
+            "1\r\n1"
+        } else {
+            "1"
+        };
+        let csv = format!(
+            "--- MINIDORA LEFT CSV ---\nid\r\n{left_rows}\r\n--- MINIDORA RIGHT CSV ---\nrecord_id\r\n{right_rows}\r\n"
+        );
+        let duplicate = serde_json::json!([["1"], ["1"]]);
+        let single = serde_json::json!([["1"]]);
+        let json = serde_json::json!({
+            "left": {"columns": ["id"], "rows": if duplicate_side == "left" { &duplicate } else { &single }},
+            "right": {"columns": ["record_id"], "rows": if duplicate_side == "right" { &duplicate } else { &single }}
+        }).to_string();
+        for (header, document, code) in [
+            (
+                "csv-inner-join \"id\" \"record_id\":",
+                csv,
+                "CSV_INNER_JOIN_DUPLICATE_KEY",
+            ),
+            (
+                "json-table-inner-join \"id\" \"record_id\":",
+                json,
+                "JSON_TABLE_INNER_JOIN_DUPLICATE_KEY",
+            ),
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{document}");
+            let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+            assert!(result["reason"].as_str().unwrap().contains(code));
+            assert_eq!(result["guarantee"], "UNKNOWN");
+            assert_eq!(result["dependencies"], serde_json::json!([]));
+            let revision = inspect_normal_case(&scratch.0, "owner");
+            assert_eq!(revision["bundle"]["request"]["text"], request);
+            assert_eq!(revision["lifecycle"], "SUSPEND");
+            assert_eq!(revision["result"], result);
+        }
+    }
+}
+
 #[test]
 fn exact_replace_count_failure_does_not_create_a_partial_file() {
     let scratch = Scratch::new();

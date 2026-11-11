@@ -1352,9 +1352,8 @@ pub fn csv_inner_join(
             )?;
         }
         for (column_index, cell) in right.rows[right_row_index].iter().enumerate() {
-            if column_index > 0 {
-                text.push(',');
-            }
+            // Each right cell follows the nonempty left side of this row.
+            text.push(',');
             append_csv_join_cell(
                 &mut text,
                 document,
