@@ -1,0 +1,478 @@
+{
+  "work_item": "B06 ordinary CLI bounded calculation sequences: scheduler namespace correction and whole-operand quantity references",
+  "recorded_at": "2026-11-11T14:15:25Z",
+  "base_commit": "999fc813a723b93b6b2ca1d8f68b3358fa3a6fd3",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "Sealed sequence input -> unique Core -> actual upstream exact values and artifact consumption -> scheduler observations -> exact rendered output and authorized local file receipt, typed stops and retained versions",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "9",
+      "14"
+    ]
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v35-evidence-ledger-admission",
+  "version_boundary": "Input grammar, sealed MeaningIR, parser revision, stored schemas and public result/graph artifact schemas are unchanged. Core scheduler key translation and executor quantity-context validation are corrected. Existing identity retries retain their saved result; recomputation requires a fresh input identity/version. This evidence uses explicit version 2.",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "work_type": "SCOPED_QC_CORRECTION_AND_EVIDENCE",
+  "product_source_changed": true,
+  "source_snapshot_sha256": "ab097c613df6f90020028d9a3738ec64772e32915220fd9510c0b0befd23c023",
+  "source_snapshot_method": "SHA-256 of compact JSON file inventory in code-snapshot.json",
+  "code_snapshot_ref": "code-snapshot.json",
+  "changed_source_paths": {
+    "crates/minidora-engine/src/core.rs": "5e5faab04fe908e09b4d0de9d3de6edbd29060a9ebd1ab7b492f12ea99d375f4",
+    "crates/minidora-engine/src/language.rs": "bcc422add2afd763b84b1eee2a91c024dc225bc13f49dc54d54ead8908aec70c"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "5adb23bd956ba24002c1236df8b41570f36bca0f989883166d0e2fcdadb626f6"
+  },
+  "component_test_location": "crates/minidora-engine/src/language.rs::tests::calculation_sequence_quantity_references_are_complete_operands",
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "b8dcb4798003716e17dc047ef09e7350798ceb6e03894254263e54a06c259b8d"
+  },
+  "working_directory": "/workspace/MINIDORA-BETA/rust",
+  "execution_prefix": "PATH=/workspace/.cargo/bin:$PATH RUSTUP_HOME=/workspace/.rustup CARGO_HOME=/workspace/.cargo CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target TMPDIR=/workspace/.minidora-cloud/b06-calculation-sequence-route/verification MINIDORA_KEEP_TEST_STATE=1",
+  "baseline_defect": {
+    "evidence": "baseline/observations.json",
+    "stores": 3,
+    "execute_requests": 3,
+    "binary_sha256": "213bc58f992edd6d8258b871ddef10717b60bd61d4a4f49c66b2984f7a26c631",
+    "observed": "Referenced scalar and mixed-length sequences SUSPEND/UNKNOWN with EXECUTION_ERROR: PREREQUISITE_SET_MISMATCH. An independent two-step no-reference control COMMITs with final 7/2. Original requests and complete stored results were checked through separate inspect.",
+    "cause": "Core supplied raw consumed step IDs to Scheduler.observe, while GoalNode.requires used sequence-{id} node IDs.",
+    "boundary": "Empty returned dependencies on this unexpected error do not prove that no step artifact was physically stored. No wrong quantity COMMIT is attributed to this published base."
+  },
+  "unpublished_intermediate_diagnostic": {
+    "stage": "Uncommitted and unpublished namespace-only correction; no quantity-context guard",
+    "evidence": [
+      "namespace-only/source.patch",
+      "namespace-only/observations.json",
+      "namespace-only/additional-observations.json"
+    ],
+    "stores": 7,
+    "execute_requests": 7,
+    "core_source_sha256": "5e5faab04fe908e09b4d0de9d3de6edbd29060a9ebd1ab7b492f12ea99d375f4",
+    "binary_sha256": "13bf6981524a336f41e59475c36b1b89a8a6a43d3b84732aad7853f216272945",
+    "upstream_exact_value": "3 m",
+    "wrong_COMMIT_observations": [
+      {
+        "expression": "2@{u}+1 m",
+        "evaluated": "23 m+1 m",
+        "value": "24 m"
+      },
+      {
+        "expression": "@{u}m+1 mm",
+        "evaluated": "3 mm+1 mm",
+        "value": "4 mm"
+      },
+      {
+        "expression": "@{u}/s+1 m/s",
+        "evaluated": "3 m/s+1 m/s",
+        "value": "4 m/s"
+      },
+      {
+        "expression": "1/@{u}+1/3 m",
+        "evaluated": "1/3 m+1/3 m",
+        "value": "2/3 m"
+      },
+      {
+        "expression": "1e+@{u}+1 m",
+        "evaluated": "1e+3 m+1 m",
+        "value": "1001 m"
+      }
+    ],
+    "controls": "Scalar 2@{u}+1 with upstream 3 remains INVALID_EXPRESSION due to parenthesized substitution. A unit-prefix probe also suspends under the intermediate calculator; it is not counted as a wrong COMMIT.",
+    "causal_limit": "The original published base blocked references at scheduler observation. These five wrong results were exposed only after that first private correction and are retained as intermediate diagnostic evidence."
+  },
+  "correction": [
+    "Keep raw step IDs in step artifacts and raw declared/actual set checking; map consumed prerequisite keys into sequence-{id} only at the Core-to-scheduler observation boundary.",
+    "Retain parenthesized canonical rational substitution. For canonical quantities, track the inserted byte ranges and map them through the same NFKC/operator normalization as calculate. Require each insertion to occupy the complete existing unit-grammar operand, allowing one source unary sign. Reuse the exact existing unit addition/subtraction regex; numeric/exponent/ratio prefixes, unit suffixes and other operators stop with CALCULATION_REFERENCE_CONTEXT."
+  ],
+  "tests_and_route": {
+    "normal_cli_route_executed": true,
+    "route_method": "Actual minidora-rust --json child processes and fresh stores; read returned step/report/graph/goal/compute/content/render/file artifacts with actor/case-authorized Store::get_bytes and digest verification. Separate inspect verifies original request and complete result.",
+    "final_scoped_unique_tests_passed": 16,
+    "new_cli_tests": 5,
+    "new_component_tests": 1,
+    "existing_scheduler_tests": 6,
+    "existing_arithmetic_unit_regressions": 4,
+    "successful_test_executions_including_cli_rerun": 21,
+    "primary_cli_run": {
+      "passed": 5,
+      "failed": 0,
+      "stores": 63,
+      "stored_input_identities": 65,
+      "execute_requests": 68
+    },
+    "review_cli_run": {
+      "passed": 5,
+      "failed": 0,
+      "stores": 63,
+      "stored_input_identities": 65,
+      "execute_requests": 68,
+      "change": "Add whole final calculation equality with the final step artifact and original-request equality on the late permission stop. Product source is unchanged."
+    },
+    "per_cli_run_breakdown": {
+      "scalar_header_newline_and_1_or_16_step_capacity": 8,
+      "unit_fixture_families_7_times_headers_3": 21,
+      "typed_stop_stores": 32,
+      "history_store": 1,
+      "history_execute_requests": 5,
+      "file_store": 1,
+      "file_execute_requests": 2
+    },
+    "all_batch_runtime_totals": {
+      "stores": 136,
+      "stored_input_identities": 150,
+      "execute_requests": 166,
+      "exact_retries": 16,
+      "diagnostic_initial_requests": 10,
+      "versioned_recompute_requests_including_ten_retries": 20,
+      "cli_test_execute_requests": 136
+    },
+    "count_boundary": "136 CLI-test requests include six exact retries across two passes. The diagnostic replay adds ten exact retries and ten new versions. Inspect and pure component/scheduler calls are not execute requests.",
+    "full_workspace_tests": "NOT_RUN; focused tests plus workspace all-target compile/lint. No full B02/B06/R2 acceptance claim."
+  },
+  "command_results": [
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 101,
+      "log": "verification/check.log",
+      "cause_and_resolution": "New test initially referenced an error-code helper in a different test module. A local test closure replaced it before any runtime test ran; subsequent all-target checks and lint passed. Product compilation did not fail."
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply-2.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-2.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine calculation_sequence -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/language-tests.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine scheduler::tests -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/scheduler-tests.log",
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route calculation_sequence_route -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/route-tests.log",
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy.log"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "log": "verification/build.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine language::tests::basic_document_numeric_tokens_cannot_be_reclassified_as_unit_suffixes -- --exact --nocapture",
+      "exit_code": 0,
+      "log": "verification/numeric-regression.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine language::tests::exact_arithmetic_and_precedence -- --exact --nocapture",
+      "exit_code": 0,
+      "log": "verification/arithmetic-regression.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine language::tests::exact_addition_and_subtraction_preserve_or_convert_units -- --exact --nocapture",
+      "exit_code": 0,
+      "log": "verification/unit-regression.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine language::tests::incompatible_mixed_units_are_a_typed_stop -- --exact --nocapture",
+      "exit_code": 0,
+      "log": "verification/mismatch-regression.log",
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log": "verification/fmt-apply-review.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "log": "verification/fmt-review.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "log": "verification/check-review.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0,
+      "log": "verification/clippy-review.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route calculation_sequence_route -- --nocapture",
+      "exit_code": 0,
+      "log": "verification/route-tests-review.log",
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "route_observations": [
+    {
+      "route": "Scalar references and exact artifact/graph maps",
+      "cases_per_cli_run": 8,
+      "evidence": "Japanese/lowercase/mixed-case English headers with LF/CRLF, blank/indented/trailing-space lines, fullwidth numeric text, negative rationals, repeated references, explicit first-occurrence requires order differing from lexical order, an unused independent step, and minimum/maximum 1/16-step chains. Every step source span, relative reference range and occurrence is checked against original UTF-8; actual parent exact value and SHA are checked. Raw step IDs remain distinct from prefixed scheduler keys. Compute consumes all declared steps including the unused step."
+    },
+    {
+      "route": "Compatible exact unit operands",
+      "cases_per_cli_run": 21,
+      "evidence": "Seven authored families through three headers: mixed-length multi-stage conversion, rational lengths, scientific notation, source unary minus, repeated fullwidth-plus operands and existing literal unit labels e/m/1e. Actual inserted values, parent hashes, final result and source/graph maps are checked. Identical unit labels retain the existing string-based contract; no general dimension validation is established."
+    },
+    {
+      "route": "Full successful artifact chain",
+      "evidence": "N step dependencies plus one sequence report; exact nodes/observed hashes and every per-node consumed map; required-graph/GoalContract agreement with sealed intent, budget, permissions and output path; compute artifact contains final calculation, actual display units, evidence and dependencies; saved content/render artifacts equal returned objects; final calculation including steps equals the last actual step artifact. Output insertion offsets are not supplied and are not claimed."
+    },
+    {
+      "route": "Typed early/intermediate stops",
+      "cases_per_cli_run": 31,
+      "breakdown": {
+        "malformed_or_unavailable_references": 12,
+        "quantity_contexts": 13,
+        "scalar_concatenation": 1,
+        "division_by_zero": 1,
+        "unit_mismatch": 1,
+        "action_deadline_evidence_budgets": 3
+      },
+      "evidence": "Parser failures preserve no completed step. Arithmetic/context failures preserve only the first successful step and no later step/report/final calculation/render/file receipt. Budget N+2 and deadline zero stop before calculation; report evidence budget one byte retains both completed step artifacts but no report or final calculation. Stored typed-step enumeration checks actual progress, not only dependency-array length. These cases remain SUSPEND/UNKNOWN."
+    },
+    {
+      "route": "Late file permission stop",
+      "cases_per_cli_run": 1,
+      "evidence": "WRITE_PERMISSION_MISSING occurs after actual computation/adoption/render: SUSPEND/COMPUTED, final 10, three step/report dependencies, content plan and RENDERED observation survive; execution graph ref is null, receipts/actions empty and no file exists. Original request and complete result persist."
+    },
+    {
+      "route": "Saved-result explanation and explicit input versions",
+      "stores_per_cli_run": 1,
+      "execute_requests_per_cli_run": 5,
+      "evidence": "Initial sequence produces 10; exact retry returns the original. Actual follow-up explanation links/copies its calculation and context result ID. Explicit version 2 produces 14 with new artifacts and retains the old complete result. A later version-1 retry still returns the original without replacing the current version-2 projection."
+    },
+    {
+      "route": "Authorized local file effect and exact retry",
+      "stores_per_cli_run": 1,
+      "execute_requests_per_cli_run": 2,
+      "evidence": "At exact N+4 action budget, actual file bytes equal displayed UTF-8 text and the CONFIRMED receipt target/hash/observed bytes. The execution graph consumes the stored receipt. Exact retry returns the same result with unchanged bytes/mtime and one action identity/receipt. This scoped observation does not establish general physical or remote exactly-once behavior."
+    }
+  ],
+  "versioned_recomputation": {
+    "binary_sha256": "b8dcb4798003716e17dc047ef09e7350798ceb6e03894254263e54a06c259b8d",
+    "stores_reused": 10,
+    "execute_requests": 20,
+    "new_input_identities": 10,
+    "namespace_only_is_uncommitted_unpublished_diagnostic": true,
+    "observations": [
+      {
+        "stage": "baseline",
+        "case": "independent-control",
+        "original_lifecycle": "COMMIT",
+        "original_exact_value": "7/2",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "COMMIT",
+        "version_2_reason": null,
+        "version_2_exact_value": "7/2",
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "baseline",
+        "case": "scalar",
+        "original_lifecycle": "SUSPEND",
+        "original_exact_value": null,
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "COMMIT",
+        "version_2_reason": null,
+        "version_2_exact_value": "11",
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "baseline",
+        "case": "units",
+        "original_lifecycle": "SUSPEND",
+        "original_exact_value": null,
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "COMMIT",
+        "version_2_reason": null,
+        "version_2_exact_value": "2000 m",
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "division-suffix",
+        "original_lifecycle": "COMMIT",
+        "original_exact_value": "4 m/s",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "CALCULATION_REFERENCE_CONTEXT: CALCULATION_REFERENCE_CONTEXT: a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "exponent-prefix",
+        "original_lifecycle": "COMMIT",
+        "original_exact_value": "1001 m",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "CALCULATION_REFERENCE_CONTEXT: CALCULATION_REFERENCE_CONTEXT: a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "numeric-prefix",
+        "original_lifecycle": "COMMIT",
+        "original_exact_value": "24 m",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "CALCULATION_REFERENCE_CONTEXT: CALCULATION_REFERENCE_CONTEXT: a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "reciprocal-prefix",
+        "original_lifecycle": "COMMIT",
+        "original_exact_value": "2/3 m",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "CALCULATION_REFERENCE_CONTEXT: CALCULATION_REFERENCE_CONTEXT: a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "scalar-control",
+        "original_lifecycle": "SUSPEND",
+        "original_exact_value": null,
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "INVALID_EXPRESSION: INVALID_EXPRESSION: unexpected input at byte 1",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "unit-prefix",
+        "original_lifecycle": "SUSPEND",
+        "original_exact_value": null,
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "CALCULATION_REFERENCE_CONTEXT: CALCULATION_REFERENCE_CONTEXT: a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      },
+      {
+        "stage": "namespace-only",
+        "case": "unit-suffix",
+        "original_lifecycle": "COMMIT",
+        "original_exact_value": "4 mm",
+        "exact_retry_preserves_original": true,
+        "explicit_version_2_lifecycle": "SUSPEND",
+        "version_2_reason": "CALCULATION_REFERENCE_CONTEXT: CALCULATION_REFERENCE_CONTEXT: a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+        "version_2_exact_value": null,
+        "original_retained_in_prior_results": true
+      }
+    ]
+  },
+  "traceability_update": "Update only current B02/B06 evidence and full-acceptance gap text plus test_execution_result. Historical source/build-only reports, baseline source lineage, all dispositions/acceptance statuses, requirements and the 93-record population are retained.",
+  "retained_local_evidence": {
+    "root": "/workspace/.minidora-cloud/b06-calculation-sequence-route",
+    "closure_status": "保持",
+    "manifest_path": "/workspace/.minidora-cloud/b06-calculation-sequence-route/asset-inventory.json",
+    "manifest_sha256": "143e1327fccb3dfc5424e48396539d3646322f186e17cc72ec631c5774302ec1",
+    "file_count_including_manifest": 3270,
+    "bytes_including_manifest": 24707499,
+    "stores": 136,
+    "stored_input_identities": 150,
+    "remote_storage_verification": "NOT_RUN; local evidence only, no OneDrive storage claim"
+  },
+  "asset_accounting": {
+    "scope": "Current evidence root files (including its manifest) plus existing retained installer; changed verified Git files; three existing active cache/target directory units. Earlier evidence roots are retained outside this batch count.",
+    "保持": 3271,
+    "保管済み": 10,
+    "稼働中": 3,
+    "ゴミ箱移動済み": 0,
+    "保留": 0,
+    "total": 3284,
+    "reclaimed_bytes": 0,
+    "pending_disposal": 0,
+    "online_only_conversion": "NOT_PERFORMED"
+  },
+  "rollback_refs": {
+    "codex/backup-main": "999fc813a723b93b6b2ca1d8f68b3358fa3a6fd3",
+    "codex/backup-main-prev": "5022b5bbcbbf334bcc6167ad065a15273d69df8a"
+  },
+  "known_limits": [
+    "These authored calculations are scoped QC, not an independent held-out B02/B06 acceptance population or general natural-language goal decomposition.",
+    "Quantity references are restricted to complete operands in the existing binary unit addition/subtraction grammar. Single-quantity identity, nested quantities, dimensional multiplication/division and broader physical dimensions remain unsupported.",
+    "Full resource/failure matrices, timeout-at-each-step injection, long-history/hostile concurrency, all inherited quantity contracts and broader task-quality populations remain unverified.",
+    "Full workspace runtime regression, frozen Python tests, external LIVE, Windows/macOS, physical 8 GB QA, remote delivery, release and deployment are NOT_RUN."
+  ],
+  "publication_review": {
+    "public_boundary_sha256": "9080ebacee267660cf903105db8385ab7ee7a0cbeb09e2046b1a50e27cc9072b",
+    "secret_or_private_theory_in_new_diff": "NONE_OBSERVED",
+    "frozen_baseline_and_original581_files_changed": false,
+    "dependency_or_toolchain_change": false,
+    "new_workflow_PR_feature_branch": "NONE"
+  },
+  "acceptance": {
+    "B02": "UNVERIFIED; selected exact unit consumers and boundaries only",
+    "B06": "UNVERIFIED; bounded arithmetic chains observed, not general multi-step problem solving",
+    "full_r2_successor_acceptance": "UNVERIFIED",
+    "capability_population": 93,
+    "release_or_deployment": "NOT_PERFORMED"
+  }
+}

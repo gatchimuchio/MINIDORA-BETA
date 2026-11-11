@@ -473,7 +473,11 @@ impl Engine {
                     let artifact_sha256 =
                         self.store
                             .put_artifact(actor, &request.case_id, &artifact)?;
-                    graph.observe(&node_id, &artifact_sha256, &consumed)?;
+                    let graph_consumed = consumed
+                        .into_iter()
+                        .map(|(id, sha)| (format!("sequence-{id}"), sha))
+                        .collect();
+                    graph.observe(&node_id, &artifact_sha256, &graph_consumed)?;
                     result.dependencies.push(artifact_sha256.clone());
                     units.push(format!(
                         "{}: {} = {}",

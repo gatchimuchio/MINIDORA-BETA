@@ -10,6 +10,668 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
+struct SequenceExpectation {
+    id: String,
+    source: String,
+    evaluated: String,
+    value: String,
+    requires: Vec<String>,
+    occurrences: Vec<String>,
+}
+
+fn sequence_step(
+    id: &str,
+    source: &str,
+    evaluated: &str,
+    value: &str,
+    requires: &[&str],
+    occurrences: &[&str],
+) -> SequenceExpectation {
+    SequenceExpectation {
+        id: id.into(),
+        source: source.into(),
+        evaluated: evaluated.into(),
+        value: value.into(),
+        requires: requires.iter().map(|s| (*s).into()).collect(),
+        occurrences: occurrences.iter().map(|s| (*s).into()).collect(),
+    }
+}
+
+fn sequence_artifact(store: &minidora_engine::store::Store, sha: &Value) -> Value {
+    let sha = sha.as_str().unwrap();
+    let bytes = store.get_bytes("owner", "normal-route", sha).unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), sha);
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn assert_sequence_artifacts(
+    directory: &Path,
+    result: &Value,
+    request: &str,
+    expected: &[SequenceExpectation],
+) -> Value {
+    basic_raw_result(directory, result, request, None);
+    let saved = inspect_normal_case(directory, "owner");
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), expected.len() + 1);
+    let intent = &saved["bundle"]["meaning"]["intent"];
+    assert_eq!(intent["kind"], "CALCULATE_SEQUENCE");
+    assert_eq!(intent["steps"].as_array().unwrap().len(), expected.len());
+    let mut parents = serde_json::Map::new();
+    let mut values = std::collections::BTreeMap::new();
+    let mut expected_nodes = Vec::new();
+    let mut expected_consumption = serde_json::Map::new();
+    let mut report_steps = Vec::new();
+    let mut display = Vec::new();
+    let mut source_cursor = 0;
+    for (i, step) in expected.iter().enumerate() {
+        let artifact = sequence_artifact(&store, &dependencies[i]);
+        let marker = format!("{}:", step.id);
+        let line_start = source_cursor + request[source_cursor..].find(&marker).unwrap();
+        let expression_tail = &request[line_start + marker.len()..];
+        let start =
+            line_start + marker.len() + expression_tail.len() - expression_tail.trim_start().len();
+        let end = start + step.source.len();
+        assert_eq!(&request[start..end], step.source);
+        source_cursor = end;
+        let span = serde_json::json!({"start":start,"end":end,"text":step.source});
+        assert_eq!(artifact["id"], step.id);
+        assert_eq!(artifact["source_expression"], span);
+        assert_eq!(artifact["evaluated_expression"], step.evaluated);
+        assert_eq!(artifact["calculation"]["expression"], step.evaluated);
+        assert_eq!(artifact["calculation"]["exact_value"], step.value);
+        if i + 1 == expected.len() {
+            assert_eq!(result["calculation"], artifact["calculation"]);
+        }
+        assert_eq!(
+            intent["steps"][i],
+            serde_json::json!({
+                "id":step.id,"expression":span,"requires":step.requires
+            })
+        );
+        let consumed = artifact["consumed"].as_array().unwrap();
+        assert_eq!(consumed.len(), step.occurrences.len());
+        let mut cursor = 0;
+        for (occurrence, id) in step.occurrences.iter().enumerate() {
+            let token = format!("@{{{id}}}");
+            let at = cursor + step.source[cursor..].find(&token).unwrap();
+            cursor = at + token.len();
+            assert_eq!(&request[start + at..start + cursor], token);
+            assert_eq!(
+                consumed[occurrence],
+                serde_json::json!({
+                    "step_id":id,"expression_start":at,"expression_end":cursor,
+                    "occurrence":occurrence,"exact_value":values[id],
+                    "artifact_sha256":parents[&format!("sequence-{id}")]
+                })
+            );
+        }
+        assert!(!step.source[cursor..].contains("@{"));
+        let graph_id = format!("sequence-{}", step.id);
+        let requires: Vec<_> = step
+            .requires
+            .iter()
+            .map(|id| format!("sequence-{id}"))
+            .collect();
+        let consumed_map: serde_json::Map<_, _> = requires
+            .iter()
+            .map(|id| (id.clone(), parents[id].clone()))
+            .collect();
+        expected_consumption.insert(graph_id.clone(), Value::Object(consumed_map));
+        expected_nodes
+            .push(serde_json::json!({"id":graph_id,"kind":"COMPUTED_VALUE","requires":requires}));
+        parents.insert(graph_id, dependencies[i].clone());
+        values.insert(step.id.clone(), step.value.clone());
+        report_steps.push(serde_json::json!([step.id, dependencies[i]]));
+        display.push(format!("{}: {} = {}", step.id, step.evaluated, step.value));
+    }
+    let last = expected.last().unwrap();
+    assert_eq!(result["calculation"]["exact_value"], last.value);
+    assert_eq!(result["calculation"]["expression"], last.evaluated);
+    assert_eq!(result["text"], display.join("\n"));
+    assert_eq!(
+        sequence_artifact(&store, dependencies.last().unwrap()),
+        serde_json::json!([
+            "minidora-calculation-sequence-report-v1",
+            report_steps,
+            last.id,
+            last.value,
+            "each declared downstream reference was substituted with the exact value of its observed upstream calculation artifact"
+        ])
+    );
+    let graph = sequence_artifact(&store, &result["execution_graph_ref"]);
+    assert_eq!(graph.as_array().unwrap().len(), 6);
+    let observed = graph[1].as_object().unwrap();
+    let sequence_ids: Vec<_> = expected
+        .iter()
+        .map(|s| format!("sequence-{}", s.id))
+        .collect();
+    expected_nodes.extend([
+        serde_json::json!({"id":"compute","kind":"CORE_RESULT","requires":sequence_ids}),
+        serde_json::json!({"id":"content","kind":"CONTENT_PLAN","requires":["compute"]}),
+        serde_json::json!({"id":"render","kind":"RENDERED_ARTIFACT","requires":["content"]}),
+    ]);
+    let has_file = !saved["bundle"]["request"]["output_path"].is_null();
+    if has_file {
+        expected_nodes
+            .push(serde_json::json!({"id":"file","kind":"REQUIRED_FILE","requires":["render"]}));
+    }
+    assert_eq!(graph[0], Value::Array(expected_nodes));
+    assert_eq!(observed.len(), expected.len() + 3 + usize::from(has_file));
+    for (id, sha) in &parents {
+        assert_eq!(observed[id], *sha);
+    }
+    expected_consumption.insert("compute".into(), Value::Object(parents));
+    expected_consumption.insert(
+        "content".into(),
+        serde_json::json!({"compute":observed["compute"]}),
+    );
+    expected_consumption.insert(
+        "render".into(),
+        serde_json::json!({"content":observed["content"]}),
+    );
+    if has_file {
+        expected_consumption.insert(
+            "file".into(),
+            serde_json::json!({"render":observed["render"]}),
+        );
+        assert_eq!(
+            sequence_artifact(&store, &observed["file"]),
+            result["receipts"][0]
+        );
+    }
+    assert_eq!(graph[5], Value::Object(expected_consumption));
+    assert_eq!(graph[2], graph[5]["content"]);
+    assert_eq!(graph[3], graph[5]["render"]);
+    assert_eq!(
+        graph[4],
+        if has_file {
+            graph[5]["file"].clone()
+        } else {
+            Value::Null
+        }
+    );
+    assert_eq!(
+        sequence_artifact(&store, &observed["compute"]),
+        serde_json::json!([result["calculation"], display, [], dependencies])
+    );
+    assert_eq!(
+        sequence_artifact(&store, &observed["content"]),
+        result["content_plan"]
+    );
+    assert_eq!(
+        sequence_artifact(&store, &observed["render"]),
+        result["render"]
+    );
+    let mut plan_dependencies = dependencies.clone();
+    plan_dependencies.push(observed["compute"].clone());
+    assert_eq!(
+        result["content_plan"]["dependencies"],
+        Value::Array(plan_dependencies)
+    );
+    let goal = sequence_artifact(&store, &saved["goal_sha256"]);
+    assert_eq!(goal["intent"], *intent);
+    for field in ["budget", "output_path", "permissions"] {
+        assert_eq!(goal[field], saved["bundle"]["request"][field]);
+    }
+    assert_eq!(
+        sequence_artifact(&store, &goal["required_graph_ref"]),
+        graph[0]
+    );
+    assert!(
+        store
+            .get_bytes(
+                "stranger",
+                "normal-route",
+                dependencies[0].as_str().unwrap()
+            )
+            .is_err()
+    );
+    saved
+}
+
+#[test]
+fn calculation_sequence_route_scalar_maps_order_and_capacity() {
+    for header in [
+        "計算手順を実行して:",
+        "calculation-sequence:",
+        "CaLcUlAtIoN-SeQuEnCe:",
+    ] {
+        for newline in ["\n", "\r\n"] {
+            let scratch = Scratch::new();
+            let request = format!(
+                "{header}{newline}{newline}  z: ０.１-０.６  {newline}unused: 7/2{newline} a: ０+@{{z}}*2 + @{{z}} {newline}final: @{{z}} - @{{a}} + @{{z}}{newline}"
+            );
+            let expected = [
+                sequence_step("z", "０.１-０.６", "０.１-０.６", "-1/2", &[], &[]),
+                sequence_step("unused", "7/2", "7/2", "7/2", &[], &[]),
+                sequence_step(
+                    "a",
+                    "０+@{z}*2 + @{z}",
+                    "０+(-1/2)*2 + (-1/2)",
+                    "-3/2",
+                    &["z"],
+                    &["z", "z"],
+                ),
+                sequence_step(
+                    "final",
+                    "@{z} - @{a} + @{z}",
+                    "(-1/2) - (-3/2) + (-1/2)",
+                    "1/2",
+                    &["z", "a"],
+                    &["z", "a", "z"],
+                ),
+            ];
+            let result = record(&execute(
+                &scratch.0,
+                "owner",
+                &["--max-actions", "7", &request],
+            ));
+            assert_sequence_artifacts(&scratch.0, &result, &request, &expected);
+        }
+    }
+    for count in [1, 16] {
+        let scratch = Scratch::new();
+        let mut request = "calculation-sequence:\ns0: 1".to_string();
+        let mut expected = vec![sequence_step("s0", "1", "1", "1", &[], &[])];
+        for i in 1..count {
+            let id = format!("s{i}");
+            let prior = format!("s{}", i - 1);
+            let source = format!("@{{{prior}}}+1");
+            request.push_str(&format!("\n{id}: {source}"));
+            expected.push(sequence_step(
+                &id,
+                &source,
+                &format!("({i})+1"),
+                &(i + 1).to_string(),
+                &[&prior],
+                &[&prior],
+            ));
+        }
+        let budget = (count + 3).to_string();
+        let result = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--max-actions", &budget, &request],
+        ));
+        assert_sequence_artifacts(&scratch.0, &result, &request, &expected);
+    }
+}
+
+#[test]
+fn calculation_sequence_route_units_consume_whole_exact_operands() {
+    let fixtures = vec![
+        vec![
+            sequence_step("u", "1 km+500 m", "1 km+500 m", "1500 m", &[], &[]),
+            sequence_step("v", "@{u}+500 m", "1500 m+500 m", "2000 m", &["u"], &["u"]),
+            sequence_step(
+                "final",
+                "@{v}-1 km",
+                "2000 m-1 km",
+                "1000 m",
+                &["v"],
+                &["v"],
+            ),
+        ],
+        vec![
+            sequence_step("u", "0.25 m+0.5 m", "0.25 m+0.5 m", "3/4 m", &[], &[]),
+            sequence_step("final", "@{u}+25 cm", "3/4 m+25 cm", "1 m", &["u"], &["u"]),
+        ],
+        vec![
+            sequence_step("u", "1e3 m+2e3 m", "1e3 m+2e3 m", "3000 m", &[], &[]),
+            sequence_step(
+                "final",
+                "@{u}+1e3 m",
+                "3000 m+1e3 m",
+                "4000 m",
+                &["u"],
+                &["u"],
+            ),
+        ],
+        vec![
+            sequence_step("u", "1 m+2 m", "1 m+2 m", "3 m", &[], &[]),
+            sequence_step("final", "-@{u}+1 m", "-3 m+1 m", "-2 m", &["u"], &["u"]),
+        ],
+        vec![
+            sequence_step("u", "1 m+2 m", "1 m+2 m", "3 m", &[], &[]),
+            sequence_step(
+                "final",
+                "@{u}＋@{u}",
+                "3 m＋3 m",
+                "6 m",
+                &["u"],
+                &["u", "u"],
+            ),
+        ],
+        vec![
+            sequence_step("u", "1 e+2 e", "1 e+2 e", "3 e", &[], &[]),
+            sequence_step("final", "1 e+@{u}", "1 e+3 e", "4 e", &["u"], &["u"]),
+        ],
+        vec![
+            sequence_step("u", "1 m/1e+2 m/1e", "1 m/1e+2 m/1e", "3 m/1e", &[], &[]),
+            sequence_step(
+                "final",
+                "1 m/1e+@{u}",
+                "1 m/1e+3 m/1e",
+                "4 m/1e",
+                &["u"],
+                &["u"],
+            ),
+        ],
+    ];
+    for header in [
+        "計算手順を実行して:",
+        "calculation-sequence:",
+        "CaLcUlAtIoN-SeQuEnCe:",
+    ] {
+        for expected in &fixtures {
+            let scratch = Scratch::new();
+            let request = format!(
+                "{header}\n{}",
+                expected
+                    .iter()
+                    .map(|s| format!("{}: {}", s.id, s.source))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let budget = (expected.len() + 3).to_string();
+            let result = record(&execute(
+                &scratch.0,
+                "owner",
+                &["--max-actions", &budget, &request],
+            ));
+            assert_sequence_artifacts(&scratch.0, &result, &request, expected);
+        }
+    }
+}
+
+fn sequence_stored_step_ids(directory: &Path) -> Vec<String> {
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let mut ids = Vec::new();
+    for entry in std::fs::read_dir(directory.join("blobs")).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        if let Ok(bytes) = store.get_bytes("owner", "normal-route", &name)
+            && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+            && value.get("evaluated_expression").is_some()
+            && value.get("source_expression").is_some()
+            && value.get("consumed").is_some()
+        {
+            ids.push(value["id"].as_str().unwrap().to_string());
+        }
+    }
+    ids.sort();
+    ids
+}
+
+#[test]
+fn calculation_sequence_route_typed_stops_preserve_only_actual_progress() {
+    let too_many = (0..17)
+        .map(|i| format!("s{i}: 1"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let malformed = [
+        "",
+        "u: 1\nu: 2",
+        "1u: 1",
+        "u: ",
+        "u 1",
+        "u: @{missing}+1",
+        "u: @{u}+1",
+        "u: @{v}+1\nv: 2",
+        "u: @{v}+1\nv: @{u}+1",
+        "u: 1\nv: @{u",
+        "u: 1\nv: @{}+1",
+        &too_many,
+    ];
+    for body in malformed {
+        let scratch = Scratch::new();
+        let request = format!("calculation-sequence:\n{body}");
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("CAPABILITY_UNAVAILABLE:")
+        );
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        assert_eq!(sequence_stored_step_ids(&scratch.0), Vec::<String>::new());
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(saved["result"], result);
+    }
+    let mut failures = Vec::new();
+    for expression in [
+        "2@{u}+1 m",
+        "@{u}m+1 mm",
+        "@{u}/s+1 m/s",
+        "1/@{u}+1/3 m",
+        "@{u}*2",
+        "(@{u})+1 m",
+        "@{u}^2+1 m",
+        "1e+@{u}+1 m",
+        "1E-@{u}+1 m",
+        "１ｅ＋@{u}＋１ m",
+        "1e−@{u}+1 m",
+        "1 e-@{u}+1 e-3m",
+        "@{u}",
+    ] {
+        failures.push((
+            format!("calculation-sequence:\nu: 1 m+2 m\nbad: {expression}\nlater: 9"),
+            "CALCULATION_REFERENCE_CONTEXT",
+            1,
+        ));
+    }
+    failures.extend([
+        (
+            "calculation-sequence:\nu: 1+2\nbad: 2@{u}+1\nlater: 9".into(),
+            "INVALID_EXPRESSION",
+            1,
+        ),
+        (
+            "calculation-sequence:\nu: 1+2\nbad: @{u}/0\nlater: 9".into(),
+            "DIVISION_BY_ZERO",
+            1,
+        ),
+        (
+            "calculation-sequence:\nu: 1 m+2 m\nbad: @{u}+1 s\nlater: 9".into(),
+            "UNIT_MISMATCH",
+            1,
+        ),
+    ]);
+    for (request, code, completed) in failures {
+        let scratch = Scratch::new();
+        let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{code}:")),
+            "{request}: {}",
+            result["reason"]
+        );
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), completed);
+        for field in [
+            "calculation",
+            "content_plan",
+            "render",
+            "execution_graph_ref",
+        ] {
+            assert!(result[field].is_null());
+        }
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert_eq!(sequence_stored_step_ids(&scratch.0), vec!["u"]);
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        assert_eq!(
+            sequence_artifact(&store, &result["dependencies"][0])["id"],
+            "u"
+        );
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(saved["result"], result);
+    }
+    let request = "calculation-sequence:\nu: 2+3\nfinal: @{u}*2";
+    for (args, code, count) in [
+        (vec!["--max-actions", "4"], "ACTION_BUDGET_EXHAUSTED", 0),
+        (vec!["--deadline-ms", "0"], "RESOURCE_LIMIT", 0),
+        (vec!["--max-evidence-bytes", "1"], "RESOURCE_LIMIT", 2),
+    ] {
+        let scratch = Scratch::new();
+        let mut args = args;
+        args.push(request);
+        let result = stopped(&execute(&scratch.0, "owner", &args), 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{code}:"))
+        );
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), count);
+        assert_eq!(sequence_stored_step_ids(&scratch.0).len(), count);
+        for field in [
+            "calculation",
+            "content_plan",
+            "render",
+            "execution_graph_ref",
+        ] {
+            assert!(result[field].is_null());
+        }
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(saved["result"], result);
+    }
+    let scratch = Scratch::new();
+    let path = scratch.0.join("not-authorized.txt");
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--output", path.to_str().unwrap(), request],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("WRITE_PERMISSION_MISSING:")
+    );
+    assert_eq!(result["guarantee"], "COMPUTED");
+    assert_eq!(result["calculation"]["exact_value"], "10");
+    assert_eq!(result["dependencies"].as_array().unwrap().len(), 3);
+    assert_eq!(result["content_plan"]["text"], result["text"]);
+    assert_eq!(result["render"]["status"], "RENDERED");
+    assert!(result["execution_graph_ref"].is_null());
+    assert_eq!(result["receipts"], serde_json::json!([]));
+    assert!(!path.exists());
+    assert!(
+        minidora_engine::store::Store::open(&scratch.0)
+            .unwrap()
+            .actions("owner", "normal-route")
+            .unwrap()
+            .is_empty()
+    );
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    assert_eq!(saved["result"], result);
+}
+
+#[test]
+fn calculation_sequence_route_retry_explanation_and_version_history() {
+    let scratch = Scratch::new();
+    let request = "calculation-sequence:\nu: 2+3\nfinal: @{u}*2";
+    let expected = [
+        sequence_step("u", "2+3", "2+3", "5", &[], &[]),
+        sequence_step("final", "@{u}*2", "(5)*2", "10", &["u"], &["u"]),
+    ];
+    let args = ["--input", "sequence-history", request];
+    let first = record(&execute(&scratch.0, "owner", &args));
+    assert_sequence_artifacts(&scratch.0, &first, request, &expected);
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["calculation"], first["calculation"]);
+    assert!(explanation["text"].as_str().unwrap().contains("(5)*2"));
+    assert!(explanation["text"].as_str().unwrap().contains("10"));
+    assert!(
+        explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&first["id"])
+    );
+    assert_eq!(
+        inspect_normal_case(&scratch.0, "owner")["bundle"]["meaning"]["context_result_ref"],
+        first["id"]
+    );
+    let changed = request.replace("2+3", "4+3");
+    let expected = [
+        sequence_step("u", "4+3", "4+3", "7", &[], &[]),
+        sequence_step("final", "@{u}*2", "(7)*2", "14", &["u"], &["u"]),
+    ];
+    let second = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "sequence-history", "--version", "2", &changed],
+    ));
+    let saved = assert_sequence_artifacts(&scratch.0, &second, &changed, &expected);
+    assert_eq!(saved["prior_results"][first["id"].as_str().unwrap()], first);
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), first);
+    assert_eq!(inspect_normal_case(&scratch.0, "owner")["result"], second);
+}
+
+#[test]
+fn calculation_sequence_route_file_effect_is_confirmed_once() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("sequence-result.txt");
+    let path_text = path.to_str().unwrap();
+    let request = "calculation-sequence:\nu: 2+3\nfinal: @{u}*2";
+    let expected = [
+        sequence_step("u", "2+3", "2+3", "5", &[], &[]),
+        sequence_step("final", "@{u}*2", "(5)*2", "10", &["u"], &["u"]),
+    ];
+    let args = [
+        "--input",
+        "sequence-file",
+        "--max-actions",
+        "6",
+        "--output",
+        path_text,
+        "--allow-write",
+        path_text,
+        request,
+    ];
+    let result = record(&execute(&scratch.0, "owner", &args));
+    assert_sequence_artifacts(&scratch.0, &result, request, &expected);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes, result["text"].as_str().unwrap().as_bytes());
+    assert_eq!(result["receipts"].as_array().unwrap().len(), 1);
+    assert_eq!(result["receipts"][0]["phase"], "CONFIRMED");
+    assert_eq!(result["receipts"][0]["target"], path_text);
+    assert_eq!(result["receipts"][0]["observed_bytes"], bytes.len());
+    assert_eq!(
+        result["receipts"][0]["content_sha256"],
+        minidora_domain::digest(&bytes)
+    );
+    let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), result);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        modified
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let actions = store.actions("owner", "normal-route").unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        serde_json::to_value(actions[0].receipt.as_ref().unwrap()).unwrap(),
+        result["receipts"][0]
+    );
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {

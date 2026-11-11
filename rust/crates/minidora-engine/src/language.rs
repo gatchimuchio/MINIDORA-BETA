@@ -83,12 +83,7 @@ pub fn calculate(expression: &str) -> Result<Calculation> {
     if expression.len() > MAX_EXPRESSION_BYTES {
         return Err(failure("EXPRESSION_LIMIT", "expression exceeds 8192 bytes"));
     }
-    let normalized: String = expression
-        .nfkc()
-        .collect::<String>()
-        .replace('×', "*")
-        .replace('÷', "/")
-        .replace('−', "-");
+    let normalized = normalize_expression(expression);
     if let Some(calculation) = calculate_unit_addition(expression, &normalized)? {
         return Ok(calculation);
     }
@@ -136,7 +131,7 @@ pub struct ResolvedSequenceCalculation {
     pub consumed: Vec<CalculationReferenceUse>,
 }
 
-fn sequence_value_literal(value: &str) -> Result<String> {
+fn sequence_value_literal(value: &str) -> Result<(String, bool)> {
     if value.len() > MAX_EXPRESSION_BYTES {
         return Err(failure(
             "CALCULATION_REFERENCE_LIMIT",
@@ -146,7 +141,7 @@ fn sequence_value_literal(value: &str) -> Result<String> {
     if let Ok(rational) = BigRational::from_str(value)
         && rational_text(&rational) == value
     {
-        return Ok(format!("({value})"));
+        return Ok((format!("({value})"), false));
     }
 
     static QUANTITY_UNIT: OnceLock<Regex> = OnceLock::new();
@@ -161,12 +156,21 @@ fn sequence_value_literal(value: &str) -> Result<String> {
     {
         // Unit addition accepts a bare number+unit pair, not a parenthesized
         // unit expression; the existing calculator rejects other operations.
-        return Ok(format!("{number} {unit}"));
+        return Ok((format!("{number} {unit}"), true));
     }
     Err(failure(
         "CALCULATION_REFERENCE_VALUE",
         "upstream result is neither a canonical rational nor a supported exact quantity",
     ))
+}
+
+fn normalize_expression(expression: &str) -> String {
+    expression
+        .nfkc()
+        .collect::<String>()
+        .replace('×', "*")
+        .replace('÷', "/")
+        .replace('−', "-")
 }
 
 /// Replace explicit `@{step-id}` references with the exact scalar produced by
@@ -185,6 +189,7 @@ pub fn calculate_sequence_expression(
     }
     let mut evaluated_expression = String::with_capacity(expression.len());
     let mut consumed = Vec::new();
+    let mut quantity_ranges = Vec::new();
     let mut cursor = 0usize;
     while let Some(relative_start) = expression[cursor..].find("@{") {
         let start = cursor + relative_start;
@@ -226,7 +231,7 @@ pub fn calculate_sequence_expression(
                 "a consumed calculation requires a canonical lowercase SHA-256 artifact ID",
             ));
         }
-        let literal = sequence_value_literal(&prior.exact_value)?;
+        let (literal, is_quantity) = sequence_value_literal(&prior.exact_value)?;
         let next_len = evaluated_expression
             .len()
             .saturating_add(start - cursor)
@@ -238,7 +243,11 @@ pub fn calculate_sequence_expression(
             ));
         }
         evaluated_expression.push_str(&expression[cursor..start]);
+        let literal_start = evaluated_expression.len();
         evaluated_expression.push_str(&literal);
+        if is_quantity {
+            quantity_ranges.push((literal_start, evaluated_expression.len()));
+        }
         consumed.push(CalculationReferenceUse {
             step_id: id.to_string(),
             expression_start: start,
@@ -260,6 +269,31 @@ pub fn calculate_sequence_expression(
         ));
     }
     evaluated_expression.push_str(&expression[cursor..]);
+    if !quantity_ranges.is_empty() {
+        let normalized = normalize_expression(&evaluated_expression);
+        let captures = unit_addition_pattern().captures(&normalized);
+        for (start, end) in quantity_ranges {
+            let start = normalize_expression(&evaluated_expression[..start]).len();
+            let end = normalize_expression(&evaluated_expression[..end]).len();
+            let whole_operand = captures.as_ref().is_some_and(|captures| {
+                [(1, 2), (4, 5)].into_iter().any(|(number, unit)| {
+                    let number = captures.get(number).expect("operand number exists");
+                    let unit = captures.get(unit).expect("operand unit exists");
+                    // A source unary sign may precede the inserted quantity.
+                    // Exponent signs, ratios and unit-label fragments may not.
+                    let signed_start =
+                        number.start() + usize::from(number.as_str().starts_with(['+', '-']));
+                    (start == number.start() || start == signed_start) && end == unit.end()
+                })
+            });
+            if !whole_operand {
+                return Err(failure(
+                    "CALCULATION_REFERENCE_CONTEXT",
+                    "a quantity reference must be a complete operand in the supported addition/subtraction grammar; numeric/unit concatenation and other operators are unsupported",
+                ));
+            }
+        }
+    }
     let calculation = calculate(&evaluated_expression)?;
     Ok(ResolvedSequenceCalculation {
         evaluated_expression,
@@ -313,13 +347,16 @@ fn numeric_operand_prefix_len(text: &str) -> usize {
         .map_or(0, |value| value.end())
 }
 
-fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Calculation>> {
+fn unit_addition_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
-    let pattern = PATTERN.get_or_init(|| {
+    PATTERN.get_or_init(|| {
         Regex::new(r"^\s*([+-]?(?:[0-9]+/[0-9]+|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?))\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*([+-])\s*([+-]?(?:[0-9]+/[0-9]+|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?))\s*([A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63})\s*$")
             .expect("unit arithmetic expression pattern is static")
-    });
-    let Some(captures) = pattern.captures(normalized) else {
+    })
+}
+
+fn calculate_unit_addition(original: &str, normalized: &str) -> Result<Option<Calculation>> {
+    let Some(captures) = unit_addition_pattern().captures(normalized) else {
         return Ok(None);
     };
     for (number_index, unit_index) in [(1, 2), (4, 5)] {
@@ -1426,6 +1463,76 @@ impl SequenceModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn calculation_sequence_quantity_references_are_complete_operands() {
+        let code = |error| match error {
+            minidora_domain::Error::Contract { code, .. } => code,
+            other => panic!("unexpected error: {other}"),
+        };
+        let mut prior = BTreeMap::from([(
+            "u".into(),
+            SequenceValue {
+                exact_value: "3 m".into(),
+                artifact_sha256: minidora_domain::digest(b"component fixture, not a Core artifact"),
+            },
+        )]);
+        for source in [
+            "2@{u}+1 m",
+            "@{u}m+1 mm",
+            "@{u}/s+1 m/s",
+            "1/@{u}+1/3 m",
+            "@{u}*2",
+            "(@{u})+1 m",
+            "@{u}^2+1 m",
+            "1e+@{u}+1 m",
+            "1E-@{u}+1 m",
+            "１ｅ＋@{u}＋１ m",
+            "1e−@{u}+1 m",
+            "1 e-@{u}+1 e-3m",
+            "@{u}",
+        ] {
+            assert_eq!(
+                code(calculate_sequence_expression(source, &prior).unwrap_err()),
+                "CALCULATION_REFERENCE_CONTEXT",
+                "{source}"
+            );
+        }
+        for (source, evaluated, exact) in [
+            ("@{u}+1 m", "3 m+1 m", "4 m"),
+            ("-@{u}+1 m", "-3 m+1 m", "-2 m"),
+            ("−@{u}+1 m", "−3 m+1 m", "-2 m"),
+            ("＋@{u}+1 m", "＋3 m+1 m", "4 m"),
+            ("@{u}＋@{u}", "3 m＋3 m", "6 m"),
+        ] {
+            let actual = calculate_sequence_expression(source, &prior).unwrap();
+            assert_eq!(actual.evaluated_expression, evaluated);
+            assert_eq!(actual.calculation.exact_value, exact);
+            for (i, reference) in actual.consumed.iter().enumerate() {
+                assert_eq!(reference.occurrence, i);
+                assert_eq!(
+                    &source[reference.expression_start..reference.expression_end],
+                    "@{u}"
+                );
+                assert_eq!(reference.exact_value, "3 m");
+                assert_eq!(reference.artifact_sha256, prior["u"].artifact_sha256);
+            }
+        }
+        for unit in ["e", "m/1e"] {
+            prior.get_mut("u").unwrap().exact_value = format!("3 {unit}");
+            let actual =
+                calculate_sequence_expression(&format!("1 {unit}+@{{u}}"), &prior).unwrap();
+            assert_eq!(actual.calculation.exact_value, format!("4 {unit}"));
+        }
+        prior.get_mut("u").unwrap().exact_value = "3".into();
+        assert_eq!(
+            code(calculate_sequence_expression("2@{u}+1", &prior).unwrap_err()),
+            "INVALID_EXPRESSION"
+        );
+        let actual = calculate_sequence_expression("10/@{u}+@{u}", &prior).unwrap();
+        assert_eq!(actual.evaluated_expression, "10/(3)+(3)");
+        assert_eq!(actual.calculation.exact_value, "19/3");
+        assert_eq!(actual.consumed.len(), 2);
+    }
     #[test]
     fn basic_document_numeric_tokens_cannot_be_reclassified_as_unit_suffixes() {
         for text in [

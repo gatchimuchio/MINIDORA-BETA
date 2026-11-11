@@ -63,6 +63,8 @@ Arithmetic uses exact integers/rationals, bounded expressions and recorded steps
 
 Each line declares one unique step ID and exact arithmetic expression. `@{earlier-id}` inserts the earlier step's exact rational result, with parentheses preserving scalar expression grouping. Exact unit-bearing results can also flow into the existing bounded addition/subtraction grammar, including mixed `mm`, `cm`, `m` and `km` conversion; dimensional multiplication or division is not added by this route. The Core adds each step to its finite required-artifact graph, stores its source expression and evaluated result, and records the upstream artifact SHA-256 actually consumed by each dependent step. Only earlier declared results can be referenced; forward or unknown references remain unresolved. At most 16 steps are admitted, and the caller's action budget must also cover every required graph node. This is a bounded calculation-chain route, not general multi-step reasoning acceptance.
 
+A quantity reference must occupy a complete number-and-unit operand of the existing binary addition/subtraction grammar. Numeric prefixes, exponent fragments, unit suffixes and other operators suspend with `CALCULATION_REFERENCE_CONTEXT`. The minimum action budget is the number of declared steps plus three, or plus four when a file is required. Scoped CLI observations, artifact consumption, typed stops, version history and a confirmed local file receipt are recorded in [the B06 route audit](audit/b06-calculation-sequence-route-validation.json); B02 and B06 acceptance remain `UNVERIFIED`.
+
 ## Statistics, linear systems and probability
 
 ```bash
