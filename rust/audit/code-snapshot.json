@@ -1,6 +1,6 @@
 {
   "snapshot_kind": "first-party code/tests/tools plus manifests/lock/toolchain",
-  "sha256": "7409a084cb88a5b545aaa6a9abc53e5150029f26646e0a5fb3517316687c70ad",
+  "sha256": "7fbb13fc94436e4d56cfb41c70540cb3f5d7fd2aa8f921afc54bbe1b85f97cfd",
   "files": [
     {
       "path": "Cargo.lock",
@@ -20,7 +20,7 @@
     },
     {
       "path": "apps/cli/tests/normal_route.rs",
-      "sha256": "b4a8c96639127949e95361cbab0f662eb4242ffca3937852e29fb345276c8324"
+      "sha256": "0facf8ba695a9936847f180a5f16a877349d4410a3cbf72312a8d3fc8378a11c"
     },
     {
       "path": "crates/minidora-domain/Cargo.toml",

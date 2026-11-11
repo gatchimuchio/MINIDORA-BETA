@@ -674,8 +674,17 @@ fn decimal_statistics_are_exact_and_retain_actual_observations() {
     assert_eq!(result["guarantee"], "COMPUTED");
     let statistics: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
     assert_eq!(statistics["mean"], "1/5");
+    assert_eq!(statistics["median"], "1/5");
+    assert_eq!(statistics["min"], "1/10");
+    assert_eq!(statistics["max"], "3/10");
     assert_eq!(statistics["sum"], "3/5");
+    assert_eq!(statistics["population_variance"], "1/150");
+    assert_eq!(statistics["sample_variance"], "1/100");
     assert_eq!(statistics["count"], 3);
+    assert_eq!(
+        statistics["sorted_values"],
+        serde_json::json!(["1/10", "1/5", "3/10"])
+    );
     assert_eq!(
         statistics["input_values"],
         serde_json::json!(["0.1", "0.2", "0.3"])
@@ -685,6 +694,215 @@ fn decimal_statistics_are_exact_and_retain_actual_observations() {
             .as_str()
             .unwrap()
             .contains("supplied values")
+    );
+}
+
+#[test]
+fn probability_normalization_reports_exact_intermediate_values_on_the_normal_route() {
+    let scratch = Scratch::new();
+    let japanese = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "normalize-ja", "確率分布 [1,2,3] を正規化して"],
+    ));
+    assert_eq!(japanese["lifecycle"], "COMMIT");
+    assert_eq!(japanese["guarantee"], "COMPUTED");
+    let japanese_report: Value = serde_json::from_str(japanese["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        japanese_report["input_weights"],
+        serde_json::json!(["1", "2", "3"])
+    );
+    assert_eq!(japanese_report["total_weight"], "6");
+    assert_eq!(
+        japanese_report["normalized_probabilities"],
+        serde_json::json!(["1/6", "1/3", "1/2"])
+    );
+    assert_eq!(japanese_report["probability_sum"], "1");
+
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "normalize-en", "normalize-probabilities [2,2]"],
+    ));
+    let english_report: Value = serde_json::from_str(english["text"].as_str().unwrap()).unwrap();
+    assert_eq!(english_report["total_weight"], "4");
+    assert_eq!(
+        english_report["normalized_probabilities"],
+        serde_json::json!(["1/2", "1/2"])
+    );
+    assert_eq!(english_report["probability_sum"], "1");
+
+    let zero_total = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "normalize-zero", "normalize-probabilities [0,0]"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        zero_total["reason"]
+            .as_str()
+            .unwrap()
+            .contains("ZERO_PROBABILITY_WEIGHT_TOTAL")
+    );
+}
+
+#[test]
+fn finite_expectation_and_variance_report_exact_intermediate_values() {
+    let scratch = Scratch::new();
+    let japanese = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "expected-value-ja",
+            "期待値 [-1,3] 重み [1,3] を計算して",
+        ],
+    ));
+    let japanese_report: Value = serde_json::from_str(japanese["text"].as_str().unwrap()).unwrap();
+    assert_eq!(japanese["lifecycle"], "COMMIT");
+    assert_eq!(japanese["guarantee"], "COMPUTED");
+    assert_eq!(japanese_report["total_weight"], "4");
+    assert_eq!(
+        japanese_report["normalized_probabilities"],
+        serde_json::json!(["1/4", "3/4"])
+    );
+    assert_eq!(japanese_report["probability_sum"], "1");
+    assert_eq!(
+        japanese_report["expected_value_contributions"],
+        serde_json::json!(["-1/4", "9/4"])
+    );
+    assert_eq!(japanese_report["expected_value"], "2");
+    assert_eq!(
+        japanese_report["variance_contributions"],
+        serde_json::json!(["9/4", "3/4"])
+    );
+    assert_eq!(japanese_report["variance"], "3");
+
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "expected-value-en",
+            "expected-value [0,4] weights [3,1]",
+        ],
+    ));
+    let english_report: Value = serde_json::from_str(english["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        english_report["normalized_probabilities"],
+        serde_json::json!(["3/4", "1/4"])
+    );
+    assert_eq!(
+        english_report["expected_value_contributions"],
+        serde_json::json!(["0", "1"])
+    );
+    assert_eq!(english_report["expected_value"], "1");
+    assert_eq!(
+        english_report["variance_contributions"],
+        serde_json::json!(["3/4", "9/4"])
+    );
+    assert_eq!(english_report["variance"], "3");
+}
+
+#[test]
+fn finite_event_probability_reports_membership_and_exact_mass_on_the_normal_route() {
+    let scratch = Scratch::new();
+    let japanese = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "event-probability-ja",
+            "事象確率 [0,1,1,2] 重み [1,2,3,4] 事象値 [1,2,2] を計算して",
+        ],
+    ));
+    let japanese_report: Value = serde_json::from_str(japanese["text"].as_str().unwrap()).unwrap();
+    assert_eq!(japanese["lifecycle"], "COMMIT");
+    assert_eq!(japanese["guarantee"], "COMPUTED");
+    assert_eq!(japanese_report["total_weight"], "10");
+    assert_eq!(
+        japanese_report["normalized_probabilities"],
+        serde_json::json!(["1/10", "1/5", "3/10", "2/5"])
+    );
+    assert_eq!(japanese_report["probability_sum"], "1");
+    assert_eq!(
+        japanese_report["event_membership"],
+        serde_json::json!([false, true, true, true])
+    );
+    assert_eq!(
+        japanese_report["event_probability_contributions"],
+        serde_json::json!(["0", "1/5", "3/10", "2/5"])
+    );
+    assert_eq!(japanese_report["event_probability"], "9/10");
+
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "event-probability-en",
+            "event-probability [1,2,3] weights [1,2,1] values [1]",
+        ],
+    ));
+    let english_report: Value = serde_json::from_str(english["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        english_report["normalized_probabilities"],
+        serde_json::json!(["1/4", "1/2", "1/4"])
+    );
+    assert_eq!(
+        english_report["event_membership"],
+        serde_json::json!([true, false, false])
+    );
+    assert_eq!(
+        english_report["event_probability_contributions"],
+        serde_json::json!(["1/4", "0", "0"])
+    );
+    assert_eq!(english_report["event_probability"], "1/4");
+}
+
+#[test]
+fn polynomial_evaluation_reports_each_exact_contribution_on_the_normal_route() {
+    let scratch = Scratch::new();
+    let japanese = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "polynomial-ja", "評価 2*x^2-3*x+1 代入 x=2"],
+    ));
+    let japanese_report: Value = serde_json::from_str(japanese["text"].as_str().unwrap()).unwrap();
+    assert_eq!(japanese["lifecycle"], "COMMIT");
+    assert_eq!(japanese["guarantee"], "COMPUTED");
+    assert_eq!(japanese_report["bindings"], serde_json::json!({"x":"2"}));
+    assert_eq!(japanese_report["value"], "3");
+    assert_eq!(
+        japanese_report["terms"],
+        serde_json::json!([
+            {"powers":{"x":2},"coefficient":"2","monomial_value":"4","contribution":"8"},
+            {"powers":{"x":1},"coefficient":"-3","monomial_value":"2","contribution":"-6"},
+            {"powers":{},"coefficient":"1","monomial_value":"1","contribution":"1"}
+        ])
+    );
+
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "polynomial-en", "evaluate x^2+2*x+y at x=3,y=2"],
+    ));
+    let english_report: Value = serde_json::from_str(english["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        english_report["bindings"],
+        serde_json::json!({"x":"3", "y":"2"})
+    );
+    assert_eq!(english_report["value"], "17");
+    assert_eq!(
+        english_report["terms"],
+        serde_json::json!([
+            {"powers":{"x":2},"coefficient":"1","monomial_value":"9","contribution":"9"},
+            {"powers":{"x":1},"coefficient":"2","monomial_value":"3","contribution":"6"},
+            {"powers":{"y":1},"coefficient":"1","monomial_value":"2","contribution":"2"}
+        ])
     );
 }
 
