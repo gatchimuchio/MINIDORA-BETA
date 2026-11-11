@@ -1316,6 +1316,136 @@ fn csv_selection_retains_exact_source_newlines_and_decoded_cell_content() {
 }
 
 #[test]
+fn grouped_csv_statistics_report_exact_results_and_source_spans_on_the_normal_route() {
+    let csv = "地域,売上\r\n北,0.1\r\n北,0.3\r\n南,1.0\r\n南,2.0\r\n";
+    for (actor, header) in [
+        ("japanese", "CSVの「地域」ごとに「売上」の統計量を計算して:"),
+        ("english", "csv-group-statistics \"地域\" \"売上\":"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{csv}");
+        let result = record(&execute(&scratch.0, actor, &[&request]));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "COMPUTED");
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+        assert_eq!(result["content_plan"]["text"], result["text"]);
+        assert_eq!(
+            result["content_plan"]["required_units"],
+            serde_json::json!([result["text"]])
+        );
+        assert_eq!(result["render"]["status"], "RENDERED");
+        assert_eq!(
+            result["render"]["actual_sha256"].as_str().unwrap().len(),
+            64
+        );
+
+        let report: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
+        assert_eq!(report["group_column"], "地域");
+        assert_eq!(report["value_column"], "売上");
+        assert_eq!(report["source_sha256"].as_str().unwrap().len(), 64);
+        let groups = report["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0]["value"], "北");
+        assert_eq!(
+            groups[0]["source_record_numbers"],
+            serde_json::json!([1, 2])
+        );
+        assert_eq!(groups[1]["value"], "南");
+        assert_eq!(
+            groups[1]["source_record_numbers"],
+            serde_json::json!([3, 4])
+        );
+
+        let north = &groups[0]["statistics"];
+        assert_eq!(north["count"], 2);
+        assert_eq!(north["sum"], "2/5");
+        assert_eq!(north["mean"], "1/5");
+        assert_eq!(north["median"], "1/5");
+        assert_eq!(north["min"], "1/10");
+        assert_eq!(north["max"], "3/10");
+        assert_eq!(north["population_variance"], "1/100");
+        assert_eq!(north["sample_variance"], "1/50");
+
+        let south = &groups[1]["statistics"];
+        assert_eq!(south["count"], 2);
+        assert_eq!(south["sum"], "3");
+        assert_eq!(south["mean"], "3/2");
+        assert_eq!(south["median"], "3/2");
+        assert_eq!(south["min"], "1");
+        assert_eq!(south["max"], "2");
+        assert_eq!(south["population_variance"], "1/4");
+        assert_eq!(south["sample_variance"], "1/2");
+
+        let spans = report["source_spans"].as_array().unwrap();
+        assert_eq!(spans.len(), 10);
+        for span in spans {
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            let source_text = span["source_text"].as_str().unwrap();
+            assert!(start < end && end <= csv.len());
+            assert_eq!(&csv.as_bytes()[start..end], source_text.as_bytes());
+        }
+        let northern_key_spans = spans
+            .iter()
+            .filter(|span| span["kind"] == "CSV_GROUP_MEMBER" && span["decoded_value"] == "北")
+            .count();
+        assert_eq!(northern_key_spans, 2);
+
+        let inspected = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args([
+                "inspect",
+                "--db",
+                scratch.0.to_str().unwrap(),
+                "--case",
+                "normal-route",
+                "--actor",
+                actor,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        let revision = record(&inspected);
+        assert_eq!(revision["bundle"]["request"]["text"], request);
+        assert_eq!(revision["bundle"]["meaning"]["intent"]["document"], csv);
+        assert_eq!(revision["result"]["dependencies"], result["dependencies"]);
+    }
+}
+
+#[test]
+fn mixed_csv_group_values_suspend_with_a_durable_typed_error_and_no_artifact() {
+    let scratch = Scratch::new();
+    let csv = "region,sales\r\nnorth,1 m\r\nnorth,2\r\n";
+    let request = format!("CSVの「region」ごとに「sales」の統計量を計算して:\n{csv}");
+    let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CSV_GROUP_STATISTICS_MIXED_VALUES")
+    );
+    assert!(result["dependencies"].as_array().unwrap().is_empty());
+    assert_eq!(result["guarantee"], "UNKNOWN");
+
+    let inspected = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args([
+            "inspect",
+            "--db",
+            scratch.0.to_str().unwrap(),
+            "--case",
+            "normal-route",
+            "--actor",
+            "owner",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let revision = record(&inspected);
+    assert_eq!(revision["lifecycle"], "SUSPEND");
+    assert_eq!(revision["result"]["reason"], result["reason"]);
+    assert_eq!(revision["result"]["dependencies"], serde_json::json!([]));
+}
+
+#[test]
 fn exact_replace_count_failure_does_not_create_a_partial_file() {
     let scratch = Scratch::new();
     let target = scratch.0.join("must-not-exist.txt");

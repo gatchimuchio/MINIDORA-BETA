@@ -759,7 +759,9 @@ impl LosslessTokenProjection {
 pub struct ModelEmission {
     pub text: String,
     pub model_revision: String,
-    pub sequence_probability: String,
+    /// Absent when the core supplied one surface; no probability comparison was needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence_probability: Option<String>,
     pub token_count: usize,
     pub objective: String,
     pub decoder_version: String,
@@ -1277,31 +1279,51 @@ impl SequenceModel {
                 "no Core-authorized surface sequence",
             ));
         }
-        let mut best: Option<(&String, BigRational)> = None;
-        for text in alternatives {
+        // A singleton has no selection to make. Preserve its exact projection
+        // and token budget without multiplying an irrelevant full-sequence score.
+        let (text, probability) = if alternatives.len() == 1 {
             poll_model(deadline)?;
+            let text = &alternatives[0];
             if self
                 .project_bytes_until(text.as_bytes(), deadline)?
                 .tokens
                 .len()
                 > max_tokens
             {
-                continue;
+                return Err(failure(
+                    "DECODER_BUDGET",
+                    "no authorized surface satisfies the token budget",
+                ));
             }
-            let probability =
-                self.lossless_sequence_probability_until(text.as_bytes(), deadline)?;
-            if best.as_ref().is_none_or(|(old, score)| {
-                probability > *score || (probability == *score && text < *old)
-            }) {
-                best = Some((text, probability));
+            (text, None)
+        } else {
+            let mut best: Option<(&String, BigRational)> = None;
+            for text in alternatives {
+                poll_model(deadline)?;
+                if self
+                    .project_bytes_until(text.as_bytes(), deadline)?
+                    .tokens
+                    .len()
+                    > max_tokens
+                {
+                    continue;
+                }
+                let probability =
+                    self.lossless_sequence_probability_until(text.as_bytes(), deadline)?;
+                if best.as_ref().is_none_or(|(old, score)| {
+                    probability > *score || (probability == *score && text < *old)
+                }) {
+                    best = Some((text, probability));
+                }
             }
-        }
-        let (text, probability) = best.ok_or_else(|| {
-            failure(
-                "DECODER_BUDGET",
-                "no authorized surface satisfies the token budget",
-            )
-        })?;
+            let (text, probability) = best.ok_or_else(|| {
+                failure(
+                    "DECODER_BUDGET",
+                    "no authorized surface satisfies the token budget",
+                )
+            })?;
+            (text, Some(probability))
+        };
         let mut history = Vec::new();
         let mut context_hashes = Vec::new();
         let lossless_projection = self.project_bytes_until(text.as_bytes(), deadline)?;
@@ -1326,14 +1348,22 @@ impl SequenceModel {
         poll_model(deadline)?;
         let model_revision = identity(&(self.revision()?, LOSSLESS_TOKEN_ADAPTER))?;
         poll_model(deadline)?;
+        let ranked_candidates = probability.is_some();
         Ok(ModelEmission {
             text: text.clone(),
             model_revision,
-            sequence_probability: rational_text(&probability),
+            sequence_probability: probability.map(|value| rational_text(&value)),
             token_count: lossless_projection.tokens.len(),
-            objective:
-                "maximum exact sequence probability over Core-authorized equivalent surfaces".into(),
-            decoder_version: "bounded-finite-surface-literal-exact-v1".into(),
+            objective: if ranked_candidates {
+                "maximum exact sequence probability over Core-authorized equivalent surfaces".into()
+            } else {
+                "single candidate preserved losslessly; candidate ranking was not applicable".into()
+            },
+            decoder_version: if ranked_candidates {
+                "bounded-finite-surface-literal-exact-v1".into()
+            } else {
+                "bounded-finite-surface-literal-singleton-v1".into()
+            },
             context_hashes,
             lossless_projection,
         })
@@ -1499,6 +1529,34 @@ mod tests {
             .unwrap();
         assert_eq!(emission.text, "計算結果は5です。");
         assert!(!emission.context_hashes.is_empty());
+        assert_eq!(emission.sequence_probability, None);
+        assert_eq!(
+            emission.decoder_version,
+            "bounded-finite-surface-literal-singleton-v1"
+        );
+        assert!(
+            emission
+                .objective
+                .contains("candidate ranking was not applicable")
+        );
+        let serialized = serde_json::to_value(&emission).unwrap();
+        assert!(serialized.get("sequence_probability").is_none());
+        let restored: ModelEmission = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored.sequence_probability, None);
+        let ranked = model
+            .realize_supported(
+                &["計算結果は5です。".into(), "計算結果は6です。".into()],
+                100,
+            )
+            .unwrap();
+        assert!(ranked.sequence_probability.is_some());
+        let serialized = serde_json::to_value(&ranked).unwrap();
+        let restored: ModelEmission = serde_json::from_value(serialized).unwrap();
+        assert_eq!(restored.sequence_probability, ranked.sequence_probability);
+        assert_eq!(
+            ranked.decoder_version,
+            "bounded-finite-surface-literal-exact-v1"
+        );
         assert!(model.realize_supported(&[], 100).is_err());
         assert!(model.realize_supported(&["長い文字列".into()], 1).is_err());
     }
@@ -1562,7 +1620,7 @@ mod lossless_tests {
         );
         assert_eq!(
             emission.decoder_version,
-            "bounded-finite-surface-literal-exact-v1"
+            "bounded-finite-surface-literal-singleton-v1"
         );
     }
 }
@@ -1610,6 +1668,19 @@ mod model_resource_tests {
         assert_eq!(
             code(model.sequence_probability(&text).unwrap_err()),
             "MODEL_RESOURCE_LIMIT"
+        );
+        let emission = model
+            .realize_supported(std::slice::from_ref(&text), MAX_MODEL_TOKENS)
+            .unwrap();
+        assert_eq!(emission.text, text);
+        assert_eq!(emission.sequence_probability, None);
+        assert_eq!(
+            emission.decoder_version,
+            "bounded-finite-surface-literal-singleton-v1"
+        );
+        assert_eq!(
+            emission.lossless_projection.recover_bytes().unwrap(),
+            text.as_bytes()
         );
     }
     #[test]
