@@ -6041,6 +6041,89 @@ fn structured_code_generation_route_headers_and_actual_artifacts() {
     }
 }
 
+#[test]
+fn explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage() {
+    let material = "ねこ\n地元で開催\n雨天中止";
+    let title_end = "ねこ".len();
+    let event_start = "ねこ\n".len();
+    let event_end = event_start + "地元で開催".len();
+    let condition_start = "ねこ\n地元で開催\n".len();
+    let body = serde_json::json!({
+        "materials":[{"id":"source","text":material}],
+        "units":[
+            {"id":"title","kind":"heading","fragments":[{"material":"source","start":0,"end":title_end}],"with":[],"required":false,"protected":false},
+            {"id":"event","kind":"bullet","fragments":[{"material":"source","start":event_start,"end":event_end}],"with":[],"required":false,"protected":false},
+            {"id":"weather","kind":"condition","fragments":[{"material":"source","start":condition_start,"end":material.len()}],"with":[],"required":false,"protected":false}
+        ],
+        "order":["title","event"],
+        "max_chars":128
+    }).to_string();
+    for header in ["文章を構成して:", "text-compose:"] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{body}");
+        let result = record(&execute(&scratch.0, "owner", &[&request]));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "USER_PREMISE");
+        assert_eq!(result["text"], "# ねこ\n\n- 地元で開催\n\n条件: 雨天中止");
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        let intent = &saved["bundle"]["meaning"]["intent"];
+        assert_eq!(intent["kind"], "COMPOSE_TEXT");
+        assert_eq!(intent["document"], body);
+        let dependencies = result["dependencies"].as_array().unwrap();
+        assert_eq!(dependencies.len(), 1);
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let bytes = store
+            .get_bytes("owner", "normal-route", dependencies[0].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            minidora_domain::digest(&bytes),
+            dependencies[0].as_str().unwrap()
+        );
+        let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(artifact["source_document"], body);
+        assert_eq!(artifact["text"], result["text"]);
+        assert_eq!(
+            artifact["selected_unit_ids"],
+            serde_json::json!(["title", "event", "weather"])
+        );
+        assert_eq!(artifact["omitted_unit_ids"], serde_json::json!([]));
+        assert_eq!(artifact["operation"], "TEXT_COMPOSE_EXPLICIT_FRAGMENTS");
+        assert!(
+            artifact["spans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|span| span["origin"]["kind"] == "MATERIAL_TEXT")
+        );
+        assert!(
+            artifact["spans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|span| span["origin"]["kind"] == "UNIT_DIRECTIVE")
+        );
+        assert_eq!(saved["result"], result);
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+    }
+
+    let scratch = Scratch::new();
+    let too_short = serde_json::json!({
+        "materials":[{"id":"source","text":"長い見出し"}],
+        "units":[{"id":"title","kind":"heading","fragments":[{"material":"source","start":0,"end":"長い見出し".len()}],"with":[],"required":true,"protected":false}],
+        "order":["title"],
+        "max_chars":2
+    }).to_string();
+    let request = format!("text-compose:\n{too_short}");
+    let result = stopped(&execute(&scratch.0, "owner", &[&request]), 2, "SUSPEND");
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("TEXT_COMPOSITION_CHAR_LIMIT")
+    );
+    assert!(result["dependencies"].as_array().unwrap().is_empty());
+}
+
 fn code_expression_documents() -> Vec<Value> {
     let mut expressions = Vec::new();
     for (kind, operations) in [

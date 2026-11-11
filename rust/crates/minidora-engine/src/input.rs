@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v37-bounded-code-capabilities";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v38-bounded-writing-composition";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -224,6 +224,14 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(match text.split_once('\n') {
             Some((_, document)) => Intent::GenerateCode { document: document.into() },
             None => Intent::Unknown { reason: "code generation requires a header newline and explicit structured algorithm/constants document".into() },
+        }));
+    }
+    if matches!(header, "文章を構成して:" | "文章を構成して：")
+        || header.eq_ignore_ascii_case("text-compose:")
+    {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) => Intent::ComposeText { document: document.into() },
+            None => Intent::Unknown { reason: "text composition requires a header newline and an explicit materials/units/order JSON document".into() },
         }));
     }
     let code_operation = match header {
@@ -2129,6 +2137,27 @@ mod structured_document_tests {
                 matches!(bundle.meaning.intent, Intent::Unknown { .. }),
                 "{source}"
             );
+        }
+    }
+    #[test]
+    fn explicit_text_composition_headers_retain_complete_json_body() {
+        let body = " {\"materials\":[],\"units\":[],\"order\":[],\"max_chars\":1} \r\n";
+        for header in [
+            "文章を構成して:",
+            "文章を構成して：",
+            "text-compose:",
+            "TeXt-CoMpOsE:",
+        ] {
+            let request = format!("{header}\n{body}");
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", &request), None).unwrap();
+            assert!(
+                matches!(&bundle.meaning.intent, Intent::ComposeText { document } if document == body)
+            );
+            assert_eq!(bundle.meaning.spans[0].text, request);
+        }
+        for request in ["文章を構成して:", "text-compose:"] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
+            assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
         }
     }
     #[test]

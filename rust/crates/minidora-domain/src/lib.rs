@@ -273,6 +273,9 @@ pub enum Intent {
         new: String,
         count: Option<usize>,
     },
+    ComposeText {
+        document: String,
+    },
     Search {
         provider: String,
         query: String,

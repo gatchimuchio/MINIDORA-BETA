@@ -263,6 +263,19 @@ Grouped CSV statistics use an exact decoded string key in first-seen order and c
 
 Literal editing replaces original nonoverlapping matches only. A supplied count must match before any result is formed; omitting the count means all such matches. Unmatched text stays byte-for-byte unchanged; inserted text is not rescanned. Missing search text, a no-op, an empty search, a count mismatch or resource overflow stops. The original document/hash, exact parameters and source/output mappings are stored separately from the emitted result. This is not arbitrary editing-intent inference, unrestricted writing quality or a file write without the separate exact-target grant.
 
+### Explicit-source writing composition
+
+```bash
+"$minidora_bin" --db "$minidora_state" --actor demo --case composed-notice \
+  $'text-compose:\n{"materials":[{"id":"notice","text":"Cat fair Nov 14"}],"units":[{"id":"title","kind":"heading","fragments":[{"material":"notice","start":0,"end":8}],"with":[],"required":true,"protected":false},{"id":"date","kind":"bullet","fragments":[{"material":"notice","start":9,"end":15}],"with":[],"required":false,"protected":false}],"order":["title","date"],"max_chars":256}'
+```
+
+`text-compose:` (ASCII case insensitive) and `文章を構成して:` accept one strict JSON body with exactly `materials`, `units`, `order` and `max_chars`. Each material has an `id` and literal `text`. A unit has an `id`, `kind`, `fragments`, `with`, `required` and `protected`; each fragment names a material and a nonempty `start`/`end` half-open UTF-8 byte range in its decoded text. Kinds are `heading`, `paragraph`, `bullet`, `numbered`, `quote`, `condition` and `caveat`. The listed order is explicit; companion units are inserted immediately after their parent, required units are retained, and condition/caveat units are always included. Unselected units are reported. Maximums are 128 materials/units, 32 fragments per unit, 100,000 Unicode scalar values and 256,000 input/output bytes. Invalid UTF-8 boundaries, duplicate keys/IDs, missing sources, ambiguous fields, span overflow or length overflow suspend without truncating text.
+
+Markers are fixed by role: headings use `# `, bullets `- `, numbered blocks `1.`, quotes `> `, and condition/caveat blocks use `条件:`/`留保:` labels. Paragraphs have no prefix.
+
+The output is limited to caller-selected literal fragments, fixed layout prefixes and blank-line separators. Every output segment maps either to its exact decoded material range and containing JSON string token or to the unit directive that generated the layout token. The stored artifact includes source/output hashes, selected and omitted units, protection/required flags and complete output spans. `USER_PREMISE` describes the supplied content; it does not assert that facts are true. This route does not write original prose, summarize, infer a purpose, select facts, prove semantic equivalence, validate writing quality or satisfy the twelve-task B08 acceptance population. Editing and general writing remain open B08 work; see [the B08 route audit](audit/b08-explicit-text-composition-route-validation.json).
+
 ## Exact-target file output
 
 ```bash

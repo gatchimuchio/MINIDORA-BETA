@@ -1,6 +1,7 @@
 //! Source-preserving explicit document operations. CSV uses RFC 4180 record and
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
+use crate::ports::{JsonKind, JsonNode, strict_json_document};
 use minidora_domain::{Result, digest, failure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1825,9 +1826,785 @@ pub fn replace_exact(
     )
 }
 
+/// An exact output segment from explicit text composition. Material offsets
+/// address the decoded JSON string in UTF-8 bytes; JSON offsets address the
+/// original request body. Formatting tokens point to their declaring unit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TextCompositionOrigin {
+    MaterialText {
+        material_id: String,
+        material_json_start: usize,
+        material_json_end: usize,
+        text_start: usize,
+        text_end: usize,
+    },
+    UnitDirective {
+        unit_id: String,
+        unit_json_start: usize,
+        unit_json_end: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextCompositionSpan {
+    pub output_start: usize,
+    pub output_end: usize,
+    pub text: String,
+    pub origin: TextCompositionOrigin,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextCompositionUnit {
+    pub id: String,
+    pub role: String,
+    pub required: bool,
+    pub protected: bool,
+    pub directive_json_start: usize,
+    pub directive_json_end: usize,
+    pub output_start: usize,
+    pub output_end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextCompositionResult {
+    pub text: String,
+    pub source_document: String,
+    pub source_sha256: String,
+    pub output_sha256: String,
+    pub operation: String,
+    pub max_chars: usize,
+    pub selected_unit_ids: Vec<String>,
+    pub omitted_unit_ids: Vec<String>,
+    pub units: Vec<TextCompositionUnit>,
+    pub spans: Vec<TextCompositionSpan>,
+    pub guarantee: String,
+}
+
+#[derive(Clone, Debug)]
+struct CompositionMaterial {
+    text: String,
+    json_span: std::ops::Range<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct CompositionFragment {
+    material_id: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Clone, Debug)]
+struct CompositionUnit {
+    id: String,
+    role: String,
+    fragments: Vec<CompositionFragment>,
+    companions: Vec<String>,
+    required: bool,
+    protected: bool,
+    json_span: std::ops::Range<usize>,
+}
+
+fn composition_schema(message: impl Into<String>) -> minidora_domain::Error {
+    failure("TEXT_COMPOSITION_SCHEMA", message)
+}
+
+fn composition_fields<'a>(
+    node: &'a JsonNode,
+    required: &[&str],
+    label: &str,
+) -> Result<&'a BTreeMap<String, JsonNode>> {
+    let JsonKind::Object(fields) = &node.kind else {
+        return Err(composition_schema(format!("{label} must be an object")));
+    };
+    let expected: BTreeSet<_> = required.iter().copied().collect();
+    let actual: BTreeSet<_> = fields.keys().map(String::as_str).collect();
+    if actual != expected {
+        return Err(composition_schema(format!(
+            "{label} fields must be exactly {}",
+            required.join(", ")
+        )));
+    }
+    Ok(fields)
+}
+
+fn composition_field<'a>(
+    fields: &'a BTreeMap<String, JsonNode>,
+    name: &str,
+) -> Result<&'a JsonNode> {
+    fields
+        .get(name)
+        .ok_or_else(|| composition_schema(format!("missing field {name}")))
+}
+
+fn composition_string(document: &str, node: &JsonNode, label: &str) -> Result<String> {
+    if !matches!(node.kind, JsonKind::Scalar) || !document[node.span.clone()].starts_with('"') {
+        return Err(composition_schema(format!("{label} must be a string")));
+    }
+    serde_json::from_str(&document[node.span.clone()])
+        .map_err(|_| composition_schema(format!("{label} is not a valid string")))
+}
+
+fn composition_array<'a>(node: &'a JsonNode, label: &str) -> Result<&'a [JsonNode]> {
+    let JsonKind::Array(values) = &node.kind else {
+        return Err(composition_schema(format!("{label} must be an array")));
+    };
+    Ok(values)
+}
+
+fn composition_usize(document: &str, node: &JsonNode, label: &str) -> Result<usize> {
+    if !matches!(node.kind, JsonKind::Number) {
+        return Err(composition_schema(format!(
+            "{label} must be a nonnegative integer"
+        )));
+    }
+    document[node.span.clone()]
+        .parse::<usize>()
+        .map_err(|_| composition_schema(format!("{label} is out of range or not an integer")))
+}
+
+fn composition_bool(document: &str, node: &JsonNode, label: &str) -> Result<bool> {
+    match &document[node.span.clone()] {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(composition_schema(format!("{label} must be a boolean"))),
+    }
+}
+
+fn composition_name(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.trim() != value
+        || value.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(composition_schema(format!(
+            "{label} must be a nonempty token of at most 128 bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn composition_text(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+    {
+        return Err(composition_schema(format!(
+            "{label} is empty or contains an unsupported control character"
+        )));
+    }
+    Ok(())
+}
+
+fn visit_composition_unit(
+    id: &str,
+    units: &BTreeMap<String, usize>,
+    declarations: &[CompositionUnit],
+    visited: &mut BTreeSet<String>,
+    selected: &mut Vec<usize>,
+) -> Result<()> {
+    let Some(index) = units.get(id).copied() else {
+        return Err(composition_schema(format!("unknown unit reference {id}")));
+    };
+    if !visited.insert(id.to_owned()) {
+        return Ok(());
+    }
+    selected.push(index);
+    for companion in &declarations[index].companions {
+        visit_composition_unit(companion, units, declarations, visited, selected)?;
+    }
+    Ok(())
+}
+
+fn push_composition_span(
+    text: &mut String,
+    spans: &mut Vec<TextCompositionSpan>,
+    piece: &str,
+    origin: TextCompositionOrigin,
+) -> Result<()> {
+    if piece.is_empty() {
+        return Ok(());
+    }
+    if spans.len() >= 8192 || text.len().saturating_add(piece.len()) > MAX_RESULT_BYTES {
+        return Err(failure(
+            "TEXT_COMPOSITION_OUTPUT_LIMIT",
+            "composition exceeds the output byte or provenance-span budget",
+        ));
+    }
+    let output_start = text.len();
+    text.push_str(piece);
+    spans.push(TextCompositionSpan {
+        output_start,
+        output_end: text.len(),
+        text: piece.into(),
+        origin,
+    });
+    Ok(())
+}
+
+fn append_composition_marker(
+    text: &mut String,
+    spans: &mut Vec<TextCompositionSpan>,
+    piece: &str,
+    unit: &CompositionUnit,
+) -> Result<()> {
+    push_composition_span(
+        text,
+        spans,
+        piece,
+        TextCompositionOrigin::UnitDirective {
+            unit_id: unit.id.clone(),
+            unit_json_start: unit.json_span.start,
+            unit_json_end: unit.json_span.end,
+        },
+    )
+}
+
+fn composition_line_ranges(content: &str) -> Vec<(usize, usize)> {
+    let bytes = content.as_bytes();
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    while start < bytes.len() {
+        let mut end = start;
+        while end < bytes.len() && !matches!(bytes[end], b'\r' | b'\n') {
+            end += 1;
+        }
+        if end < bytes.len() {
+            if bytes[end] == b'\r' && bytes.get(end + 1) == Some(&b'\n') {
+                end += 2;
+            } else {
+                end += 1;
+            }
+        }
+        ranges.push((start, end));
+        start = end;
+    }
+    if ranges.is_empty() {
+        ranges.push((0, content.len()));
+    }
+    ranges
+}
+
+/// Compose caller-selected UTF-8 byte slices from explicit JSON materials.
+/// This performs only bounded layout and exact source copying; it does not
+/// infer a purpose, select facts, rewrite prose or claim semantic quality.
+pub fn compose_explicit_text(document: &str) -> Result<TextCompositionResult> {
+    admission(document)?;
+    let root = strict_json_document(document)?;
+    let root_fields = composition_fields(
+        &root,
+        &["materials", "units", "order", "max_chars"],
+        "composition document",
+    )?;
+    let max_chars = composition_usize(
+        document,
+        composition_field(root_fields, "max_chars")?,
+        "max_chars",
+    )?;
+    if !(1..=100_000).contains(&max_chars) {
+        return Err(composition_schema("max_chars must be in 1..=100000"));
+    }
+
+    let material_rows =
+        composition_array(composition_field(root_fields, "materials")?, "materials")?;
+    if !(1..=128).contains(&material_rows.len()) {
+        return Err(composition_schema("materials must contain 1..=128 entries"));
+    }
+    let mut materials = BTreeMap::<String, CompositionMaterial>::new();
+    for row in material_rows {
+        let fields = composition_fields(row, &["id", "text"], "material")?;
+        let id = composition_string(document, composition_field(fields, "id")?, "material.id")?;
+        composition_name(&id, "material.id")?;
+        let text_node = composition_field(fields, "text")?;
+        let value = composition_string(document, text_node, "material.text")?;
+        composition_text(&value, "material.text")?;
+        if materials
+            .insert(
+                id,
+                CompositionMaterial {
+                    text: value,
+                    json_span: text_node.span.clone(),
+                },
+            )
+            .is_some()
+        {
+            return Err(composition_schema("material IDs must be unique"));
+        }
+    }
+
+    let unit_rows = composition_array(composition_field(root_fields, "units")?, "units")?;
+    if !(1..=128).contains(&unit_rows.len()) {
+        return Err(composition_schema("units must contain 1..=128 entries"));
+    }
+    let mut declarations = Vec::with_capacity(unit_rows.len());
+    let mut units = BTreeMap::<String, usize>::new();
+    for row in unit_rows {
+        let fields = composition_fields(
+            row,
+            &["id", "kind", "fragments", "with", "required", "protected"],
+            "unit",
+        )?;
+        let id = composition_string(document, composition_field(fields, "id")?, "unit.id")?;
+        composition_name(&id, "unit.id")?;
+        let role = composition_string(document, composition_field(fields, "kind")?, "unit.kind")?;
+        if !matches!(
+            role.as_str(),
+            "heading" | "paragraph" | "bullet" | "numbered" | "quote" | "condition" | "caveat"
+        ) {
+            return Err(composition_schema(
+                "unit.kind must be heading, paragraph, bullet, numbered, quote, condition or caveat",
+            ));
+        }
+        let fragment_rows =
+            composition_array(composition_field(fields, "fragments")?, "unit.fragments")?;
+        if !(1..=32).contains(&fragment_rows.len()) {
+            return Err(composition_schema(
+                "each unit must contain 1..=32 fragments",
+            ));
+        }
+        let mut fragments = Vec::with_capacity(fragment_rows.len());
+        for fragment in fragment_rows {
+            let fields = composition_fields(fragment, &["material", "start", "end"], "fragment")?;
+            let material_id = composition_string(
+                document,
+                composition_field(fields, "material")?,
+                "fragment.material",
+            )?;
+            composition_name(&material_id, "fragment.material")?;
+            let start = composition_usize(
+                document,
+                composition_field(fields, "start")?,
+                "fragment.start",
+            )?;
+            let end =
+                composition_usize(document, composition_field(fields, "end")?, "fragment.end")?;
+            let Some(material) = materials.get(&material_id) else {
+                return Err(composition_schema(
+                    "fragment.material must name a declared material",
+                ));
+            };
+            if start >= end || material.text.get(start..end).is_none() {
+                return Err(composition_schema(
+                    "fragment byte range must be nonempty, in bounds and on UTF-8 boundaries",
+                ));
+            }
+            fragments.push(CompositionFragment {
+                material_id,
+                start,
+                end,
+            });
+        }
+        let companion_rows = composition_array(composition_field(fields, "with")?, "unit.with")?;
+        if companion_rows.len() > 128 {
+            return Err(composition_schema(
+                "unit.with may contain at most 128 unit IDs",
+            ));
+        }
+        let mut companions = Vec::with_capacity(companion_rows.len());
+        let mut companion_set = BTreeSet::new();
+        for companion in companion_rows {
+            let value = composition_string(document, companion, "unit.with[]")?;
+            composition_name(&value, "unit.with[]")?;
+            if !companion_set.insert(value.clone()) {
+                return Err(composition_schema("unit.with IDs must be unique"));
+            }
+            companions.push(value);
+        }
+        let required = composition_bool(
+            document,
+            composition_field(fields, "required")?,
+            "unit.required",
+        )?;
+        let protected = composition_bool(
+            document,
+            composition_field(fields, "protected")?,
+            "unit.protected",
+        )?;
+        let index = declarations.len();
+        if units.insert(id.clone(), index).is_some() {
+            return Err(composition_schema("unit IDs must be unique"));
+        }
+        declarations.push(CompositionUnit {
+            id,
+            role,
+            fragments,
+            companions,
+            required,
+            protected,
+            json_span: row.span.clone(),
+        });
+    }
+    for unit in &declarations {
+        if unit.companions.iter().any(|id| !units.contains_key(id)) {
+            return Err(composition_schema("unit.with must name declared units"));
+        }
+    }
+
+    let order_rows = composition_array(composition_field(root_fields, "order")?, "order")?;
+    if !(1..=128).contains(&order_rows.len()) {
+        return Err(composition_schema("order must contain 1..=128 unit IDs"));
+    }
+    let mut order = Vec::with_capacity(order_rows.len());
+    let mut order_set = BTreeSet::new();
+    for item in order_rows {
+        let id = composition_string(document, item, "order[]")?;
+        composition_name(&id, "order[]")?;
+        if !order_set.insert(id.clone()) {
+            return Err(composition_schema("order IDs must be unique"));
+        }
+        order.push(id);
+    }
+
+    let mut selected_indices = Vec::new();
+    let mut selected_ids = BTreeSet::new();
+    for id in &order {
+        visit_composition_unit(
+            id,
+            &units,
+            &declarations,
+            &mut selected_ids,
+            &mut selected_indices,
+        )?;
+    }
+    for unit in &declarations {
+        if unit.required || matches!(unit.role.as_str(), "condition" | "caveat") {
+            visit_composition_unit(
+                &unit.id,
+                &units,
+                &declarations,
+                &mut selected_ids,
+                &mut selected_indices,
+            )?;
+        }
+    }
+
+    #[derive(Clone)]
+    struct LocalFragment {
+        start: usize,
+        end: usize,
+        id: String,
+        material_span: std::ops::Range<usize>,
+        material_start: usize,
+    }
+
+    let mut text = String::new();
+    let mut spans = Vec::new();
+    let mut output_units = Vec::with_capacity(selected_indices.len());
+    let mut number = 0usize;
+    for (selected_position, unit_index) in selected_indices.iter().copied().enumerate() {
+        let unit = &declarations[unit_index];
+        if selected_position > 0 {
+            append_composition_marker(&mut text, &mut spans, "\n\n", unit)?;
+        }
+        let output_start = text.len();
+        let mut content = String::new();
+        let mut local_fragments = Vec::with_capacity(unit.fragments.len());
+        for fragment in &unit.fragments {
+            let material = &materials[&fragment.material_id];
+            let selected_text =
+                material
+                    .text
+                    .get(fragment.start..fragment.end)
+                    .ok_or_else(|| {
+                        composition_schema("fragment source range changed during composition")
+                    })?;
+            let start = content.len();
+            content.push_str(selected_text);
+            local_fragments.push(LocalFragment {
+                start,
+                end: content.len(),
+                id: fragment.material_id.clone(),
+                material_span: material.json_span.clone(),
+                material_start: fragment.start,
+            });
+        }
+        if content.trim().is_empty() {
+            return Err(composition_schema(
+                "a unit may not consist only of whitespace",
+            ));
+        }
+        if unit.role == "heading" && content.contains(['\r', '\n']) {
+            return Err(composition_schema("heading content must be a single line"));
+        }
+        number = if unit.role == "numbered" {
+            number.saturating_add(1)
+        } else {
+            0
+        };
+        let mut local_start = 0usize;
+        let lines = composition_line_ranges(&content);
+        for (line_index, (line_start, line_end)) in lines.iter().copied().enumerate() {
+            let marker = match unit.role.as_str() {
+                "heading" if line_index == 0 => "# ".to_owned(),
+                "bullet" if line_index == 0 => "- ".to_owned(),
+                "numbered" if line_index == 0 => format!("{number}. "),
+                "quote" => "> ".to_owned(),
+                "condition" if line_index == 0 => "条件: ".to_owned(),
+                "caveat" if line_index == 0 => "留保: ".to_owned(),
+                "bullet" | "numbered" if line_index > 0 => "  ".to_owned(),
+                _ => String::new(),
+            };
+            append_composition_marker(&mut text, &mut spans, &marker, unit)?;
+            for fragment in &local_fragments {
+                let start = line_start.max(fragment.start);
+                let end = line_end.min(fragment.end);
+                if start < end {
+                    let material = &materials[&fragment.id];
+                    let decoded_start = fragment.material_start + start - fragment.start;
+                    let decoded_end = fragment.material_start + end - fragment.start;
+                    let piece = content
+                        .get(start..end)
+                        .ok_or_else(|| composition_schema("internal UTF-8 boundary mismatch"))?;
+                    if material.text.get(decoded_start..decoded_end) != Some(piece) {
+                        return Err(composition_schema(
+                            "source text provenance does not match selected material",
+                        ));
+                    }
+                    push_composition_span(
+                        &mut text,
+                        &mut spans,
+                        piece,
+                        TextCompositionOrigin::MaterialText {
+                            material_id: fragment.id.clone(),
+                            material_json_start: fragment.material_span.start,
+                            material_json_end: fragment.material_span.end,
+                            text_start: decoded_start,
+                            text_end: decoded_end,
+                        },
+                    )?;
+                }
+            }
+            local_start = line_end;
+        }
+        if local_start != content.len() {
+            return Err(composition_schema(
+                "internal line partition did not cover unit content",
+            ));
+        }
+        if text.chars().count() > max_chars {
+            return Err(failure(
+                "TEXT_COMPOSITION_CHAR_LIMIT",
+                "the explicit composition exceeds max_chars; content is retained and no text is truncated",
+            ));
+        }
+        output_units.push(TextCompositionUnit {
+            id: unit.id.clone(),
+            role: unit.role.clone(),
+            required: unit.required || matches!(unit.role.as_str(), "condition" | "caveat"),
+            protected: unit.protected
+                || matches!(unit.role.as_str(), "quote" | "condition" | "caveat"),
+            directive_json_start: unit.json_span.start,
+            directive_json_end: unit.json_span.end,
+            output_start,
+            output_end: text.len(),
+        });
+    }
+
+    let mut output_cursor = 0usize;
+    for span in &spans {
+        if span.output_start != output_cursor
+            || span.output_end <= span.output_start
+            || text.get(span.output_start..span.output_end) != Some(span.text.as_str())
+        {
+            return Err(failure(
+                "TEXT_COMPOSITION_PROVENANCE",
+                "composition spans must continuously cover exact output bytes",
+            ));
+        }
+        match &span.origin {
+            TextCompositionOrigin::MaterialText {
+                material_id,
+                material_json_start,
+                material_json_end,
+                text_start,
+                text_end,
+            } => {
+                let material = materials.get(material_id).ok_or_else(|| {
+                    failure(
+                        "TEXT_COMPOSITION_PROVENANCE",
+                        "span references unknown material",
+                    )
+                })?;
+                if material.json_span.start != *material_json_start
+                    || material.json_span.end != *material_json_end
+                    || material.text.get(*text_start..*text_end) != Some(span.text.as_str())
+                {
+                    return Err(failure(
+                        "TEXT_COMPOSITION_PROVENANCE",
+                        "material provenance does not match exact source text",
+                    ));
+                }
+            }
+            TextCompositionOrigin::UnitDirective {
+                unit_id,
+                unit_json_start,
+                unit_json_end,
+            } => {
+                let Some(unit_index) = units.get(unit_id) else {
+                    return Err(failure(
+                        "TEXT_COMPOSITION_PROVENANCE",
+                        "layout provenance references unknown unit",
+                    ));
+                };
+                let directive = &declarations[*unit_index].json_span;
+                if directive.start != *unit_json_start
+                    || directive.end != *unit_json_end
+                    || document.get(directive.clone()).is_none()
+                {
+                    return Err(failure(
+                        "TEXT_COMPOSITION_PROVENANCE",
+                        "layout provenance does not match its explicit directive",
+                    ));
+                }
+            }
+        }
+        output_cursor = span.output_end;
+    }
+    if output_cursor != text.len() || text.chars().count() > max_chars {
+        return Err(failure(
+            "TEXT_COMPOSITION_PROVENANCE",
+            "composition has unmapped output or exceeds its character limit",
+        ));
+    }
+
+    let omitted_unit_ids = declarations
+        .iter()
+        .filter(|unit| !selected_ids.contains(&unit.id))
+        .map(|unit| unit.id.clone())
+        .collect();
+    let output_sha256 = digest(text.as_bytes());
+    let result = TextCompositionResult {
+        text,
+        source_document: document.into(),
+        source_sha256: digest(document.as_bytes()),
+        output_sha256,
+        operation: "TEXT_COMPOSE_EXPLICIT_FRAGMENTS".into(),
+        max_chars,
+        selected_unit_ids: output_units.iter().map(|unit| unit.id.clone()).collect(),
+        omitted_unit_ids,
+        units: output_units,
+        spans,
+        guarantee: "caller-selected literal material fragments with explicit layout prefixes and byte provenance; no inferred purpose, fact checking, semantic equivalence or arbitrary writing-quality claim".into(),
+    };
+    let artifact_size = serde_json::to_vec(&result)?.len();
+    if artifact_size > 2_000_000 {
+        return Err(failure(
+            "TEXT_COMPOSITION_ARTIFACT_LIMIT",
+            "composition artifact exceeds 2000000 serialized bytes",
+        ));
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn explicit_composition(max_chars: usize) -> String {
+        let material = "ねこ\n地元で開催\n雨天中止";
+        let title_end = "ねこ".len();
+        let event_start = "ねこ\n".len();
+        let event_end = event_start + "地元で開催".len();
+        let condition_start = "ねこ\n地元で開催\n".len();
+        serde_json::json!({
+            "materials":[{"id":"source","text":material}],
+            "units":[
+                {"id":"title","kind":"heading","fragments":[{"material":"source","start":0,"end":title_end}],"with":[],"required":false,"protected":false},
+                {"id":"event","kind":"bullet","fragments":[{"material":"source","start":event_start,"end":event_end}],"with":[],"required":false,"protected":false},
+                {"id":"weather","kind":"condition","fragments":[{"material":"source","start":condition_start,"end":material.len()}],"with":[],"required":false,"protected":false},
+                {"id":"unused","kind":"paragraph","fragments":[{"material":"source","start":0,"end":title_end}],"with":[],"required":false,"protected":false}
+            ],
+            "order":["title","event"],
+            "max_chars":max_chars
+        }).to_string()
+    }
+
+    #[test]
+    fn explicit_text_composition_maps_material_and_layout_bytes() {
+        let source = explicit_composition(128);
+        let result = compose_explicit_text(&source).unwrap();
+        assert_eq!(result.text, "# ねこ\n\n- 地元で開催\n\n条件: 雨天中止");
+        assert_eq!(result.selected_unit_ids, ["title", "event", "weather"]);
+        assert_eq!(result.omitted_unit_ids, ["unused"]);
+        assert_eq!(result.source_document, source);
+        assert_eq!(result.source_sha256, digest(source.as_bytes()));
+        assert_eq!(result.output_sha256, digest(result.text.as_bytes()));
+        assert!(result.units[2].required);
+        assert!(result.units[2].protected);
+        let mut cursor = 0;
+        for span in &result.spans {
+            assert_eq!(span.output_start, cursor);
+            assert_eq!(
+                result.text.get(span.output_start..span.output_end),
+                Some(span.text.as_str())
+            );
+            match &span.origin {
+                TextCompositionOrigin::MaterialText {
+                    material_id,
+                    material_json_start,
+                    material_json_end,
+                    text_start,
+                    text_end,
+                } => {
+                    assert_eq!(material_id, "source");
+                    let raw = &source[*material_json_start..*material_json_end];
+                    let material: String = serde_json::from_str(raw).unwrap();
+                    assert_eq!(
+                        material.get(*text_start..*text_end),
+                        Some(span.text.as_str())
+                    );
+                }
+                TextCompositionOrigin::UnitDirective {
+                    unit_id,
+                    unit_json_start,
+                    unit_json_end,
+                } => {
+                    assert!(matches!(unit_id.as_str(), "title" | "event" | "weather"));
+                    assert!(
+                        source
+                            .get(*unit_json_start..*unit_json_end)
+                            .unwrap()
+                            .starts_with('{')
+                    );
+                }
+            }
+            cursor = span.output_end;
+        }
+        assert_eq!(cursor, result.text.len());
+    }
+
+    #[test]
+    fn explicit_text_composition_rejects_ambiguous_or_over_budget_input() {
+        let source = explicit_composition(128);
+        let mut invalid: serde_json::Value = serde_json::from_str(&source).unwrap();
+        invalid["units"][0]["fragments"][0]["start"] = serde_json::json!(1);
+        assert_eq!(
+            compose_explicit_text(&invalid.to_string())
+                .unwrap_err()
+                .to_string()
+                .split(':')
+                .next(),
+            Some("TEXT_COMPOSITION_SCHEMA")
+        );
+
+        let too_short = explicit_composition(3);
+        assert_eq!(
+            compose_explicit_text(&too_short)
+                .unwrap_err()
+                .to_string()
+                .split(':')
+                .next(),
+            Some("TEXT_COMPOSITION_CHAR_LIMIT")
+        );
+
+        for invalid_json in [
+            r#"{"materials":[],"materials":[],"units":[],"order":[],"max_chars":1}"#,
+            r#"{"materials":[],"units":[],"order":[],"max_chars":1,"extra":0}"#,
+        ] {
+            assert!(compose_explicit_text(invalid_json).is_err());
+        }
+    }
+
     #[test]
     fn rfc_quote_and_source_byte_spans() {
         let source = "名前,値,備考\r\n猫,001,\"a,b\"\r\n犬,1.2300e+40,\"二重\"\"引用\r\n続き\"\r\n";

@@ -902,6 +902,22 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::ComposeText { document } => {
+                let value = match crate::document::compose_explicit_text(document) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "TEXT_COMPOSITION_FAILED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::Search { provider, query } => {
                 use crate::search::SearchProvider;
                 let selected = match provider.as_str() {

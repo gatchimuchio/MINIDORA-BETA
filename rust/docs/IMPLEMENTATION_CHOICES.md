@@ -70,6 +70,12 @@ The input machine seals explicit, source-preserving intents for the currently im
 
 This is a current implementation limitation, not an approved replacement for the required general-language system. General Q&A, writing/code/research quality and all source-discovered capabilities stay in the [full obligations](../audit/implementation-obligations.md). Expanding the grammar must preserve original role, scope, polarity, conditions, permissions and measurable results; adding keyword-specific answers is not a valid substitute.
 
+## Explicit-source text composition instead of content invention
+
+The current B08 slice accepts a strict JSON composition request through the ordinary input/Core path. The caller supplies all material text, byte ranges, block roles, order, companion links, required flags and maximum character count. The compositor adds only fixed layout prefixes and separators and records each output segment against its material or unit directive. Required and condition/caveat units are retained, and the artifact reports omitted optional units.
+
+This follows the inspected legacy contract for composing explicit source slices and keeps a complete source map. It does not discover content, assess the requested purpose, write or rewrite prose, summarize, prove factual truth or meaning equivalence, or measure style and quality. That bounded route is one B08 building block; the twelve-task writing, editing, rewriting and summary requirement remains open. No fixed task prompt or diagnostic answer is embedded in the route.
+
 ## Effects and frontend authority
 
 The local file writer receives a persisted authorized `ATTEMPTED` record binding exact target/bytes/action identity. It reports actual observations. Core alone validates content/render/write outcomes and changes the goal state. Existing different files are not overwritten; uncertain physical outcomes remain unknown rather than generating a fresh action identity.
