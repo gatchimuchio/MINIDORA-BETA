@@ -1,0 +1,273 @@
+{
+  "record_type": "SCOPED_B08_ROUTE_OBSERVATION",
+  "scope": "R2-derived explicit required-source-sentence retention for extractive summary candidates; not full B08 acceptance",
+  "recorded_at_utc": "2026-11-12T19:37:46Z",
+  "baseline": {
+    "commit": "db63a9477415ce1fab3f0447c0e54c69322efd64",
+    "remote_main_at_start": "db63a9477415ce1fab3f0447c0e54c69322efd64",
+    "branch": "work",
+    "release_state": "NOT_RELEASED",
+    "rollback_refs": {
+      "codex/backup-main": "db63a9477415ce1fab3f0447c0e54c69322efd64",
+      "codex/backup-main-prev": "aba1399ca76c5ff4c2677c1d92afcddc55637b5f"
+    }
+  },
+  "three_document_set": "N/A; no construction three-document set specified",
+  "requirement_basis": {
+    "capability_id": "B08",
+    "r2_observable": "Twelve previously unseen writing tasks satisfy length, content, purpose and format",
+    "applied_slice": "Honor caller-designated source sentence indices during bounded extractive candidate selection; this does not infer semantic requirements, purpose or quality and does not reduce the twelve-task acceptance population."
+  },
+  "implementation": {
+    "package_version": "0.7.0-alpha.8",
+    "toolchain": "Rust 1.99.1, Cargo 1.99.1, edition 2024",
+    "parser_version": "declarative-ja-en-v44-extractive-summary-required-content",
+    "intent": "TEXT_SUMMARY_CANDIDATES",
+    "artifact_operation": "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4",
+    "request_contract": "Strict JSON requires text and max_sentences (1..8); optional max_chars is 1..100000 Unicode scalars, optional format is bullets or paragraph, and optional required_sentence_indices is an array of at most eight unique nonnegative integer indices. Indices are zero-based over source-order candidates produced by the existing punctuation/line-break splitter. An absent list means none are required.",
+    "selection": "Effective required indices are stored sorted ascending and selected before ranked fill. Remaining slots use the existing token-frequency, first-sentence and long-sentence ranking under max_chars. Output is restored to source order; every copied sentence retains exact source/output byte spans.",
+    "invalid_required_index_behavior": "Malformed, negative, fractional, null, duplicate or over-eight index lists suspend with TEXT_SUMMARY_SCHEMA; an index outside generated candidates suspends with TEXT_SUMMARY_REQUIRED_INDEX. Each stop creates no artifact.",
+    "required_budget_behavior": "When required sentence count exceeds max_sentences the route suspends with TEXT_SUMMARY_REQUIRED_LIMIT; when required sentence characters exceed max_chars it suspends with TEXT_SUMMARY_REQUIRED_CHAR_LIMIT. Each stop creates no artifact and no sentence is truncated.",
+    "artifact_fields": [
+      "effective required source sentence indices",
+      "selected/omitted/length-limited sentence indices and selection ranks",
+      "selected character count and effective format",
+      "exact source and output byte spans",
+      "source JSON string token and source/output hashes",
+      "coverage_verified=false"
+    ],
+    "terminal_guarantee": "HYPOTHESIS",
+    "known_gap": "Required indices preserve caller-chosen source sentences but do not judge semantic importance, truth, relevance or completeness. Natural-language constraints, purpose, meaning, conditions, negation, quality and the complete twelve-task B08 observable remain unverified."
+  },
+  "route_observation": {
+    "test_case_id": "extractive_summary_candidate_normal_route_preserves_required_sentence_indices",
+    "header": "text-summary:",
+    "input_utf8": "text-summary:\n{\"max_chars\":26,\"max_sentences\":2,\"required_sentence_indices\":[2],\"text\":\"shared alpha. shared beta. unique gamma. shared delta.\"}",
+    "input_sha256": "df5aee3b6977a45fa672a0e926e3389d89bb60cf95ab63ce6d507a3a4fbd710c",
+    "source_sha256": "9872bac4a409b97f1b3ca181023b07a90d5712dd2b27c4437c921500f95c3c83",
+    "visible_output_utf8": "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- shared alpha.\n- unique gamma.",
+    "visible_output_sha256": "a25da2c5598b5ecd537733ef32db1916583804e2313f78259ccbe8197ac8aed3",
+    "terminal_state": "COMMIT with HYPOTHESIS guarantee",
+    "artifact": {
+      "operation": "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4",
+      "format": "bullets",
+      "max_sentences": 2,
+      "max_chars": 26,
+      "required_sentence_indices": [
+        2
+      ],
+      "selected_sentence_indices": [
+        0,
+        2
+      ],
+      "selection_ranks_by_source_index": {
+        "0": 2,
+        "2": 1
+      },
+      "omitted_sentence_indices": [
+        1,
+        3
+      ],
+      "selected_character_count": 26,
+      "coverage_verified": false,
+      "source_byte_ranges": [
+        [
+          0,
+          13
+        ],
+        [
+          27,
+          40
+        ]
+      ],
+      "output_byte_ranges": [
+        [
+          141,
+          154
+        ],
+        [
+          157,
+          170
+        ]
+      ],
+      "source_ranges_match_exact_input": true,
+      "output_ranges_match_exact_artifact_text": true,
+      "persisted_artifact_read_through_actor_case_scoped_store": true,
+      "output_hash_matches_artifact_text": true,
+      "required_sentence_source_byte_range": [
+        27,
+        40
+      ],
+      "ranked_fill_source_byte_range": [
+        0,
+        13
+      ]
+    },
+    "typed_stop_observation": {
+      "out_of_range_required_index": {
+        "reason": "TEXT_SUMMARY_REQUIRED_INDEX",
+        "lifecycle": "SUSPEND"
+      },
+      "required_count_above_max_sentences": {
+        "reason": "TEXT_SUMMARY_REQUIRED_LIMIT",
+        "lifecycle": "SUSPEND"
+      },
+      "required_characters_above_max_chars": {
+        "reason": "TEXT_SUMMARY_REQUIRED_CHAR_LIMIT",
+        "lifecycle": "SUSPEND"
+      },
+      "adopted_dependencies_each": 0,
+      "artifact_created_each": false
+    }
+  },
+  "verification": {
+    "platform": "Linux x86_64; Rust 1.99.1 / Cargo 1.99.1; CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target",
+    "passed": [
+      {
+        "command": "cargo test --locked -p minidora-engine text_summary --lib",
+        "cases": 7,
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test --locked -p minidora-engine extractive_summary_headers_retain_complete_json_body --lib",
+        "cases": 1,
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test --locked -p minidora-cli --test normal_route extractive_summary_candidate_",
+        "cases": 4,
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test --locked -p minidora-engine text_editing --lib",
+        "cases": 8,
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test --locked -p minidora-cli --test normal_route explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage",
+        "cases": 1,
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test --locked -p minidora-cli --test normal_route text_editing_route_",
+        "cases": 3,
+        "exit_code": 0
+      },
+      {
+        "command": "cargo fmt --all -- --check",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo check --workspace --all-targets --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo build --workspace --locked",
+        "exit_code": 0
+      }
+    ],
+    "not_run": [
+      {
+        "item": "Full workspace runtime suite",
+        "reason": "The BUILD_BATCH changed one bounded summary route; focused route/component regressions plus all-target check, Clippy and build were run."
+      },
+      {
+        "item": "Frozen Python beta suite",
+        "reason": "Frozen Python source and release artifacts were not changed; predecessor evidence does not establish Rust successor acceptance."
+      },
+      {
+        "item": "Twelve unseen B08 writing tasks",
+        "reason": "This route slice does not replace or reduce the required full acceptance population; B08 remains UNVERIFIED."
+      },
+      {
+        "item": "Independent semantic summary-quality evaluation",
+        "reason": "The artifact remains HYPOTHESIS and no semantic coverage evaluator was exercised."
+      },
+      {
+        "item": "Windows physical 8 GB acceptance",
+        "reason": "The observed environment is Linux x86_64 and is not the specified Windows physical target."
+      }
+    ],
+    "failed_observations": [
+      {
+        "stage": "Initial verification invocation",
+        "observation": "The shell initially lacked Cargo in PATH, and the corrected invocation was first issued at the repository root, which has no Cargo.toml.",
+        "resolution": "No tests ran during those two attempts. Repeated from the rust/ workspace with /workspace/.cargo/bin in PATH and the configured CARGO_HOME, RUSTUP_HOME and CARGO_TARGET_DIR; all listed checks passed."
+      }
+    ]
+  },
+  "traceability": {
+    "requirements_row": "rust/audit/requirements.tsv:B08",
+    "redesign_trace_row": "docs/redesign/03_REQUIREMENT_TRACE.tsv:B08",
+    "code_snapshot_ref": "code-snapshot.json",
+    "code_snapshot_sha256": "488d53ce5311915553fbadde6ec6605ab902b4c8e1d2a4d71a2d9771c2fb7f11",
+    "code_snapshot_file_count": 31,
+    "changed_paths": [
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv",
+      "rust/README.md",
+      "rust/apps/cli/tests/normal_route.rs",
+      "rust/audit/IMPLEMENTATION_STATUS.md",
+      "rust/audit/README.md",
+      "rust/audit/b08-extractive-summary-required-content-route-validation.json",
+      "rust/audit/code-snapshot.json",
+      "rust/audit/requirements.tsv",
+      "rust/audit/rust-requirement-observations.json",
+      "rust/crates/minidora-engine/src/input.rs",
+      "rust/crates/minidora-engine/src/text_summary.rs",
+      "rust/docs/IMPLEMENTATION_CHOICES.md"
+    ]
+  },
+  "asset_closure": {
+    "inventory_scope": "Closure inventory: tracked repository files, both Rust target directories and ignored Python bytecode. Focused CLI tests removed temporary Scratch state during teardown; no runtime state remained.",
+    "categories": {
+      "retained": {
+        "count": 746,
+        "items": "Tracked repository files including this route audit (745 pre-existing tracked files plus this new audit)."
+      },
+      "archived": {
+        "count": 0,
+        "items": "None."
+      },
+      "in_use": {
+        "count": 4034,
+        "items": "/workspace/.minidora-cloud/rust-target build and test artifacts; 2.2G."
+      },
+      "moved_to_trash": {
+        "count": 0,
+        "items": "No retained assets moved to trash; transient test Scratch state was removed by the test harness."
+      },
+      "held": {
+        "count": 3697,
+        "items": [
+          {
+            "count": 3677,
+            "path": "rust/target",
+            "cause": "Pre-existing Rust build cache; this task used the externally configured CARGO_TARGET_DIR.",
+            "impact": "2.0G retained in the repository checkout.",
+            "next_action": "Leave untouched; owner can decide a later cleanup after confirming the cache is unnecessary."
+          },
+          {
+            "count": 20,
+            "path": "ignored *.pyc files",
+            "cause": "Pre-existing Python bytecode in the frozen source area; not generated by this Rust task.",
+            "impact": "No source or release-manifest changes; files remain present.",
+            "next_action": "Leave untouched; owner can decide a separate cleanup."
+          }
+        ]
+      }
+    },
+    "total_count": 8477,
+    "reconciliation": "746 retained + 0 archived + 4034 in use + 0 moved to trash + 3697 held = 8477"
+  },
+  "acceptance": {
+    "B08": "UNVERIFIED",
+    "full_12_task_population": "NOT_RUN; unchanged and still required",
+    "release_state": "NOT_RELEASED",
+    "privacy_and_permission_check": "Limited to synthetic route strings, Rust implementation/tests and current project documentation. No credentials, personal data, private HDS or other-repository content were added; frozen Python source, release manifests, checksums and dependency locks remain unchanged.",
+    "publication_state": "Authorized direct fast-forward to main after final diff and public-boundary review; no release, distribution or PR."
+  }
+}

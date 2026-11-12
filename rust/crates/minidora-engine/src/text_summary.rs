@@ -10,12 +10,12 @@ const MAX_REQUEST_BYTES: usize = 256_000;
 const MAX_TEXT_SCALARS: usize = 100_000;
 const MAX_SENTENCES: usize = 4_096;
 const MAX_ARTIFACT_BYTES: usize = 2_000_000;
-const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3";
+const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4";
 const ALGORITHM: &str =
-    "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_CHAR_BUDGET_OUTPUT_FORMAT_V1";
+    "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_REQUIRED_CONTENT_OUTPUT_FORMAT_V1";
 const LABEL: &str =
     "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
-const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; each retained sentence is copied verbatim with decoded-source byte offsets in the requested bullets or paragraph layout. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
+const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; caller-required source sentences are retained before ranked fill, and every retained sentence is copied verbatim with decoded-source byte offsets in the requested bullets or paragraph layout. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +24,7 @@ struct SummaryRequest {
     max_sentences: usize,
     max_chars: Option<usize>,
     format: Option<String>,
+    required_sentence_indices: Option<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +57,7 @@ pub struct ExtractiveSummaryCandidates {
     pub format: String,
     pub max_sentences: usize,
     pub max_chars: usize,
+    pub required_sentence_indices: Vec<usize>,
     pub selected_character_count: usize,
     pub sentence_count: usize,
     pub selected_sentence_indices: Vec<usize>,
@@ -115,17 +117,17 @@ fn fields<'a>(
         return Err(schema("summary request must be one JSON object"));
     };
     let required = ["max_sentences", "text"];
-    if !(2..=4).contains(&values.len())
+    if !(2..=5).contains(&values.len())
         || required.iter().any(|key| !values.contains_key(*key))
         || values.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "text" | "max_sentences" | "max_chars" | "format"
+                "text" | "max_sentences" | "max_chars" | "format" | "required_sentence_indices"
             )
         })
     {
         return Err(schema(
-            "summary request fields must include text and max_sentences; max_chars and format are optional",
+            "summary request fields must include text and max_sentences; max_chars, format, and required_sentence_indices are optional",
         ));
     }
     if values
@@ -138,6 +140,27 @@ fn fields<'a>(
         !matches!(value.kind, JsonKind::Scalar) || !document[value.span.clone()].starts_with('"')
     }) {
         return Err(schema("format must be either bullets or paragraph"));
+    }
+    if let Some(value) = values.get("required_sentence_indices") {
+        let JsonKind::Array(indices) = &value.kind else {
+            return Err(schema(
+                "required_sentence_indices must be an array of source-order integers",
+            ));
+        };
+        if indices.len() > 8 {
+            return Err(schema(
+                "required_sentence_indices may contain at most 8 indices",
+            ));
+        }
+        for index in indices {
+            if !matches!(index.kind, JsonKind::Number)
+                || document[index.span.clone()].parse::<usize>().is_err()
+            {
+                return Err(schema(
+                    "required_sentence_indices must contain nonnegative integer indices",
+                ));
+            }
+        }
     }
     Ok(values)
 }
@@ -323,6 +346,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         max_sentences,
         max_chars,
         format,
+        required_sentence_indices,
     } = serde_json::from_str(document).map_err(|error| schema(error.to_string()))?;
     if !(1..=8).contains(&max_sentences) {
         return Err(schema("max_sentences must be an integer from 1 to 8"));
@@ -332,6 +356,16 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         return Err(schema("max_chars must be an integer from 1 to 100000"));
     }
     let format = SummaryFormat::from_request(format.as_deref())?;
+    let mut required_sentence_indices = required_sentence_indices.unwrap_or_default();
+    required_sentence_indices.sort_unstable();
+    if required_sentence_indices
+        .windows(2)
+        .any(|pair| pair[0] == pair[1])
+    {
+        return Err(schema(
+            "required_sentence_indices must not contain duplicates",
+        ));
+    }
     if text.trim().is_empty()
         || text.len() > MAX_REQUEST_BYTES
         || text.chars().count() > MAX_TEXT_SCALARS
@@ -348,22 +382,57 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     if candidates.is_empty() {
         return Err(schema("text contains no sentence candidates"));
     }
+    if required_sentence_indices
+        .iter()
+        .any(|index| *index >= candidates.len())
+    {
+        return Err(failure(
+            "TEXT_SUMMARY_REQUIRED_INDEX",
+            "a required sentence index is outside the source sentence candidates",
+        ));
+    }
+    if required_sentence_indices.len() > max_sentences {
+        return Err(failure(
+            "TEXT_SUMMARY_REQUIRED_LIMIT",
+            "required source sentences exceed max_sentences",
+        ));
+    }
+    let required_set: std::collections::BTreeSet<_> =
+        required_sentence_indices.iter().copied().collect();
+    let mut selected_ranked = required_sentence_indices.clone();
+    let mut selected_character_count = selected_ranked
+        .iter()
+        .map(|index| candidates[*index].text.chars().count())
+        .sum::<usize>();
+    if selected_character_count > max_chars {
+        return Err(failure(
+            "TEXT_SUMMARY_REQUIRED_CHAR_LIMIT",
+            "required source sentences exceed max_chars; no sentence was truncated",
+        ));
+    }
     score_sentences(&mut candidates);
     let mut ranking: Vec<usize> = (0..candidates.len()).collect();
     ranking.sort_by(|left, right| {
         compare_scores(candidates[*right].score, candidates[*left].score)
             .then_with(|| right.cmp(left))
     });
-    let mut selected_ranked = Vec::with_capacity(max_sentences);
+    let mut selection_ranks: BTreeMap<usize, usize> = selected_ranked
+        .iter()
+        .enumerate()
+        .map(|(rank, index)| (*index, rank + 1))
+        .collect();
     let mut length_limited_sentence_indices = Vec::new();
-    let mut selected_character_count = 0usize;
     for index in ranking {
         if selected_ranked.len() == max_sentences {
             break;
         }
+        if required_set.contains(&index) {
+            continue;
+        }
         let sentence_characters = candidates[index].text.chars().count();
         if selected_character_count.saturating_add(sentence_characters) <= max_chars {
             selected_character_count += sentence_characters;
+            selection_ranks.insert(index, selected_ranked.len() + 1);
             selected_ranked.push(index);
         } else {
             length_limited_sentence_indices.push(index);
@@ -376,11 +445,6 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         ));
     }
     length_limited_sentence_indices.sort_unstable();
-    let selection_ranks: BTreeMap<usize, usize> = selected_ranked
-        .iter()
-        .enumerate()
-        .map(|(rank, index)| (*index, rank + 1))
-        .collect();
     let mut selected: Vec<usize> = selected_ranked;
     selected.sort_unstable();
     let selected_set: std::collections::BTreeSet<_> = selected.iter().copied().collect();
@@ -428,6 +492,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         format: format.as_str().into(),
         max_sentences,
         max_chars,
+        required_sentence_indices,
         selected_character_count,
         sentence_count: candidates.len(),
         selected_sentence_indices,
@@ -457,6 +522,7 @@ mod tests {
         let report = extractive_summary_candidates(&document).unwrap();
         assert_eq!(report.operation, OPERATION);
         assert_eq!(report.format, "bullets");
+        assert!(report.required_sentence_indices.is_empty());
         assert_eq!(report.sentence_count, 3);
         assert_eq!(report.selected_sentence_indices, vec![0, 2]);
         assert_eq!(report.omitted_sentence_indices, vec![1]);
@@ -487,6 +553,12 @@ mod tests {
             r#"{"text":"x。","max_sentences":1,"format":"table"}"#,
             r#"{"text":"x。","max_sentences":1,"format":null}"#,
             r#"{"text":"x。","max_sentences":1,"format":1}"#,
+            r#"{"text":"x。","max_sentences":1,"required_sentence_indices":null}"#,
+            r#"{"text":"x。","max_sentences":1,"required_sentence_indices":"0"}"#,
+            r#"{"text":"x。","max_sentences":1,"required_sentence_indices":[-1]}"#,
+            r#"{"text":"x。","max_sentences":1,"required_sentence_indices":[1.5]}"#,
+            r#"{"text":"x。","max_sentences":1,"required_sentence_indices":[0,0]}"#,
+            r#"{"text":"x。","max_sentences":8,"required_sentence_indices":[0,1,2,3,4,5,6,7,8]}"#,
         ] {
             assert!(
                 extractive_summary_candidates(document).is_err(),
@@ -518,8 +590,9 @@ mod tests {
         })
         .to_string();
         let report = extractive_summary_candidates(&document).unwrap();
-        assert_eq!(report.operation, "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3");
+        assert_eq!(report.operation, "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4");
         assert_eq!(report.format, "bullets");
+        assert!(report.required_sentence_indices.is_empty());
         assert_eq!(report.max_chars, 35);
         assert_eq!(report.selected_sentence_indices, vec![0, 2]);
         assert_eq!(report.omitted_sentence_indices, vec![1]);
@@ -575,5 +648,71 @@ mod tests {
             );
         }
         assert_eq!(report.output_sha256, digest(report.text.as_bytes()));
+    }
+
+    #[test]
+    fn retains_required_source_sentences_before_ranked_fill_and_maps_them_exactly() {
+        let text = "shared alpha. shared beta. unique gamma. shared delta.";
+        let document = serde_json::json!({
+            "text":text,
+            "max_sentences":2,
+            "max_chars":26,
+            "required_sentence_indices":[2]
+        })
+        .to_string();
+        let report = extractive_summary_candidates(&document).unwrap();
+        assert_eq!(report.operation, OPERATION);
+        assert_eq!(report.required_sentence_indices, vec![2]);
+        assert_eq!(report.selected_sentence_indices, vec![0, 2]);
+        assert_eq!(report.selected_character_count, 26);
+        assert!(report.text.contains("shared alpha."));
+        assert!(report.text.contains("unique gamma."));
+        assert!(!report.text.contains("shared beta."));
+        assert!(!report.text.contains("shared delta."));
+        let required = report
+            .sentences
+            .iter()
+            .find(|sentence| sentence.sentence_index == 2)
+            .unwrap();
+        let ranked = report
+            .sentences
+            .iter()
+            .find(|sentence| sentence.sentence_index == 0)
+            .unwrap();
+        assert_eq!(required.selection_rank, 1);
+        assert_eq!(ranked.selection_rank, 2);
+        for sentence in &report.sentences {
+            assert_eq!(
+                report
+                    .source_text
+                    .get(sentence.source_start..sentence.source_end),
+                Some(sentence.text.as_str())
+            );
+            assert_eq!(
+                report.text.get(sentence.output_start..sentence.output_end),
+                Some(sentence.text.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_required_source_indices_that_are_unavailable_or_exceed_budgets() {
+        for (document, code) in [
+            (
+                r#"{"text":"Only one.","max_sentences":1,"required_sentence_indices":[1]}"#,
+                "TEXT_SUMMARY_REQUIRED_INDEX",
+            ),
+            (
+                r#"{"text":"One. Two.","max_sentences":1,"required_sentence_indices":[0,1]}"#,
+                "TEXT_SUMMARY_REQUIRED_LIMIT",
+            ),
+            (
+                r#"{"text":"Required sentence.","max_sentences":1,"max_chars":4,"required_sentence_indices":[0]}"#,
+                "TEXT_SUMMARY_REQUIRED_CHAR_LIMIT",
+            ),
+        ] {
+            let error = extractive_summary_candidates(document).unwrap_err();
+            assert!(error.to_string().contains(code), "{error}");
+        }
     }
 }

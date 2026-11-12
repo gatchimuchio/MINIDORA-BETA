@@ -6173,7 +6173,7 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
         let artifact: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             artifact["operation"],
-            "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3"
+            "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4"
         );
         assert_eq!(artifact["format"], "bullets");
         assert_eq!(artifact["source_text"], source);
@@ -6264,7 +6264,7 @@ fn extractive_summary_candidate_normal_route_renders_explicit_paragraph_format()
     let artifact: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         artifact["operation"],
-        "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3"
+        "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4"
     );
     assert_eq!(artifact["format"], "paragraph");
     assert_eq!(
@@ -6309,6 +6309,106 @@ fn extractive_summary_candidate_normal_route_renders_explicit_paragraph_format()
                 .contains("TEXT_SUMMARY_SCHEMA")
         );
         assert!(result["dependencies"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn extractive_summary_candidate_normal_route_preserves_required_sentence_indices() {
+    let scratch = Scratch::new();
+    let source = "shared alpha. shared beta. unique gamma. shared delta.";
+    let body = serde_json::json!({
+        "text":source,
+        "max_sentences":2,
+        "max_chars":26,
+        "required_sentence_indices":[2]
+    })
+    .to_string();
+    let request = format!("text-summary:\n{body}");
+    let result = record(&execute(&scratch.0, "owner", &[&request]));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "HYPOTHESIS");
+    assert!(result["text"].as_str().unwrap().contains("shared alpha."));
+    assert!(result["text"].as_str().unwrap().contains("unique gamma."));
+    assert!(!result["text"].as_str().unwrap().contains("shared beta."));
+    assert!(!result["text"].as_str().unwrap().contains("shared delta."));
+
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 1);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bytes = store
+        .get_bytes("owner", "normal-route", dependencies[0].as_str().unwrap())
+        .unwrap();
+    let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        artifact["operation"],
+        "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4"
+    );
+    assert_eq!(
+        artifact["required_sentence_indices"],
+        serde_json::json!([2])
+    );
+    assert_eq!(
+        artifact["selected_sentence_indices"],
+        serde_json::json!([0, 2])
+    );
+    assert_eq!(
+        artifact["omitted_sentence_indices"],
+        serde_json::json!([1, 3])
+    );
+    assert_eq!(artifact["selected_character_count"], 26);
+    for sentence in artifact["sentences"].as_array().unwrap() {
+        let source_start = sentence["source_start"].as_u64().unwrap() as usize;
+        let source_end = sentence["source_end"].as_u64().unwrap() as usize;
+        let output_start = sentence["output_start"].as_u64().unwrap() as usize;
+        let output_end = sentence["output_end"].as_u64().unwrap() as usize;
+        let text = sentence["text"].as_str().unwrap();
+        assert_eq!(&source[source_start..source_end], text);
+        assert_eq!(
+            &artifact["text"].as_str().unwrap()[output_start..output_end],
+            text
+        );
+    }
+
+    for (body, code) in [
+        (
+            serde_json::json!({
+                "text":"Only one.",
+                "max_sentences":1,
+                "required_sentence_indices":[1]
+            }),
+            "TEXT_SUMMARY_REQUIRED_INDEX",
+        ),
+        (
+            serde_json::json!({
+                "text":"One. Two.",
+                "max_sentences":1,
+                "required_sentence_indices":[0, 1]
+            }),
+            "TEXT_SUMMARY_REQUIRED_LIMIT",
+        ),
+        (
+            serde_json::json!({
+                "text":"Required sentence.",
+                "max_sentences":1,
+                "max_chars":4,
+                "required_sentence_indices":[0]
+            }),
+            "TEXT_SUMMARY_REQUIRED_CHAR_LIMIT",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let stopped_result = stopped(
+            &execute(&scratch.0, "owner", &[&format!("text-summary:\n{}", body)]),
+            2,
+            "SUSPEND",
+        );
+        assert!(stopped_result["reason"].as_str().unwrap().contains(code));
+        assert!(
+            stopped_result["dependencies"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
