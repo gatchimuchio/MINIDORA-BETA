@@ -398,7 +398,10 @@ fn inspect(
         // newly different answer during mere effect reconciliation.
         let memory = store.load_memory(actor)?;
         let answer = crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
-        let current_proof_contract = bundle.meaning.parser_version == crate::input::PARSER_VERSION;
+        let current_proof_contract = matches!(
+            bundle.meaning.parser_version.as_str(),
+            "declarative-ja-en-v46-proof-lineage-guarantee" | crate::input::PARSER_VERSION
+        );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
         } else {
@@ -417,6 +420,22 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_PROOF_INVALIDATED",
                 "original adopted relation proof is no longer valid unchanged",
+            ));
+        }
+    }
+    if let Intent::InspectPremises { subject } = &goal.intent {
+        let memory = store.load_memory(actor)?;
+        let dependencies: Vec<String> = crate::relations::explicit_premises_about(&memory, subject)
+            .into_iter()
+            .map(|fact| fact.id)
+            .collect();
+        if dependencies.is_empty()
+            || dependencies != result.dependencies
+            || result.guarantee != Guarantee::UserPremise
+        {
+            return Err(failure(
+                "RECOVERY_PREMISES_CHANGED",
+                "the original active premise listing is no longer valid unchanged",
             ));
         }
     }

@@ -1772,6 +1772,142 @@ fn conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract()
 }
 
 #[test]
+fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart() {
+    let scratch = Scratch::new();
+    let bird = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-bird", "ココは鳥"],
+    ));
+    let gray = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-gray", "[scope=story]ココは灰色"],
+    ));
+    let negative = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-negative", "ココは哺乳類ではない"],
+    ));
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "bird-rule", "もしXは鳥ならXは動物"],
+    ));
+    let listed = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "coco-listing",
+            "ココについて、何が分かっていますか",
+        ],
+    ));
+
+    assert_eq!(listed["lifecycle"], "COMMIT");
+    assert_eq!(listed["guarantee"], "USER_PREMISE");
+    assert!(
+        listed["text"]
+            .as_str()
+            .unwrap()
+            .contains("現実世界の真偽は確認していません")
+    );
+    assert!(listed["text"].as_str().unwrap().contains("ココは鳥である"));
+    assert!(
+        listed["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは哺乳類ではない")
+    );
+    assert!(listed["text"].as_str().unwrap().contains("範囲: story"));
+    assert!(
+        !listed["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは動物である")
+    );
+    assert_eq!(listed["dependencies"].as_array().unwrap().len(), 3);
+    for source in [&bird, &gray, &negative] {
+        assert!(
+            listed["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&source["dependencies"][0])
+        );
+    }
+    assert!(
+        !listed["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule["dependencies"][0])
+    );
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v47-premise-inspection"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "INSPECT_PREMISES"
+    );
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["subject"], "ココ");
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "invalidate-coco-bird",
+            &format!("{}を無効化して", bird["dependencies"][0].as_str().unwrap()),
+        ],
+    ));
+    let after_invalidation = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "coco-listing-after",
+            "ココについて、何が分かっていますか",
+        ],
+    ));
+    assert_eq!(
+        after_invalidation["dependencies"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        !after_invalidation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&bird["dependencies"][0])
+    );
+    assert!(
+        !after_invalidation["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは鳥である")
+    );
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "unknown-subject-listing",
+                "ミケについて何が分かっていますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+}
+
+#[test]
 fn agreeing_examples_do_not_promote_a_universal_empirical_rule() {
     let scratch = Scratch::new();
     for premise in ["甲は鳥", "甲は青色", "乙は鳥", "乙は青色", "丙は鳥"] {

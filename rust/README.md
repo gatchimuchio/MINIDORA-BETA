@@ -202,9 +202,13 @@ Evaluation uses the same bounded polynomial grammar as simplification and symbol
 "$minidora_bin" --db "$minidora_state" --actor demo --case relations 'ルリは動物ですか'
 "$minidora_bin" --db "$minidora_state" --actor demo --case negative 'ミナは鳥ではない'
 "$minidora_bin" --db "$minidora_state" --actor demo --case negative 'ミナは鳥ですか'
+"$minidora_bin" --db "$minidora_state" --actor demo --case relations \
+  'ココについて、何が分かっていますか'
 ```
 
 These are scoped user premises and formal consequences, not independently verified facts about the world. Persistent premises/rules are actor-scoped across cases; cases identify result lineages, not separate knowledge databases. Use distinct explicit scopes or actors for isolated premise worlds. The negative example uses a different subject to avoid contradicting the earlier positive example. The supported copular grammar preserves polarity and optional `[scope=story]` labels. Rule variables use `X`, `Y`, `Z` or explicit `$` names. Proof-preserving rule composition, dependencies and invalidation belong to Core. Unknown grammar, unresolved contradictions and missing premises produce typed stops. General Japanese understanding, unrestricted quantified logic and induction from arbitrary examples are not established.
+
+The premise-listing question returns only active direct user premises for the named subject, including their scope and premise IDs. Derived conclusions are omitted from this list; it does not verify claims about the outside world. A subject with no active supplied premise produces a typed `MISSING_PREMISES` stop.
 
 A stored fact/rule ID can be withdrawn using `invalidate ID` or `IDを無効化して`; inspect the returned JSON or saved case to obtain its actual ID. Original observations remain retained. This does not establish all required generalized-learning or long-history resource gates.
 

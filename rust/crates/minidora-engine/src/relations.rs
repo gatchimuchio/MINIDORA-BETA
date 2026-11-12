@@ -12,6 +12,31 @@ pub struct QueryOutcome {
     pub used_rules: Vec<String>,
     pub steps: u32,
 }
+
+/// Return active, directly supplied premises for one subject. Derived facts
+/// are deliberately excluded: callers can present exactly what entered memory
+/// without describing inference as an observation.
+pub fn explicit_premises_about(memory: &MemoryState, subject: &str) -> Vec<Fact> {
+    let mut facts: Vec<_> = memory
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.valid
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+                && !fact.source_input.is_empty()
+                && fact.proposition.subject == subject
+        })
+        .cloned()
+        .collect();
+    facts.sort_by(|left, right| {
+        left.proposition
+            .cmp(&right.proposition)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    facts
+}
+
 fn variable(term: &str) -> bool {
     term.starts_with('$') || term.starts_with('?')
 }
@@ -615,6 +640,21 @@ mod tests {
         assert!(dependencies.contains(&fact.id));
         assert!(dependencies.contains(&rule.id));
         assert!(dependencies.iter().any(|id| id.starts_with("fact:")));
+    }
+    #[test]
+    fn explicit_premise_listing_excludes_invalid_derived_and_other_subject_facts() {
+        let mut memory = MemoryState::default();
+        let rule = add_rule(&mut memory, p("$x", "鳥"), p("$x", "動物"), "rule-input").unwrap();
+        let direct = assert_fact(&mut memory, p("ココ", "鳥"), "coco-input").unwrap();
+        assert_fact(&mut memory, p("ミケ", "猫"), "mike-input").unwrap();
+        let mut negative = p("ココ", "鳥");
+        negative.negative = true;
+        let direct_negative = assert_fact(&mut memory, negative, "counterexample-input").unwrap();
+        invalidate(&mut memory, &direct_negative.id).unwrap();
+
+        let listed = explicit_premises_about(&memory, "ココ");
+        assert_eq!(listed, vec![direct]);
+        assert!(!listed.iter().any(|fact| fact.id == rule.id));
     }
     #[test]
     fn contradicted_direct_premise_keeps_user_premise_guarantee() {

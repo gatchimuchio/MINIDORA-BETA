@@ -1316,6 +1316,55 @@ impl Engine {
                         "この問いに必要な有効な前提または導出経路がありません。"),
                 }
             }
+            Intent::InspectPremises { subject } => {
+                let memory = self.store.load_memory(actor)?;
+                let facts = relations::explicit_premises_about(&memory, subject);
+                if facts.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "この対象について有効な提示前提は保存されていません。",
+                    );
+                }
+                let disclosure = format!(
+                    "会話に保存された「{subject}」の提示前提です。現実世界の真偽は確認していません。"
+                );
+                let mut evidence_bytes = disclosure.len();
+                if evidence_bytes > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "提示前提の一覧が要求の証拠予算を超えました。",
+                    );
+                }
+                let mut lines = vec![disclosure];
+                for fact in &facts {
+                    let line = format!(
+                        "・{}（範囲: {}; 提示前提ID: {}）",
+                        describe(&fact.proposition),
+                        fact.proposition.scope,
+                        fact.id
+                    );
+                    evidence_bytes = evidence_bytes
+                        .checked_add(line.len())
+                        .and_then(|total| total.checked_add(1))
+                        .unwrap_or(usize::MAX);
+                    if evidence_bytes > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "提示前提の一覧が要求の証拠予算を超えました。",
+                        );
+                    }
+                    lines.push(line);
+                }
+                units.extend(lines);
+                result.dependencies = facts.into_iter().map(|fact| fact.id).collect();
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::Invalidate { id } => {
                 let mut memory = self.store.load_memory(actor)?;
                 let affected = relations::invalidate(&mut memory, id)?;

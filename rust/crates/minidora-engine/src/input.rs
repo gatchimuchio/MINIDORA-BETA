@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v46-proof-lineage-guarantee";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v47-premise-inspection";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -846,6 +846,31 @@ fn calculation_correction_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
+    let patterns = [
+        r"(?i)^what (?:facts|premises) (?:have been|are) (?:provided|recorded|stated) about (.+)$",
+        r"^(.+?)(?:について|に関して)[、， ]*(?:(?:何|どんなこと)(?:が|を))?(?:分かって|わかって|知って)(?:いる|います)(?:こと)?(?:(?:を)?(?:教えて|説明して)(?:ください)?|ですか|でしょうか|か)?$",
+    ];
+    for pattern in patterns {
+        if let Some(capture) = regex(pattern)?.captures(text) {
+            let subject = capture[1].trim();
+            if !subject.is_empty()
+                && subject.len() <= 512
+                && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；'])
+            {
+                return Ok(Some(Intent::InspectPremises {
+                    subject: subject.to_string(),
+                }));
+            }
+            return Ok(Some(Intent::Unknown {
+                reason: "premise inspection needs one nonempty subject without a clause list"
+                    .into(),
+            }));
+        }
+    }
+    Ok(None)
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = structured_intent(text)? {
         return Ok(intent);
@@ -901,6 +926,9 @@ fn interpret(text: &str) -> Result<Intent> {
                 "quoted content requires an explicit supported operation; its instructions are data"
                     .into(),
         });
+    }
+    if let Some(intent) = inspect_premises_intent(body)? {
+        return Ok(intent);
     }
     if let Some(capture) =
         regex(r"(?is)^(?:もし\s*)?(.+?)(?:ならば|なら|であれば)[、,\s]*(.+)$")?.captures(body)
@@ -1726,6 +1754,28 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn premise_inspection_questions_keep_the_named_subject() {
+        for (text, expected) in [
+            ("ココについて、何が分かっていますか", "ココ"),
+            ("ココについてわかっていることを教えてください", "ココ"),
+            ("ココに関して知っていることを説明して", "ココ"),
+            ("What facts have been recorded about Coco?", "Coco"),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::InspectPremises { subject } if subject == expected
+                ),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("ココについて何が分かっているか、ミケについても").unwrap(),
+            Intent::Unknown { .. }
+        ));
+    }
+
     #[test]
     fn structured_code_generation_headers_preserve_original_body() {
         let document = " \r\n{\"仕様\":{},\"定数\":{\"x\":9007199254740993}} \t\n";

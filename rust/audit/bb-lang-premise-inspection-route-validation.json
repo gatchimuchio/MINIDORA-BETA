@@ -1,0 +1,116 @@
+{
+  "work_item": "BODY-1 bounded BB-LANG natural-language premise inspection",
+  "parser_version": "declarative-ja-en-v47-premise-inspection",
+  "execution_mode": "fresh CLI process for each request; one durable actor/case store",
+  "producer_consumer": "ordinary natural-language request -> sealed intent -> Core actor memory -> active direct premises -> content plan/render/result dependency ledger",
+  "scope": "Lists only valid, directly supplied USER_PREMISE facts for the named subject. Preserves polarity, scope and premise IDs; excludes derived conclusions and does not claim external-world verification.",
+  "observations": [
+    {
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-gray",
+      "request": "[scope=story]ココは灰色",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは灰色である。\n前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62"
+      ]
+    },
+    {
+      "input_id": "coco-negative",
+      "request": "ココは哺乳類ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類ではない。\n前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843"
+      ]
+    },
+    {
+      "input_id": "bird-rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01"
+      ]
+    },
+    {
+      "input_id": "coco-listing",
+      "request": "ココについて、何が分かっていますか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類ではない（範囲: default; 提示前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843）\n・ココは灰色である（範囲: story; 提示前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62）\n・ココは鳥である（範囲: default; 提示前提ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515）",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843",
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62",
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "invalidate-coco-bird",
+      "request": "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515を無効化して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-listing-after",
+      "request": "ココについて、何が分かっていますか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類ではない（範囲: default; 提示前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843）\n・ココは灰色である（範囲: story; 提示前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62）",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843",
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62"
+      ]
+    },
+    {
+      "input_id": "unknown-subject-listing",
+      "request": "ミケについて何が分かっていますか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この対象について有効な提示前提は保存されていません。",
+      "reason": "MISSING_PREMISES: この対象について有効な提示前提は保存されていません。",
+      "dependencies": []
+    }
+  ],
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "USER_PREMISE",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true
+  },
+  "outcome": "PASS",
+  "acceptance_boundary": "One bounded evidence-retrieval route is BUILD_COVERED. General what/why/how, unrestricted Japanese understanding and BB-LANG acceptance remain BUILD_GAP/UNVERIFIED."
+}
