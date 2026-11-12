@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 bounded BB-CONTENT generated-code verification consumer",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-12T23:32:15+00:00",
-  "base_commit": "dc53db0dd1cef4e01bc1315388bad8718e5cc23a",
+  "recorded_at": "2026-11-12T23:45:55+00:00",
+  "base_commit": "2acd3c4659c7bf28485607f77b9f0752bd429f6e",
   "requirement_ids": [
     "A07",
     "A14",
@@ -23,13 +23,13 @@
     "rust/crates/minidora-domain/src/lib.rs": "6e8973f9ad652c6e746ac0703a967d5ac4d60f646d537c902e5eba94c07ad46e",
     "rust/crates/minidora-engine/src/code_capability.rs": "7343805ab74d0b1b6282c7f34b657ae88bb5b73a4dfe0fb00faacb53d2ac04cf",
     "rust/crates/minidora-engine/src/code_generation.rs": "3a6651ea3920bd5789e739e454b469a2f1c450a79484b32f1a5045220b3b95de",
-    "rust/crates/minidora-engine/src/core.rs": "2c32e39bcd6b5fd965e09c51f61d89ce9b07d65a87a37ae4c761bf0409d82ec0",
+    "rust/crates/minidora-engine/src/core.rs": "0b9fcfa4fd199debe92a548dfafbadf9fd81395f336c40496e58459c098ea0b9",
     "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
-    "rust/crates/minidora-engine/src/recovery.rs": "878d5eadda201a4b9b314cbb099229d73af037c31dbcdb1365f6c6982b26c1d7",
+    "rust/crates/minidora-engine/src/recovery.rs": "3d9d818432f636f124098d0f89fc8dc256baf395e9504463a7ec6b5b3e157b4d",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
   },
   "test_and_tool_snapshot_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "452f31dadf99b2d47e2aa303bdeafe15b70a3e52c14774c97fb4c7e1208e2f36",
+    "rust/apps/cli/tests/normal_route.rs": "c3588039dba15be56976cb5ff810af906c06449466407af027155fab4f2fd254",
     "rust/tools/generated_code_verification_route_test.py": "e74d067e3b2c66f16310253b9b7e1646915ce5cd00b730620432279650fbab84"
   },
   "execution_mode": "fresh CLI process per request; temporary actor/case state",

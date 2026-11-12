@@ -484,6 +484,21 @@ fn inspect(
         verify_source_summary_context(store, actor, case, state, &result, plan, &goal)?;
     let search_candidate_rank =
         verify_search_candidate_context(store, actor, case, state, &result, plan, &goal)?;
+    let previous_csv_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
+        match bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+        {
+            Some(previous) => {
+                crate::document::previous_csv_statistics_explanation(store, actor, case, previous)?
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
     if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
@@ -581,6 +596,30 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_CODE_CONTEXT_CHANGED",
                 "the code-generation source or structured explanation no longer matches the prior result",
+            ));
+        }
+    }
+    if let Some((report_ref, expected_units)) = &previous_csv_statistics_explanation {
+        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+            failure(
+                "RECOVERY_CSV_CONTEXT_CHANGED",
+                "the prior CSV-statistics result reference is missing",
+            )
+        })?;
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_CSV_CONTEXT_CHANGED",
+                "the prior CSV-statistics result is no longer retained",
+            )
+        })?;
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != vec![previous.id.clone(), report_ref.clone()]
+            || plan.required_units != *expected_units
+            || result.guarantee != previous.guarantee
+        {
+            return Err(failure(
+                "RECOVERY_CSV_CONTEXT_CHANGED",
+                "the exact statistics report or source-cell explanation changed",
             ));
         }
     }
@@ -731,6 +770,15 @@ fn inspect(
             });
         }
     }
+    if previous_csv_statistics_explanation.is_some() {
+        let id = "previous-csv-statistics".to_string();
+        sources.push(id.clone());
+        expected_nodes.push(GoalNode {
+            id,
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -776,6 +824,11 @@ fn inspect(
             graph.observe(&id, reference, &BTreeMap::new())?;
             source_refs.insert(id, reference.clone());
         }
+    }
+    if let Some((report_ref, _)) = &previous_csv_statistics_explanation {
+        let id = "previous-csv-statistics".to_string();
+        graph.observe(&id, report_ref, &BTreeMap::new())?;
+        source_refs.insert(id, report_ref.clone());
     }
     let compute = (
         &result.calculation,

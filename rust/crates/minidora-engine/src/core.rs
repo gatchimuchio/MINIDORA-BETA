@@ -275,6 +275,20 @@ impl Engine {
             } else {
                 Vec::new()
             };
+        let previous_csv_statistics_explanation =
+            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => crate::document::previous_csv_statistics_explanation(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        prior,
+                    )?,
+                    None => None,
+                }
+            } else {
+                None
+            };
         if let Intent::Retrieve { urls, .. } = &bundle.meaning.intent {
             for (index, _) in urls.iter().enumerate() {
                 let id = format!("source-{index}");
@@ -297,6 +311,15 @@ impl Engine {
         }
         for index in &source_followup_indices {
             let id = format!("followup-source-{index}");
+            nodes.push(GoalNode {
+                id: id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            compute_requires.push(id);
+        }
+        if previous_csv_statistics_explanation.is_some() {
+            let id = "previous-csv-statistics".to_string();
             nodes.push(GoalNode {
                 id: id.clone(),
                 kind: GoalNodeKind::Evidence,
@@ -1289,6 +1312,13 @@ impl Engine {
                     units.extend(explanation);
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.push(report_ref);
+                    result.guarantee = prior.guarantee.clone();
+                } else if let Some((report_ref, explanation)) = &previous_csv_statistics_explanation
+                {
+                    graph.observe("previous-csv-statistics", report_ref, &BTreeMap::new())?;
+                    units.extend(explanation.clone());
+                    result.dependencies.push(prior.id.clone());
+                    result.dependencies.push(report_ref.clone());
                     result.guarantee = prior.guarantee.clone();
                 } else {
                     units.push(prior.text.clone());

@@ -3467,6 +3467,44 @@ fn basic_document_json_pointer_preserves_body_and_large_raw_lexemes() {
     }
 }
 
+#[test]
+fn csv_statistics_followup_explains_revalidated_source_cells() {
+    let scratch = Scratch::new();
+    let source = "label,value\r\na,0.1\r\nb,0.2\r\nc,0.3\r\n";
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "csv-statistics",
+            &format!("CSVの列「value」の統計量を計算して:\n{source}"),
+        ],
+    ));
+    assert_eq!(original["lifecycle"], "COMMIT");
+    assert_eq!(original["guarantee"], "COMPUTED");
+    assert_eq!(original["dependencies"].as_array().unwrap().len(), 1);
+    let statistics: Value = serde_json::from_str(original["text"].as_str().unwrap()).unwrap();
+    assert_eq!(statistics["statistics"]["mean"], "1/5");
+
+    let explained = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "csv-statistics-explanation", "詳しく説明して"],
+    ));
+    assert_eq!(explained["lifecycle"], "COMMIT");
+    assert_eq!(explained["guarantee"], "COMPUTED");
+    assert_eq!(
+        explained["dependencies"],
+        serde_json::json!([original["id"], original["dependencies"][0]])
+    );
+    let text = explained["text"].as_str().unwrap();
+    assert!(text.contains("前回のCSV統計: value列"));
+    assert!(text.contains("正確な集計値:"));
+    assert!(text.contains("mean\":\"1/5\""));
+    assert!(text.contains("計算に使った元セル: 3件"));
+    assert!(text.contains("元セル 行2・列2"));
+}
+
 fn assert_basic_json_statistics(report: &Value, source: &str, pointer: &str, singleton: bool) {
     assert_eq!(report["pointer"], pointer);
     let array = if singleton {

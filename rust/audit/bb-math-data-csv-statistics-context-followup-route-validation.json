@@ -1,0 +1,143 @@
+{
+  "work_item": "BODY-1 BB-MATH-DATA CSV statistics to BB-CONTEXT source-cell explanation",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-12T23:45:05+00:00",
+  "base_commit": "2acd3c4659c7bf28485607f77b9f0752bd429f6e",
+  "requirement_ids": [
+    "A07",
+    "A14",
+    "B02",
+    "B04",
+    "E08",
+    "E12",
+    "F04"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v52-search-candidate-body",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/document.rs": "ae076da42e5c3f23be510a52de8d9a4636da5a21a4b07e7dea7de06f0555c6be",
+    "rust/crates/minidora-engine/src/core.rs": "0b9fcfa4fd199debe92a548dfafbadf9fd81395f336c40496e58459c098ea0b9",
+    "rust/crates/minidora-engine/src/recovery.rs": "3d9d818432f636f124098d0f89fc8dc256baf395e9504463a7ec6b5b3e157b4d",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "c3588039dba15be56976cb5ff810af906c06449466407af027155fab4f2fd254",
+    "rust/tools/csv_statistics_context_followup_route_test.py": "c540db823209608de83b347df694fc2940e20f1d26fd4e9292f40b072ec4f6b3"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "cfd9041f7013d58232a1b45445cd3aa0497702c4e5203b2081b0c26af6a2c6a2",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "74dc67bcb410ce4cb2d5e12303de50d98e1c45aaaefeffe4a1c169de0e1d1ebf",
+    "rust/audit/requirements.tsv": "66996ff127643a8138db84b227e6bb9834121aee8931a98b3dbb163458f30e52"
+  },
+  "execution_mode": "fresh CLI process per request; same actor/case; temporary SQLite and artifact state",
+  "producer_consumer": "ordinary CSV input -> exact decimal statistics -> immutable DocumentResult with original-cell spans -> ordinary same-case 詳しく説明して -> report/source revalidation -> exact values and cell coordinates -> authorized local file -> recovery without resend",
+  "scope": "Only the existing CSV_STATISTICS producer is consumed. Core recomputes the report from its retained exact source, validates artifact and source/output hashes and every cell span, and explains the exact statistic plus up to eight source cells. Other CSV/JSON operation reports and general explanation remain outside this route.",
+  "statistics_result": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "result_id": "ee97690818a6702d9779e2b4b30e6c11582ed4af195ab97b08d4fb061598373c",
+    "report_ref": "ee00c645bd181d1bd2e14ab47d128540d64441e9ed49badf39fbb602c9fdef7a",
+    "source_sha256": "49f32d7caf21bd00569f07e646ca64b428434c06a723c9265a12c94429177137",
+    "output_sha256": "d8f44cd4b3c4384ba884e13a7150d502e2110e9c5520791cd9f863aed2d538f3",
+    "statistics": {
+      "input_values": [
+        "0.1",
+        "0.2",
+        "0.3"
+      ],
+      "input_units": null,
+      "normalized_values": [
+        "1/10",
+        "1/5",
+        "3/10"
+      ],
+      "count": 3,
+      "unit": null,
+      "variance_unit": null,
+      "sum": "3/5",
+      "mean": "1/5",
+      "median": "1/5",
+      "min": "1/10",
+      "max": "3/10",
+      "population_variance": "1/150",
+      "sample_variance": "1/100",
+      "sorted_values": [
+        "1/10",
+        "1/5",
+        "3/10"
+      ],
+      "scope": "descriptive exact statistics of the supplied values; no inference about population representativeness or causal effects"
+    },
+    "numeric_source_spans": [
+      {
+        "column": 1,
+        "decoded_value": "0.1",
+        "kind": "CSV_NUMERIC_OBSERVATION",
+        "output_end": null,
+        "output_start": null,
+        "row": 1,
+        "source_end": 22,
+        "source_start": 19,
+        "source_text": "0.1"
+      },
+      {
+        "column": 1,
+        "decoded_value": "0.2",
+        "kind": "CSV_NUMERIC_OBSERVATION",
+        "output_end": null,
+        "output_start": null,
+        "row": 2,
+        "source_end": 33,
+        "source_start": 30,
+        "source_text": "0.2"
+      },
+      {
+        "column": 1,
+        "decoded_value": "0.3",
+        "kind": "CSV_NUMERIC_OBSERVATION",
+        "output_end": null,
+        "output_start": null,
+        "row": 3,
+        "source_end": 43,
+        "source_start": 40,
+        "source_text": "0.3"
+      }
+    ]
+  },
+  "explanation_consumer": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "dependencies": [
+      "ee97690818a6702d9779e2b4b30e6c11582ed4af195ab97b08d4fb061598373c",
+      "ee00c645bd181d1bd2e14ab47d128540d64441e9ed49badf39fbb602c9fdef7a"
+    ],
+    "text": "前回のCSV統計: value列\n元資料SHA-256: 49f32d7caf21bd00569f07e646ca64b428434c06a723c9265a12c94429177137\n集計artifact SHA-256: ee00c645bd181d1bd2e14ab47d128540d64441e9ed49badf39fbb602c9fdef7a\n正確な集計値: {\"count\":3,\"input_units\":null,\"input_values\":[\"0.1\",\"0.2\",\"0.3\"],\"max\":\"3/10\",\"mean\":\"1/5\",\"median\":\"1/5\",\"min\":\"1/10\",\"normalized_values\":[\"1/10\",\"1/5\",\"3/10\"],\"population_variance\":\"1/150\",\"sample_variance\":\"1/100\",\"scope\":\"descriptive exact statistics of the supplied values; no inference about population representativeness or causal effects\",\"sorted_values\":[\"1/10\",\"1/5\",\"3/10\"],\"sum\":\"3/5\",\"unit\":null,\"variance_unit\":null}\n計算に使った元セル: 3件\n元セル 行2・列2 byte[19..22): \"0.1\"\n元セル 行3・列2 byte[30..33): \"0.2\"\n元セル 行4・列2 byte[40..43): \"0.3\"",
+    "file_sha256": "33a806c5399ff9260432930c67bdf91cba5f3c6aa7b939c8ff8b5272cb62d7fc"
+  },
+  "file_recovery": {
+    "lifecycle": "COMMIT",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true,
+    "write_resent": false
+  },
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo check --workspace --all-targets --locked",
+    "cargo test -p minidora-cli --test normal_route csv_statistics_followup_explains_revalidated_source_cells --locked",
+    "python3 tools/csv_statistics_context_followup_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-math-data-csv-statistics-context-followup-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite and Clippy during BODY-1",
+    "other CSV/JSON document operations, grouped statistics, arbitrary explanation and complete BB-MATH-DATA/BB-CONTEXT acceptance"
+  ],
+  "acceptance_boundary": "One exact CSV statistics report now feeds a source-cell-aware context explanation and no-resend file recovery. B02, B04, A07, A14 and F04 remain UNVERIFIED outside this bounded route."
+}

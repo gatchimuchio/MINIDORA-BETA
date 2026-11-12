@@ -2,7 +2,7 @@
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
 use crate::ports::{JsonKind, JsonNode, strict_json_document};
-use minidora_domain::{Result, digest, failure};
+use minidora_domain::{Guarantee, Lifecycle, Result, ResultRecord, canonical, digest, failure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,6 +49,114 @@ pub struct DocumentResult {
     pub parameters: BTreeMap<String, String>,
     pub spans: Vec<DocumentSpan>,
     pub guarantee: String,
+}
+
+/// Revalidate an exact prior CSV-statistics report and explain where each
+/// observed value came from. This is deliberately bounded to the one existing
+/// exact-statistics producer; the original result remains the numeric answer.
+pub(crate) fn previous_csv_statistics_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<(String, Vec<String>)>> {
+    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let mut found = None;
+    for dependency in &previous.dependencies {
+        let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)? else {
+            continue;
+        };
+        let Ok(report) = serde_json::from_slice::<DocumentResult>(&bytes) else {
+            continue;
+        };
+        if report.operation != "CSV_STATISTICS" {
+            continue;
+        }
+        if found.is_some() {
+            return Err(failure(
+                "CSV_CONTEXT_AMBIGUOUS",
+                "The prior result contains more than one CSV-statistics report",
+            ));
+        }
+        let column = report.parameters.get("column_name").ok_or_else(|| {
+            failure(
+                "CSV_CONTEXT_INVALID",
+                "The retained statistics report has no selected column",
+            )
+        })?;
+        let recomputed = csv_statistics(&report.source_document, column)?;
+        if previous.dependencies != [dependency.clone()]
+            || previous.text != report.text
+            || report.source_sha256 != digest(report.source_document.as_bytes())
+            || report.output_sha256 != digest(report.text.as_bytes())
+            || canonical(&report)? != bytes
+            || canonical(&recomputed)? != bytes
+        {
+            return Err(failure(
+                "CSV_CONTEXT_INVALID",
+                "The prior CSV-statistics report, source cells or output no longer revalidate",
+            ));
+        }
+        let output: serde_json::Value = serde_json::from_str(&report.text)?;
+        let statistics = output.get("statistics").ok_or_else(|| {
+            failure(
+                "CSV_CONTEXT_INVALID",
+                "The exact CSV statistics object is missing",
+            )
+        })?;
+        let observed = report
+            .spans
+            .iter()
+            .filter(|span| span.kind == "CSV_NUMERIC_OBSERVATION")
+            .collect::<Vec<_>>();
+        if observed.is_empty()
+            || report.spans.iter().any(|span| {
+                report
+                    .source_document
+                    .get(span.source_start..span.source_end)
+                    != Some(span.source_text.as_str())
+                    || match (span.output_start, span.output_end) {
+                        (Some(start), Some(end)) => report.text.get(start..end).is_none(),
+                        (None, None) => false,
+                        _ => true,
+                    }
+            })
+        {
+            return Err(failure(
+                "CSV_CONTEXT_INVALID",
+                "The prior report's source or output spans are invalid",
+            ));
+        }
+        let mut lines = vec![
+            format!("前回のCSV統計: {}列", column),
+            format!("元資料SHA-256: {}", report.source_sha256),
+            format!("集計artifact SHA-256: {dependency}"),
+            format!("正確な集計値: {}", serde_json::to_string(statistics)?),
+            format!("計算に使った元セル: {}件", observed.len()),
+        ];
+        for span in observed.iter().take(8) {
+            lines.push(format!(
+                "元セル 行{}・列{} byte[{}..{}): {:?}",
+                span.row
+                    .map_or_else(|| "?".into(), |row| (row + 1).to_string()),
+                span.column
+                    .map_or_else(|| "?".into(), |column| (column + 1).to_string()),
+                span.source_start,
+                span.source_end,
+                span.source_text
+            ));
+        }
+        if observed.len() > 8 {
+            lines.push(format!(
+                "残りの元セル {}件は保存artifactに保持されています。",
+                observed.len() - 8
+            ));
+        }
+        found = Some((dependency.clone(), lines));
+    }
+    Ok(found)
 }
 
 fn admission(document: &str) -> Result<()> {
