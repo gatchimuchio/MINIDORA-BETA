@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-SOURCE live search-list to selected body to summary",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-12T23:50:06+00:00",
-  "base_commit": "6fa2702e47ce34b416bc21685e9566471ef59d4e",
+  "recorded_at": "2026-11-12T23:51:56+00:00",
+  "base_commit": "e90e3dfbe590fd2e2566dd68326eff668234c02b",
   "requirement_ids": [
     "A07",
     "A14",
@@ -43,7 +43,7 @@
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
     "rust/audit/IMPLEMENTATION_STATUS.md": "d81be067b5a9b0198313312d352c41e1222fa1a8b045bfe1297bb94bf240ed6d",
-    "rust/audit/requirements.tsv": "0441be65606ba27c340002417a119236bd10e0137d107ea4a32114942db5b3cb"
+    "rust/audit/requirements.tsv": "3e27cda8f5ffa1b0d21e01ca327b2fc6a499b4337793ea5724eb1fbf12b3f0d9"
   },
   "execution_mode": "fresh CLI process per request; LIVE public Wikipedia read; temporary actor/case state",
   "permissions": {
@@ -58,7 +58,7 @@
     "lifecycle": "COMMIT",
     "guarantee": "SOURCE_REPORT",
     "query": "石灰水",
-    "search_observation_ref": "b419d23086ffa0e59102251054df1ac2f2fbe658f9221b30fc886e398de64c3b",
+    "search_observation_ref": "eee1d605a0b9f848fb5478adb51a59525fe8d6c8a721dc7ec5024e97588cfcb2",
     "text": "検索一覧（本文は未取得。題名・URLは本文の事実根拠ではありません）:\n1: 水酸化カルシウム\nhttps://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0\n2: フレスコ\nhttps://ja.wikipedia.org/wiki/%E3%83%95%E3%83%AC%E3%82%B9%E3%82%B3\n3: マサ\nhttps://ja.wikipedia.org/wiki/%E3%83%9E%E3%82%B5\n4: カノムピアックプーン\nhttps://ja.wikipedia.org/wiki/%E3%82%AB%E3%83%8E%E3%83%A0%E3%83%94%E3%82%A2%E3%83%83%E3%82%AF%E3%83%97%E3%83%BC%E3%83%B3\n5: アステカ料理\nhttps://ja.wikipedia.org/wiki/%E3%82%A2%E3%82%B9%E3%83%86%E3%82%AB%E6%96%99%E7%90%86"
   },
   "selected_body_result": {
@@ -67,12 +67,12 @@
     "context_result_ref": "66a7486162edf991ce2210822bccb58f1438203c5a3dcafc8aa137e2bafeb152",
     "dependencies": [
       "66a7486162edf991ce2210822bccb58f1438203c5a3dcafc8aa137e2bafeb152",
-      "b419d23086ffa0e59102251054df1ac2f2fbe658f9221b30fc886e398de64c3b",
-      "5e66438cd77560273854377bf3086cbb7fe0e7f986049ea6df30eb3817eac4b2"
+      "eee1d605a0b9f848fb5478adb51a59525fe8d6c8a721dc7ec5024e97588cfcb2",
+      "83e0901cef4cf45f08c239fd3958b0ada1f08c21133921dae978076b1980252a"
     ],
     "candidate_title": "1: 水酸化カルシウム",
     "candidate_uri": "https://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0?action=raw",
-    "body_packet_ref": "5e66438cd77560273854377bf3086cbb7fe0e7f986049ea6df30eb3817eac4b2",
+    "body_packet_ref": "83e0901cef4cf45f08c239fd3958b0ada1f08c21133921dae978076b1980252a",
     "body_packet_id": "2ec4a8a54d4351e6359435225ee3ac266416dc29858209bdb4ac04c7aca22b71",
     "body_mode": "LIVE",
     "body_http_status": 200,
@@ -91,11 +91,11 @@
   "summary_consumer": {
     "lifecycle": "COMMIT",
     "guarantee": "HYPOTHESIS",
-    "context_result_ref": "254bac92fe73aed573c6532f131a282d80524cf621d233d016225a41ce2594ac",
+    "context_result_ref": "fc78771a35a97667da4b3c71ee1fb56cfe59a9565e71b0bba71b8f64b1bc58a1",
     "dependencies": [
-      "254bac92fe73aed573c6532f131a282d80524cf621d233d016225a41ce2594ac",
-      "5e66438cd77560273854377bf3086cbb7fe0e7f986049ea6df30eb3817eac4b2",
-      "568570c9bad28e4e545213ffbea5e79b2f3621f00cf14208d09e32c99aaf9037"
+      "fc78771a35a97667da4b3c71ee1fb56cfe59a9565e71b0bba71b8f64b1bc58a1",
+      "83e0901cef4cf45f08c239fd3958b0ada1f08c21133921dae978076b1980252a",
+      "78514b15c63c7a71f653aa913744a88f66e6738f4f07e55c42078c5635205e19"
     ],
     "text": "出典: https://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0?action=raw\n出典packet: 2ec4a8a54d4351e6359435225ee3ac266416dc29858209bdb4ac04c7aca22b71\n取得本文SHA-256: 82e6206cec80121c8a41feb1511898ab64451d86b76689138e798832669c8fe6\nライセンス情報: 未記録。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- [Ca+2]\n- 950P }}</ref>\n- <ref name=PGCH/>",
     "exact_body_sha_referenced": true

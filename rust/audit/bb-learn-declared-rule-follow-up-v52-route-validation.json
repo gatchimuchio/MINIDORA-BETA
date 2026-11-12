@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-LEARN bounded declared-rule follow-up (v52 replay)",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-12T23:50:03+00:00",
-  "base_commit": "6fa2702e47ce34b416bc21685e9566471ef59d4e",
+  "recorded_at": "2026-11-12T23:52:05+00:00",
+  "base_commit": "e90e3dfbe590fd2e2566dd68326eff668234c02b",
   "requirement_ids": [
     "A09",
     "A13",
@@ -36,7 +36,7 @@
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
     "rust/audit/IMPLEMENTATION_STATUS.md": "d81be067b5a9b0198313312d352c41e1222fa1a8b045bfe1297bb94bf240ed6d",
-    "rust/audit/requirements.tsv": "0441be65606ba27c340002417a119236bd10e0137d107ea4a32114942db5b3cb"
+    "rust/audit/requirements.tsv": "3e27cda8f5ffa1b0d21e01ca327b2fc6a499b4337793ea5724eb1fbf12b3f0d9"
   },
   "execution_mode": "fresh CLI process for each request; one durable actor/case store",
   "scope": "User-declared rules and premises only; no empirical rule induction or world-truth claim.",
