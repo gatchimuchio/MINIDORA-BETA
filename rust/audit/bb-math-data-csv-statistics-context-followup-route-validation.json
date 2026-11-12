@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-MATH-DATA CSV statistics to BB-CONTEXT source-cell explanation",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-12T23:45:05+00:00",
-  "base_commit": "2acd3c4659c7bf28485607f77b9f0752bd429f6e",
+  "recorded_at": "2026-11-12T23:50:16+00:00",
+  "base_commit": "6fa2702e47ce34b416bc21685e9566471ef59d4e",
   "requirement_ids": [
     "A07",
     "A14",
@@ -31,9 +31,9 @@
     "rust/tools/csv_statistics_context_followup_route_test.py": "c540db823209608de83b347df694fc2940e20f1d26fd4e9292f40b072ec4f6b3"
   },
   "documentation_snapshot_sha256": {
-    "rust/README.md": "cfd9041f7013d58232a1b45445cd3aa0497702c4e5203b2081b0c26af6a2c6a2",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "74dc67bcb410ce4cb2d5e12303de50d98e1c45aaaefeffe4a1c169de0e1d1ebf",
-    "rust/audit/requirements.tsv": "66996ff127643a8138db84b227e6bb9834121aee8931a98b3dbb163458f30e52"
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "d81be067b5a9b0198313312d352c41e1222fa1a8b045bfe1297bb94bf240ed6d",
+    "rust/audit/requirements.tsv": "0441be65606ba27c340002417a119236bd10e0137d107ea4a32114942db5b3cb"
   },
   "execution_mode": "fresh CLI process per request; same actor/case; temporary SQLite and artifact state",
   "producer_consumer": "ordinary CSV input -> exact decimal statistics -> immutable DocumentResult with original-cell spans -> ordinary same-case 詳しく説明して -> report/source revalidation -> exact values and cell coordinates -> authorized local file -> recovery without resend",

@@ -2,13 +2,19 @@
 """Exercise declared-rule inference, contradiction and invalidation via CLI."""
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import platform
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
+
+
+PARSER_VERSION = "declarative-ja-en-v52-search-candidate-body"
 
 
 def main() -> None:
@@ -17,6 +23,25 @@ def main() -> None:
     parser.add_argument("--legacy-binary", type=Path)
     parser.add_argument("--evidence-output", type=Path)
     arguments = parser.parse_args()
+    repository_root = Path(__file__).resolve().parents[2]
+    rust_root = repository_root / "rust"
+    cargo = shutil.which("cargo") or "/home/agent/.cargo/bin/cargo"
+    rustc = shutil.which("rustc") or "/home/agent/.cargo/bin/rustc"
+
+    def command_output(command: list[str]) -> str:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+
+    def hashes(paths: list[str]) -> dict[str, str]:
+        return {
+            f"rust/{path}": hashlib.sha256((rust_root / path).read_bytes()).hexdigest()
+            for path in paths
+        }
 
     with tempfile.TemporaryDirectory(prefix="minidora-learned-rule-") as temporary:
         database = Path(temporary) / "state"
@@ -229,16 +254,65 @@ def main() -> None:
             }
 
         report = {
-            "work_item": "BB-LEARN bounded declared-rule follow-up",
-            "parser_version": "declarative-ja-en-v46-proof-lineage-guarantee",
+            "work_item": "BODY-1 BB-LEARN bounded declared-rule follow-up (v52 replay)",
+            "stage": "BODY-1_EXECUTION",
+            "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "base_commit": command_output(
+                ["git", "-C", str(repository_root), "rev-parse", "HEAD"]
+            ),
+            "requirement_ids": ["A09", "A13", "CAP-D04", "CAP-D05", "CAP-D06", "CAP-D07", "CAP-D12", "CAP-D13"],
+            "software_version": "0.7.0-alpha.8",
+            "schema_version": "minidora-rust/0.7.0-alpha.8",
+            "parser_version": PARSER_VERSION,
+            "toolchain": {
+                "rustc": command_output([rustc, "--version"]),
+                "cargo": command_output([cargo, "--version"]),
+                "platform": platform.platform(),
+            },
+            "source_snapshot_sha256": hashes([
+                "crates/minidora-domain/src/lib.rs",
+                "crates/minidora-engine/src/input.rs",
+                "crates/minidora-engine/src/core.rs",
+                "crates/minidora-engine/src/relations.rs",
+                "crates/minidora-engine/src/recovery.rs",
+                "crates/minidora-engine/src/store.rs",
+            ]),
+            "test_and_tool_snapshot_sha256": hashes([
+                "apps/cli/tests/normal_route.rs",
+                "tools/learned_rule_followup_test.py",
+            ]),
+            "documentation_snapshot_sha256": hashes([
+                "README.md",
+                "audit/IMPLEMENTATION_STATUS.md",
+                "audit/requirements.tsv",
+            ]),
             "execution_mode": "fresh CLI process for each request; one durable actor/case store",
             "scope": "User-declared rules and premises only; no empirical rule induction or world-truth claim.",
+            "producer_consumer": (
+                "Core adopts a caller-declared scoped rule and a new premise -> a later fresh-process query "
+                "uses the derived fact and rule -> a counterexample causes a typed conflict stop -> "
+                "explicit invalidation retains original records -> the next query uses only the counterexample"
+            ),
             "rule_id": rule_id,
             "new_observation_id": fact_id,
             "counterexample_id": counterexample_id,
             "observations": observations,
             "legacy_v45_recovery": legacy_recovery,
             "outcome": "PASS",
+            "commands": [
+                "cargo fmt --all -- --check",
+                "cargo check --workspace --all-targets --locked",
+                "cargo test -p minidora-cli --test normal_route conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract --locked",
+                "python3 tools/learned_rule_followup_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-learn-declared-rule-follow-up-v52-route-validation.json",
+            ],
+            "not_run": [
+                "empirical rule induction from unlabelled examples",
+                "generalized causal learning, broad task transfer and full BB-LEARN/CAP-D05-D14 acceptance",
+            ],
+            "acceptance_boundary": (
+                "This route proves only an explicitly supplied rule's bounded use, counterexample conflict, "
+                "invalidation and dependency retention. It does not prove autonomous or empirical learning."
+            ),
         }
         if arguments.evidence_output:
             arguments.evidence_output.parent.mkdir(parents=True, exist_ok=True)
