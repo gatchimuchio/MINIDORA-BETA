@@ -493,6 +493,19 @@ pub(crate) fn previous_code_explanation(
     case: &str,
     previous: &minidora_domain::ResultRecord,
 ) -> Result<Option<(String, Vec<String>)>> {
+    let Some((report_ref, report)) = previous_code_report(store, actor, case, previous)? else {
+        return Ok(None);
+    };
+    let units = explanation_lines_from_validated(&report)?;
+    Ok(Some((report_ref, units)))
+}
+
+pub(crate) fn previous_code_report(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &minidora_domain::ResultRecord,
+) -> Result<Option<(String, CodeGenerationReport)>> {
     for dependency in &previous.dependencies {
         let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)? else {
             continue;
@@ -503,21 +516,29 @@ pub(crate) fn previous_code_explanation(
         if report.version != VERSION || report.source != previous.text {
             continue;
         }
-        let units = explanation_lines(&report)?;
-        return Ok(Some((dependency.clone(), units)));
+        validate_report(&report)?;
+        return Ok(Some((dependency.clone(), report)));
     }
     Ok(None)
 }
 
-/// Explains only the operation tree declared in the original algorithm IR.
-/// It neither executes nor independently validates the generated Python.
-pub(crate) fn explanation_lines(report: &CodeGenerationReport) -> Result<Vec<String>> {
+fn validate_report(report: &CodeGenerationReport) -> Result<()> {
     if generate(&report.source_document)? != *report {
         return Err(failure(
             "CODE_GENERATION_CONTEXT_MISMATCH",
             "stored code report is not reproducible from its structured specification",
         ));
     }
+    Ok(())
+}
+
+#[cfg(test)]
+fn explanation_lines(report: &CodeGenerationReport) -> Result<Vec<String>> {
+    validate_report(report)?;
+    explanation_lines_from_validated(report)
+}
+
+fn explanation_lines_from_validated(report: &CodeGenerationReport) -> Result<Vec<String>> {
     let document: Value = serde_json::from_str(&report.source_document)?;
     let specification = document
         .get("仕様")

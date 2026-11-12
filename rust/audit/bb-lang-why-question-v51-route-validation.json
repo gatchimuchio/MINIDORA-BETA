@@ -1,0 +1,283 @@
+{
+  "work_item": "BODY-1 bounded BB-LANG proof-backed why questions",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-12T23:12:17+00:00",
+  "base_commit": "8a5b557b6f40d27f3f9d61162a5216b0e001787b",
+  "subject": "MINIDORA Rust successor engine",
+  "requirement_ids": [
+    "A13",
+    "A12",
+    "A15",
+    "E08",
+    "E12"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v51-generated-code-verification",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "3b20e4620f321dab4cbb63ca2ffb62e35612f2609031720d272fbdda1bf464e7",
+    "rust/crates/minidora-engine/src/core.rs": "5f1db057913bb3a06db720f8708e804b8b537fdd02a1551f3147226325b34fae",
+    "rust/crates/minidora-engine/src/input.rs": "f7e30443bb3c3f7b0c34641c903f5ac9b9bf3509ffd3dc2de8b0db66d61123f3",
+    "rust/crates/minidora-engine/src/recovery.rs": "5c037f6a79d3f1c4551dc8fb8ae2faa26402d78f5d5e680591154b9baec4c9a2"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "e40a28ace1a42fa7f8623f5e04a141785f2b970d35e0546d8fde4d92ced874bc",
+    "rust/tools/why_question_route_test.py": "b72aa00d1a7eb4c263521304f527767f6be821b8a9a02d69d56178b073e789ed"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "e65d533e6265031e8853d416bf0e2bd0dd029a936fff5e8abaf168292c812915",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "4044e026b90058998d21f08c8ed3caa985e584c948995edfebbc3966dee02432",
+    "rust/audit/requirements.tsv": "f76754976e9db6037df1d56941fe83d08460814c5a2bbc541c00c7900aa531d7"
+  },
+  "execution_mode": "fresh CLI process per request; user-declared actor-scoped premises and rules",
+  "producer_consumer": "ordinary Japanese/English why question -> relation proof query -> direct premise and rule explanation -> content/render/dependency ledger",
+  "scope": "Supports explicit copular why questions over current declared premises/rules. Shows the premise and rule IDs; a refuted question states the supported opposite; missing/conflicting evidence suspends. This is not a world-truth claim or empirical learning.",
+  "observations": [
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "rule-ja",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:1a32652d6ea0a1ecc3f7f04c8a1212cc1fc4df2da3b1a13b69bb6653d0654370\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:1a32652d6ea0a1ecc3f7f04c8a1212cc1fc4df2da3b1a13b69bb6653d0654370"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "premise-ja",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:1bccba33b51871712bee2fc408425e3d503df232db3dd669a8b0cbf27403fb29\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:1bccba33b51871712bee2fc408425e3d503df232db3dd669a8b0cbf27403fb29"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "why-ja",
+      "request": "どうしてココは動物なのですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された証拠が支える結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:1bccba33b51871712bee2fc408425e3d503df232db3dd669a8b0cbf27403fb29）\n導出された事実: ココは動物である（導出ID: fact:676db6a6954b11a5a4eab0b803b4dab57d01abb6342a8ee7cb9c37400b1b941a; 依存ID: fact:1bccba33b51871712bee2fc408425e3d503df232db3dd669a8b0cbf27403fb29, rule:1a32652d6ea0a1ecc3f7f04c8a1212cc1fc4df2da3b1a13b69bb6653d0654370）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:1a32652d6ea0a1ecc3f7f04c8a1212cc1fc4df2da3b1a13b69bb6653d0654370）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:1bccba33b51871712bee2fc408425e3d503df232db3dd669a8b0cbf27403fb29",
+        "fact:676db6a6954b11a5a4eab0b803b4dab57d01abb6342a8ee7cb9c37400b1b941a",
+        "rule:1a32652d6ea0a1ecc3f7f04c8a1212cc1fc4df2da3b1a13b69bb6653d0654370"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "rule-en",
+      "request": "If X is a bird then X is an animal",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはbirdである ならば $xはanimalである。\n規則ID: rule:407c6e1d27091b19f201656576b54b744fe87e1ef99c513dc852246f6dd53c01\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:407c6e1d27091b19f201656576b54b744fe87e1ef99c513dc852246f6dd53c01"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "premise-en",
+      "request": "Coco is a bird",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはbirdである。\n前提ID: fact:0b1a44a66b2fb7db7d2143048cb338a7d0b6cc773a10740fdd3a12c8df32dfa7\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:0b1a44a66b2fb7db7d2143048cb338a7d0b6cc773a10740fdd3a12c8df32dfa7"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "why-en",
+      "request": "Why is Coco an animal?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された証拠が支える結論: Cocoはanimalである。\n直接提示された前提: Cocoはbirdである（根拠ID: fact:0b1a44a66b2fb7db7d2143048cb338a7d0b6cc773a10740fdd3a12c8df32dfa7）\n導出された事実: Cocoはanimalである（導出ID: fact:5cbec99af74cd835e11bc85173172a8a45beba1ae3c51efd53c106874015cbae; 依存ID: fact:0b1a44a66b2fb7db7d2143048cb338a7d0b6cc773a10740fdd3a12c8df32dfa7, rule:407c6e1d27091b19f201656576b54b744fe87e1ef99c513dc852246f6dd53c01）\n適用規則: $xはbirdである ならば $xはanimalである（規則ID: rule:407c6e1d27091b19f201656576b54b744fe87e1ef99c513dc852246f6dd53c01）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:0b1a44a66b2fb7db7d2143048cb338a7d0b6cc773a10740fdd3a12c8df32dfa7",
+        "fact:5cbec99af74cd835e11bc85173172a8a45beba1ae3c51efd53c106874015cbae",
+        "rule:407c6e1d27091b19f201656576b54b744fe87e1ef99c513dc852246f6dd53c01"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "why-missing",
+      "request": "どうしてミケは鳥ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この関係を説明する有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: この関係を説明する有効な前提または導出経路がありません。",
+      "dependencies": []
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "negative-premise",
+      "request": "ミケは鳥ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥ではない。\n前提ID: fact:11d232f3cba3b4b55c28b398ddb382d15d34508caf56eee2b6a70d78f9991052\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:11d232f3cba3b4b55c28b398ddb382d15d34508caf56eee2b6a70d78f9991052"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "why-refuted",
+      "request": "なぜミケは鳥ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された根拠は問いの関係を支持せず、反対に「ミケは鳥ではない」を支持します。\n提示された証拠が支える結論: ミケは鳥ではない。\n直接提示された前提: ミケは鳥ではない（根拠ID: fact:11d232f3cba3b4b55c28b398ddb382d15d34508caf56eee2b6a70d78f9991052）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:11d232f3cba3b4b55c28b398ddb382d15d34508caf56eee2b6a70d78f9991052"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "positive-premise",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:8172b6eb9e725c36fc9cfbdaaf0586d17ffe0450f4579c4cc9d8c9b9ea8491ea\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:8172b6eb9e725c36fc9cfbdaaf0586d17ffe0450f4579c4cc9d8c9b9ea8491ea"
+      ]
+    },
+    {
+      "actor": "fixture-why-reader",
+      "case": "why-question",
+      "input_id": "why-conflict",
+      "request": "なぜミケは鳥ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+      "reason": "CONFLICTING_PREMISES: 同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+      "dependencies": []
+    },
+    {
+      "actor": "fixture-why-recovery",
+      "case": "why-file-recovery",
+      "input_id": "rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:7b08b8b7b5b3e43410b90d8efb2601b16fe66714849f63174b9174419a17b1c1\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:7b08b8b7b5b3e43410b90d8efb2601b16fe66714849f63174b9174419a17b1c1"
+      ]
+    },
+    {
+      "actor": "fixture-why-recovery",
+      "case": "why-file-recovery",
+      "input_id": "premise",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:feb27fe95f2c08e74bd09c6fa3192b6806ebcc25f952f5a9b4d925ed03b89cec\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:feb27fe95f2c08e74bd09c6fa3192b6806ebcc25f952f5a9b4d925ed03b89cec"
+      ]
+    },
+    {
+      "actor": "fixture-why-recovery",
+      "case": "why-file-recovery",
+      "input_id": "why-file",
+      "request": "どうしてココは動物なのですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された証拠が支える結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:feb27fe95f2c08e74bd09c6fa3192b6806ebcc25f952f5a9b4d925ed03b89cec）\n導出された事実: ココは動物である（導出ID: fact:9be2eff9817fb60039bd3f9dfbb9d7b2f5339ae4fec6a6bd08d20a609757814a; 依存ID: fact:feb27fe95f2c08e74bd09c6fa3192b6806ebcc25f952f5a9b4d925ed03b89cec, rule:7b08b8b7b5b3e43410b90d8efb2601b16fe66714849f63174b9174419a17b1c1）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:7b08b8b7b5b3e43410b90d8efb2601b16fe66714849f63174b9174419a17b1c1）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:9be2eff9817fb60039bd3f9dfbb9d7b2f5339ae4fec6a6bd08d20a609757814a",
+        "fact:feb27fe95f2c08e74bd09c6fa3192b6806ebcc25f952f5a9b4d925ed03b89cec",
+        "rule:7b08b8b7b5b3e43410b90d8efb2601b16fe66714849f63174b9174419a17b1c1"
+      ]
+    },
+    {
+      "actor": "fixture-why-recovery",
+      "case": "why-file-recovery",
+      "operation": "reconcile",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "receipt_phase": "CONFIRMED",
+      "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+      "dependencies": [
+        "fact:9be2eff9817fb60039bd3f9dfbb9d7b2f5339ae4fec6a6bd08d20a609757814a",
+        "fact:feb27fe95f2c08e74bd09c6fa3192b6806ebcc25f952f5a9b4d925ed03b89cec",
+        "rule:7b08b8b7b5b3e43410b90d8efb2601b16fe66714849f63174b9174419a17b1c1"
+      ]
+    }
+  ],
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "DERIVED",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true
+  },
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo check --workspace --all-targets --locked",
+    "cargo test -p minidora-engine why_questions_parse_only_one_supported_relation --lib",
+    "cargo test -p minidora-cli --test normal_route natural_why_question_explains_only_current_relation_proofs",
+    "python3 tools/why_question_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-why-question-v51-route-validation.json"
+  ],
+  "regression_checks": [
+    {
+      "command": "python3 tools/related_answer_explanation_test.py --binary target/debug/minidora-rust",
+      "outcome": "PASS",
+      "scope": "Existing v48 prior-answer explanation, stale-proof suspension and adopted-file recovery through the v51 binary"
+    }
+  ],
+  "not_run": [
+    "full workspace test suite and Clippy for this batch",
+    "unrestricted causal why/how understanding and full BB-LANG/A13 acceptance"
+  ],
+  "acceptance_boundary": "Finite relation why-question route only. General causal understanding, unrestricted why/how questions and BB-LANG/A13 acceptance remain BUILD_GAP/UNVERIFIED."
+}

@@ -1848,7 +1848,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v50-code-context-explanation"
+        "declarative-ja-en-v51-generated-code-verification"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -1971,7 +1971,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v50-code-context-explanation"
+        "declarative-ja-en-v51-generated-code-verification"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -6491,7 +6491,99 @@ fn generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v50-code-context-explanation"
+        "declarative-ja-en-v51-generated-code-verification"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        generated["id"]
+    );
+}
+
+#[test]
+fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() {
+    let scratch = Scratch::new();
+    let value = code_document(
+        "増分",
+        &["x"],
+        vec![code_return(code_binary(
+            "算術",
+            "加算",
+            code_ref("x"),
+            code_constant("幅"),
+        ))],
+        serde_json::json!({"幅": 1}),
+    );
+    let document = serde_json::to_string(&value).unwrap();
+    let generate_request = format!("code-generate:\n{document}");
+    let generated = record(&execute(&scratch.0, "owner", &[&generate_request]));
+    assert_eq!(generated["lifecycle"], "COMMIT");
+    assert_eq!(generated["guarantee"], "COMPUTED");
+    let source_ref = generated["dependencies"][0].as_str().unwrap().to_owned();
+
+    let cases = serde_json::json!({
+        "試験":[
+            {"引数":{"x":3,"定数":{"幅":1}},"期待値":4},
+            {"引数":{"x":0,"定数":{"幅":-2}},"期待値":-2}
+        ]
+    });
+    let request = format!(
+        "生成コードを検証して:\n{}",
+        serde_json::to_string(&cases).unwrap()
+    );
+    let verified = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "verify-generated-code", &request],
+    ));
+    assert_eq!(verified["lifecycle"], "COMMIT");
+    assert_eq!(verified["guarantee"], "COMPUTED");
+    assert!(verified["text"].as_str().unwrap().contains("2件中2件一致"));
+    assert!(verified["text"].as_str().unwrap().contains("試験1: 一致"));
+    assert!(verified["text"].as_str().unwrap().contains("試験2: 一致"));
+    assert!(
+        verified["text"]
+            .as_str()
+            .unwrap()
+            .contains("ネイティブ評価")
+    );
+    let dependencies = verified["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 3);
+    assert_eq!(dependencies[0], generated["id"]);
+    assert_eq!(dependencies[1], source_ref);
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let verification_ref = verified["dependencies"][2].as_str().unwrap();
+    let verification_bytes = store
+        .get_bytes("owner", "normal-route", verification_ref)
+        .unwrap();
+    assert_eq!(
+        minidora_domain::digest(&verification_bytes),
+        verification_ref
+    );
+    let report: Value = serde_json::from_slice(&verification_bytes).unwrap();
+    assert_eq!(report["operation"], "VERIFY");
+    assert_eq!(report["source"], generated["text"]);
+    assert_eq!(
+        report["source_sha256"],
+        generated["render"]["actual_sha256"]
+    );
+    assert_eq!(report["verification"]["case_count"], 2);
+    assert_eq!(report["verification"]["all_matched"], true);
+    assert!(
+        report["assurance"]
+            .as_str()
+            .unwrap()
+            .contains("ホストPython、exec、eval")
+    );
+
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v51-generated-code-verification"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "VERIFY_PREVIOUS_CODE"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],

@@ -17,6 +17,7 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Component, Path},
+    time::{Duration, Instant},
 };
 
 pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord> {
@@ -405,6 +406,7 @@ fn inspect(
                 | "declarative-ja-en-v48-related-context-explanation"
                 | "declarative-ja-en-v49-why-proof-query"
                 | "declarative-ja-en-v50-code-context-explanation"
+                | "declarative-ja-en-v51-generated-code-verification"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -448,6 +450,7 @@ fn inspect(
         "declarative-ja-en-v48-related-context-explanation"
             | "declarative-ja-en-v49-why-proof-query"
             | "declarative-ja-en-v50-code-context-explanation"
+            | "declarative-ja-en-v51-generated-code-verification"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -485,6 +488,54 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_CODE_CONTEXT_CHANGED",
                 "the code-generation source or structured explanation no longer matches the prior result",
+            ));
+        }
+    }
+    if bundle.meaning.parser_version == "declarative-ja-en-v51-generated-code-verification"
+        && let Intent::VerifyPreviousCode { document } = &goal.intent
+    {
+        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+            failure(
+                "RECOVERY_CODE_CONTEXT_CHANGED",
+                "the adopted verification has no retained prior-result context",
+            )
+        })?;
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_CODE_CONTEXT_CHANGED",
+                "the adopted verification's prior result is no longer available",
+            )
+        })?;
+        let (source_ref, source_report) =
+            crate::code_generation::previous_code_report(store, actor, case, previous)?
+                .ok_or_else(|| {
+                    failure(
+                        "RECOVERY_CODE_CONTEXT_CHANGED",
+                        "the original generated-code report is no longer available unchanged",
+                    )
+                })?;
+        let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
+        let verification = crate::code_capability::verify_previous_source(
+            &source_report.source,
+            document,
+            deadline,
+        )?;
+        let verification_bytes = canonical(&verification)?;
+        let verification_ref = digest(&verification_bytes);
+        let verification_dependencies =
+            vec![previous.id.clone(), source_ref, verification_ref.clone()];
+        let stored_verification = store.get_bytes(actor, case, &verification_ref)?;
+        let expected_units =
+            crate::code_capability::previous_code_verification_lines(&verification)?;
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != verification_dependencies
+            || result.guarantee != Guarantee::Computed
+            || plan.required_units != expected_units
+            || stored_verification != verification_bytes
+        {
+            return Err(failure(
+                "RECOVERY_CODE_VERIFICATION_CHANGED",
+                "the prior generated source or finite-case verification differs from the adopted result",
             ));
         }
     }

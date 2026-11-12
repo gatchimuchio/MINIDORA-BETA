@@ -2330,6 +2330,68 @@ pub fn run(
     })
 }
 
+pub(crate) fn verify_previous_source(
+    source: &str,
+    case_document: &str,
+    deadline: Option<Instant>,
+) -> Result<CodeCapabilityReport> {
+    if case_document.len() > 256_000 {
+        return Err(input_error(
+            "verification case document exceeds 256000 bytes",
+        ));
+    }
+    let root = strict_json_document(case_document)?;
+    let JsonKind::Object(fields) = &root.kind else {
+        return Err(input_error("verification cases must be a JSON object"));
+    };
+    exact_fields(fields, &["試験"], &["最大手数"])?;
+    let cases = &case_document[field(fields, "試験")?.span.clone()];
+    let source_json = serde_json::to_string(source)?;
+    let verification_document = if let Some(max_steps) = fields.get("最大手数") {
+        let max_steps = &case_document[max_steps.span.clone()];
+        format!(r#"{{"情報源":{source_json},"試験":{cases},"最大手数":{max_steps}}}"#)
+    } else {
+        format!(r#"{{"情報源":{source_json},"試験":{cases}}}"#)
+    };
+    run(&verification_document, CodeOperation::Verify, deadline)
+}
+
+pub(crate) fn previous_code_verification_lines(
+    report: &CodeCapabilityReport,
+) -> Result<Vec<String>> {
+    if report.operation != "VERIFY" || report.verification.is_none() {
+        return Err(failure(
+            "CODE_VERIFICATION_REPORT_INVALID",
+            "a generated-code verification report is required",
+        ));
+    }
+    let verification = report.verification.as_ref().expect("verified above");
+    let mut lines = vec![
+        format!(
+            "前回生成した関数「{}」を、保存済みソース {} に対して有限ケースで評価しました。",
+            report.function_name, report.source_sha256
+        ),
+        report.summary.clone(),
+    ];
+    for case in &verification.cases {
+        let matched = if case.matched { "一致" } else { "不一致" };
+        let actual = case.actual_json.as_deref().unwrap_or("値なし");
+        lines.push(format!(
+            "試験{}: {matched}; 状態={}; 実際値={actual}; 期待値={}; 手数={}",
+            case.number + 1,
+            case.evaluation_status,
+            case.expected_json,
+            case.steps
+        ));
+        if let Some(diagnostic) = &case.diagnostic {
+            lines.push(format!("  診断: {diagnostic}"));
+        }
+    }
+    lines.push(verification.assurance.clone());
+    lines.push(report.assurance.clone());
+    Ok(lines)
+}
+
 #[derive(Clone, Debug)]
 struct EvalError {
     kind: String,
@@ -3487,6 +3549,28 @@ mod tests {
 
     fn request(value: serde_json::Value) -> String {
         serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn previous_generated_source_is_consumed_by_native_finite_verification() {
+        let source = "# Python 3.12; execution and input/output tests: NOT_RUN.\ndef 増分(x, 定数):\n    return (x + 定数[\"幅\"])\n";
+        let cases = request(serde_json::json!({
+            "試験":[
+                {"引数":{"x":3,"定数":{"幅":1}},"期待値":4},
+                {"引数":{"x":0,"定数":{"幅":-2}},"期待値":-3}
+            ]
+        }));
+        let report = verify_previous_source(source, &cases, None).unwrap();
+        assert_eq!(report.operation, "VERIFY");
+        assert_eq!(report.source, source);
+        let verification = report.verification.unwrap();
+        assert_eq!(verification.case_count, 2);
+        assert!(verification.cases[0].matched);
+        assert_eq!(verification.cases[0].actual_json.as_deref(), Some("4"));
+        assert!(!verification.cases[1].matched);
+        assert_eq!(verification.cases[1].actual_json.as_deref(), Some("-2"));
+        assert!(!verification.all_matched);
+        assert!(verify_previous_source(source, r#"{"試験":[],"試験":[]}"#, None).is_err());
     }
 
     #[test]

@@ -1562,6 +1562,73 @@ impl Engine {
                 units.push(report.source);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::VerifyPreviousCode { document } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "直前に採用されたコード生成結果がありません。",
+                    );
+                };
+                let Some((source_ref, source_report)) =
+                    crate::code_generation::previous_code_report(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        prior,
+                    )?
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_CODE_GENERATION_CONTEXT",
+                        "直前の採用結果に、同一ケースで再検証できる構造化コード生成レポートがありません。",
+                    );
+                };
+                if source_report.source_sha256 != digest(source_report.source.as_bytes()) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "CODE_GENERATION_CONTEXT_MISMATCH",
+                        "直前の生成レポートのソースハッシュが保存済みコードと一致しません。",
+                    );
+                }
+                let deadline =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
+                let report = match crate::code_capability::verify_previous_source(
+                    &source_report.source,
+                    document,
+                    deadline,
+                ) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let code = match &error {
+                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                            _ => "CODE_CAPABILITY_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let report_bytes = canonical(&report)?;
+                if report_bytes.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "generated-code verification report exceeds request evidence budget",
+                    );
+                }
+                let verification_ref = self.store.put_artifact(actor, &request.case_id, &report)?;
+                result
+                    .dependencies
+                    .extend([prior.id.clone(), source_ref, verification_ref]);
+                units.extend(crate::code_capability::previous_code_verification_lines(
+                    &report,
+                )?);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::ReadCode { document }
             | Intent::EvaluateCode { document }
             | Intent::VerifyCode { document } => {

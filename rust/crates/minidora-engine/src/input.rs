@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v50-code-context-explanation";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v51-generated-code-verification";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -45,6 +45,12 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     };
     if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
         unresolved.push("no actual adopted previous result is available".into());
+    }
+    if matches!(intent, Intent::VerifyPreviousCode { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved
+            .push("no actual committed previous result is available for code verification".into());
     }
     if matches!(intent, Intent::SummarizePreviousSource)
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -909,6 +915,21 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    let header = text
+        .split_once('\n')
+        .map_or_else(|| terminal_trim(text), |(header, _)| terminal_trim(header));
+    if matches!(header, "生成コードを検証して:" | "生成コードを検証して：")
+        || header.eq_ignore_ascii_case("verify-generated-code:")
+    {
+        return Ok(match text.split_once('\n') {
+            Some((_, document)) => Intent::VerifyPreviousCode {
+                document: document.into(),
+            },
+            None => Intent::Unknown {
+                reason: "generated-code verification requires one finite case document".into(),
+            },
+        });
+    }
     if let Some(intent) = structured_intent(text)? {
         return Ok(intent);
     }
@@ -1883,6 +1904,36 @@ mod tests {
             "code-generate:",
             "code-generate: then execute\n{}",
             "コードを生成してから実行して:\n{}",
+        ] {
+            assert!(matches!(
+                interpret(request).unwrap(),
+                Intent::Unknown { .. }
+            ));
+        }
+    }
+    #[test]
+    fn generated_code_verification_headers_preserve_finite_case_document() {
+        let document = " \r\n{\"試験\":[{\"引数\":{\"x\":3},\"期待値\":4}],\"最大手数\":48} \t\n";
+        for header in [
+            "生成コードを検証して:",
+            "生成コードを検証して：",
+            "verify-generated-code:",
+            "VeRiFy-GeNeRaTeD-CoDe:",
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let request = format!("{header}{newline}{document}");
+                assert_eq!(
+                    interpret(&request).unwrap(),
+                    Intent::VerifyPreviousCode {
+                        document: document.into()
+                    }
+                );
+            }
+        }
+        for request in [
+            "生成コードを検証して:",
+            "verify-generated-code: then execute",
+            "コードを生成してから検証して:\n{}",
         ] {
             assert!(matches!(
                 interpret(request).unwrap(),

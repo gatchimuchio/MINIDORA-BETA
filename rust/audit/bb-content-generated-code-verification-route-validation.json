@@ -1,0 +1,111 @@
+{
+  "work_item": "BODY-1 bounded BB-CONTENT generated-code verification consumer",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-12T23:12:11+00:00",
+  "base_commit": "8a5b557b6f40d27f3f9d61162a5216b0e001787b",
+  "requirement_ids": [
+    "A07",
+    "A14",
+    "B07",
+    "F04",
+    "E08",
+    "E12"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v51-generated-code-verification",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "3b20e4620f321dab4cbb63ca2ffb62e35612f2609031720d272fbdda1bf464e7",
+    "rust/crates/minidora-engine/src/code_capability.rs": "7343805ab74d0b1b6282c7f34b657ae88bb5b73a4dfe0fb00faacb53d2ac04cf",
+    "rust/crates/minidora-engine/src/code_generation.rs": "3a6651ea3920bd5789e739e454b469a2f1c450a79484b32f1a5045220b3b95de",
+    "rust/crates/minidora-engine/src/core.rs": "5f1db057913bb3a06db720f8708e804b8b537fdd02a1551f3147226325b34fae",
+    "rust/crates/minidora-engine/src/input.rs": "f7e30443bb3c3f7b0c34641c903f5ac9b9bf3509ffd3dc2de8b0db66d61123f3",
+    "rust/crates/minidora-engine/src/recovery.rs": "5c037f6a79d3f1c4551dc8fb8ae2faa26402d78f5d5e680591154b9baec4c9a2",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "e40a28ace1a42fa7f8623f5e04a141785f2b970d35e0546d8fde4d92ced874bc",
+    "rust/tools/generated_code_verification_route_test.py": "8f350ff09d67e848f292abf21d6d357a951f3b98e5f2480878debc455c5f4a63"
+  },
+  "execution_mode": "fresh CLI process per request; temporary actor/case state",
+  "producer_consumer": "structured code request -> committed source and immutable CodeGenerationReport -> ordinary generated-code verification request -> same-case report/source revalidation -> bounded native finite-case evaluator -> verification report -> content/render/local-file receipt",
+  "scope": "Only a just-prior committed structured function generation in the same actor/case is consumed. The user supplies finite JSON test cases. Core reparses the stored generated source with the existing restricted Python AST reader and evaluates that AST using Rust's bounded native interpreter; it does not invoke host Python, exec, eval, a compiler, or external effects. Passing finite examples do not establish general correctness or run Python input/output tests.",
+  "generated_result": {
+    "id": "eacc331c38072581a7b2ee257a10b8378453d2419671f04a0e7602cac9407c92",
+    "source_sha256": "8a93af9e4b61aa1a5351af0bb56ff9ba1e85511ee8b77c93c516305eda44a726",
+    "report_artifact_ref": "647328e8ab02510138caf3959a6299b72fee20dda5bcf29c83841bfdf89ff4c4"
+  },
+  "verification_result": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "dependencies": [
+      "eacc331c38072581a7b2ee257a10b8378453d2419671f04a0e7602cac9407c92",
+      "647328e8ab02510138caf3959a6299b72fee20dda5bcf29c83841bfdf89ff4c4",
+      "27f9b29c76de5388ca2aae9deb790f712921604f28e3ae432c3ae033229b4ac2"
+    ],
+    "report_artifact_ref": "27f9b29c76de5388ca2aae9deb790f712921604f28e3ae432c3ae033229b4ac2",
+    "text": "前回生成した関数「増分」を、保存済みソース 8a93af9e4b61aa1a5351af0bb56ff9ba1e85511ee8b77c93c516305eda44a726 に対して有限ケースで評価しました。\n指定した有限ケース: 2件中2件一致。全入力での正しさは示しません。\n試験1: 一致; 状態=COMPUTED; 実際値=4; 期待値=4; 手数=6\n試験2: 一致; 状態=COMPUTED; 実際値=-2; 期待値=-2; 手数=6\n一致は指定された有限入力に限る。全入力での正しさ、型安全性、一般Python互換性を証明しない\n限定Python AST読解・ネイティブ評価。ホストPython、exec、eval、コンパイラ、外部作用は使用していない",
+    "finite_cases": [
+      {
+        "引数": {
+          "x": 3,
+          "定数": {
+            "幅": 1
+          }
+        },
+        "期待値": 4
+      },
+      {
+        "引数": {
+          "x": 0,
+          "定数": {
+            "幅": -2
+          }
+        },
+        "期待値": -2
+      }
+    ],
+    "observed_cases": [
+      {
+        "actual": 4,
+        "expected": 4,
+        "matched": true
+      },
+      {
+        "actual": -2,
+        "expected": -2,
+        "matched": true
+      }
+    ],
+    "local_file_sha256": "51d75ae4766594e717121204b1f737f070c09054dab5fdac78b418516ffe5b4a"
+  },
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true,
+    "no_write_resent": true
+  },
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo check --workspace --all-targets --locked",
+    "cargo test -p minidora-engine generated_code_verification_headers_preserve_finite_case_document --lib --locked",
+    "cargo test -p minidora-engine previous_generated_source_is_consumed_by_native_finite_verification --lib --locked",
+    "cargo test -p minidora-cli --test normal_route generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage --locked",
+    "python3 tools/generated_code_verification_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-content-generated-code-verification-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime test suite and Clippy",
+    "host Python parsing/execution or generated-Python I/O tests",
+    "general-purpose verification, hidden-input correctness, free-form code repair, and full B07/F04 acceptance"
+  ],
+  "acceptance_boundary": "This closes one same-case producer-to-consumer route for structured generated Python source and user-authored finite cases. The evaluator handles a restricted Python subset; its output is not proof of general program correctness. Full BB-CONTENT, B07, A07, A14 and F04 remain UNVERIFIED."
+}

@@ -183,6 +183,9 @@ pub enum Intent {
     VerifyCode {
         document: String,
     },
+    VerifyPreviousCode {
+        document: String,
+    },
     CsvSelect {
         document: String,
         column: String,

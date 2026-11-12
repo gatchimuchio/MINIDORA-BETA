@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 
-PARSER_VERSION = "declarative-ja-en-v50-code-context-explanation"
+PARSER_VERSION = "declarative-ja-en-v51-generated-code-verification"
 DOCUMENT = {
     "仕様": {
         "名前": "増分",
@@ -228,7 +228,7 @@ def main() -> None:
             for path in relative_paths[5:]
         }
         report = {
-            "work_item": "BODY-1 bounded BB-CONTEXT/BB-CONTENT generated-code explanation",
+            "work_item": "BODY-1 bounded BB-CONTEXT/BB-CONTENT generated-code explanation (v51 replay)",
             "stage": "BODY-1_EXECUTION",
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "base_commit": command_output(
@@ -283,7 +283,7 @@ def main() -> None:
                 "cargo check --workspace --all-targets --locked",
                 "cargo test -p minidora-engine code_explanation_ --lib",
                 "cargo test -p minidora-cli --test normal_route generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage",
-                "python3 tools/code_context_explanation_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-content-code-context-explanation-route-validation.json",
+                "python3 tools/code_context_explanation_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-content-code-context-explanation-v51-route-validation.json",
             ],
             "not_run": [
                 "full workspace runtime suite, Clippy and full code-capability QA",

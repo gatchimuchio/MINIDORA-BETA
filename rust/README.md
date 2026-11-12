@@ -71,13 +71,24 @@ A quantity reference must occupy a complete number-and-unit operand of the exist
 "$minidora_bin" --db "$minidora_state" --actor demo --case generated-function \
   'code-generate:
 {"仕様":{"名前":"増分","引数":["x"],"手順":[{"種別":"返却","式":{"種別":"算術","演算":"加算","左":{"種別":"参照","名前":"x"},"右":{"種別":"定数参照","キー":"幅"}}}]},"定数":{"幅":1}}'
-"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function \
+"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function-verify \
+  'code-generate:
+{"仕様":{"名前":"増分","引数":["x"],"手順":[{"種別":"返却","式":{"種別":"算術","演算":"加算","左":{"種別":"参照","名前":"x"},"右":{"種別":"定数参照","キー":"幅"}}}]},"定数":{"幅":1}}'
+"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function-verify \
+  '生成コードを検証して:
+{"試験":[{"引数":{"x":3,"定数":{"幅":1}},"期待値":4},{"引数":{"x":0,"定数":{"幅":-2}},"期待値":-2}]}'
+"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function-explain \
+  'code-generate:
+{"仕様":{"名前":"増分","引数":["x"],"手順":[{"種別":"返却","式":{"種別":"算術","演算":"加算","左":{"種別":"参照","名前":"x"},"右":{"種別":"定数参照","キー":"幅"}}}]},"定数":{"幅":1}}'
+"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function-explain \
   '詳しく説明して'
 ```
 
 `code-generate:` (ASCII case insensitive) and `コードを生成して:` accept the original JSON body with exactly `仕様` and `定数`. This ports the existing explicit algorithm-generation contract. The specification has exactly `名前`, `引数` and `手順`; it supplies the algorithm. The function receives the declared arguments followed by the separate `定数` dictionary. Changing constant values preserves the generated source. The output is Python source; an exact `--output` / `--allow-write` grant can save those same bytes as a file.
 
-In the same actor and case, `詳しく説明して` after code generation reads its stored report and reconstructs the explanation from that exact algorithm IR. It describes assignments, branches, loops, expressions and returns, keeps the generated report/prior-result dependencies, and states the stored Python parse/execution/test status. The route does not run the generated code; see [the code-context route evidence](audit/bb-content-code-context-explanation-route-validation.json). Free-form code explanation, edits and full B07 acceptance remain `UNVERIFIED`.
+In the same actor and case, `詳しく説明して` after code generation reads its stored report and reconstructs the explanation from that exact algorithm IR. It describes assignments, branches, loops, expressions and returns, keeps the generated report/prior-result dependencies, and states the stored Python parse/execution/test status. The v51 route still does not execute the generated code for an explanation; see [the v51 code-context route evidence](audit/bb-content-code-context-explanation-v51-route-validation.json).
+
+To check generated output, send `生成コードを検証して:` as the next request in that same actor and case after a committed code-generation result. The JSON body accepts only `試験` and optional `最大手数`; each case supplies `引数` and `期待値`. Core reloads and revalidates the previous generation report, then uses the existing restricted Python AST reader and bounded Rust interpreter on the stored source. It records the source result, generation-report reference, verification-report reference and case-level actual values. For example, the `generated-function-verify` commands above produce two finite checks. This does not invoke host Python, `exec`, `eval`, a compiler or external effects, and matching finite cases do not prove general program correctness. The generator's Python execution and I/O test statuses remain `NOT_RUN`; see [the v51 generated-code verification route evidence](audit/bb-content-generated-code-verification-route-validation.json). General code creation, editing, unrestricted validation and full B07 acceptance remain `UNVERIFIED`.
 
 | IR category | Supported forms |
 |---|---|
