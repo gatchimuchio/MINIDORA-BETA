@@ -17,4 +17,5 @@ pub mod scheduler;
 pub mod search;
 pub mod store;
 pub mod text_editing;
+pub mod text_summary;
 pub use core::Engine;

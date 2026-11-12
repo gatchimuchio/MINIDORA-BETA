@@ -274,7 +274,18 @@ Literal editing replaces original nonoverlapping matches only. A supplied count 
 
 Markers are fixed by role: headings use `# `, bullets `- `, numbered blocks `1.`, quotes `> `, and condition/caveat blocks use `条件:`/`留保:` labels. Paragraphs have no prefix.
 
-The output is limited to caller-selected literal fragments, fixed layout prefixes and blank-line separators. Every output segment maps either to its exact decoded material range and containing JSON string token or to the unit directive that generated the layout token. The stored artifact includes source/output hashes, selected and omitted units, protection/required flags and complete output spans. `USER_PREMISE` describes the supplied content; it does not assert that facts are true. This route does not write original prose, summarize, infer a purpose, select facts, prove semantic equivalence, validate writing quality or satisfy the twelve-task B08 acceptance population. General drafting, inferred corrections and summaries remain open B08 work; see [the composition route audit](audit/b08-explicit-text-composition-route-validation.json).
+The output is limited to caller-selected literal fragments, fixed layout prefixes and blank-line separators. Every output segment maps either to its exact decoded material range and containing JSON string token or to the unit directive that generated the layout token. The stored artifact includes source/output hashes, selected and omitted units, protection/required flags and complete output spans. `USER_PREMISE` describes the supplied content; it does not assert that facts are true. This route does not write original prose, infer a purpose, select facts, prove semantic equivalence, validate writing quality or satisfy the twelve-task B08 acceptance population. A separate bounded extractive candidate operation is documented below; semantic summary quality remains open. See [the composition route audit](audit/b08-explicit-text-composition-route-validation.json).
+
+### Extractive summary candidates
+
+```bash
+"$minidora_bin" --db "$minidora_state" --actor demo --case extractive-candidates \
+  $'text-summary:\n{"text":"A source sentence. A second source sentence.","max_sentences":1}'
+```
+
+`text-summary:` (ASCII case insensitive) and `文章を要約して:` accept one strict JSON body with exactly `text` and `max_sentences`. The limit is an integer from 1 through 8. The operation splits the supplied text at `. ! ? 。！？` and line breaks, preserves each selected sentence verbatim, and ranks sentences by the inherited extractive frequency score, a 6/5 first-sentence weight, a 3/4 penalty over 180 Unicode scalars, and the inherited reverse-source-order tie break. It returns selected and omitted sentence indices, the score fraction and exact source/output byte spans. The stored artifact also identifies the exact JSON string token containing the decoded source text.
+
+The visible output begins by stating that purpose, meaning, conditions, negation and coverage were not verified. Core records it as `HYPOTHESIS`. Input is limited to 100,000 Unicode scalars, 256,000 bytes and 4,096 sentence candidates; the serialized artifact is limited to 2,000,000 bytes and the request evidence budget. This is a deterministic extractive candidate ranking, not a semantic summary verifier or a claim that the user's content, purpose, length or format requirements were satisfied. The [candidate-route audit](audit/b08-extractive-summary-candidate-route-validation.json) records the scoped normal-route evidence; the twelve-task B08 population remains open.
 
 ### Protected text import and editing
 
@@ -309,7 +320,7 @@ Core reads bases only from the frontend's bound actor and current case. CLI acto
 
 The result records changed and unchanged output ranges, actual base/ancestor artifact digests and source hashes. Unchanged text points to its parent artifact; inserted text points to the current request's replacement string. Limits are 64 edits per revision, 256 protected ranges, 16 editing revisions, 256,000 request/output bytes, inherited `max_chars` up to 100,000 scalar values, 2,000,000 bytes per artifact and 8,000,000 aggregate bytes during ancestry replay. Replay and patch application poll the request deadline; in-progress cancellation polling is not implemented. Exact request retries retain the saved result and file receipt; a new explicit input version retains prior results. Local file output uses the existing exact-target write grant.
 
-These operations locate or apply explicit corrections and preserve provenance. Discovering a correction from a natural-language request, preserving arbitrary rewritten meaning, summarizing and satisfying an audience, style or purpose remain open requirements. The [protected-editing audit](audit/b08-protected-text-editing-route-validation.json) and [unique-location audit](audit/b08-unique-literal-edit-location-route-validation.json) record scoped normal-route observations; full B08 acceptance remains `UNVERIFIED`.
+These operations locate or apply explicit corrections and preserve provenance. Discovering a correction from a natural-language request, preserving arbitrary rewritten meaning, and producing a summary that satisfies audience, style, purpose or semantic coverage remain open requirements. The [protected-editing audit](audit/b08-protected-text-editing-route-validation.json), [unique-location audit](audit/b08-unique-literal-edit-location-route-validation.json) and [extractive candidate audit](audit/b08-extractive-summary-candidate-route-validation.json) record scoped normal-route observations; full B08 acceptance remains `UNVERIFIED`.
 
 ## Exact-target file output
 

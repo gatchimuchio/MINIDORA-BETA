@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v40-unique-text-edit-location";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v41-extractive-summary-candidates";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -232,6 +232,14 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(match text.split_once('\n') {
             Some((_, document)) => Intent::ComposeText { document: document.into() },
             None => Intent::Unknown { reason: "text composition requires a header newline and an explicit materials/units/order JSON document".into() },
+        }));
+    }
+    if matches!(header, "文章を要約して:" | "文章を要約して：")
+        || header.eq_ignore_ascii_case("text-summary:")
+    {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) => Intent::TextSummaryCandidates { document: document.into() },
+            None => Intent::Unknown { reason: "text summary requires a header newline and an explicit text/max_sentences JSON document; output is an unverified extractive candidate".into() },
         }));
     }
     let text_operation = match header {
@@ -2180,6 +2188,35 @@ mod structured_document_tests {
             assert_eq!(bundle.meaning.spans[0].text, request);
         }
         for request in ["文章を構成して:", "text-compose:"] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
+            assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
+        }
+    }
+    #[test]
+    fn extractive_summary_headers_retain_complete_json_body() {
+        let body = " {\"text\":\"猫は走る。\",\"max_sentences\":1} \r\n";
+        for header in [
+            "文章を要約して:",
+            "文章を要約して：",
+            "text-summary:",
+            "TeXt-SuMmArY:",
+        ] {
+            for newline in ["\n", "\r\n"] {
+                let request = format!("{header}{newline}{body}");
+                let bundle =
+                    seal(&RequestEnvelope::new("c", "i", "actor", &request), None).unwrap();
+                assert!(matches!(
+                    &bundle.meaning.intent,
+                    Intent::TextSummaryCandidates { document } if document == body
+                ));
+                assert_eq!(bundle.meaning.spans[0].text, request);
+            }
+        }
+        for request in [
+            "text-summary:",
+            "text-summary: and translate\n{}",
+            "文章を要約して: 送信して\n{}",
+        ] {
             let bundle = seal(&RequestEnvelope::new("c", "i", "actor", request), None).unwrap();
             assert!(matches!(bundle.meaning.intent, Intent::Unknown { .. }));
         }

@@ -74,7 +74,11 @@ This is a current implementation limitation, not an approved replacement for the
 
 The current B08 slice accepts a strict JSON composition request through the ordinary input/Core path. The caller supplies all material text, byte ranges, block roles, order, companion links, required flags and maximum character count. The compositor adds only fixed layout prefixes and separators and records each output segment against its material or unit directive. Required and condition/caveat units are retained, and the artifact reports omitted optional units.
 
-This follows the inspected legacy contract for composing explicit source slices and keeps a complete source map. It does not discover content, assess the requested purpose, write or rewrite prose, summarize, prove factual truth or meaning equivalence, or measure style and quality. That bounded route is one B08 building block; the twelve-task writing, editing, rewriting and summary requirement remains open. No fixed task prompt or diagnostic answer is embedded in the route.
+This follows the inspected legacy contract for composing explicit source slices and keeps a complete source map. It does not discover content, assess the requested purpose, write or rewrite prose, select facts, prove factual truth or meaning equivalence, or measure style and quality. That bounded route is one B08 building block. A separate extractive sentence-ranking operation emits visibly unverified summary candidates with exact source offsets; it does not establish semantic coverage or close the twelve-task writing, editing, rewriting and summary requirement. No fixed task prompt or diagnostic answer is embedded in either route.
+
+## Extractive sentence candidates with source offsets
+
+The inspected legacy `extractive-要約-v2` ranks complete input sentences by token frequency, a first-sentence weight and a long-sentence penalty, then returns selected sentences in source order. The Rust route keeps this bounded extractive family but preserves exact sentence bytes and source ranges, records the selected/omitted indices and score fractions, and exposes the exact source JSON string token. The ordinary Core path labels the result `HYPOTHESIS` and displays that coverage of purpose, meaning, conditions and negation has not been checked. This is a candidate-generation operation; it cannot claim the requested semantic summary is complete or suitable.
 
 ## Artifact-based text import and protected editing
 

@@ -918,6 +918,31 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::TextSummaryCandidates { document } => {
+                let value = match crate::text_summary::extractive_summary_candidates(document) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "TEXT_SUMMARY_FAILED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let report_bytes = canonical(&value)?;
+                if report_bytes.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "extractive summary candidate artifact exceeds request evidence budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::Hypothesis;
+            }
             Intent::ImportText { document } => {
                 let value = match crate::text_editing::import_explicit_text(document) {
                     Ok(value) => value,

@@ -1,0 +1,154 @@
+{
+  "record_type": "SCOPED_B08_ROUTE_OBSERVATION",
+  "scope": "B08 extractive summary candidate operation; not full B08 acceptance",
+  "recorded_at_utc": "2026-11-12T18:55:20Z",
+  "baseline": {
+    "commit": "df05382807b7e285b113b0f33a56981ce121da45",
+    "branch": "work (same tree as origin/main at start)",
+    "remote_main_at_start": "df05382807b7e285b113b0f33a56981ce121da45",
+    "release_state": "NOT_RELEASED"
+  },
+  "source_review": {
+    "frozen_sources": "READ_ONLY; hashes unchanged",
+    "legacy_source_commit": "fe5822de63644bdaea9208a98046f71684dffae2",
+    "files": {
+      "summary_module": {
+        "path": "src/minidora/製品版/要約.py",
+        "git_blob_sha": "e33b0008808ae4ff9a79ef0dfebf0636de7776c1",
+        "sha256": "b10fe4043d7f97a5552984a662e325e12976c558b39dca7fc2ac54b62d6fec7d"
+      },
+      "summary_adapter": {
+        "path": "src/minidora/製品版/組込モジュール.py",
+        "git_blob_sha": "fb2d914b0e0f91e33cabf22f2e0ff1f004f48647",
+        "sha256": "5d237c0817cbc9f233fae9d5721c86182977a2dfcd550c2a85d30d1fc05f332b"
+      }
+    },
+    "observed_contract": "The predecessor splits source text into sentences, ranks by token frequency with a first-sentence weight and long-sentence penalty, and returns selected sentences in source order. Its adapter may resolve an explicit body or prior response/reference and selects a line count from the request. It does not preserve exact sentence byte ranges or verify semantic coverage."
+  },
+  "implementation": {
+    "parser_version": "declarative-ja-en-v41-extractive-summary-candidates",
+    "intent": "TEXT_SUMMARY_CANDIDATES",
+    "headers": [
+      "文章を要約して:",
+      "text-summary: (ASCII case-insensitive)"
+    ],
+    "json_contract": {
+      "exact_fields": [
+        "text",
+        "max_sentences"
+      ],
+      "max_sentences_range": [
+        1,
+        8
+      ]
+    },
+    "operation": "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V1",
+    "algorithm": "Token-frequency score, 6/5 first-sentence weight, 3/4 penalty above 180 Unicode scalars; ties retain the predecessor reverse-source-order selection. Selected output is restored to source order.",
+    "artifact": "Source and output digests, exact source JSON string token, selected/omitted sentence indices, score fractions and UTF-8 source/output ranges.",
+    "terminal_guarantee": "HYPOTHESIS",
+    "visible_label": "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。",
+    "hard_limits": {
+      "request_bytes": 256000,
+      "text_unicode_scalars": 100000,
+      "sentence_candidates": 4096,
+      "serialized_artifact_bytes": 2000000,
+      "max_sentences": [
+        1,
+        8
+      ]
+    },
+    "known_gap": "No validation of relevance, completeness, task purpose, semantic meaning, conditions, negation, audience, style, factual truth or quality. The result is a candidate extraction, not a semantic summary acceptance."
+  },
+  "route_observation": {
+    "test_case_id": "extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverage",
+    "frontends": [
+      "Japanese header",
+      "English header"
+    ],
+    "input_utf8": "text-summary:\n{\"max_sentences\":2,\"text\":\"猫たちは 川沿いで 走る。猫たちは 川沿いで 休む。雨の日は 近づかない。\"}",
+    "input_sha256": "e388b3a6dd72a49591100ea07bb3b6a55f2b19cf48a113d6c86d363f912fc871",
+    "source_sha256": "3f022104dcabe584e0e491f44fbd40f5a11196d1d72e1691964b43f30ce88982",
+    "visible_output_utf8": "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 猫たちは 川沿いで 走る。\n- 猫たちは 川沿いで 休む。",
+    "visible_output_sha256": "3eae67d63db74509548476a29e59a011fb8fb22f6d319b4037dc72a286a24218",
+    "terminal_state": "COMMIT with HYPOTHESIS guarantee",
+    "artifact_observations": {
+      "selected_sentence_indices": [
+        0,
+        1
+      ],
+      "omitted_sentence_indices": [
+        2
+      ],
+      "coverage_verified": false,
+      "source_ranges_checked_against_exact_input": true,
+      "stored_artifact_digest_verified_by_normal_route_test": true
+    },
+    "test_expected_gap": "The source contains a final conditional sentence; the frequency ranking omits it for this request. The emitted label and artifact explicitly leave semantic/condition coverage unverified."
+  },
+  "verification": {
+    "passed": [
+      {
+        "command": "cargo test -p minidora-engine text_summary --lib",
+        "cases": 3
+      },
+      {
+        "command": "cargo test -p minidora-engine extractive_summary_headers_retain_complete_json_body --lib",
+        "cases": 1
+      },
+      {
+        "command": "cargo test -p minidora-cli --test normal_route extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverage",
+        "cases": 1
+      },
+      {
+        "command": "cargo test -p minidora-cli --test normal_route explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage",
+        "cases": 1
+      },
+      {
+        "command": "cargo test -p minidora-cli --test normal_route text_editing_route_",
+        "cases": 3
+      },
+      {
+        "command": "cargo test -p minidora-engine text_editing --lib",
+        "cases": 8
+      },
+      {
+        "command": "cargo fmt --all -- --check"
+      },
+      {
+        "command": "cargo check --workspace --all-targets"
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets -- -D warnings"
+      },
+      {
+        "command": "cargo build --workspace"
+      }
+    ],
+    "corrected_test_expectations": [
+      "The first component run exposed a tie-break mismatch with the inspected predecessor; the Rust ranking was changed to its reverse-source-order tie rule and component tests passed.",
+      "The first CLI fixture then exercised that tie rule but asserted the other sentence; the fixture was changed to use repeated source terms so the test checks frequency selection and omission of an unranked condition. The final CLI route test passed for both headers."
+    ],
+    "not_run": [
+      "Full workspace runtime tests",
+      "Frozen Python test suite",
+      "Twelve unseen B08 acceptance tasks",
+      "Independent semantic quality evaluation",
+      "Windows/8 GB resource acceptance"
+    ]
+  },
+  "traceability": {
+    "requirements_row": "rust/audit/requirements.tsv:B08",
+    "redesign_trace_row": "docs/redesign/03_REQUIREMENT_TRACE.tsv:B08",
+    "source_contract_reviews": [
+      "src/minidora/製品版/要約.py",
+      "src/minidora/製品版/組込モジュール.py"
+    ],
+    "code_snapshot_sha256": "b09c0bdde13945aa035e79aeff4efefdcb690511c7d0d4ba8dc8cb7558d1eec0",
+    "code_snapshot_file_count": 31
+  },
+  "acceptance": {
+    "B08": "UNVERIFIED",
+    "full_12_task_population": "NOT_RUN",
+    "release_state": "NOT_RELEASED"
+  }
+}

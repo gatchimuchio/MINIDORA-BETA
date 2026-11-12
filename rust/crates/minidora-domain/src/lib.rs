@@ -276,6 +276,9 @@ pub enum Intent {
     ComposeText {
         document: String,
     },
+    TextSummaryCandidates {
+        document: String,
+    },
     ImportText {
         document: String,
     },
