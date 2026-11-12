@@ -398,11 +398,21 @@ fn inspect(
         // newly different answer during mere effect reconciliation.
         let memory = store.load_memory(actor)?;
         let answer = crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
-        let mut dependencies: Vec<String> =
-            answer.facts.iter().map(|fact| fact.id.clone()).collect();
-        dependencies.extend(answer.used_rules);
+        let current_proof_contract = bundle.meaning.parser_version == crate::input::PARSER_VERSION;
+        let dependencies = if current_proof_contract {
+            crate::relations::answer_dependencies(&answer)
+        } else {
+            // Preserve recovery for records produced before the v46 lineage
+            // and guarantee contract.
+            let mut legacy: Vec<String> = answer.facts.iter().map(|fact| fact.id.clone()).collect();
+            legacy.extend(answer.used_rules.iter().cloned());
+            legacy
+        };
+        let guarantee_matches = !current_proof_contract
+            || result.guarantee == crate::relations::answer_guarantee(&answer);
         if !matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED")
             || dependencies != result.dependencies
+            || !guarantee_matches
         {
             return Err(failure(
                 "RECOVERY_PROOF_INVALIDATED",
@@ -910,6 +920,80 @@ mod tests {
         let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes).unwrap();
         assert_eq!(emission.authorized_surfaces.as_ref().map(Vec::len), Some(2));
         assert!(inspect(&engine.store, "alice", &revision, result).is_ok());
+    }
+
+    #[test]
+    fn current_relation_answer_lineage_and_guarantee_replay_for_recovery() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let observation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "observation", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let observation_id = observation.dependencies[0].clone();
+        let derived = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "derived", "alice", "ココは動物ですか"),
+            )
+            .unwrap();
+        assert_eq!(derived.guarantee, Guarantee::Derived);
+        assert!(derived.dependencies.contains(&rule_id));
+        assert!(derived.dependencies.contains(&observation_id));
+
+        let counterexample = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "counterexample", "alice", "ココは動物ではない"),
+            )
+            .unwrap();
+        let counterexample_id = counterexample.dependencies[0].clone();
+        assert_eq!(
+            engine
+                .execute(
+                    "alice",
+                    RequestEnvelope::new("case", "conflict", "alice", "ココは動物ですか"),
+                )
+                .unwrap()
+                .lifecycle,
+            Lifecycle::Suspend
+        );
+        engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate",
+                    "alice",
+                    &format!("{rule_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+
+        let mut request =
+            RequestEnvelope::new("case", "after-invalidation", "alice", "ココは動物ですか");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit);
+        assert_eq!(result.guarantee, Guarantee::UserPremise);
+        assert_eq!(result.dependencies, vec![counterexample_id]);
+        assert!(result.text.contains("ココは動物ではない"));
+        let revision = engine.latest("alice", "case").unwrap().unwrap();
+        assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
     }
 
     #[test]

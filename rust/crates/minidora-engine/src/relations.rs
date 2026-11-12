@@ -460,6 +460,29 @@ pub fn query(
     })
 }
 
+/// Retain the queried fact and every transitive premise/rule identity used by
+/// its proof. This makes a Core answer's dependency ledger independently
+/// traceable to the user-provided roots.
+pub fn answer_dependencies(answer: &QueryOutcome) -> Vec<String> {
+    let mut dependencies = BTreeSet::new();
+    for fact in &answer.facts {
+        dependencies.insert(fact.id.clone());
+        dependencies.extend(fact.dependencies.iter().cloned());
+    }
+    dependencies.extend(answer.used_rules.iter().cloned());
+    dependencies.into_iter().collect()
+}
+
+/// A direct user premise stays a premise even when it refutes the asked
+/// proposition; rule-backed conclusions remain derived.
+pub fn answer_guarantee(answer: &QueryOutcome) -> Guarantee {
+    if answer.used_rules.is_empty() {
+        Guarantee::UserPremise
+    } else {
+        Guarantee::Derived
+    }
+}
+
 /// Preserve originals and append validity changes in the Core's next durable
 /// memory revision. No counterexample or rule record is physically deleted.
 pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
@@ -579,6 +602,30 @@ mod tests {
             "UNKNOWN"
         );
         assert_eq!(memory.rules.len(), 3);
+    }
+    #[test]
+    fn query_answer_dependencies_retain_root_premise_and_rule() {
+        let mut memory = MemoryState::default();
+        let rule = add_rule(&mut memory, p("$x", "鳥"), p("$x", "動物"), "rule-input").unwrap();
+        let fact = assert_fact(&mut memory, p("初見の個体", "鳥"), "new-input").unwrap();
+        let answer = query(&memory, &p("初見の個体", "動物"), 100).unwrap();
+        assert_eq!(answer.status, "SUPPORTED");
+        assert_eq!(answer_guarantee(&answer), Guarantee::Derived);
+        let dependencies = answer_dependencies(&answer);
+        assert!(dependencies.contains(&fact.id));
+        assert!(dependencies.contains(&rule.id));
+        assert!(dependencies.iter().any(|id| id.starts_with("fact:")));
+    }
+    #[test]
+    fn contradicted_direct_premise_keeps_user_premise_guarantee() {
+        let mut memory = MemoryState::default();
+        let mut negative = p("個体", "動物");
+        negative.negative = true;
+        let fact = assert_fact(&mut memory, negative, "counterexample").unwrap();
+        let answer = query(&memory, &p("個体", "動物"), 100).unwrap();
+        assert_eq!(answer.status, "CONTRADICTED");
+        assert_eq!(answer_guarantee(&answer), Guarantee::UserPremise);
+        assert_eq!(answer_dependencies(&answer), vec![fact.id]);
     }
     #[test]
     fn contradictory_premises_cannot_drive_descendants() {

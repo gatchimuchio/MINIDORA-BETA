@@ -1,0 +1,147 @@
+{
+  "work_item": "BODY-1 bounded BB-LEARN declared-rule follow-up and proof lineage",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-12T22:04:36Z",
+  "base_commit": "c2d001253da37ca557cb1a489b3da74a6f3760e3",
+  "subject": "MINIDORA Rust successor engine",
+  "requirement_ids": [
+    "CAP-D05–D08",
+    "CAP-D12–D14",
+    "A01–A03",
+    "B10–B11"
+  ],
+  "construction_set": "rust/audit/construction/MB-BUILD-20261113",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": ["13", "14", "19"]
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version_before": "declarative-ja-en-v45-previous-source-summary",
+  "parser_version_after": "declarative-ja-en-v46-proof-lineage-guarantee",
+  "version_boundary": "No database schema or dependency changes. The additive parser revision records a changed proof-dependency and answer-guarantee contract for newly sealed questions. Recovery retains the previous dependency interpretation for older parser versions.",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux x86_64"
+  },
+  "backup_rotation": {
+    "performed_before_edits": true,
+    "remote_tags_before": {
+      "codex/backup-main": "6c6cc85683b461ac0350d066a72695c33b562c39",
+      "codex/backup-main-prev": "a8112eac78c165e7aa44c98a0ad8aeb9f8e61d71"
+    },
+    "remote_tags_after": {
+      "codex/backup-main": "c2d001253da37ca557cb1a489b3da74a6f3760e3",
+      "codex/backup-main-prev": "6c6cc85683b461ac0350d066a72695c33b562c39"
+    }
+  },
+  "changed_source_paths": {
+    "crates/minidora-engine/src/input.rs": "2ed7dc6fa4f7d662871b822972152b157befc11b3c1a31b556759fa4593ac99a",
+    "crates/minidora-engine/src/core.rs": "ff6d409e773389ea63b7aa89d935c90e4525a76a37e3d3232201c82122c6779d",
+    "crates/minidora-engine/src/relations.rs": "8fd60ae18f72801c167f0d5d312d631f61fc6738d68d8f87a7054f85b6f617ab",
+    "crates/minidora-engine/src/recovery.rs": "4dd94c06e10fe46714ed0bad61d6ff8e28c79f4bf19874182479ec5439da16e4"
+  },
+  "changed_test_and_tool_paths": {
+    "crates/minidora-engine/src/relations.rs": "8fd60ae18f72801c167f0d5d312d631f61fc6738d68d8f87a7054f85b6f617ab",
+    "crates/minidora-engine/src/recovery.rs": "4dd94c06e10fe46714ed0bad61d6ff8e28c79f4bf19874182479ec5439da16e4",
+    "tools/learned_rule_followup_test.py": "ec76e6d192ea3f56a27da798ac85936747e0a89f09d63ab2a21318e5cd33d6a9"
+  },
+  "observed_pre_fix_defect": {
+    "route": "declared X-is-bird → X-is-animal rule; new subject Koko asserted as bird; a direct negative Koko-is-not-animal premise; query Koko-is-an-animal; invalidate rule; query again",
+    "before_invalidation": "Core suspended with CONFLICTING_PREMISES",
+    "after_invalidation_lifecycle": "COMMIT",
+    "after_invalidation_guarantee_before_fix": "DERIVED",
+    "after_invalidation_dependencies_before_fix": ["the direct negative premise id"],
+    "defect": "A direct user premise was reported as DERIVED despite having no rule dependency."
+  },
+  "observed_route": {
+    "execution_mode": "Eight fresh CLI processes with separate request IDs, using one isolated durable store, actor and case.",
+    "rule_input": "もしXは鳥ならXは動物",
+    "rule_id": "rule:f25aceb58f2f2feb297a7aff9f4fab406dcbdeb479d831751213d7da970b9fa4",
+    "new_subject_observation": "ココは鳥です",
+    "new_observation_id": "fact:02afd4caa7694896f1848fb57c746897433583fb4e920270a332a28a505c622f",
+    "unseen_question": "ココは動物ですか",
+    "new_question_lifecycle": "COMMIT",
+    "new_question_guarantee": "DERIVED",
+    "new_question_dependencies": [
+      "fact:02afd4caa7694896f1848fb57c746897433583fb4e920270a332a28a505c622f",
+      "fact:8838bbd73e3ec3fbef61cc92632f1df9ed19bfc4da76e60030c022ffbff34f33",
+      "rule:f25aceb58f2f2feb297a7aff9f4fab406dcbdeb479d831751213d7da970b9fa4"
+    ],
+    "restart_replay": "A later fresh CLI process returned the same text, guarantee and dependency identities.",
+    "counterexample": "ココは動物ではない",
+    "counterexample_id": "fact:d6511379b8aa6180cb71710c6f082f6f5f29c5f34635d8e3e0404d003f657e62",
+    "conflict_lifecycle": "SUSPEND",
+    "conflict_reason": "CONFLICTING_PREMISES",
+    "rule_invalidation": "COMMIT; original records retained",
+    "post_invalidation_lifecycle": "COMMIT",
+    "post_invalidation_guarantee": "USER_PREMISE",
+    "post_invalidation_text": "提示された前提の範囲では、ココは動物ではない。",
+    "post_invalidation_dependencies": [
+      "fact:d6511379b8aa6180cb71710c6f082f6f5f29c5f34635d8e3e0404d003f657e62"
+    ],
+    "recovery_inspection": "The current v46 lineage and guarantee were re-derived by artifact inspection for the authorized temporary file result.",
+    "legacy_v45_recovery": {
+      "producer_parser_version": "declarative-ja-en-v45-previous-source-summary",
+      "producer_guarantee": "DERIVED",
+      "reconciled_lifecycle": "COMMIT",
+      "recovery_receipt": "LOCAL_FILE_RECONCILED_NO_RESEND",
+      "file_inode_mtime_size_unchanged": true
+    }
+  },
+  "tests": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine relations::tests:: -- --nocapture",
+      "passed": 5,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["rule generalization, conflicting premises, exact root premise/rule dependencies, and direct negative-premise guarantee"]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine current_relation_answer_lineage_and_guarantee_replay_for_recovery -- --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["same-case rule/fact/query, counterexample stop, invalidation, authorized file output, and v46 recovery inspection"]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine interrupted_actual_write_reconciles_same_identity_without_resending -- --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["existing local-file recovery regression"]
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml -p minidora-cli --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "python3 rust/tools/learned_rule_followup_test.py --binary /workspace/MINIDORA-BETA/rust/target/debug/minidora-rust --legacy-binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output /workspace/.minidora-cloud/learned-rule-follow-up.json",
+      "fresh_cli_processes": 8,
+      "legacy_recovery": "v45 COMMIT; LOCAL_FILE_RECONCILED_NO_RESEND; inode, modification time and size unchanged",
+      "outcome": "PASS"
+    },
+    {
+      "command": "python3 -m py_compile rust/tools/learned_rule_followup_test.py",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo fmt --all --manifest-path rust/Cargo.toml --check && git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "test_harness_corrections": [
+    "The first focused recovery-test compilation passed an owned String to RequestEnvelope::new, which accepts &str. The fixture was corrected to borrow the formatted request, and all listed test reruns passed."
+  ],
+  "not_run": [
+    "full workspace runtime suite, all-target check and Clippy",
+    "empirical rule induction from observations; current route consumes only user-declared rules and premises",
+    "generalization outside the bounded copular, single-premise relation grammar",
+    "large-memory, counterexample-population or independent unseen-task quality evaluation",
+    "full BB-LEARN, BODY-1, QC, QA and 93-requirement successor acceptance"
+  ],
+  "disposition": "This closes one bounded declared-rule→unseen-subject→conflict→invalidation→new answer path and corrects proof lineage/guarantee reporting for new v46 queries. It does not establish empirical learning or full BB-LEARN acceptance; work continues."
+}

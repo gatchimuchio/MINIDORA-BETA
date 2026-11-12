@@ -1296,19 +1296,19 @@ impl Engine {
             Intent::Ask { proposition } => {
                 let memory = self.store.load_memory(actor)?;
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
+                let answer_dependencies = relations::answer_dependencies(&answer);
+                let answer_guarantee = relations::answer_guarantee(&answer);
                 match answer.status.as_str() {
                     "SUPPORTED"=>{
                         units.push(format!("提示された前提の範囲では、{}。",describe(proposition)));
-                        result.dependencies.extend(answer.facts.iter().map(|f|f.id.clone()));
-                        result.dependencies.extend(answer.used_rules.clone());
-                        result.guarantee=if answer.used_rules.is_empty(){Guarantee::UserPremise}else{Guarantee::Derived};
+                        result.dependencies.extend(answer_dependencies.iter().cloned());
+                        result.guarantee=answer_guarantee;
                     },
                     "CONTRADICTED"=>{
                         let mut opposite=proposition.clone(); opposite.negative = !opposite.negative;
                         units.push(format!("提示された前提の範囲では、{}。",describe(&opposite)));
-                        result.dependencies.extend(answer.facts.iter().map(|f|f.id.clone()));
-                        result.dependencies.extend(answer.used_rules.clone());
-                        result.guarantee=Guarantee::Derived;
+                        result.dependencies.extend(answer_dependencies);
+                        result.guarantee=answer_guarantee;
                     },
                     "CONFLICT"=>return self.stop(&mut state,Lifecycle::Suspend,"CONFLICTING_PREMISES",
                         "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。"),
