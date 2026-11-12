@@ -1,0 +1,128 @@
+{
+  "record_type": "SCOPED_B08_ROUTE_OBSERVATION",
+  "scope": "R2-derived explicit output-character constraint for extractive summary candidates; not full B08 acceptance",
+  "recorded_at_utc": "2026-11-12T19:04:28Z",
+  "baseline": {
+    "commit": "9eca4a43506fc8d351008f8edad05618c03eef36",
+    "remote_main_at_start": "9eca4a43506fc8d351008f8edad05618c03eef36",
+    "branch": "work (same content as origin/main at start)",
+    "release_state": "NOT_RELEASED"
+  },
+  "requirement_basis": {
+    "capability_id": "B08",
+    "r2_observable": "Twelve previously unseen writing tasks satisfy length, content, purpose and format",
+    "applied_slice": "Enforce a supplied maximum over complete extracted sentence text. This does not establish content, purpose, semantic coverage or format acceptance."
+  },
+  "implementation": {
+    "parser_version": "declarative-ja-en-v42-extractive-summary-character-limit",
+    "intent": "TEXT_SUMMARY_CANDIDATES",
+    "artifact_operation": "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2",
+    "request_contract": "Strict JSON fields are text and max_sentences plus optional max_chars. max_chars is 1..100000 Unicode scalars; absent means 100000.",
+    "selection": "Rank with the versioned extractive algorithm. In rank order, keep full sentences that fit the remaining character budget until max_sentences is reached; skip and record a too-long sentence, then continue to lower-ranked candidates. Restore selected candidates to source order for output.",
+    "budget_unit": "Sum of Unicode scalar values in copied sentence text; fixed disclosure label, bullet markers and separators are excluded.",
+    "no_fit_behavior": "SUSPEND with TEXT_SUMMARY_CHAR_LIMIT and no artifact; no sentence is truncated.",
+    "artifact_fields": [
+      "effective max_chars",
+      "selected_character_count",
+      "selected/omitted/length_limited sentence indices",
+      "exact source and output ranges",
+      "source JSON string token",
+      "source/output hashes"
+    ],
+    "terminal_guarantee": "HYPOTHESIS",
+    "known_gap": "Length compliance is a structural check only. The ranking does not prove user purpose, semantic completeness, factual correctness, conditions, negation, audience, style or overall writing quality."
+  },
+  "route_observation": {
+    "test_case_id": "extractive_summary_candidate_route_applies_character_budget_without_truncation",
+    "header": "text-summary:",
+    "input_utf8": "text-summary:\n{\"max_chars\":35,\"max_sentences\":2,\"text\":\"shared concept first. shared concept second. unique third.\"}",
+    "input_sha256": "cf073f81e019d16a3a53f0be5006755038f9463b310aead4a713812d0d749ec2",
+    "source_sha256": "28970e7cf0e966f9db6880f6c9f8196101b6df037637f7f0d9560e3daff1fc2a",
+    "visible_output_utf8": "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- shared concept first.\n- unique third.",
+    "visible_output_sha256": "0b2127854d4ace6c6d516fc7488892e8df9461425b65c6c80e5c888ad43cbf57",
+    "terminal_state": "COMMIT with HYPOTHESIS guarantee",
+    "artifact": {
+      "operation": "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2",
+      "max_chars": 35,
+      "selected_character_count": 34,
+      "selected_sentence_indices": [
+        0,
+        2
+      ],
+      "omitted_sentence_indices": [
+        1
+      ],
+      "length_limited_sentence_indices": [
+        1
+      ],
+      "coverage_verified": false,
+      "source_byte_ranges_checked_against_exact_input": true,
+      "persisted_artifact_read_through_case_scoped_store": true
+    },
+    "typed_stop_observation": {
+      "max_chars": 1,
+      "reason": "TEXT_SUMMARY_CHAR_LIMIT",
+      "lifecycle": "SUSPEND",
+      "adopted_dependencies": 0
+    }
+  },
+  "verification": {
+    "passed": [
+      {
+        "command": "cargo test --locked -p minidora-engine text_summary --lib",
+        "cases": 4
+      },
+      {
+        "command": "cargo test --locked -p minidora-engine extractive_summary_headers_retain_complete_json_body --lib",
+        "cases": 1
+      },
+      {
+        "command": "cargo test --locked -p minidora-cli --test normal_route extractive_summary_candidate_",
+        "cases": 2
+      },
+      {
+        "command": "cargo test --locked -p minidora-cli --test normal_route explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage",
+        "cases": 1
+      },
+      {
+        "command": "cargo test --locked -p minidora-cli --test normal_route text_editing_route_",
+        "cases": 3
+      },
+      {
+        "command": "cargo test --locked -p minidora-engine text_editing --lib",
+        "cases": 8
+      },
+      {
+        "command": "cargo fmt --all -- --check"
+      },
+      {
+        "command": "cargo check --workspace --all-targets --locked"
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings"
+      },
+      {
+        "command": "cargo build --workspace --locked"
+      }
+    ],
+    "not_run": [
+      "Full workspace runtime suite",
+      "Frozen Python suite",
+      "Twelve unseen B08 writing/editing tasks",
+      "Independent semantic summary-quality evaluation",
+      "Windows/8 GB acceptance"
+    ],
+    "failed_observations": []
+  },
+  "traceability": {
+    "requirements_row": "rust/audit/requirements.tsv:B08",
+    "redesign_trace_row": "docs/redesign/03_REQUIREMENT_TRACE.tsv:B08",
+    "code_snapshot_sha256": "e3d1fcfafb288f4ec9f190b2f5b2f0079ee0ed8e75077fc2fcc17baae20edc11",
+    "code_snapshot_file_count": 31
+  },
+  "acceptance": {
+    "B08": "UNVERIFIED",
+    "full_12_task_population": "NOT_RUN",
+    "release_state": "NOT_RELEASED"
+  }
+}

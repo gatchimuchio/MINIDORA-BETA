@@ -6129,7 +6129,9 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
     let source = "猫たちは 川沿いで 走る。猫たちは 川沿いで 休む。雨の日は 近づかない。";
     for header in ["文章を要約して:", "text-summary:"] {
         let scratch = Scratch::new();
-        let body = serde_json::json!({"text":source,"max_sentences":2}).to_string();
+        let max_chars = "猫たちは 川沿いで 走る。".chars().count() * 2;
+        let body =
+            serde_json::json!({"text":source,"max_sentences":2,"max_chars":max_chars}).to_string();
         let request = format!("{header}\n{body}");
         let result = record(&execute(&scratch.0, "owner", &[&request]));
         assert_eq!(result["lifecycle"], "COMMIT");
@@ -6171,7 +6173,7 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
         let artifact: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             artifact["operation"],
-            "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V1"
+            "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2"
         );
         assert_eq!(artifact["source_text"], source);
         assert_eq!(
@@ -6184,6 +6186,12 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
         );
         assert_eq!(artifact["omitted_sentence_indices"], serde_json::json!([2]));
         assert_eq!(artifact["coverage_verified"], false);
+        assert_eq!(artifact["max_chars"], max_chars);
+        assert_eq!(artifact["selected_character_count"], max_chars);
+        assert_eq!(
+            artifact["length_limited_sentence_indices"],
+            serde_json::json!([])
+        );
         for sentence in artifact["sentences"].as_array().unwrap() {
             let start = sentence["source_start"].as_u64().unwrap() as usize;
             let end = sentence["source_end"].as_u64().unwrap() as usize;
@@ -6206,6 +6214,60 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
             .contains("TEXT_SUMMARY_SCHEMA")
     );
     assert!(result["dependencies"].as_array().unwrap().is_empty());
+
+    let scratch = Scratch::new();
+    let body = serde_json::json!({"text":source,"max_sentences":2,"max_chars":1}).to_string();
+    let result = stopped(
+        &execute(&scratch.0, "owner", &[&format!("text-summary:\n{body}")]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("TEXT_SUMMARY_CHAR_LIMIT")
+    );
+    assert!(result["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn extractive_summary_candidate_route_applies_character_budget_without_truncation() {
+    let scratch = Scratch::new();
+    let source = "shared concept first. shared concept second. unique third.";
+    let body = serde_json::json!({"text":source,"max_sentences":2,"max_chars":35}).to_string();
+    let request = format!("text-summary:\n{body}");
+    let result = record(&execute(&scratch.0, "owner", &[&request]));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "HYPOTHESIS");
+    let output = result["text"].as_str().unwrap();
+    assert!(output.contains("shared concept first."));
+    assert!(output.contains("unique third."));
+    assert!(!output.contains("shared concept second."));
+
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "TEXT_SUMMARY_CANDIDATES"
+    );
+    let dependencies = result["dependencies"].as_array().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bytes = store
+        .get_bytes("owner", "normal-route", dependencies[0].as_str().unwrap())
+        .unwrap();
+    let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(artifact["max_chars"], 35);
+    assert_eq!(artifact["selected_character_count"], 34);
+    assert_eq!(
+        artifact["selected_sentence_indices"],
+        serde_json::json!([0, 2])
+    );
+    assert_eq!(artifact["omitted_sentence_indices"], serde_json::json!([1]));
+    assert_eq!(
+        artifact["length_limited_sentence_indices"],
+        serde_json::json!([1])
+    );
+    assert_eq!(saved["result"], result);
 }
 
 fn text_patch(id: &str, start: usize, end: usize, expected: &str, replacement: &str) -> Value {

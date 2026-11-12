@@ -10,8 +10,8 @@ const MAX_REQUEST_BYTES: usize = 256_000;
 const MAX_TEXT_SCALARS: usize = 100_000;
 const MAX_SENTENCES: usize = 4_096;
 const MAX_ARTIFACT_BYTES: usize = 2_000_000;
-const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V1";
-const ALGORITHM: &str = "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_V1";
+const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2";
+const ALGORITHM: &str = "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_CHAR_BUDGET_V2";
 const LABEL: &str =
     "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
 const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; each retained sentence is copied verbatim with decoded-source byte offsets. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
@@ -21,6 +21,7 @@ const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by 
 struct SummaryRequest {
     text: String,
     max_sentences: usize,
+    max_chars: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,9 +52,12 @@ pub struct ExtractiveSummaryCandidates {
     pub output_sha256: String,
     pub text: String,
     pub max_sentences: usize,
+    pub max_chars: usize,
+    pub selected_character_count: usize,
     pub sentence_count: usize,
     pub selected_sentence_indices: Vec<usize>,
     pub omitted_sentence_indices: Vec<usize>,
+    pub length_limited_sentence_indices: Vec<usize>,
     pub sentences: Vec<ExtractedSentence>,
     pub coverage_verified: bool,
     pub guarantee: String,
@@ -81,11 +85,22 @@ fn fields(node: &crate::ports::JsonNode) -> Result<&BTreeMap<String, crate::port
     let JsonKind::Object(values) = &node.kind else {
         return Err(schema("summary request must be one JSON object"));
     };
-    let expected = ["max_sentences", "text"];
-    if values.len() != expected.len() || expected.iter().any(|key| !values.contains_key(*key)) {
+    let required = ["max_sentences", "text"];
+    if !(2..=3).contains(&values.len())
+        || required.iter().any(|key| !values.contains_key(*key))
+        || values
+            .keys()
+            .any(|key| !matches!(key.as_str(), "text" | "max_sentences" | "max_chars"))
+    {
         return Err(schema(
-            "summary request fields must be exactly max_sentences and text",
+            "summary request fields must be text, max_sentences, and optional max_chars",
         ));
+    }
+    if values
+        .get("max_chars")
+        .is_some_and(|value| !matches!(value.kind, JsonKind::Number))
+    {
+        return Err(schema("max_chars must be an integer from 1 to 100000"));
     }
     Ok(values)
 }
@@ -269,9 +284,14 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     let SummaryRequest {
         text,
         max_sentences,
+        max_chars,
     } = serde_json::from_str(document).map_err(|error| schema(error.to_string()))?;
     if !(1..=8).contains(&max_sentences) {
         return Err(schema("max_sentences must be an integer from 1 to 8"));
+    }
+    let max_chars = max_chars.unwrap_or(MAX_TEXT_SCALARS);
+    if !(1..=MAX_TEXT_SCALARS).contains(&max_chars) {
+        return Err(schema("max_chars must be an integer from 1 to 100000"));
     }
     if text.trim().is_empty()
         || text.len() > MAX_REQUEST_BYTES
@@ -295,7 +315,28 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         compare_scores(candidates[*right].score, candidates[*left].score)
             .then_with(|| right.cmp(left))
     });
-    let selected_ranked: Vec<usize> = ranking.into_iter().take(max_sentences).collect();
+    let mut selected_ranked = Vec::with_capacity(max_sentences);
+    let mut length_limited_sentence_indices = Vec::new();
+    let mut selected_character_count = 0usize;
+    for index in ranking {
+        if selected_ranked.len() == max_sentences {
+            break;
+        }
+        let sentence_characters = candidates[index].text.chars().count();
+        if selected_character_count.saturating_add(sentence_characters) <= max_chars {
+            selected_character_count += sentence_characters;
+            selected_ranked.push(index);
+        } else {
+            length_limited_sentence_indices.push(index);
+        }
+    }
+    if selected_ranked.is_empty() {
+        return Err(failure(
+            "TEXT_SUMMARY_CHAR_LIMIT",
+            "no complete source sentence fits max_chars; no text was truncated",
+        ));
+    }
+    length_limited_sentence_indices.sort_unstable();
     let selection_ranks: BTreeMap<usize, usize> = selected_ranked
         .iter()
         .enumerate()
@@ -342,9 +383,12 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         output_sha256,
         text: output,
         max_sentences,
+        max_chars,
+        selected_character_count,
         sentence_count: candidates.len(),
         selected_sentence_indices,
         omitted_sentence_indices,
+        length_limited_sentence_indices,
         sentences: spans,
         coverage_verified: false,
         guarantee: GUARANTEE.into(),
@@ -392,6 +436,9 @@ mod tests {
             r#"{"text":"  ","max_sentences":1}"#,
             r#"{"text":"x。","max_sentences":9}"#,
             r#"{"text":"x。","max_sentences":1.5}"#,
+            r#"{"text":"x。","max_sentences":1,"max_chars":0}"#,
+            r#"{"text":"x。","max_sentences":1,"max_chars":100001}"#,
+            r#"{"text":"x。","max_sentences":1,"max_chars":null}"#,
         ] {
             assert!(
                 extractive_summary_candidates(document).is_err(),
@@ -411,5 +458,37 @@ mod tests {
             .map(|span| span.text.as_str())
             .collect();
         assert_eq!(actual, vec!["一行目！！", "二行目。", "三行目"]);
+    }
+
+    #[test]
+    fn enforces_character_budget_without_truncating_or_discarding_later_fitting_sentences() {
+        let text = "shared concept first. shared concept second. unique third.";
+        let document = serde_json::json!({
+            "text":text,
+            "max_sentences":2,
+            "max_chars":35
+        })
+        .to_string();
+        let report = extractive_summary_candidates(&document).unwrap();
+        assert_eq!(report.operation, "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2");
+        assert_eq!(report.max_chars, 35);
+        assert_eq!(report.selected_sentence_indices, vec![0, 2]);
+        assert_eq!(report.omitted_sentence_indices, vec![1]);
+        assert_eq!(report.length_limited_sentence_indices, vec![1]);
+        assert_eq!(report.selected_character_count, 34);
+        assert!(report.selected_character_count <= report.max_chars);
+        assert!(report.text.contains("shared concept first."));
+        assert!(report.text.contains("unique third."));
+        assert!(!report.text.contains("shared concept second."));
+        for span in &report.sentences {
+            assert_eq!(
+                report.source_text.get(span.source_start..span.source_end),
+                Some(span.text.as_str())
+            );
+            assert_eq!(
+                report.text.get(span.output_start..span.output_end),
+                Some(span.text.as_str())
+            );
+        }
     }
 }
