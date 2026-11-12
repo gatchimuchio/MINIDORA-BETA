@@ -6173,8 +6173,9 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
         let artifact: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             artifact["operation"],
-            "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2"
+            "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3"
         );
+        assert_eq!(artifact["format"], "bullets");
         assert_eq!(artifact["source_text"], source);
         assert_eq!(
             artifact["source_text_sha256"],
@@ -6229,6 +6230,86 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
             .contains("TEXT_SUMMARY_CHAR_LIMIT")
     );
     assert!(result["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn extractive_summary_candidate_normal_route_renders_explicit_paragraph_format() {
+    let scratch = Scratch::new();
+    let source = "猫は走る。猫は休む。";
+    let body = serde_json::json!({
+        "text":source,
+        "max_sentences":2,
+        "format":"paragraph"
+    })
+    .to_string();
+    assert_eq!(
+        body,
+        r#"{"format":"paragraph","max_sentences":2,"text":"猫は走る。猫は休む。"}"#
+    );
+    let request = format!("text-summary:\n{body}");
+    let result = record(&execute(&scratch.0, "owner", &[&request]));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "HYPOTHESIS");
+    assert_eq!(
+        result["text"],
+        "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n猫は走る。 猫は休む。"
+    );
+
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 1);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bytes = store
+        .get_bytes("owner", "normal-route", dependencies[0].as_str().unwrap())
+        .unwrap();
+    let artifact: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        artifact["operation"],
+        "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3"
+    );
+    assert_eq!(artifact["format"], "paragraph");
+    assert_eq!(
+        artifact["selected_sentence_indices"],
+        serde_json::json!([0, 1])
+    );
+    assert_eq!(artifact["coverage_verified"], false);
+    assert_eq!(
+        artifact["output_sha256"],
+        minidora_domain::digest(artifact["text"].as_str().unwrap().as_bytes())
+    );
+    for sentence in artifact["sentences"].as_array().unwrap() {
+        let source_start = sentence["source_start"].as_u64().unwrap() as usize;
+        let source_end = sentence["source_end"].as_u64().unwrap() as usize;
+        let output_start = sentence["output_start"].as_u64().unwrap() as usize;
+        let output_end = sentence["output_end"].as_u64().unwrap() as usize;
+        let text = sentence["text"].as_str().unwrap();
+        assert_eq!(&source[source_start..source_end], text);
+        assert_eq!(
+            &artifact["text"].as_str().unwrap()[output_start..output_end],
+            text
+        );
+    }
+
+    for format in [serde_json::json!("table"), serde_json::json!(1)] {
+        let scratch = Scratch::new();
+        let body = serde_json::json!({
+            "text":source,
+            "max_sentences":2,
+            "format":format
+        })
+        .to_string();
+        let result = stopped(
+            &execute(&scratch.0, "owner", &[&format!("text-summary:\n{body}")]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .contains("TEXT_SUMMARY_SCHEMA")
+        );
+        assert!(result["dependencies"].as_array().unwrap().is_empty());
+    }
 }
 
 #[test]

@@ -10,11 +10,12 @@ const MAX_REQUEST_BYTES: usize = 256_000;
 const MAX_TEXT_SCALARS: usize = 100_000;
 const MAX_SENTENCES: usize = 4_096;
 const MAX_ARTIFACT_BYTES: usize = 2_000_000;
-const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2";
-const ALGORITHM: &str = "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_CHAR_BUDGET_V2";
+const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3";
+const ALGORITHM: &str =
+    "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_CHAR_BUDGET_OUTPUT_FORMAT_V1";
 const LABEL: &str =
     "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
-const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; each retained sentence is copied verbatim with decoded-source byte offsets. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
+const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; each retained sentence is copied verbatim with decoded-source byte offsets in the requested bullets or paragraph layout. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +23,7 @@ struct SummaryRequest {
     text: String,
     max_sentences: usize,
     max_chars: Option<usize>,
+    format: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +53,7 @@ pub struct ExtractiveSummaryCandidates {
     pub source_text_json_end: usize,
     pub output_sha256: String,
     pub text: String,
+    pub format: String,
     pub max_sentences: usize,
     pub max_chars: usize,
     pub selected_character_count: usize,
@@ -61,6 +64,29 @@ pub struct ExtractiveSummaryCandidates {
     pub sentences: Vec<ExtractedSentence>,
     pub coverage_verified: bool,
     pub guarantee: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryFormat {
+    Bullets,
+    Paragraph,
+}
+
+impl SummaryFormat {
+    fn from_request(value: Option<&str>) -> Result<Self> {
+        match value {
+            None | Some("bullets") => Ok(Self::Bullets),
+            Some("paragraph") => Ok(Self::Paragraph),
+            Some(_) => Err(schema("format must be either bullets or paragraph")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bullets => "bullets",
+            Self::Paragraph => "paragraph",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,19 +107,25 @@ fn schema(message: impl Into<String>) -> minidora_domain::Error {
     failure("TEXT_SUMMARY_SCHEMA", message)
 }
 
-fn fields(node: &crate::ports::JsonNode) -> Result<&BTreeMap<String, crate::ports::JsonNode>> {
+fn fields<'a>(
+    document: &str,
+    node: &'a crate::ports::JsonNode,
+) -> Result<&'a BTreeMap<String, crate::ports::JsonNode>> {
     let JsonKind::Object(values) = &node.kind else {
         return Err(schema("summary request must be one JSON object"));
     };
     let required = ["max_sentences", "text"];
-    if !(2..=3).contains(&values.len())
+    if !(2..=4).contains(&values.len())
         || required.iter().any(|key| !values.contains_key(*key))
-        || values
-            .keys()
-            .any(|key| !matches!(key.as_str(), "text" | "max_sentences" | "max_chars"))
+        || values.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "text" | "max_sentences" | "max_chars" | "format"
+            )
+        })
     {
         return Err(schema(
-            "summary request fields must be text, max_sentences, and optional max_chars",
+            "summary request fields must include text and max_sentences; max_chars and format are optional",
         ));
     }
     if values
@@ -101,6 +133,11 @@ fn fields(node: &crate::ports::JsonNode) -> Result<&BTreeMap<String, crate::port
         .is_some_and(|value| !matches!(value.kind, JsonKind::Number))
     {
         return Err(schema("max_chars must be an integer from 1 to 100000"));
+    }
+    if values.get("format").is_some_and(|value| {
+        !matches!(value.kind, JsonKind::Scalar) || !document[value.span.clone()].starts_with('"')
+    }) {
+        return Err(schema("format must be either bullets or paragraph"));
     }
     Ok(values)
 }
@@ -270,7 +307,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         ));
     }
     let root = strict_json_document(document)?;
-    let fields = fields(&root)?;
+    let fields = fields(document, &root)?;
     let text_node = &fields["text"];
     if !matches!(text_node.kind, JsonKind::Scalar)
         || !document[text_node.span.clone()].starts_with('"')
@@ -285,6 +322,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         text,
         max_sentences,
         max_chars,
+        format,
     } = serde_json::from_str(document).map_err(|error| schema(error.to_string()))?;
     if !(1..=8).contains(&max_sentences) {
         return Err(schema("max_sentences must be an integer from 1 to 8"));
@@ -293,6 +331,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     if !(1..=MAX_TEXT_SCALARS).contains(&max_chars) {
         return Err(schema("max_chars must be an integer from 1 to 100000"));
     }
+    let format = SummaryFormat::from_request(format.as_deref())?;
     if text.trim().is_empty()
         || text.len() > MAX_REQUEST_BYTES
         || text.chars().count() > MAX_TEXT_SCALARS
@@ -350,7 +389,11 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     let mut spans = Vec::with_capacity(selected.len());
     for index in &selected {
         let candidate = &candidates[*index];
-        output.push_str("\n- ");
+        match format {
+            SummaryFormat::Bullets => output.push_str("\n- "),
+            SummaryFormat::Paragraph if spans.is_empty() => output.push('\n'),
+            SummaryFormat::Paragraph => output.push(' '),
+        }
         let output_start = output.len();
         output.push_str(&candidate.text);
         let output_end = output.len();
@@ -382,6 +425,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         source_text_json_end: text_node.span.end,
         output_sha256,
         text: output,
+        format: format.as_str().into(),
         max_sentences,
         max_chars,
         selected_character_count,
@@ -412,6 +456,7 @@ mod tests {
         let document = serde_json::json!({"text":text,"max_sentences":2}).to_string();
         let report = extractive_summary_candidates(&document).unwrap();
         assert_eq!(report.operation, OPERATION);
+        assert_eq!(report.format, "bullets");
         assert_eq!(report.sentence_count, 3);
         assert_eq!(report.selected_sentence_indices, vec![0, 2]);
         assert_eq!(report.omitted_sentence_indices, vec![1]);
@@ -439,6 +484,9 @@ mod tests {
             r#"{"text":"x。","max_sentences":1,"max_chars":0}"#,
             r#"{"text":"x。","max_sentences":1,"max_chars":100001}"#,
             r#"{"text":"x。","max_sentences":1,"max_chars":null}"#,
+            r#"{"text":"x。","max_sentences":1,"format":"table"}"#,
+            r#"{"text":"x。","max_sentences":1,"format":null}"#,
+            r#"{"text":"x。","max_sentences":1,"format":1}"#,
         ] {
             assert!(
                 extractive_summary_candidates(document).is_err(),
@@ -470,7 +518,8 @@ mod tests {
         })
         .to_string();
         let report = extractive_summary_candidates(&document).unwrap();
-        assert_eq!(report.operation, "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V2");
+        assert_eq!(report.operation, "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V3");
+        assert_eq!(report.format, "bullets");
         assert_eq!(report.max_chars, 35);
         assert_eq!(report.selected_sentence_indices, vec![0, 2]);
         assert_eq!(report.omitted_sentence_indices, vec![1]);
@@ -490,5 +539,41 @@ mod tests {
                 Some(span.text.as_str())
             );
         }
+    }
+
+    #[test]
+    fn renders_paragraph_layout_with_exact_unicode_source_and_output_spans() {
+        let text = "猫は走る。猫は休む。";
+        let document = serde_json::json!({
+            "text":text,
+            "max_sentences":2,
+            "format":"paragraph"
+        })
+        .to_string();
+        let report = extractive_summary_candidates(&document).unwrap();
+        assert_eq!(report.operation, OPERATION);
+        assert_eq!(report.format, "paragraph");
+        assert!(report.text.starts_with(&format!("{LABEL}\n")));
+        assert!(!report.text.contains("\n- "));
+        let copied = report
+            .sentences
+            .iter()
+            .map(|sentence| sentence.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(report.text, format!("{LABEL}\n{copied}"));
+        for sentence in &report.sentences {
+            assert_eq!(
+                report
+                    .source_text
+                    .get(sentence.source_start..sentence.source_end),
+                Some(sentence.text.as_str())
+            );
+            assert_eq!(
+                report.text.get(sentence.output_start..sentence.output_end),
+                Some(sentence.text.as_str())
+            );
+        }
+        assert_eq!(report.output_sha256, digest(report.text.as_bytes()));
     }
 }

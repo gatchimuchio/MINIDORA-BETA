@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v42-extractive-summary-character-limit";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v43-extractive-summary-output-format";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -2194,7 +2194,7 @@ mod structured_document_tests {
     }
     #[test]
     fn extractive_summary_headers_retain_complete_json_body() {
-        let body = " {\"text\":\"猫は走る。\",\"max_sentences\":1} \r\n";
+        let body = " {\"text\":\"猫は走る。\",\"max_sentences\":1,\"format\":\"paragraph\"} \r\n";
         for header in [
             "文章を要約して:",
             "文章を要約して：",
