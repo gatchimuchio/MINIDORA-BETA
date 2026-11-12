@@ -1,0 +1,95 @@
+{
+  "work_item": "BODY-1 bounded BB-CONTEXT / BB-CONTENT / BB-MATH-DATA calculation explanation follow-up",
+  "recorded_at": "2026-11-12T21:32:54Z",
+  "base_commit": "a8112eac78c165e7aa44c98a0ad8aeb9f8e61d71",
+  "subject": "MINIDORA Rust successor engine",
+  "construction_set": "rust/audit/construction/MB-BUILD-20261113",
+  "construction_requirement": "A real prior-result follow-up through ordinary input, Core, content selection, render, persistence and observable output; this record covers one bounded cross-cutting route only.",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": ["14", "19"]
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "version_boundary": "No input grammar, Intent, domain result, database schema version, dependency, or lockfile change. The serialized ModelEmission observation adds an optional authorized_surfaces field; it is omitted for singleton and legacy observations. Multi-surface use is limited to ExplainPrevious over a retained Calculation, and recovery regenerates the exact surfaces from that calculation before replaying selection.",
+  "backup_rotation": {
+    "performed_before_source_edits": true,
+    "remote_tags_before": {
+      "codex/backup-main": "d50a3f559793222f84eca8f2266d557b806de746",
+      "codex/backup-main-prev": "db63a9477415ce1fab3f0447c0e54c69322efd64"
+    },
+    "remote_tags_after": {
+      "codex/backup-main": "a8112eac78c165e7aa44c98a0ad8aeb9f8e61d71",
+      "codex/backup-main-prev": "d50a3f559793222f84eca8f2266d557b806de746"
+    }
+  },
+  "changed_source_paths": {
+    "crates/minidora-engine/src/core.rs": "8414b1b59fa4005b6ab510701d4d3e934b60338bc66f721a9db6aec5b627acad",
+    "crates/minidora-engine/src/language.rs": "087aedd7ffda14e848c3893b91dc9a09423a09dea5e7f6480c023c4a6ba0120e",
+    "crates/minidora-engine/src/recovery.rs": "a0be56c187846129e20622f95852715ea38cc761c44da3ad96f0dc8c60e6fca5"
+  },
+  "changed_test_paths": {
+    "crates/minidora-engine/src/language.rs": "087aedd7ffda14e848c3893b91dc9a09423a09dea5e7f6480c023c4a6ba0120e",
+    "crates/minidora-engine/src/recovery.rs": "a0be56c187846129e20622f95852715ea38cc761c44da3ad96f0dc8c60e6fca5",
+    "apps/cli/tests/normal_route.rs": "ca04efca8e2b4ca011df1156e407824da0315e0a3c8ce72700cba923d8b95a5b"
+  },
+  "observed_route": {
+    "input": "2+3, followed in a separate CLI process by 詳しく説明して",
+    "output": "A Japanese explanation containing the exact source expression, every retained calculation step, and exact result 5.",
+    "content_selection": "The Core supplies two fixed, semantically equivalent surfaces derived from the retained Calculation. The exact sequence model ranks these surfaces; it supplies no arithmetic or new facts.",
+    "persistence_and_recovery": "The selected surface and optional candidate set are retained in the model observation artifact. A recovery inspection over the actual file-output case regenerates the same two surfaces and reproduces the model observation. Existing singleton reconciliation was rerun and passed.",
+    "external_effects": "Tests wrote only to temporary local directories. No remote service, deployment, release or user data was used."
+  },
+  "tests": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine calculation_explanation -- --nocapture",
+      "passed": 2,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": [
+        "calculation_explanation_surfaces_retain_expression_steps_and_exact_value",
+        "calculation_explanation_candidates_replay_for_recovery"
+      ]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine interrupted_actual_write_reconciles_same_identity_without_resending -- --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["legacy singleton model observation and no-resend recovery"]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-cli --test normal_route calculation_followup_and_explicit_retry_survive_process_restarts -- --exact --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["ordinary CLI calculation, durable exact retry, and separate-process explanation follow-up"]
+    },
+    {
+      "command": "cargo fmt --all --manifest-path rust/Cargo.toml && git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "test_total": {
+    "unique_tests_passed": 4,
+    "failed": 0,
+    "ignored": 0
+  },
+  "not_run": [
+    "full workspace runtime suite",
+    "all-target check",
+    "Clippy",
+    "open-domain generation and general writing acceptance",
+    "full B02/B08 or 93-requirement BUILD/QC/QA"
+  ],
+  "disposition": "Scoped route passes. General-language generation, unrestricted writing, full B02/B08, all-system BUILD and independent QA remain UNVERIFIED. No full-successor acceptance is claimed."
+}

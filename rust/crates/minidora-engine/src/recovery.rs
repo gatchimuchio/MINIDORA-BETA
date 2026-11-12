@@ -300,10 +300,32 @@ fn inspect(
     model.validate()?;
     let emission_bytes = store.get_bytes(actor, case, &plan.model_observation_ref)?;
     let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes)?;
-    let verified_emission = model.realize_supported(
-        std::slice::from_ref(&plan.text),
-        request.budget.max_evidence_bytes,
-    )?;
+    let authorized_surfaces = match &emission.authorized_surfaces {
+        Some(surfaces) => {
+            let calculation = result.calculation.as_ref().ok_or_else(|| {
+                failure(
+                    "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                    "multi-surface output has no retained calculation",
+                )
+            })?;
+            if !matches!(goal.intent, Intent::ExplainPrevious)
+                || surfaces.as_slice()
+                    != language::calculation_explanation_surfaces(calculation).as_slice()
+                || !surfaces.contains(&plan.text)
+            {
+                return Err(failure(
+                    "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                    "retained multi-surface output differs from the Core-approved calculation surfaces",
+                ));
+            }
+            surfaces.clone()
+        }
+        // Legacy alpha 8 records contain no candidate list and can only prove
+        // the exact singleton surface they already retained.
+        None => vec![plan.text.clone()],
+    };
+    let verified_emission =
+        model.realize_supported(&authorized_surfaces, request.budget.max_evidence_bytes)?;
     if canonical(&verified_emission)? != emission_bytes
         || emission.text != plan.text
         || emission.model_revision != plan.model_revision
@@ -626,6 +648,24 @@ mod tests {
         }
     }
 
+    fn empty_fixture() -> Fixture {
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-recovery-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        Fixture {
+            state: directory.join("state"),
+            target: directory.join("actual-report.txt"),
+            directory,
+            token: String::new(),
+        }
+    }
+
     fn attempted_prefix() -> Fixture {
         let directory = std::env::temp_dir().join(format!(
             "minidora-recovery-{}-{}",
@@ -701,6 +741,42 @@ mod tests {
             target,
             token,
         }
+    }
+
+    #[test]
+    fn calculation_explanation_candidates_replay_for_recovery() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut calculation = RequestEnvelope::new("case", "calculation", "alice", "2+3");
+        calculation.output_path = Some(fixture.target.clone());
+        calculation
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        assert_eq!(
+            engine.execute("alice", calculation).unwrap().lifecycle,
+            Lifecycle::Commit
+        );
+
+        let explanation_target = fixture.target.with_file_name("explanation.txt");
+        let mut request = RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        request.output_path = Some(explanation_target.clone());
+        request.permissions.write_paths.insert(explanation_target);
+        assert_eq!(
+            engine.execute("alice", request).unwrap().lifecycle,
+            Lifecycle::Commit
+        );
+
+        let revision = engine.latest("alice", "case").unwrap().unwrap();
+        let result = revision.result.as_ref().unwrap();
+        let plan = result.content_plan.as_ref().unwrap();
+        let emission_bytes = engine
+            .store
+            .get_bytes("alice", "case", &plan.model_observation_ref)
+            .unwrap();
+        let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes).unwrap();
+        assert_eq!(emission.authorized_surfaces.as_ref().map(Vec::len), Some(2));
+        assert!(inspect(&engine.store, "alice", &revision, result).is_ok());
     }
 
     #[test]

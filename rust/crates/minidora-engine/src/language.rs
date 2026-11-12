@@ -108,6 +108,40 @@ pub fn calculate(expression: &str) -> Result<Calculation> {
     })
 }
 
+/// Core-approved Japanese explanation surfaces for one retained calculation.
+/// Every candidate carries the same source expression, exact steps and result;
+/// sequence probabilities only choose wording and never supply arithmetic.
+pub(crate) fn calculation_explanation_surfaces(calculation: &Calculation) -> Vec<String> {
+    let steps = if calculation.steps.is_empty() {
+        "演算過程はありません。".to_owned()
+    } else {
+        calculation.steps.join("\n")
+    };
+    if calculation.steps.is_empty() {
+        vec![
+            format!(
+                "計算式「{}」の値を確認します。{}答えは{}です。",
+                calculation.expression, steps, calculation.exact_value
+            ),
+            format!(
+                "「{}」は演算のない式です。{}計算結果は{}です。",
+                calculation.expression, steps, calculation.exact_value
+            ),
+        ]
+    } else {
+        vec![
+            format!(
+                "計算式「{}」を順に計算します。\n{}\nしたがって、答えは{}です。",
+                calculation.expression, steps, calculation.exact_value
+            ),
+            format!(
+                "「{}」の計算過程を示します。\n{}\n計算結果は{}です。",
+                calculation.expression, steps, calculation.exact_value
+            ),
+        ]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SequenceValue {
     pub exact_value: String,
@@ -852,6 +886,10 @@ pub struct ModelEmission {
     /// Absent when the core supplied one surface; no probability comparison was needed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence_probability: Option<String>,
+    /// Multiple Core-approved surfaces are retained so recovery can reproduce
+    /// the exact selection. Absent on legacy and singleton emissions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorized_surfaces: Option<Vec<String>>,
     pub token_count: usize,
     pub objective: String,
     pub decoder_version: String,
@@ -1443,6 +1481,7 @@ impl SequenceModel {
             text: text.clone(),
             model_revision,
             sequence_probability: probability.map(|value| rational_text(&value)),
+            authorized_surfaces: (alternatives.len() > 1).then(|| alternatives.to_vec()),
             token_count: lossless_projection.tokens.len(),
             objective: if ranked_candidates {
                 "maximum exact sequence probability over Core-authorized equivalent surfaces".into()
@@ -1755,22 +1794,42 @@ mod tests {
         assert!(serialized.get("sequence_probability").is_none());
         let restored: ModelEmission = serde_json::from_value(serialized).unwrap();
         assert_eq!(restored.sequence_probability, None);
-        let ranked = model
-            .realize_supported(
-                &["計算結果は5です。".into(), "計算結果は6です。".into()],
-                100,
-            )
-            .unwrap();
+        let alternatives = vec!["計算結果は5です。".into(), "計算結果は6です。".into()];
+        let ranked = model.realize_supported(&alternatives, 100).unwrap();
         assert!(ranked.sequence_probability.is_some());
+        assert_eq!(ranked.authorized_surfaces, Some(alternatives));
         let serialized = serde_json::to_value(&ranked).unwrap();
         let restored: ModelEmission = serde_json::from_value(serialized).unwrap();
         assert_eq!(restored.sequence_probability, ranked.sequence_probability);
+        assert_eq!(restored.authorized_surfaces, ranked.authorized_surfaces);
         assert_eq!(
             ranked.decoder_version,
             "bounded-finite-surface-literal-exact-v1"
         );
         assert!(model.realize_supported(&[], 100).is_err());
         assert!(model.realize_supported(&["長い文字列".into()], 1).is_err());
+    }
+
+    #[test]
+    fn calculation_explanation_surfaces_retain_expression_steps_and_exact_value() {
+        let calculation = calculate("2+3*4").unwrap();
+        let surfaces = calculation_explanation_surfaces(&calculation);
+        assert_eq!(surfaces.len(), 2);
+        assert_ne!(surfaces[0], surfaces[1]);
+        for surface in &surfaces {
+            assert!(surface.contains(&calculation.expression));
+            assert!(surface.contains(&calculation.exact_value));
+            for step in &calculation.steps {
+                assert!(surface.contains(step));
+            }
+        }
+
+        let literal = calculate("7").unwrap();
+        assert!(literal.steps.is_empty());
+        for surface in calculation_explanation_surfaces(&literal) {
+            assert!(surface.contains("演算過程はありません。"));
+            assert!(surface.contains(&literal.exact_value));
+        }
     }
 }
 

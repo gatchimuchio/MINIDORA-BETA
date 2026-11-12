@@ -749,7 +749,14 @@ fn calculation_followup_and_explicit_retry_survive_process_restarts() {
 
     let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
     assert_eq!(explanation["lifecycle"], "COMMIT");
-    assert!(explanation["text"].as_str().unwrap().contains('5'));
+    let explanation_text = explanation["text"].as_str().unwrap();
+    assert!(explanation_text.contains("2+3"));
+    assert!(explanation_text.contains("2 + 3 = 5"));
+    assert!(explanation_text.contains('5'));
+    assert!(
+        explanation_text.contains("答えは") || explanation_text.contains("計算結果は"),
+        "explanation must connect the retained calculation to its result"
+    );
     assert!(
         explanation["dependencies"]
             .as_array()

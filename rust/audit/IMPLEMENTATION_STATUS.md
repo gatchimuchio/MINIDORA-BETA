@@ -33,6 +33,10 @@ The current development identity is `0.7.0-alpha.8`, schema `minidora-rust/0.7.0
 
 These rows describe source-visible mechanisms. Unit tests and route tests are different evidence levels; final command results must be linked to their actual current code and execution artifacts. No test counts are inferred from definitions, loops or historical passes.
 
+## Bounded saved-calculation explanation follow-up
+
+The ordinary Japanese follow-up `詳しく説明して` can consume a prior committed arithmetic result and produce one of two Core-derived explanation surfaces. Both carry the same retained expression, all exact calculation steps and exact result; the local sequence model ranks those authorized surfaces and does not generate or validate arithmetic. The selected result, candidate set and model observation are retained as case artifacts, and file-effect inspection re-derives and replays the candidate set. See [calculation-explanation-followup-route-validation.json](calculation-explanation-followup-route-validation.json) for focused evidence. This is a narrow context/content/math route; unrestricted language generation, general writing, full B02 and full successor acceptance remain `UNVERIFIED`.
+
 ## Current-run validation
 
 The alpha 7 Linux development run passed formatting, whole-workspace/all-target checking, Clippy with warnings denied, all-feature tests (134 passed, 0 failed, 0 ignored) and build. See [validation.json](validation.json) and [executed-tests.json](executed-tests.json) for the exact source snapshot and outcomes. These checks do not establish full successor acceptance.

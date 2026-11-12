@@ -379,6 +379,7 @@ impl Engine {
         }
         let mut result = base_result(&request);
         let mut units = Vec::new();
+        let mut approved_surfaces = None;
         match &bundle.meaning.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
@@ -1116,6 +1117,8 @@ impl Engine {
                     units.push(format!("計算式: {}", calculation.expression));
                     units.extend(calculation.steps.clone());
                     units.push(format!("計算結果: {}", calculation.exact_value));
+                    approved_surfaces =
+                        Some(language::calculation_explanation_surfaces(calculation));
                     result.calculation = Some(calculation.clone());
                 } else {
                     units.push(prior.text.clone());
@@ -1755,8 +1758,9 @@ impl Engine {
                 );
             }
         };
+        let surfaces = approved_surfaces.unwrap_or_else(|| vec![units.join("\n")]);
         let emission = match model.realize_supported_until(
-            &[units.join("\n")],
+            &surfaces,
             request.budget.max_evidence_bytes,
             deadline,
         ) {
