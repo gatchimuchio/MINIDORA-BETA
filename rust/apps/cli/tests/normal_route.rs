@@ -700,12 +700,16 @@ impl Drop for Scratch {
 }
 
 fn execute(directory: &Path, actor: &str, args: &[&str]) -> Output {
+    execute_in_case(directory, actor, "normal-route", args)
+}
+
+fn execute_in_case(directory: &Path, actor: &str, case: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
         .args([
             "--db",
             directory.to_str().unwrap(),
             "--case",
-            "normal-route",
+            case,
             "--actor",
             actor,
             "--json",
@@ -1904,6 +1908,141 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
             .as_str()
             .unwrap()
             .contains("MISSING_PREMISES")
+    );
+}
+
+#[test]
+fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
+    let scratch = Scratch::new();
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "bird-rule-for-explanation",
+            "もしXは鳥ならXは動物",
+        ],
+    ));
+    let bird = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-bird-for-explanation", "ココは鳥"],
+    ));
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-animal-question", "ココは動物ですか"],
+    ));
+    assert_eq!(answer["guarantee"], "DERIVED");
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "DERIVED");
+    let explanation_text = explanation["text"].as_str().unwrap();
+    assert!(explanation_text.contains("前回の結論: ココは動物である"));
+    assert!(explanation_text.contains("直接提示された前提: ココは鳥である"));
+    assert!(explanation_text.contains("適用規則: $xは鳥である ならば $xは動物である"));
+    assert!(explanation_text.contains("現実世界での真偽確認ではありません"));
+    assert!(
+        explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&answer["id"])
+    );
+    for dependency in answer["dependencies"].as_array().unwrap() {
+        assert!(
+            explanation["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency)
+        );
+    }
+    assert!(
+        explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule["dependencies"][0])
+    );
+    assert!(
+        explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&bird["dependencies"][0])
+    );
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v48-related-context-explanation"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        answer["id"]
+    );
+
+    let stale_answer = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "stale-explanation",
+        &["--input", "stale-coco-question", "ココは動物ですか"],
+    ));
+    assert_eq!(stale_answer["guarantee"], "DERIVED");
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "rule-invalidation",
+        &[
+            "--input",
+            "invalidate-bird-rule",
+            &format!("{}を無効化して", rule["dependencies"][0].as_str().unwrap()),
+        ],
+    ));
+    let stale_explanation = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "stale-explanation",
+            &["--input", "stale-coco-explanation", "詳しく説明して"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        stale_explanation["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_PROOF_CHANGED")
+    );
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mike-negative-premise", "ミケは鳥ではない"],
+    ));
+    let contradicted = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mike-positive-question", "ミケは鳥ですか"],
+    ));
+    assert_eq!(contradicted["guarantee"], "USER_PREMISE");
+    assert!(
+        contradicted["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミケは鳥ではない")
+    );
+    let negative_explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(negative_explanation["lifecycle"], "COMMIT");
+    assert_eq!(negative_explanation["guarantee"], "USER_PREMISE");
+    assert!(
+        negative_explanation["text"]
+            .as_str()
+            .unwrap()
+            .contains("直接提示された前提: ミケは鳥ではない")
+    );
+    assert!(
+        negative_explanation["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&contradicted["id"])
     );
 }
 

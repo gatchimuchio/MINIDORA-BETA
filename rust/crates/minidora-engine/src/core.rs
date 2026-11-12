@@ -1150,11 +1150,87 @@ impl Engine {
                     approved_surfaces =
                         Some(language::calculation_explanation_surfaces(calculation));
                     result.calculation = Some(calculation.clone());
+                    result.dependencies.push(prior.id.clone());
+                    result.guarantee = prior.guarantee.clone();
+                } else if let Some(proposition) = previous_relation_answer(&prior.text)? {
+                    let memory = self.store.load_memory(actor)?;
+                    let answer =
+                        relations::query(&memory, &proposition, request.budget.max_actions)?;
+                    let proof_dependencies = relations::answer_dependencies(&answer);
+                    let answer_guarantee = relations::answer_guarantee(&answer);
+                    if answer.status != "SUPPORTED"
+                        || proof_dependencies != prior.dependencies
+                        || answer_guarantee != prior.guarantee
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTEXT_PROOF_CHANGED",
+                            "前回の関係回答を支えた現在有効な根拠が変わっています。新しい問いで確認してください。",
+                        );
+                    }
+                    units.push(format!("前回の結論: {}。", describe(&proposition)));
+                    let mut displayed_fact_ids = Vec::new();
+                    for id in &proof_dependencies {
+                        if let Some(fact) = memory.facts.iter().find(|fact| {
+                            &fact.id == id
+                                && fact.valid
+                                && fact.guarantee == Guarantee::UserPremise
+                                && fact.dependencies.is_empty()
+                        }) {
+                            units.push(format!(
+                                "直接提示された前提: {}（根拠ID: {}）",
+                                describe(&fact.proposition),
+                                fact.id
+                            ));
+                            displayed_fact_ids.push(fact.id.clone());
+                        }
+                    }
+                    for fact in &answer.facts {
+                        if displayed_fact_ids.contains(&fact.id) {
+                            continue;
+                        }
+                        let label = if fact.guarantee == Guarantee::Derived {
+                            "導出された事実"
+                        } else {
+                            "直接提示された前提"
+                        };
+                        let lineage = if fact.dependencies.is_empty() {
+                            format!("根拠ID: {}", fact.id)
+                        } else {
+                            format!(
+                                "導出ID: {}; 依存ID: {}",
+                                fact.id,
+                                fact.dependencies.join(", ")
+                            )
+                        };
+                        units.push(format!(
+                            "{label}: {}（{lineage}）",
+                            describe(&fact.proposition)
+                        ));
+                    }
+                    for id in &answer.used_rules {
+                        if let Some(rule) = memory.rules.iter().find(|rule| &rule.id == id) {
+                            units.push(format!(
+                                "適用規則: {} ならば {}（規則ID: {}）",
+                                describe(&rule.premise),
+                                describe(&rule.conclusion),
+                                rule.id
+                            ));
+                        }
+                    }
+                    units.push(
+                        "この説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。"
+                            .into(),
+                    );
+                    result.dependencies.push(prior.id.clone());
+                    result.dependencies.extend(proof_dependencies);
+                    result.guarantee = answer_guarantee;
                 } else {
                     units.push(prior.text.clone());
+                    result.dependencies.push(prior.id.clone());
+                    result.guarantee = prior.guarantee.clone();
                 }
-                result.dependencies.push(prior.id.clone());
-                result.guarantee = prior.guarantee.clone();
             }
             Intent::SummarizePreviousSource => {
                 let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
@@ -2204,6 +2280,15 @@ fn rejected(request: &RequestEnvelope, code: &str, message: &str) -> ResultRecor
     r.reason = Some(format!("{code}: {message}"));
     r.text = message.into();
     r
+}
+pub(crate) fn previous_relation_answer(text: &str) -> Result<Option<Proposition>> {
+    let Some(statement) = text
+        .strip_prefix("提示された前提の範囲では、")
+        .and_then(|value| value.strip_suffix('。'))
+    else {
+        return Ok(None);
+    };
+    input::parse_proposition(statement, false)
 }
 fn describe(p: &Proposition) -> String {
     if p.predicate == "is" {

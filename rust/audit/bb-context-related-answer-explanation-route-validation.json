@@ -1,0 +1,242 @@
+{
+  "work_item": "BODY-1 bounded BB-CONTEXT relation-answer explanation",
+  "parser_version": "declarative-ja-en-v48-related-context-explanation",
+  "execution_mode": "fresh CLI process for each request; actor-scoped memory; same-case prior result",
+  "producer_consumer": "committed relation answer -> exact conclusion recovery -> active proof replay -> premise/rule explanation -> content/render/result lineage",
+  "scope": "Re-explains supported copular relation answers only when the same current proof, dependencies and guarantee still hold. Shows direct premise and applicable rule IDs; a changed proof suspends rather than explaining stale support.",
+  "observations": [
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "bird-rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "coco-question",
+      "request": "ココは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ココは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467",
+        "fact:e8ddf41e86b4e44ebfcfd700982c3fbfd07362ca41527f1797a36134a026b2eb",
+        "rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "coco-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "前回の結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467）\n導出された事実: ココは動物である（導出ID: fact:e8ddf41e86b4e44ebfcfd700982c3fbfd07362ca41527f1797a36134a026b2eb; 依存ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467, rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7）\nこの説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "bb3205e8a0adee33f7e72baf6e605a47614508770d2408d04093ff974a5d57f5",
+        "fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467",
+        "fact:e8ddf41e86b4e44ebfcfd700982c3fbfd07362ca41527f1797a36134a026b2eb",
+        "rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "stale-relation-follow-up",
+      "input_id": "stale-question",
+      "request": "ココは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ココは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467",
+        "fact:e8ddf41e86b4e44ebfcfd700982c3fbfd07362ca41527f1797a36134a026b2eb",
+        "rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "rule-invalidation",
+      "input_id": "invalidate-bird-rule",
+      "request": "rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7を無効化して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "stale-relation-follow-up",
+      "input_id": "stale-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "前回の関係回答を支えた現在有効な根拠が変わっています。新しい問いで確認してください。",
+      "reason": "CONTEXT_PROOF_CHANGED: 前回の関係回答を支えた現在有効な根拠が変わっています。新しい問いで確認してください。",
+      "dependencies": []
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "mike-negative",
+      "request": "ミケは鳥ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥ではない。\n前提ID: fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "mike-question",
+      "request": "ミケは鳥ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ミケは鳥ではない。",
+      "reason": null,
+      "dependencies": [
+        "fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1"
+      ]
+    },
+    {
+      "actor": "fixture-relation-reader",
+      "case": "relation-follow-up",
+      "input_id": "mike-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前回の結論: ミケは鳥ではない。\n直接提示された前提: ミケは鳥ではない（根拠ID: fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1）\nこの説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "80600c8dec4f985151e01fdc3132bba4381345bc75cb7b5c0a6c04128a8e5cba",
+        "fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1"
+      ]
+    },
+    {
+      "actor": "fixture-explanation-recovery",
+      "case": "explanation-file-recovery",
+      "input_id": "rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604"
+      ]
+    },
+    {
+      "actor": "fixture-explanation-recovery",
+      "case": "explanation-file-recovery",
+      "input_id": "bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20"
+      ]
+    },
+    {
+      "actor": "fixture-explanation-recovery",
+      "case": "explanation-file-recovery",
+      "input_id": "answer",
+      "request": "ココは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ココは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20",
+        "fact:c43c6fa4aab787a87d813e7bdd11fd125a08751631953bb3fd337ac2906fd085",
+        "rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604"
+      ]
+    },
+    {
+      "actor": "fixture-explanation-recovery",
+      "case": "explanation-file-recovery",
+      "input_id": "explanation-file",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "前回の結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20）\n導出された事実: ココは動物である（導出ID: fact:c43c6fa4aab787a87d813e7bdd11fd125a08751631953bb3fd337ac2906fd085; 依存ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20, rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604）\nこの説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "c92d9083fccba171ff85756a23aee9cc78c9206ec427fe1fb6d806ebd8d36178",
+        "fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20",
+        "fact:c43c6fa4aab787a87d813e7bdd11fd125a08751631953bb3fd337ac2906fd085",
+        "rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604"
+      ]
+    },
+    {
+      "actor": "fixture-explanation-recovery",
+      "case": "explanation-file-recovery",
+      "operation": "reconcile",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "receipt_phase": "CONFIRMED",
+      "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+      "dependencies": [
+        "c92d9083fccba171ff85756a23aee9cc78c9206ec427fe1fb6d806ebd8d36178",
+        "fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20",
+        "fact:c43c6fa4aab787a87d813e7bdd11fd125a08751631953bb3fd337ac2906fd085",
+        "rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604"
+      ]
+    }
+  ],
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "DERIVED",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true
+  },
+  "outcome": "PASS",
+  "acceptance_boundary": "This is a bounded relation-answer context route. General explanation, paraphrase, examples, broad topic continuity and complete BB-CONTEXT/A07/A14 acceptance remain BUILD_GAP/UNVERIFIED."
+}

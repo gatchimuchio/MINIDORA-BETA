@@ -400,7 +400,9 @@ fn inspect(
         let answer = crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
         let current_proof_contract = matches!(
             bundle.meaning.parser_version.as_str(),
-            "declarative-ja-en-v46-proof-lineage-guarantee" | crate::input::PARSER_VERSION
+            "declarative-ja-en-v46-proof-lineage-guarantee"
+                | "declarative-ja-en-v47-premise-inspection"
+                | "declarative-ja-en-v48-related-context-explanation"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -436,6 +438,28 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_PREMISES_CHANGED",
                 "the original active premise listing is no longer valid unchanged",
+            ));
+        }
+    }
+    if bundle.meaning.parser_version == "declarative-ja-en-v48-related-context-explanation"
+        && matches!(goal.intent, Intent::ExplainPrevious)
+        && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
+        && let Some(previous) = state.prior_results.get(previous_id)
+        && let Some(proposition) = crate::core::previous_relation_answer(&previous.text)?
+    {
+        let memory = store.load_memory(actor)?;
+        let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
+        let mut dependencies = vec![previous.id.clone()];
+        dependencies.extend(crate::relations::answer_dependencies(&answer));
+        if previous.lifecycle != Lifecycle::Commit
+            || answer.status != "SUPPORTED"
+            || dependencies != result.dependencies
+            || previous.guarantee != crate::relations::answer_guarantee(&answer)
+            || result.guarantee != crate::relations::answer_guarantee(&answer)
+        {
+            return Err(failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the relation proof behind the previous-answer explanation changed",
             ));
         }
     }
