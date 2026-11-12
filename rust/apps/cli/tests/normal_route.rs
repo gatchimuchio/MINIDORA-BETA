@@ -1848,7 +1848,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v49-why-proof-query"
+        "declarative-ja-en-v50-code-context-explanation"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -1971,7 +1971,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v49-why-proof-query"
+        "declarative-ja-en-v50-code-context-explanation"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -6448,6 +6448,55 @@ fn structured_code_generation_route_headers_and_actual_artifacts() {
             assert_eq!(report["constructed_ast_depth"], 8);
         }
     }
+}
+
+#[test]
+fn generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage() {
+    let scratch = Scratch::new();
+    let value = code_document(
+        "増分",
+        &["x"],
+        vec![code_return(code_binary(
+            "算術",
+            "加算",
+            code_ref("x"),
+            code_constant("幅"),
+        ))],
+        serde_json::json!({"幅": 1}),
+    );
+    let document = serde_json::to_string(&value).unwrap();
+    let request = format!("code-generate:\n{document}");
+    let generated = record(&execute(&scratch.0, "owner", &[&request]));
+    assert_eq!(generated["lifecycle"], "COMMIT");
+    assert!(generated["text"].as_str().unwrap().contains("x +"));
+    let report_ref = generated["dependencies"][0].as_str().unwrap().to_owned();
+
+    let explanation = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "explain-generated-code", "詳しく説明して"],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "COMPUTED");
+    let explanation_text = explanation["text"].as_str().unwrap();
+    assert!(explanation_text.contains("前回生成した関数「増分」"));
+    assert!(explanation_text.contains("入力値「x」に定数辞書の「幅」を足した値を返します。"));
+    assert!(
+        explanation_text.contains("Python構文解析=NOT_RUN, 実行=NOT_RUN, 入出力テスト=NOT_RUN")
+    );
+    let dependencies = explanation["dependencies"].as_array().unwrap();
+    assert!(dependencies.contains(&generated["id"]));
+    assert!(dependencies.contains(&serde_json::json!(report_ref)));
+
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v50-code-context-explanation"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        generated["id"]
+    );
 }
 
 #[test]

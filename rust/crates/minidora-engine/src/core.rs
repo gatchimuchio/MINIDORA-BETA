@@ -1178,6 +1178,18 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
+                } else if let Some((report_ref, explanation)) =
+                    crate::code_generation::previous_code_explanation(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        prior,
+                    )?
+                {
+                    units.extend(explanation);
+                    result.dependencies.push(prior.id.clone());
+                    result.dependencies.push(report_ref);
+                    result.guarantee = prior.guarantee.clone();
                 } else {
                     units.push(prior.text.clone());
                     result.dependencies.push(prior.id.clone());

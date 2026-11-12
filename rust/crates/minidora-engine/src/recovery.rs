@@ -404,6 +404,7 @@ fn inspect(
                 | "declarative-ja-en-v47-premise-inspection"
                 | "declarative-ja-en-v48-related-context-explanation"
                 | "declarative-ja-en-v49-why-proof-query"
+                | "declarative-ja-en-v50-code-context-explanation"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -446,6 +447,7 @@ fn inspect(
         bundle.meaning.parser_version.as_str(),
         "declarative-ja-en-v48-related-context-explanation"
             | "declarative-ja-en-v49-why-proof-query"
+            | "declarative-ja-en-v50-code-context-explanation"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -464,6 +466,25 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_CONTEXT_PROOF_CHANGED",
                 "the relation proof behind the previous-answer explanation changed",
+            ));
+        }
+    }
+    if bundle.meaning.parser_version == "declarative-ja-en-v50-code-context-explanation"
+        && matches!(goal.intent, Intent::ExplainPrevious)
+        && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
+        && let Some(previous) = state.prior_results.get(previous_id)
+        && let Some((report_ref, expected_units)) =
+            crate::code_generation::previous_code_explanation(store, actor, case, previous)?
+    {
+        let expected_dependencies = vec![previous.id.clone(), report_ref];
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != expected_dependencies
+            || plan.required_units != expected_units
+            || result.guarantee != previous.guarantee
+        {
+            return Err(failure(
+                "RECOVERY_CODE_CONTEXT_CHANGED",
+                "the code-generation source or structured explanation no longer matches the prior result",
             ));
         }
     }

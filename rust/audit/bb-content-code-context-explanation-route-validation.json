@@ -1,0 +1,73 @@
+{
+  "work_item": "BODY-1 bounded BB-CONTEXT/BB-CONTENT generated-code explanation",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-12T22:57:41+00:00",
+  "base_commit": "b18f470a92222ce23aebfe0db3b7dfed0605367e",
+  "requirement_ids": [
+    "A07",
+    "A14",
+    "B07",
+    "F04",
+    "E08",
+    "E12"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v50-code-context-explanation",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/code_generation.rs": "1fd9f83a68d830e83aa1ccccf5584a2035b08f04adc7b0471b7cfdbf3b0ddf85",
+    "rust/crates/minidora-engine/src/core.rs": "81c96cc28ad2c86cd27c267444a43cd7d5ef42e79a4977a52fa8bb4f6c6c5831",
+    "rust/crates/minidora-engine/src/recovery.rs": "222f793794e1bd072fca3162a78dc48a73d32c719a851d9eedc7a2bd34f09c4b",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e",
+    "rust/crates/minidora-engine/src/input.rs": "533740f650e00b02e9220649cbc2425be70d1ae7643a7eb5d8d7cf82af332a96"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "9d2051d7f8a279b1e09102f0c0584974b4424b8ebe624b0fae12cd63d1e10398",
+    "rust/tools/code_context_explanation_route_test.py": "f78ce68bad153a652149b6732573382ac6971c07cb158e605f07d29d51b2ad2b"
+  },
+  "execution_mode": "fresh CLI process per request; temporary actor/case state",
+  "producer_consumer": "structured code request -> generated source plus immutable code report -> ExplainPrevious loads the same-case report -> IR-derived explanation -> content/render/local-file receipt -> Core recovery replay",
+  "scope": "Explains only code produced by the existing structured algorithm IR generator. Reconstructs each assignment, branch, loop, expression and return from its retained specification; links the prior result and report artifact. Python parsing, execution and input/output tests remain explicitly NOT_RUN.",
+  "generated_result": {
+    "id": "63f20b95f27ca7b41b19a5b92de883c19a8d62e62f4821bd4ceab62d18a4b16c",
+    "source_sha256": "8a93af9e4b61aa1a5351af0bb56ff9ba1e85511ee8b77c93c516305eda44a726",
+    "report_artifact_ref": "647328e8ab02510138caf3959a6299b72fee20dda5bcf29c83841bfdf89ff4c4"
+  },
+  "explanation_result": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "text": "前回生成した関数「増分」の構造化手順です。\n引数: x、定数。最後の「定数」は、生成コードへ渡す定数辞書です。\n手順:\n  入力値「x」に定数辞書の「幅」を足した値を返します。\n生成Pythonソース SHA-256: 8a93af9e4b61aa1a5351af0bb56ff9ba1e85511ee8b77c93c516305eda44a726。\n記録された状態: Python構文解析=NOT_RUN, 実行=NOT_RUN, 入出力テスト=NOT_RUN。これらがNOT_RUNなら未実施です。",
+    "dependencies": [
+      "63f20b95f27ca7b41b19a5b92de883c19a8d62e62f4821bd4ceab62d18a4b16c",
+      "647328e8ab02510138caf3959a6299b72fee20dda5bcf29c83841bfdf89ff4c4"
+    ],
+    "local_file_sha256": "581c579d5b49e453e03658d6e580945f9a2bfea4f9aa877f2577aecdb1ad54ab"
+  },
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true
+  },
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo check --workspace --all-targets --locked",
+    "cargo test -p minidora-engine code_explanation_ --lib",
+    "cargo test -p minidora-cli --test normal_route generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage",
+    "python3 tools/code_context_explanation_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-content-code-context-explanation-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite, Clippy and full code-capability QA",
+    "parsing or executing generated Python; verification is not claimed",
+    "general free-form code explanation, revision and full B07/F04 acceptance"
+  ],
+  "acceptance_boundary": "This closes one structured-IR code-generation-to-context-explanation route. General code understanding, execution/test validation and full BB-CONTENT/BB-CONTEXT acceptance remain UNVERIFIED."
+}

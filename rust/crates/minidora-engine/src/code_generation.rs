@@ -483,9 +483,247 @@ pub fn generate(document: &str) -> Result<CodeGenerationReport> {
     })
 }
 
+/// Reconstructs a prior code-generation report only from an artifact bound to
+/// the same actor and case, then checks that it is the exact output retained
+/// by that prior result. A previous prose result which happens to depend on
+/// the same artifact is not reclassified as generated source.
+pub(crate) fn previous_code_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &minidora_domain::ResultRecord,
+) -> Result<Option<(String, Vec<String>)>> {
+    for dependency in &previous.dependencies {
+        let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)? else {
+            continue;
+        };
+        let Ok(report) = serde_json::from_slice::<CodeGenerationReport>(&bytes) else {
+            continue;
+        };
+        if report.version != VERSION || report.source != previous.text {
+            continue;
+        }
+        let units = explanation_lines(&report)?;
+        return Ok(Some((dependency.clone(), units)));
+    }
+    Ok(None)
+}
+
+/// Explains only the operation tree declared in the original algorithm IR.
+/// It neither executes nor independently validates the generated Python.
+pub(crate) fn explanation_lines(report: &CodeGenerationReport) -> Result<Vec<String>> {
+    if generate(&report.source_document)? != *report {
+        return Err(failure(
+            "CODE_GENERATION_CONTEXT_MISMATCH",
+            "stored code report is not reproducible from its structured specification",
+        ));
+    }
+    let document: Value = serde_json::from_str(&report.source_document)?;
+    let specification = document
+        .get("仕様")
+        .ok_or_else(|| invalid("stored code specification is missing"))?;
+    let steps = specification
+        .get("手順")
+        .ok_or_else(|| invalid("stored algorithm steps are missing"))?;
+    let mut lines = vec![
+        format!(
+            "前回生成した関数「{}」の構造化手順です。",
+            report.function_name
+        ),
+        format!(
+            "引数: {}。最後の「定数」は、生成コードへ渡す定数辞書です。",
+            report.parameters.join("、")
+        ),
+        "手順:".into(),
+    ];
+    explain_block(steps, 0, &mut lines)?;
+    if !report.source_sha256.is_empty() {
+        lines.push(format!(
+            "生成Pythonソース SHA-256: {}。",
+            report.source_sha256
+        ));
+    }
+    lines.push(format!(
+        "記録された状態: Python構文解析={}, 実行={}, 入出力テスト={}。これらがNOT_RUNなら未実施です。",
+        report.python_parse, report.execution, report.input_output_tests
+    ));
+    Ok(lines)
+}
+
+fn explain_block(rows: &Value, depth: usize, lines: &mut Vec<String>) -> Result<()> {
+    let rows = rows
+        .as_array()
+        .ok_or_else(|| invalid("stored algorithm block must be an array"))?;
+    let indent = "  ".repeat(depth + 1);
+    if rows.is_empty() {
+        lines.push(format!("{indent}追加の明示手順はありません。"));
+        return Ok(());
+    }
+    for node in rows {
+        let kind = node
+            .get("種別")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("stored algorithm statement has no kind"))?;
+        match kind {
+            "代入" => {
+                let name = node["名前"]
+                    .as_str()
+                    .ok_or_else(|| invalid("stored assignment name must be a string"))?;
+                let expression = expression_summary(&node["式"])?;
+                lines.push(format!(
+                    "{indent}変数「{name}」に、{expression}を代入します。"
+                ));
+            }
+            "返却" => {
+                let expression = expression_summary(&node["式"])?;
+                lines.push(format!("{indent}{expression}を返します。"));
+            }
+            "分岐" => {
+                let condition = expression_summary(&node["条件"])?;
+                lines.push(format!("{indent}条件「{condition}」が真なら:"));
+                explain_block(&node["真"], depth + 1, lines)?;
+                lines.push(format!("{indent}条件が偽なら:"));
+                explain_block(&node["偽"], depth + 1, lines)?;
+            }
+            "反復" => {
+                let variable = node["変数"]
+                    .as_str()
+                    .ok_or_else(|| invalid("stored loop variable must be a string"))?;
+                let target = expression_summary(&node["対象"])?;
+                lines.push(format!(
+                    "{indent}「{target}」の各要素を変数「{variable}」に順に設定して繰り返します:"
+                ));
+                explain_block(&node["手順"], depth + 1, lines)?;
+            }
+            _ => return Err(invalid("stored algorithm statement is unsupported")),
+        }
+    }
+    Ok(())
+}
+
+fn expression_summary(node: &Value) -> Result<String> {
+    let kind = node
+        .get("種別")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("stored expression has no kind"))?;
+    let field = |key: &str| {
+        node.get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid(format!("stored expression field {key} must be a string")))
+    };
+    match kind {
+        "参照" => Ok(format!("入力値「{}」", field("名前")?)),
+        "定数参照" => Ok(format!("定数辞書の「{}」", field("キー")?)),
+        "算術" => {
+            let left = expression_summary(&node["左"])?;
+            let right = expression_summary(&node["右"])?;
+            let operation = match field("演算")? {
+                "加算" => format!("{left}に{right}を足した値"),
+                "減算" => format!("{left}から{right}を引いた値"),
+                "乗算" => format!("{left}と{right}の積"),
+                "整数商" => format!("{left}を{right}で整数除算した商"),
+                "剰余" => format!("{left}を{right}で割った余り"),
+                _ => return Err(invalid("stored arithmetic operator is unsupported")),
+            };
+            Ok(operation)
+        }
+        "比較" => {
+            let left = expression_summary(&node["左"])?;
+            let right = expression_summary(&node["右"])?;
+            let comparison = match field("演算")? {
+                "等値" => format!("{left}と{right}が等しい"),
+                "非等値" => format!("{left}と{right}が等しくない"),
+                "未満" => format!("{left}は{right}より小さい"),
+                "以下" => format!("{left}は{right}以下"),
+                "超" => format!("{left}は{right}より大きい"),
+                "以上" => format!("{left}は{right}以上"),
+                _ => return Err(invalid("stored comparison operator is unsupported")),
+            };
+            Ok(format!("{comparison}かどうか"))
+        }
+        "選択" => Ok(format!(
+            "条件「{}」が真なら「{}」、偽なら「{}」を選んだ値",
+            expression_summary(&node["条件"])?,
+            expression_summary(&node["真"])?,
+            expression_summary(&node["偽"])?
+        )),
+        "リスト" => {
+            let values = node["要素"]
+                .as_array()
+                .ok_or_else(|| invalid("stored list elements must be an array"))?
+                .iter()
+                .map(expression_summary)
+                .collect::<Result<Vec<_>>>()?;
+            if values.is_empty() {
+                Ok("空のリスト".into())
+            } else {
+                Ok(format!("要素が順に{}のリスト", values.join("、")))
+            }
+        }
+        "添字" => Ok(format!(
+            "{}の位置{}にある要素",
+            expression_summary(&node["対象"])?,
+            expression_summary(&node["位置"])?
+        )),
+        "呼出" => {
+            let name = field("関数")?;
+            let arguments = node["引数"]
+                .as_array()
+                .ok_or_else(|| invalid("stored call arguments must be an array"))?
+                .iter()
+                .map(expression_summary)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(format!(
+                "{}({})の結果",
+                match name {
+                    "合計" => "合計",
+                    "長さ" => "長さ",
+                    "範囲" => "範囲",
+                    "絶対値" => "絶対値",
+                    "最小" => "最小値",
+                    "最大" => "最大値",
+                    "整列" => "整列",
+                    "リスト化" => "リスト化",
+                    "すべて" => "すべての条件判定",
+                    "いずれか" => "いずれかの条件判定",
+                    _ => return Err(invalid("stored function call is unsupported")),
+                },
+                arguments.join("、")
+            ))
+        }
+        _ => Err(invalid("stored algorithm expression is unsupported")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_explanation_uses_the_saved_algorithm_ir_and_keeps_execution_unverified() {
+        let document = r#"{"仕様":{"名前":"増分","引数":["x"],"手順":[{"種別":"返却","式":{"種別":"算術","演算":"加算","左":{"種別":"参照","名前":"x"},"右":{"種別":"定数参照","キー":"幅"}}}]},"定数":{"幅":1}}"#;
+        let report = generate(document).unwrap();
+        let lines = explanation_lines(&report).unwrap();
+        let explanation = lines.join("\n");
+        assert!(explanation.contains("関数「増分」"));
+        assert!(explanation.contains("入力値「x」に定数辞書の「幅」を足した値を返します。"));
+        assert!(explanation.contains("Python構文解析=NOT_RUN, 実行=NOT_RUN, 入出力テスト=NOT_RUN"));
+        assert!(!explanation.contains("実行しました"));
+    }
+
+    #[test]
+    fn code_explanation_preserves_loop_and_branch_structure() {
+        let document = r#"{"仕様":{"名前":"正数だけを返す","引数":["values"],"手順":[{"種別":"反復","変数":"value","対象":{"種別":"参照","名前":"values"},"手順":[{"種別":"分岐","条件":{"種別":"比較","演算":"超","左":{"種別":"参照","名前":"value"},"右":{"種別":"定数参照","キー":"下限"}},"真":[{"種別":"返却","式":{"種別":"呼出","関数":"絶対値","引数":[{"種別":"参照","名前":"value"}]}}],"偽":[]}]}]},"定数":{"下限":0}}"#;
+        let report = generate(document).unwrap();
+        let explanation = explanation_lines(&report).unwrap().join("\n");
+        assert!(explanation.contains("の各要素を変数「value」に順に設定して繰り返します:"));
+        assert!(
+            explanation.contains("条件「入力値「value」は定数辞書の「下限」より大きいかどうか」")
+        );
+        assert!(explanation.contains("条件が偽なら:"));
+        assert!(explanation.contains("追加の明示手順はありません。"));
+        assert!(explanation.contains("絶対値(入力値「value」)"));
+    }
 
     #[test]
     fn structured_code_generation_identifier_contract() {

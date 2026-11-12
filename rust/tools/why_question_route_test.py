@@ -196,7 +196,7 @@ def main() -> None:
                 ):
                     assert state["bundle"]["meaning"]["intent"]["kind"] == "ASK_WHY"
                     assert state["bundle"]["meaning"]["parser_version"] == (
-                        "declarative-ja-en-v49-why-proof-query"
+                        "declarative-ja-en-v50-code-context-explanation"
                     )
                     adopted = (revision_number, saved)
             assert adopted is not None, "Core did not retain the adopted why-answer result"
@@ -273,7 +273,7 @@ def main() -> None:
             "requirement_ids": ["A13", "A12", "A15", "E08", "E12"],
             "software_version": "0.7.0-alpha.8",
             "schema_version": "minidora-rust/0.7.0-alpha.8",
-            "parser_version": "declarative-ja-en-v49-why-proof-query",
+            "parser_version": "declarative-ja-en-v50-code-context-explanation",
             "toolchain": toolchain,
             "source_snapshot_sha256": sha256_paths(source_paths),
             "test_and_tool_snapshot_sha256": sha256_paths(test_paths),
@@ -303,13 +303,13 @@ def main() -> None:
                 "cargo check --workspace --all-targets --locked",
                 "cargo test -p minidora-engine why_questions_parse_only_one_supported_relation --lib",
                 "cargo test -p minidora-cli --test normal_route natural_why_question_explains_only_current_relation_proofs",
-                "python3 tools/why_question_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-why-question-route-validation.json",
+                "python3 tools/why_question_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-why-question-v50-route-validation.json",
             ],
             "regression_checks": [
                 {
                     "command": "python3 tools/related_answer_explanation_test.py --binary target/debug/minidora-rust",
                     "outcome": "PASS",
-                    "scope": "Existing v48 prior-answer explanation, stale-proof suspension and adopted-file recovery through the v49 binary",
+                    "scope": "Existing v48 prior-answer explanation, stale-proof suspension and adopted-file recovery through the v50 binary",
                 }
             ],
             "not_run": [

@@ -71,9 +71,13 @@ A quantity reference must occupy a complete number-and-unit operand of the exist
 "$minidora_bin" --db "$minidora_state" --actor demo --case generated-function \
   'code-generate:
 {"仕様":{"名前":"増分","引数":["x"],"手順":[{"種別":"返却","式":{"種別":"算術","演算":"加算","左":{"種別":"参照","名前":"x"},"右":{"種別":"定数参照","キー":"幅"}}}]},"定数":{"幅":1}}'
+"$minidora_bin" --db "$minidora_state" --actor demo --case generated-function \
+  '詳しく説明して'
 ```
 
 `code-generate:` (ASCII case insensitive) and `コードを生成して:` accept the original JSON body with exactly `仕様` and `定数`. This ports the existing explicit algorithm-generation contract. The specification has exactly `名前`, `引数` and `手順`; it supplies the algorithm. The function receives the declared arguments followed by the separate `定数` dictionary. Changing constant values preserves the generated source. The output is Python source; an exact `--output` / `--allow-write` grant can save those same bytes as a file.
+
+In the same actor and case, `詳しく説明して` after code generation reads its stored report and reconstructs the explanation from that exact algorithm IR. It describes assignments, branches, loops, expressions and returns, keeps the generated report/prior-result dependencies, and states the stored Python parse/execution/test status. The route does not run the generated code; see [the code-context route evidence](audit/bb-content-code-context-explanation-route-validation.json). Free-form code explanation, edits and full B07 acceptance remain `UNVERIFIED`.
 
 | IR category | Supported forms |
 |---|---|

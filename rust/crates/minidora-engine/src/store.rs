@@ -376,6 +376,27 @@ impl Store {
         self.read_blob_bytes(sha)
     }
 
+    /// Reads a case-scoped artifact only when the supplied identity is bound
+    /// to this case. A missing binding is an ordinary non-match; a bound but
+    /// missing or corrupt blob remains an integrity failure.
+    pub fn get_bytes_if_present(
+        &self,
+        actor: &str,
+        case: &str,
+        sha: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        Self::require_case(&self.connection, actor, case)?;
+        let available: bool = sql(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM case_artifact WHERE case_id=?1 AND sha256=?2)",
+            params![case, sha],
+            |row| row.get(0),
+        ))?;
+        if !available {
+            return Ok(None);
+        }
+        Ok(Some(self.read_blob_bytes(sha)?))
+    }
+
     fn require_artifact(&self, connection: &Connection, case: &str, sha: &str) -> Result<()> {
         let available: bool = sql(connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM case_artifact WHERE case_id=?1 AND sha256=?2)",
