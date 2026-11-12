@@ -254,6 +254,27 @@ impl Engine {
         self.advance(&mut state, Lifecycle::Sealed, None)?;
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
+        let source_followup_indices =
+            if matches!(bundle.meaning.intent, Intent::SummarizePreviousSource) {
+                previous
+                    .filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                    .map(|prior| {
+                        prior
+                            .evidence
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, packet)| {
+                                packet.packet_kind == "FETCHED_BODY"
+                                    && packet.failure.is_none()
+                                    && packet.extracted_text.is_some()
+                            })
+                            .map(|(index, _)| index)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
         if let Intent::Retrieve { urls, .. } = &bundle.meaning.intent {
             for (index, _) in urls.iter().enumerate() {
                 let id = format!("source-{index}");
@@ -264,6 +285,15 @@ impl Engine {
                     requires: Vec::new(),
                 });
             }
+        }
+        for index in &source_followup_indices {
+            let id = format!("followup-source-{index}");
+            nodes.push(GoalNode {
+                id: id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            compute_requires.push(id);
         }
         if let Intent::CalculateSequence { steps } = &bundle.meaning.intent {
             for step in steps {
@@ -1125,6 +1155,105 @@ impl Engine {
                 }
                 result.dependencies.push(prior.id.clone());
                 result.guarantee = prior.guarantee.clone();
+            }
+            Intent::SummarizePreviousSource => {
+                let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "要約対象となる実際の採用済み出典結果がありません。",
+                    );
+                };
+                if source_followup_indices.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SOURCE_BODY_UNAVAILABLE",
+                        "前回結果に要約できる取得本文がありません。検索一覧や題名だけから本文を補いません。",
+                    );
+                }
+                result.dependencies.push(prior.id.clone());
+                let mut source_reports = Vec::new();
+                let mut report_bytes = 0usize;
+                for source_index in &source_followup_indices {
+                    let Some(packet) = prior.evidence.get(*source_index) else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Fail,
+                            "SOURCE_EVIDENCE_INDEX_MISMATCH",
+                            "取得本文の保存位置が前回結果と一致しません。",
+                        );
+                    };
+                    let packet_bytes = canonical(packet)?;
+                    let packet_ref = digest(&packet_bytes);
+                    let retained = match self.store.get_bytes(actor, &request.case_id, &packet_ref)
+                    {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "SOURCE_EVIDENCE_UNAVAILABLE",
+                                &error.to_string(),
+                            );
+                        }
+                    };
+                    if retained != packet_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Fail,
+                            "SOURCE_EVIDENCE_INTEGRITY_FAILURE",
+                            "前回の取得本文artifactが保存済みpacketと一致しません。",
+                        );
+                    }
+                    let node_id = format!("followup-source-{source_index}");
+                    graph.observe(&node_id, &packet_ref, &BTreeMap::new())?;
+                    let source_report = match crate::text_summary::summarize_fetched_source(
+                        &prior.id,
+                        packet,
+                        &packet_ref,
+                    ) {
+                        Ok(report) => report,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "SOURCE_SUMMARY_FAILED",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
+                        }
+                    };
+                    let encoded = canonical(&source_report)?;
+                    report_bytes = report_bytes.saturating_add(encoded.len());
+                    if report_bytes > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "出典付き要約artifactが要求の証拠予算を超えました。",
+                        );
+                    }
+                    units.push(format!(
+                        "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
+                        source_report.source_final_uri,
+                        source_report.source_packet_id,
+                        source_report.raw_body_sha256,
+                        source_report.summary.text
+                    ));
+                    source_reports.push(encoded);
+                    result.dependencies.push(packet_ref);
+                }
+                for encoded in source_reports {
+                    let report_ref = self.store.put_bytes(actor, &request.case_id, &encoded)?;
+                    result.dependencies.push(report_ref);
+                }
+                result.guarantee = Guarantee::Hypothesis;
             }
             Intent::Assert { proposition } => {
                 let mut memory = self.store.load_memory(actor)?;

@@ -170,6 +170,7 @@ pub enum Intent {
         replacement: String,
     },
     ExplainPrevious,
+    SummarizePreviousSource,
     GenerateCode {
         document: String,
     },

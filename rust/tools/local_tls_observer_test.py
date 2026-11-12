@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import socket
 import ssl
 import subprocess
@@ -173,6 +174,99 @@ def run_case(binary: Path, directory: Path, fixture: Fixture, ca: Path,
     return {"name": name, "exit_code": completed.returncode, "result": result}
 
 
+def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path,
+                       prior: dict) -> dict:
+    environment = os.environ.copy()
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        environment[key] = fixture.proxy
+    environment["NO_PROXY"] = environment["no_proxy"] = ""
+    environment["SSL_CERT_FILE"] = str(ca)
+    output_path = directory / "source-summary.txt"
+    state_path = directory / "state-success"
+    completed = subprocess.run(
+        [str(binary), "run", "--db", str(state_path),
+         "--case", "success", "--actor", "fixture-local", "--input", "summary",
+         "--json", "--max-evidence-bytes", "4096", "--deadline-ms", "5000",
+         "--output", str(output_path), "--allow-write", str(output_path),
+         "前回の資料を要約して"],
+        env=environment, capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert completed.returncode == 0, (
+        f"source-summary follow-up: exit={completed.returncode} "
+        f"stdout={completed.stdout} stderr={completed.stderr}"
+    )
+    result = json.loads(completed.stdout)
+    packet = prior["evidence"][0]
+    assert result["lifecycle"] == "COMMIT"
+    assert result["guarantee"] == "HYPOTHESIS"
+    assert result["evidence"] == []
+    assert len(result["receipts"]) == 1
+    assert result["receipts"][0]["phase"] == "CONFIRMED"
+    assert result["receipts"][0]["target"] == str(output_path)
+    assert result["dependencies"][0] == prior["id"]
+    assert packet["final_uri"] in result["text"]
+    assert packet["raw_sha256"] in result["text"]
+    assert "ライセンス情報: 未記録" in result["text"]
+    assert "網羅は検証していません" in result["text"]
+    for sentence in ("外部命令は権限ではない", "値: 5"):
+        assert sentence in result["text"]
+    assert output_path.read_bytes() == result["text"].encode("utf-8")
+    original_stat = output_path.stat()
+
+    # Test-only crash injection: roll the case journal back to the retained
+    # adopted rendering after the exact output happened, then run real recovery.
+    database = sqlite3.connect(state_path / "state.sqlite3")
+    snapshots = database.execute(
+        "SELECT revision,state_sha256 FROM case_revision ORDER BY revision"
+    ).fetchall()
+    retained = None
+    for revision_number, state_sha in snapshots:
+        state = json.loads((state_path / "blobs" / state_sha).read_text(encoding="utf-8"))
+        saved = state.get("result")
+        if (state["lifecycle"] == "ADOPTED" and saved
+                and saved.get("input_id") == "summary" and saved.get("render") is not None):
+            retained = (revision_number, saved)
+    assert retained is not None, "Core did not retain the source summary before delivery"
+    revision_number, saved_result = retained
+    canonical_result = json.dumps(
+        saved_result, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    result_sha = hashlib.sha256(canonical_result).hexdigest()
+    database.executescript(
+        "PRAGMA foreign_keys=ON; DROP TRIGGER case_revision_no_delete; "
+        "DROP TRIGGER action_history_no_delete;"
+    )
+    database.execute("DELETE FROM case_revision WHERE revision>?", (revision_number,))
+    database.execute("DELETE FROM action_history WHERE sequence>3")
+    database.execute(
+        "UPDATE input_identity SET result_sha256=? WHERE case_id=? AND input_id=?",
+        (result_sha, "success", "summary"),
+    )
+    database.commit()
+    database.close()
+
+    recovered_process = subprocess.run(
+        [str(binary), "reconcile", "--db", str(state_path), "--case", "success",
+         "--actor", "fixture-local", "--json"],
+        env=environment, capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert recovered_process.returncode == 0, (
+        f"source-summary recovery: exit={recovered_process.returncode} "
+        f"stdout={recovered_process.stdout} stderr={recovered_process.stderr}"
+    )
+    recovered = json.loads(recovered_process.stdout)
+    final_stat = output_path.stat()
+    assert recovered["lifecycle"] == "COMMIT"
+    assert recovered.get("reason", "").startswith("LOCAL_FILE_RECONCILED")
+    assert recovered["receipts"][-1]["phase"] == "CONFIRMED"
+    assert "NO_RESEND" in recovered["receipts"][-1]["reason"]
+    assert (final_stat.st_ino, final_stat.st_mtime_ns, final_stat.st_size) == (
+        original_stat.st_ino, original_stat.st_mtime_ns, original_stat.st_size
+    )
+    return {"name": "source-summary-follow-up", "exit_code": completed.returncode,
+            "input_processes": 2, "recovered": recovered, "result": result}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
@@ -184,8 +278,10 @@ def main() -> None:
         certificate, key, ca = certificates(directory)
         fixture = Fixture(certificate, key)
         try:
+            success = run_case(binary, directory, fixture, ca, "success", ["/ok"])
+            source_followup = run_source_summary(binary, directory, fixture, ca, success["result"])
             cases = [
-                run_case(binary, directory, fixture, ca, "success", ["/ok"]),
+                success,
                 run_case(binary, directory, fixture, ca, "redirect", ["/redirect"]),
                 run_case(binary, directory, fixture, ca, "partial-scope-denial", ["/ok", "/denied-redirect"]),
                 run_case(binary, directory, fixture, ca, "rate-limit", ["/429"]),
@@ -222,7 +318,8 @@ def main() -> None:
             "cases_passed": len(cases),
             "transport_observations": fixture.events,
             "cases": cases,
-            "scope": "Actual compiled CLI/reqwest/native-TLS transport with fixture source bytes; not LIVE Internet or benchmark acceptance",
+            "source_followup": source_followup,
+            "scope": "Actual compiled CLI/reqwest/native-TLS transport, persisted separate-process source follow-up and fixture source bytes; not LIVE Internet or benchmark acceptance",
         }
         if arguments.evidence_output:
             arguments.evidence_output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")

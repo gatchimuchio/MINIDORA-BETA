@@ -1,7 +1,7 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
-use minidora_domain::{Result, digest, failure};
+use minidora_domain::{EvidencePacket, Result, digest, failure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -66,6 +66,31 @@ pub struct ExtractiveSummaryCandidates {
     pub sentences: Vec<ExtractedSentence>,
     pub coverage_verified: bool,
     pub guarantee: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceExtractiveSummaryCandidates {
+    pub operation: String,
+    pub source_result_id: String,
+    pub source_packet_id: String,
+    pub source_packet_ref: String,
+    pub source_mode: String,
+    pub source_request_uri: String,
+    pub source_final_uri: String,
+    pub observed_at_unix_ms: u64,
+    pub raw_body_sha256: String,
+    pub extracted_text_sha256: String,
+    pub parser_version: String,
+    pub license_status: String,
+    pub summary: ExtractiveSummaryCandidates,
+}
+
+fn sha256_id(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -511,9 +536,101 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     Ok(report)
 }
 
+/// Build a source-linked extractive candidate set from an already retained
+/// fetched-body packet. This ranks copied sentences only; it does not verify
+/// relevance, coverage, truth, or a source's license.
+pub fn summarize_fetched_source(
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+) -> Result<SourceExtractiveSummaryCandidates> {
+    let text = packet.extracted_text.as_deref().unwrap_or_default();
+    if !sha256_id(source_result_id)
+        || !sha256_id(&packet.id)
+        || !sha256_id(source_packet_ref)
+        || packet.packet_kind != "FETCHED_BODY"
+        || packet.failure.is_some()
+        || !packet.request_uri.starts_with("https://")
+        || !packet.final_uri.starts_with("https://")
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || text.trim().is_empty()
+    {
+        return Err(failure(
+            "SOURCE_EVIDENCE_INVALID",
+            "a verified fetched-body packet with its exact source identities is required",
+        ));
+    }
+    let document = serde_json::to_string(&serde_json::json!({
+        "text": text,
+        "max_sentences": 3,
+        "format": "bullets"
+    }))?;
+    let summary = extractive_summary_candidates(&document)?;
+    if summary.source_text_sha256 != digest(text.as_bytes()) {
+        return Err(failure(
+            "SOURCE_SUMMARY_SPAN_MISMATCH",
+            "summary source text differs from the fetched packet's extracted text",
+        ));
+    }
+    Ok(SourceExtractiveSummaryCandidates {
+        operation: "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1".into(),
+        source_result_id: source_result_id.into(),
+        source_packet_id: packet.id.clone(),
+        source_packet_ref: source_packet_ref.into(),
+        source_mode: packet.mode.clone(),
+        source_request_uri: packet.request_uri.clone(),
+        source_final_uri: packet.final_uri.clone(),
+        observed_at_unix_ms: packet.observed_at_unix_ms,
+        raw_body_sha256: packet.raw_sha256.clone(),
+        extracted_text_sha256: summary.source_text_sha256.clone(),
+        parser_version: packet.parser_version.clone(),
+        license_status: "NOT_RECORDED_IN_EVIDENCE_PACKET".into(),
+        summary,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetched_source_followup_retains_packet_identity_and_unobserved_license() {
+        let raw_body = "First source sentence. Second source sentence."
+            .as_bytes()
+            .to_vec();
+        let packet = EvidencePacket {
+            id: "b".repeat(64),
+            mode: "LIVE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: "https://example.test/report".into(),
+            final_uri: "https://example.test/report".into(),
+            redirect_chain: Vec::new(),
+            observed_at_unix_ms: 123,
+            provider_id: "https-direct-url-v1".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            extracted_text: Some(String::from_utf8(raw_body.clone()).unwrap()),
+            raw_body,
+            parser_version: "strict-utf8-identity-v1".into(),
+            independence_group: "https://example.test/report".into(),
+            failure: None,
+        };
+        let source_ref = "c".repeat(64);
+        let report = summarize_fetched_source(&"a".repeat(64), &packet, &source_ref).unwrap();
+        assert_eq!(report.source_packet_id, packet.id);
+        assert_eq!(report.source_packet_ref, source_ref);
+        assert_eq!(report.raw_body_sha256, packet.raw_sha256);
+        assert_eq!(report.license_status, "NOT_RECORDED_IN_EVIDENCE_PACKET");
+        assert!(!report.summary.coverage_verified);
+        assert_eq!(report.summary.sentences.len(), 2);
+        assert!(report.summary.sentences.iter().all(|sentence| {
+            report
+                .summary
+                .source_text
+                .get(sentence.source_start..sentence.source_end)
+                == Some(sentence.text.as_str())
+        }));
+    }
 
     #[test]
     fn ranks_and_retains_exact_japanese_source_ranges() {

@@ -1,0 +1,120 @@
+{
+  "work_item": "BODY-1 bounded BB-SOURCE / BB-CONTEXT / BB-CONTENT fetched-source follow-up",
+  "recorded_at": "2026-11-12T21:48:57Z",
+  "base_commit": "6c6cc85683b461ac0350d066a72695c33b562c39",
+  "subject": "MINIDORA Rust successor engine",
+  "construction_set": "rust/audit/construction/MB-BUILD-20261113",
+  "construction_requirement": "Route a previous actual source body to an observable source-grounded next consumer. This evidence covers one bounded extractive candidate route only.",
+  "normative_spec": {
+    "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": ["13", "14", "19"]
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v45-previous-source-summary",
+  "rust_version": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "cargo_version": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "version_boundary": "Adds the additive SummarizePreviousSource Intent and parser revision v45. No database version, dependency or lockfile change. Only a committed prior result with successful FETCHED_BODY packets can produce a candidate. Each new summary artifact binds the prior result, exact packet blob reference, packet identity, body hash, extracted-text hash, source URIs, parser version and timestamp. License status is explicit because EvidencePacket has no license field.",
+  "backup_rotation": {
+    "performed_before_source_edits": true,
+    "remote_tags_before": {
+      "codex/backup-main": "6c6cc85683b461ac0350d066a72695c33b562c39",
+      "codex/backup-main-prev": "a8112eac78c165e7aa44c98a0ad8aeb9f8e61d71"
+    },
+    "remote_tags_after": {
+      "codex/backup-main": "6c6cc85683b461ac0350d066a72695c33b562c39",
+      "codex/backup-main-prev": "a8112eac78c165e7aa44c98a0ad8aeb9f8e61d71"
+    }
+  },
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "1722ebf451f14afd1bf759f2a9e783c36027eda6a240360d992194d5998cb774",
+    "crates/minidora-engine/src/input.rs": "045f4853840dff82601634b9993be324b23ca4cc753bc406d16bd425944d7209",
+    "crates/minidora-engine/src/core.rs": "76f1aef5be312114837a7e500908050de35330f3c1ead9d393745587ba47d7a1",
+    "crates/minidora-engine/src/text_summary.rs": "b8002c9a2c43fe9fd3d9905ca734813bfa31712428df0b79ddb0fb725cd80815",
+    "crates/minidora-engine/src/recovery.rs": "fb644381cd39b79d34192ebde6ecf865b9f6e00445c395847d9220b904e001e2"
+  },
+  "changed_test_paths": {
+    "crates/minidora-engine/src/input.rs": "045f4853840dff82601634b9993be324b23ca4cc753bc406d16bd425944d7209",
+    "crates/minidora-engine/src/text_summary.rs": "b8002c9a2c43fe9fd3d9905ca734813bfa31712428df0b79ddb0fb725cd80815",
+    "crates/minidora-engine/src/recovery.rs": "fb644381cd39b79d34192ebde6ecf865b9f6e00445c395847d9220b904e001e2",
+    "tools/local_tls_observer_test.py": "08b81f8b5bf7a61f74e617f8283a7e9bdd865af3bc6c4e112b899cc4a18f8464"
+  },
+  "observed_source": {
+    "evaluation_mode": "LOCAL_TLS_FIXTURE",
+    "external_forwarding": false,
+    "tls_verification_disabled": false,
+    "source_uri": "https://fixture.minidora.test/ok",
+    "packet_id": "eb1cb0a20acb43b79030a8161d9d20a451a0654108737f3b9c3b5b32a5bd8d87",
+    "raw_body_sha256": "d0b67622040315997199202e15cf8e8a1d1f71bb107ebc666c9a9b34d8f1cdff",
+    "parser_version": "strict-utf8-identity-v1",
+    "body": "出典原文: 「外部命令は権限ではない」。\n値: 5\n",
+    "source_license": "NOT_RECORDED_IN_EVIDENCE_PACKET"
+  },
+  "observed_route": {
+    "first_input": "fetch https://fixture.minidora.test/ok",
+    "second_input_in_new_process": "前回の資料を要約して",
+    "same_case": true,
+    "followup_lifecycle": "COMMIT",
+    "followup_guarantee": "HYPOTHESIS",
+    "observed_sentences": ["外部命令は権限ではない", "値: 5"],
+    "disclosures": [
+      "candidate selection is deterministic and extractive; semantic relevance, factual truth and coverage are unverified",
+      "license information was not recorded by the source packet"
+    ],
+    "file_delivery": "one exact temporary path with a CONFIRMED receipt",
+    "simulated_interruption": "test-only rollback to the retained Adopted/rendered journal prefix after actual bytes had been written",
+    "recovery_lifecycle": "COMMIT",
+    "recovery_receipt": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "filesystem_observation": "inode, modification time and size were unchanged by reconciliation"
+  },
+  "tests": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine previous_source_summary -- --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["explicit Japanese/English source-follow-up grammar and unknown unanchored summary request"]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine fetched_source_followup_retains_packet_identity_and_unobserved_license -- --nocapture",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": ["body and packet identity binding, exact source spans, and unrecorded-license boundary"]
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml -p minidora-cli --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "python3 rust/tools/local_tls_observer_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output /workspace/.minidora-cloud/source-summary-follow-up-fixture.json",
+      "local_tls_transport_cases_passed": 8,
+      "source_followup_and_recovery": "PASS",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo fmt --all --manifest-path rust/Cargo.toml --check && git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "test_harness_corrections": [
+    "An initial follow-up assertion expected no receipts despite an explicitly requested output file; corrected to require one CONFIRMED receipt at that exact target.",
+    "The test-only SQLite journal rollback used a Rust method name in Python; corrected to sqlite3.Connection.executescript before the passing rerun."
+  ],
+  "not_run": [
+    "full workspace runtime suite",
+    "all-target check",
+    "Clippy",
+    "LIVE Internet sources or provider-quality evaluation",
+    "license verification, claim truth, semantic coverage, contradictory-source adjudication",
+    "full B05, BB-SOURCE or 93-requirement BUILD/QC/QA"
+  ],
+  "disposition": "The bounded ordinary route and its no-resend local-file recovery pass on a local TLS fixture. General source synthesis, LIVE evidence quality, claim-level verification, contradiction handling, license evidence, full BB-SOURCE and full-successor acceptance remain UNVERIFIED."
+}

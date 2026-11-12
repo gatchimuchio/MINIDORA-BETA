@@ -177,6 +177,117 @@ pub fn reconcile_cancelled_effects(
 }
 
 type Inspected = (ActionRecord, DeliveryReceipt, Scheduler, String);
+
+struct SourceSummaryExpectation {
+    source_packet_refs: Vec<(usize, String)>,
+}
+
+fn verify_source_summary_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<SourceSummaryExpectation>> {
+    if !matches!(goal.intent, Intent::SummarizePreviousSource) {
+        return Ok(None);
+    }
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "source summary has no sealed prior-result reference",
+        )
+    })?;
+    let prior = state.prior_results.get(prior_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the exact prior source result is not retained",
+        )
+    })?;
+    if prior.id != *prior_id || prior.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the referenced prior result is not the same committed result",
+        ));
+    }
+    let source_packets: Vec<_> = prior
+        .evidence
+        .iter()
+        .enumerate()
+        .filter(|(_, packet)| {
+            packet.packet_kind == "FETCHED_BODY"
+                && packet.failure.is_none()
+                && packet.extracted_text.is_some()
+        })
+        .collect();
+    if source_packets.is_empty() || !result.evidence.is_empty() {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the prior result lacks fetched bodies or the derived result added undeclared evidence",
+        ));
+    }
+    let mut dependencies = vec![prior.id.clone()];
+    let mut packet_refs = Vec::new();
+    let mut summary_refs = Vec::new();
+    let mut source_packet_refs = Vec::new();
+    let mut units = Vec::new();
+    let mut report_bytes = 0usize;
+    for (index, packet) in source_packets {
+        let packet_bytes = canonical(packet)?;
+        let packet_ref = digest(&packet_bytes);
+        if store.get_bytes(actor, case, &packet_ref)? != packet_bytes {
+            return Err(failure(
+                "RECOVERY_SOURCE_PACKET_MISMATCH",
+                "the original source packet blob differs from its retained record",
+            ));
+        }
+        let report = crate::text_summary::summarize_fetched_source(&prior.id, packet, &packet_ref)?;
+        let encoded = canonical(&report)?;
+        report_bytes = report_bytes.saturating_add(encoded.len());
+        if report_bytes > goal.budget.max_evidence_bytes {
+            return Err(failure(
+                "RECOVERY_SOURCE_SUMMARY_LIMIT",
+                "the retained source summary exceeds the original evidence budget",
+            ));
+        }
+        let report_ref = digest(&encoded);
+        if store.get_bytes(actor, case, &report_ref)? != encoded {
+            return Err(failure(
+                "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+                "the retained source summary artifact differs from the exact source packet",
+            ));
+        }
+        packet_refs.push(packet_ref.clone());
+        summary_refs.push(report_ref);
+        source_packet_refs.push((index, packet_ref));
+        units.push(format!(
+            "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
+            report.source_final_uri,
+            report.source_packet_id,
+            report.raw_body_sha256,
+            report.summary.text
+        ));
+    }
+    dependencies.extend(packet_refs);
+    dependencies.extend(summary_refs);
+    if dependencies != result.dependencies
+        || units != plan.required_units
+        || result.guarantee != Guarantee::Hypothesis
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+            "source dependencies or displayed candidate units differ from Core's retained derivation",
+        ));
+    }
+    Ok(Some(SourceSummaryExpectation { source_packet_refs }))
+}
+
 fn inspect(
     store: &Store,
     actor: &str,
@@ -260,7 +371,9 @@ fn inspect(
         || plan.locale != request.locale
         || plan.locale != "ja"
         || plan.required_units.is_empty()
-        || matches!(plan.guarantee, Guarantee::Unknown | Guarantee::Hypothesis)
+        || plan.guarantee == Guarantee::Unknown
+        || (plan.guarantee == Guarantee::Hypothesis
+            && !matches!(goal.intent, Intent::SummarizePreviousSource))
         || !validate_render(plan, render)
     {
         return Err(failure(
@@ -277,6 +390,8 @@ fn inspect(
             "adopted result differs from original input",
         ));
     }
+    let source_summary =
+        verify_source_summary_context(store, actor, case, state, &result, plan, &goal)?;
     if let Intent::Ask { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
@@ -372,6 +487,17 @@ fn inspect(
             "undeclared evidence cannot satisfy this original graph",
         ));
     }
+    if let Some(summary) = &source_summary {
+        for (index, _) in &summary.source_packet_refs {
+            let id = format!("followup-source-{index}");
+            sources.push(id.clone());
+            expected_nodes.push(GoalNode {
+                id,
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+        }
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -407,6 +533,13 @@ fn inspect(
         let id = format!("source-{index}");
         graph.observe(&id, &reference, &BTreeMap::new())?;
         source_refs.insert(id, reference);
+    }
+    if let Some(summary) = &source_summary {
+        for (index, reference) in &summary.source_packet_refs {
+            let id = format!("followup-source-{index}");
+            graph.observe(&id, reference, &BTreeMap::new())?;
+            source_refs.insert(id, reference.clone());
+        }
     }
     let compute = (
         &result.calculation,

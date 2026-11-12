@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v44-extractive-summary-required-content";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v45-previous-source-summary";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -45,6 +45,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     };
     if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
         unresolved.push("no actual adopted previous result is available".into());
+    }
+    if matches!(intent, Intent::SummarizePreviousSource)
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push(
+            "no actual committed previous result is available for source summarization".into(),
+        );
     }
     if matches!(intent, Intent::CorrectCalculation { .. })
         && previous.is_none_or(|result| {
@@ -855,6 +862,9 @@ fn interpret(text: &str) -> Result<Intent> {
         "cancel" | "stop" | "中止" | "停止" | "キャンセル" | "やめて"
     ) {
         return Ok(Intent::Cancel);
+    }
+    if regex(r"(?i)^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))(?:を)?要約(?:してください|して|せよ)$|^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document)$")?.is_match(body) {
+        return Ok(Intent::SummarizePreviousSource);
     }
     if regex(r"(?i)^(?:explain (?:that|it|the (?:previous )?(?:result|answer))|(?:それ|その答え|その結果|前の結果|直前の結果|さっきの答え)(?:を)?(?:詳しく)?説明(?:してください|して|せよ)|詳しく説明して)$")?.is_match(body) {
         return Ok(Intent::ExplainPrevious);
@@ -1967,6 +1977,26 @@ mod tests {
         let mut request = RequestEnvelope::new("c", "i", "actor", "それを説明して");
         request.context_ref = Some("missing".into());
         assert!(seal(&request, None).is_err());
+    }
+
+    #[test]
+    fn previous_source_summary_requires_an_explicit_source_context_phrase() {
+        assert_eq!(
+            interpret("前回の資料を要約して").unwrap(),
+            Intent::SummarizePreviousSource
+        );
+        assert_eq!(
+            interpret("取得した本文を要約してください").unwrap(),
+            Intent::SummarizePreviousSource
+        );
+        assert_eq!(
+            interpret("summarize previous source").unwrap(),
+            Intent::SummarizePreviousSource
+        );
+        assert!(matches!(
+            interpret("要約して").unwrap(),
+            Intent::Unknown { .. }
+        ));
     }
 }
 
