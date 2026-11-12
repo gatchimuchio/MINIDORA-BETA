@@ -183,6 +183,95 @@ struct SourceSummaryExpectation {
     source_packet_refs: Vec<(usize, String)>,
 }
 
+fn verify_search_candidate_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<u32>> {
+    let Intent::FetchPreviousSearchCandidate { rank } = &goal.intent else {
+        return Ok(None);
+    };
+    let rank = *rank;
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "candidate-body result has no sealed prior-search reference",
+        )
+    })?;
+    let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "the original search result is no longer retained",
+        )
+    })?;
+    if previous.id != *previous_id || previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "the referenced search result is not the same committed result",
+        ));
+    }
+    let (search_ref, observation) =
+        crate::search::previous_observation(store, actor, case, previous)?.ok_or_else(|| {
+            failure(
+                "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+                "the original live search report is no longer available unchanged",
+            )
+        })?;
+    let candidate = observation
+        .candidates
+        .iter()
+        .find(|candidate| candidate.rank == rank)
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+                "the selected candidate no longer appears at its original rank",
+            )
+        })?;
+    if result.evidence.len() != 1 {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "candidate-body result must retain exactly one fetched packet",
+        ));
+    }
+    let packet = &result.evidence[0];
+    let expected_uri = crate::search::candidate_body_uri(candidate)?;
+    crate::ports::validate_successful_packet(packet, &goal.permissions)?;
+    if packet.request_uri != expected_uri || packet.raw_body.len() > goal.budget.max_evidence_bytes
+    {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "the fetched packet differs from the selected candidate or original budget",
+        ));
+    }
+    let packet_bytes = canonical(packet)?;
+    let body_ref = digest(&packet_bytes);
+    if store.get_bytes(actor, case, &body_ref)? != packet_bytes {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "the original candidate body artifact is no longer present unchanged",
+        ));
+    }
+    let expected_dependencies = vec![previous.id.clone(), search_ref, body_ref];
+    if result.dependencies != expected_dependencies
+        || plan.required_units != crate::search::candidate_body_lines(candidate, packet)
+        || result.guarantee != Guarantee::SourceReport
+    {
+        return Err(failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "the candidate, retrieved body or displayed source report differs from the adopted result",
+        ));
+    }
+    Ok(Some(rank))
+}
+
 fn verify_source_summary_context(
     store: &Store,
     actor: &str,
@@ -393,6 +482,8 @@ fn inspect(
     }
     let source_summary =
         verify_source_summary_context(store, actor, case, state, &result, plan, &goal)?;
+    let search_candidate_rank =
+        verify_search_candidate_context(store, actor, case, state, &result, plan, &goal)?;
     if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
@@ -407,6 +498,7 @@ fn inspect(
                 | "declarative-ja-en-v49-why-proof-query"
                 | "declarative-ja-en-v50-code-context-explanation"
                 | "declarative-ja-en-v51-generated-code-verification"
+                | "declarative-ja-en-v52-search-candidate-body"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -451,6 +543,7 @@ fn inspect(
             | "declarative-ja-en-v49-why-proof-query"
             | "declarative-ja-en-v50-code-context-explanation"
             | "declarative-ja-en-v51-generated-code-verification"
+            | "declarative-ja-en-v52-search-candidate-body"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -491,8 +584,11 @@ fn inspect(
             ));
         }
     }
-    if bundle.meaning.parser_version == "declarative-ja-en-v51-generated-code-verification"
-        && let Intent::VerifyPreviousCode { document } = &goal.intent
+    if matches!(
+        bundle.meaning.parser_version.as_str(),
+        "declarative-ja-en-v51-generated-code-verification"
+            | "declarative-ja-en-v52-search-candidate-body"
+    ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
@@ -610,6 +706,14 @@ fn inspect(
                 requires: Vec::new(),
             });
         }
+    } else if let Some(rank) = search_candidate_rank {
+        let id = format!("search-candidate-body-{rank}");
+        sources.push(id.clone());
+        expected_nodes.push(GoalNode {
+            id,
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
     } else if !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
@@ -659,7 +763,10 @@ fn inspect(
     let mut source_refs = BTreeMap::new();
     for (index, packet) in result.evidence.iter().enumerate() {
         let reference = verified_artifact(store, actor, case, packet)?;
-        let id = format!("source-{index}");
+        let id = search_candidate_rank.map_or_else(
+            || format!("source-{index}"),
+            |rank| format!("search-candidate-body-{rank}"),
+        );
         graph.observe(&id, &reference, &BTreeMap::new())?;
         source_refs.insert(id, reference);
     }

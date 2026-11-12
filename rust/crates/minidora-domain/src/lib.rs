@@ -186,6 +186,9 @@ pub enum Intent {
     VerifyPreviousCode {
         document: String,
     },
+    FetchPreviousSearchCandidate {
+        rank: u32,
+    },
     CsvSelect {
         document: String,
         column: String,

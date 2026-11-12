@@ -286,6 +286,15 @@ impl Engine {
                 });
             }
         }
+        if let Intent::FetchPreviousSearchCandidate { rank } = &bundle.meaning.intent {
+            let id = format!("search-candidate-body-{rank}");
+            compute_requires.push(id.clone());
+            nodes.push(GoalNode {
+                id,
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+        }
         for index in &source_followup_indices {
             let id = format!("followup-source-{index}");
             nodes.push(GoalNode {
@@ -1132,6 +1141,97 @@ impl Engine {
                 if observation.candidates.is_empty() {
                     units.push("検索候補がありません。".into());
                 }
+                result.guarantee = Guarantee::SourceReport;
+            }
+            Intent::FetchPreviousSearchCandidate { rank } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_SEARCH_RESULT_CONTEXT",
+                        "本文取得の対象となる直前の検索結果がありません。",
+                    );
+                };
+                let Some((search_ref, observation)) = crate::search::previous_observation(
+                    &self.store,
+                    actor,
+                    &request.case_id,
+                    prior,
+                )?
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_SEARCH_RESULT_CONTEXT",
+                        "直前の結果に再検証できる検索一覧がありません。",
+                    );
+                };
+                let Some(candidate) = observation
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.rank == *rank)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SEARCH_CANDIDATE_UNAVAILABLE",
+                        "指定順位の有効な検索候補が直前の一覧にありません。",
+                    );
+                };
+                let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let mut remaining = request.budget.clone();
+                remaining.deadline_ms = remaining.deadline_ms.saturating_sub(elapsed);
+                if remaining.deadline_ms == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "DEADLINE",
+                        "本文取得の総締切です。",
+                    );
+                }
+                let packet = match crate::search::fetch_candidate(
+                    candidate,
+                    &request.permissions,
+                    &remaining,
+                ) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "EVIDENCE_UNAVAILABLE",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                if packet.raw_body.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "検索候補の取得本文が要求の証拠予算を超えました。",
+                    );
+                }
+                let body_ref = self.store.put_artifact(actor, &request.case_id, &packet)?;
+                graph.observe(
+                    &format!("search-candidate-body-{rank}"),
+                    &body_ref,
+                    &BTreeMap::new(),
+                )?;
+                result
+                    .dependencies
+                    .extend([prior.id.clone(), search_ref, body_ref]);
+                result.evidence.push(packet.clone());
+                if packet.failure.is_some() || packet.extracted_text.is_none() {
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "FETCH_OR_PARSER_FAILURE",
+                        "選択した検索候補の本文を取得または検証できません。失敗packetを保持しました。",
+                    );
+                }
+                units.extend(crate::search::candidate_body_lines(candidate, &packet));
                 result.guarantee = Guarantee::SourceReport;
             }
             Intent::ExplainPrevious => {

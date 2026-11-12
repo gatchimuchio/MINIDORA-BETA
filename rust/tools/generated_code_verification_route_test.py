@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 
-PARSER_VERSION = "declarative-ja-en-v51-generated-code-verification"
+PARSER_VERSION = "declarative-ja-en-v52-search-candidate-body"
 DOCUMENT = {
     "仕様": {
         "名前": "増分",
@@ -315,7 +315,7 @@ def main() -> None:
                 "cargo test -p minidora-engine generated_code_verification_headers_preserve_finite_case_document --lib --locked",
                 "cargo test -p minidora-engine previous_generated_source_is_consumed_by_native_finite_verification --lib --locked",
                 "cargo test -p minidora-cli --test normal_route generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage --locked",
-                "python3 tools/generated_code_verification_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-content-generated-code-verification-route-validation.json",
+                "python3 tools/generated_code_verification_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-content-generated-code-verification-v52-route-validation.json",
             ],
             "not_run": [
                 "full workspace runtime test suite and Clippy",

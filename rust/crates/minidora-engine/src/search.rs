@@ -6,7 +6,7 @@
 
 use crate::ports;
 use minidora_domain::{
-    EvidencePacket, Permissions, ResourceBudget, Result, digest, failure, identity,
+    EvidencePacket, Permissions, ResourceBudget, Result, ResultRecord, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -392,6 +392,131 @@ pub fn parse_listing(
     Ok(observation)
 }
 
+pub(crate) fn validate_stored_observation(observation: &SearchObservation) -> Result<()> {
+    let listing = &observation.listing;
+    if observation.failure.is_some()
+        || listing.packet_kind != "SEARCH_LIST"
+        || listing.provider_id != observation.provider.provider_id()
+        || listing.mode != "LIVE"
+        || listing.failure.is_some()
+        || listing.http_status != 200
+        || listing.extracted_text.is_some()
+        || listing.parser_version != "strict-utf8-identity-v1"
+        || listing.raw_sha256 != digest(&listing.raw_body)
+        || listing.request_uri
+            != observation
+                .provider
+                .request_uri(&observation.query)?
+                .as_str()
+    {
+        return Err(failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The retained live search listing does not match its provider contract",
+        ));
+    }
+    let source_packet_id = identity(&(
+        &listing.mode,
+        "FETCHED_BODY",
+        &listing.request_uri,
+        &listing.final_uri,
+        listing.http_status,
+        &listing.raw_sha256,
+        &listing.parser_version,
+        &listing.independence_group,
+        &listing.failure,
+        &listing.redirect_chain,
+        "https-direct-url-v1",
+    ))?;
+    if source_packet_id != observation.source_fetch_packet_id {
+        return Err(failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The retained search listing no longer matches its original fetched packet identity",
+        ));
+    }
+    let mut fetched_packet = listing.clone();
+    fetched_packet.id = observation.source_fetch_packet_id.clone();
+    fetched_packet.packet_kind = "FETCHED_BODY".into();
+    fetched_packet.provider_id = "https-direct-url-v1".into();
+    fetched_packet.extracted_text = Some(
+        std::str::from_utf8(&listing.raw_body)
+            .map_err(|_| failure("SEARCH_CONTEXT_INVALID", "The listing is not UTF-8"))?
+            .into(),
+    );
+    if parse_listing(observation.provider, &observation.query, fetched_packet)? != *observation {
+        return Err(failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The retained candidates differ from the exact saved search listing",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn previous_observation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<(String, SearchObservation)>> {
+    let mut found = None;
+    for dependency in &previous.dependencies {
+        let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)? else {
+            continue;
+        };
+        let Ok(observation) = serde_json::from_slice::<SearchObservation>(&bytes) else {
+            continue;
+        };
+        if observation.listing.packet_kind != "SEARCH_LIST" {
+            continue;
+        }
+        validate_stored_observation(&observation)?;
+        if !previous
+            .evidence
+            .iter()
+            .any(|packet| packet == &observation.listing)
+        {
+            return Err(failure(
+                "SEARCH_CONTEXT_INVALID",
+                "The retained search report is not the listing observed by the prior result",
+            ));
+        }
+        if found.is_some() {
+            return Err(failure(
+                "SEARCH_CONTEXT_AMBIGUOUS",
+                "More than one live search listing is attached to the prior result",
+            ));
+        }
+        found = Some((dependency.clone(), observation));
+    }
+    Ok(found)
+}
+
+pub(crate) fn candidate_body_uri(candidate: &SearchCandidate) -> Result<String> {
+    let checked = source_uri(&candidate.uri)?;
+    let mut uri = Url::parse(&checked)
+        .map_err(|_| failure("INVALID_SEARCH_CANDIDATE", "Candidate URL is malformed"))?;
+    if candidate.provider == SearchProvider::Wikipedia {
+        uri.query_pairs_mut().append_pair("action", "raw");
+    }
+    source_uri(uri.as_str())
+}
+
+pub(crate) fn candidate_body_lines(
+    candidate: &SearchCandidate,
+    packet: &EvidencePacket,
+) -> Vec<String> {
+    vec![
+        format!(
+            "検索候補 {}: {}\n取得した本文URI: {}",
+            candidate.rank, candidate.title, packet.final_uri
+        ),
+        format!(
+            "実取得本文を同一caseの証拠packetに保存しました。bytes={}; SHA-256={}; 次の「前回の本文を要約して」でこの本文を使えます。",
+            packet.raw_body.len(),
+            packet.raw_sha256
+        ),
+    ]
+}
+
 /// Candidate selection is not permission. The Core must separately authorize
 /// the actual article hostname and verify the candidate against its saved list.
 pub fn fetch_candidate(
@@ -409,8 +534,8 @@ pub fn fetch_candidate(
             "Candidate identity or provider provenance changed",
         ));
     }
-    source_uri(&candidate.uri)?;
-    ports::fetch(&candidate.uri, permissions, budget)
+    let body_uri = candidate_body_uri(candidate)?;
+    ports::fetch(&body_uri, permissions, budget)
 }
 
 #[cfg(test)]
@@ -441,6 +566,30 @@ mod tests {
         value.request_uri = provider.request_uri(query).unwrap().to_string();
         value.final_uri = value.request_uri.clone();
         value.redirect_chain = vec![value.request_uri.clone()];
+        value
+    }
+    fn live_fixture(provider: SearchProvider, query: &str, raw: &str) -> EvidencePacket {
+        let mut value = fixture(provider, query, raw);
+        value.mode = "LIVE".into();
+        value.packet_kind = "FETCHED_BODY".into();
+        value.provider_id = "https-direct-url-v1".into();
+        value.parser_version = "strict-utf8-identity-v1".into();
+        value.independence_group = value.final_uri.clone();
+        value.raw_sha256 = digest(&value.raw_body);
+        value.id = identity(&(
+            &value.mode,
+            &value.packet_kind,
+            &value.request_uri,
+            &value.final_uri,
+            value.http_status,
+            &value.raw_sha256,
+            &value.parser_version,
+            &value.independence_group,
+            &value.failure,
+            &value.redirect_chain,
+            &value.provider_id,
+        ))
+        .unwrap();
         value
     }
     #[test]
@@ -479,6 +628,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn stored_live_listing_revalidates_candidates_and_selects_raw_wikitext_route() {
+        let observation = parse_listing(
+            SearchProvider::Wikipedia,
+            "city",
+            live_fixture(
+                SearchProvider::Wikipedia,
+                "city",
+                r#"{"pages":[{"key":"Tokyo","title":"Tokyo","excerpt":"not body"}]}"#,
+            ),
+        )
+        .unwrap();
+        validate_stored_observation(&observation).unwrap();
+        let candidate = &observation.candidates[0];
+        assert_eq!(
+            candidate_body_uri(candidate).unwrap(),
+            "https://ja.wikipedia.org/wiki/Tokyo?action=raw"
+        );
+        let mut changed = observation;
+        changed.candidates[0].title = "unverified replacement".into();
+        assert!(validate_stored_observation(&changed).is_err());
     }
     #[test]
     fn crossref_uses_returned_title_doi_and_uri_not_abstract_text() {

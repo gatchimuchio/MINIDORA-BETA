@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v51-generated-code-verification";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v52-search-candidate-body";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -51,6 +51,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     {
         unresolved
             .push("no actual committed previous result is available for code verification".into());
+    }
+    if matches!(intent, Intent::FetchPreviousSearchCandidate { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push(
+            "no actual committed previous search result is available for body retrieval".into(),
+        );
     }
     if matches!(intent, Intent::SummarizePreviousSource)
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -937,6 +944,29 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     let body = terminal_trim(text);
+    if let Some(capture) = regex(
+        r"(?i)^(?:検索結果の)?([1-5])件目の本文を(?:取得して|取得してください|読んで|読んでください)$",
+    )?
+    .captures(body)
+    {
+        return Ok(Intent::FetchPreviousSearchCandidate {
+            rank: capture[1].parse().map_err(|_| {
+                failure("INVALID_SEARCH_RANK", "candidate rank is outside its valid range")
+            })?,
+        });
+    }
+    if let Some(capture) =
+        regex(r"(?i)^(?:fetch|read) (?:the )?body of (?:search )?result ([1-5])$")?.captures(body)
+    {
+        return Ok(Intent::FetchPreviousSearchCandidate {
+            rank: capture[1].parse().map_err(|_| {
+                failure(
+                    "INVALID_SEARCH_RANK",
+                    "candidate rank is outside its valid range",
+                )
+            })?,
+        });
+    }
     if let Some(correction) = calculation_correction_intent(body)? {
         return Ok(correction);
     }
@@ -2182,6 +2212,32 @@ mod tests {
             interpret("要約して").unwrap(),
             Intent::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn search_candidate_body_request_names_one_prior_list_rank() {
+        for (text, expected) in [
+            ("1件目の本文を取得して", 1),
+            ("検索結果の5件目の本文を読んでください", 5),
+            ("fetch body of result 2", 2),
+            ("Read the body of search result 3", 3),
+        ] {
+            assert_eq!(
+                interpret(text).unwrap(),
+                Intent::FetchPreviousSearchCandidate { rank: expected },
+                "{text}"
+            );
+        }
+        for text in [
+            "本文を取得して",
+            "0件目の本文を取得して",
+            "6件目の本文を取得して",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 }
 

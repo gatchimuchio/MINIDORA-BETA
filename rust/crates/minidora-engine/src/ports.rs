@@ -289,11 +289,11 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
     let mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
     if !matches!(
         mime.as_str(),
-        "text/plain" | "text/markdown" | "application/json"
+        "text/plain" | "text/markdown" | "text/x-wiki" | "application/json"
     ) {
         return Err(failure(
             "UNSUPPORTED_EVIDENCE_FORMAT",
-            "Only UTF-8 plain text, Markdown and JSON are supported",
+            "Only UTF-8 plain text, Markdown, raw wikitext and JSON are supported",
         ));
     }
     let mut charset = None;
@@ -589,6 +589,58 @@ pub fn fetch(
             }
         }
     }
+}
+
+pub(crate) fn validate_successful_packet(
+    packet: &EvidencePacket,
+    permissions: &Permissions,
+) -> Result<()> {
+    let request_uri = approved_url(&packet.request_uri, permissions)?.to_string();
+    let final_uri = approved_url(&packet.final_uri, permissions)?.to_string();
+    let chain_is_valid = packet.redirect_chain.first() == Some(&request_uri)
+        && packet.redirect_chain.last() == Some(&final_uri)
+        && packet
+            .redirect_chain
+            .iter()
+            .all(|uri| approved_url(uri, permissions).is_ok());
+    let extracted_text = std::str::from_utf8(&packet.raw_body)
+        .map_err(|_| failure("RECOVERY_EVIDENCE_MISMATCH", "Observed body is not UTF-8"))?;
+    if packet.mode != "LIVE"
+        || packet.packet_kind != "FETCHED_BODY"
+        || packet.failure.is_some()
+        || packet.http_status != 200
+        || packet.parser_version != "strict-utf8-identity-v1"
+        || packet.provider_id != "https-direct-url-v1"
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || packet.extracted_text.as_deref() != Some(extracted_text)
+        || packet.independence_group != packet.final_uri
+        || !chain_is_valid
+    {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "Observed body identity, decode or original read authority differs",
+        ));
+    }
+    let expected_id = identity(&(
+        &packet.mode,
+        &packet.packet_kind,
+        &packet.request_uri,
+        &packet.final_uri,
+        packet.http_status,
+        &packet.raw_sha256,
+        &packet.parser_version,
+        &packet.independence_group,
+        &packet.failure,
+        &packet.redirect_chain,
+        &packet.provider_id,
+    ))?;
+    if packet.id != expected_id {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "Observed body packet identity is invalid",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -3086,6 +3138,14 @@ mod tests {
         assert_eq!(
             decode_body("text/plain; charset=utf-8", "観測原文".as_bytes()).unwrap(),
             "観測原文"
+        );
+        assert_eq!(
+            decode_body(
+                "text/x-wiki; charset=UTF-8",
+                "'''見出し'''\n本文。".as_bytes()
+            )
+            .unwrap(),
+            "'''見出し'''\n本文。"
         );
     }
     #[test]

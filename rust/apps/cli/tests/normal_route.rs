@@ -1848,7 +1848,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v51-generated-code-verification"
+        "declarative-ja-en-v52-search-candidate-body"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -1971,7 +1971,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v51-generated-code-verification"
+        "declarative-ja-en-v52-search-candidate-body"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -6491,7 +6491,7 @@ fn generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v51-generated-code-verification"
+        "declarative-ja-en-v52-search-candidate-body"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -6579,7 +6579,7 @@ fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() 
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v51-generated-code-verification"
+        "declarative-ja-en-v52-search-candidate-body"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
