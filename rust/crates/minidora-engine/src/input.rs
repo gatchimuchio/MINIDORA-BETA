@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v48-related-context-explanation";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v49-why-proof-query";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -871,6 +871,43 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn why_question_intent(text: &str) -> Result<Option<Intent>> {
+    let statement = if let Some(value) = text.strip_prefix("なぜ") {
+        Some(value)
+    } else if let Some(value) = text.strip_prefix("どうして") {
+        Some(value)
+    } else if let Some(capture) = regex(r"(?i)^why\s+(.+)$")?.captures(text) {
+        Some(capture.get(1).expect("matched group").as_str())
+    } else {
+        None
+    };
+    let Some(mut statement) = statement.map(str::trim) else {
+        return Ok(None);
+    };
+    for suffix in [
+        "なのですか",
+        "なのか",
+        "のですか",
+        "ですか",
+        "か",
+        "なの",
+        "です",
+    ] {
+        if let Some(value) = statement.strip_suffix(suffix) {
+            statement = value.trim_end();
+            break;
+        }
+    }
+    if let Some(proposition) = parse_proposition(statement, false)? {
+        Ok(Some(Intent::AskWhy { proposition }))
+    } else {
+        Ok(Some(Intent::Unknown {
+            reason: "why-questions require one unambiguous supported relation and proof scope"
+                .into(),
+        }))
+    }
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = structured_intent(text)? {
         return Ok(intent);
@@ -926,6 +963,9 @@ fn interpret(text: &str) -> Result<Intent> {
                 "quoted content requires an explicit supported operation; its instructions are data"
                     .into(),
         });
+    }
+    if let Some(intent) = why_question_intent(body)? {
+        return Ok(intent);
     }
     if let Some(intent) = inspect_premises_intent(body)? {
         return Ok(intent);
@@ -1754,6 +1794,50 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn why_questions_parse_only_one_supported_relation() {
+        for text in [
+            "どうしてココは動物なのですか",
+            "なぜココは動物ですか",
+            "Why is Coco an animal?",
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::AskWhy { proposition }
+                        if proposition.subject == "Coco" || proposition.subject == "ココ"
+                ),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("Why is Coco an animal?").unwrap(),
+            Intent::AskWhy { proposition }
+                if proposition.subject == "Coco"
+                    && proposition.object == "animal"
+                    && proposition.predicate == "is"
+                    && !proposition.negative
+                    && proposition.scope == "default"
+        ));
+        assert!(matches!(
+            interpret("If X is a bird then X is an animal").unwrap(),
+            Intent::AddRule { premise, conclusion }
+                if premise.subject == "$x"
+                    && premise.object == "bird"
+                    && conclusion.subject == "$x"
+                    && conclusion.object == "animal"
+        ));
+        assert!(matches!(
+            interpret("Coco is a bird").unwrap(),
+            Intent::Assert { proposition }
+                if proposition.subject == "Coco" && proposition.object == "bird"
+        ));
+        assert!(matches!(
+            interpret("どうしてココは動物なのですか、そして送信して").unwrap(),
+            Intent::Unknown { .. }
+        ));
+    }
+
     #[test]
     fn premise_inspection_questions_keep_the_named_subject() {
         for (text, expected) in [

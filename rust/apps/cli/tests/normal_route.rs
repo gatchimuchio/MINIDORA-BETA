@@ -1848,7 +1848,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v47-premise-inspection"
+        "declarative-ja-en-v49-why-proof-query"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -1971,7 +1971,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v48-related-context-explanation"
+        "declarative-ja-en-v49-why-proof-query"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -2043,6 +2043,133 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
             .as_array()
             .unwrap()
             .contains(&contradicted["id"])
+    );
+}
+
+#[test]
+fn natural_why_question_explains_only_current_relation_proofs() {
+    let scratch = Scratch::new();
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-bird-rule", "もしXは鳥ならXは動物"],
+    ));
+    let bird = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-coco-bird", "ココは鳥"],
+    ));
+    let why = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-coco-animal", "どうしてココは動物なのですか"],
+    ));
+    assert_eq!(why["lifecycle"], "COMMIT");
+    assert_eq!(why["guarantee"], "DERIVED");
+    let why_text = why["text"].as_str().unwrap();
+    assert!(why_text.contains("提示された証拠が支える結論: ココは動物である"));
+    assert!(why_text.contains("直接提示された前提: ココは鳥である"));
+    assert!(why_text.contains("適用規則: $xは鳥である ならば $xは動物である"));
+    assert!(
+        why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule["dependencies"][0])
+    );
+    assert!(
+        why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&bird["dependencies"][0])
+    );
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "why-english-rule",
+            "If X is a bird then X is an animal",
+        ],
+    ));
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-english-premise", "Coco is a bird"],
+    ));
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-coco-animal-en", "Why is Coco an animal?"],
+    ));
+    assert_eq!(english["guarantee"], "DERIVED");
+    assert!(english["text"].as_str().unwrap().contains("適用規則:"));
+
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "why-missing", "どうしてミケは鳥ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    let negative = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-mike-negative", "ミケは鳥ではない"],
+    ));
+    let refuted_why = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-mike-bird", "なぜミケは鳥ですか"],
+    ));
+    assert_eq!(refuted_why["lifecycle"], "COMMIT");
+    assert_eq!(refuted_why["guarantee"], "USER_PREMISE");
+    assert!(
+        refuted_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("問いの関係を支持せず")
+    );
+    assert!(
+        refuted_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("直接提示された前提: ミケは鳥ではない")
+    );
+    assert!(
+        refuted_why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&negative["dependencies"][0])
+    );
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "why-mike-positive", "ミケは鳥"],
+    ));
+    let conflict = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "why-mike-conflict", "なぜミケは鳥ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        conflict["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONFLICTING_PREMISES")
     );
 }
 

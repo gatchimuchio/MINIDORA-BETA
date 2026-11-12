@@ -340,6 +340,9 @@ pub enum Intent {
     Ask {
         proposition: Proposition,
     },
+    AskWhy {
+        proposition: Proposition,
+    },
     InspectPremises {
         subject: String,
     },

@@ -392,7 +392,7 @@ fn inspect(
     }
     let source_summary =
         verify_source_summary_context(store, actor, case, state, &result, plan, &goal)?;
-    if let Intent::Ask { proposition } = &goal.intent {
+    if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
         // newly different answer during mere effect reconciliation.
@@ -403,6 +403,7 @@ fn inspect(
             "declarative-ja-en-v46-proof-lineage-guarantee"
                 | "declarative-ja-en-v47-premise-inspection"
                 | "declarative-ja-en-v48-related-context-explanation"
+                | "declarative-ja-en-v49-why-proof-query"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -441,8 +442,11 @@ fn inspect(
             ));
         }
     }
-    if bundle.meaning.parser_version == "declarative-ja-en-v48-related-context-explanation"
-        && matches!(goal.intent, Intent::ExplainPrevious)
+    if matches!(
+        bundle.meaning.parser_version.as_str(),
+        "declarative-ja-en-v48-related-context-explanation"
+            | "declarative-ja-en-v49-why-proof-query"
+    ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
         && let Some(proposition) = crate::core::previous_relation_answer(&previous.text)?

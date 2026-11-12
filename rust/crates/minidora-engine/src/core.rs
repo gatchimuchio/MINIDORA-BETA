@@ -1169,60 +1169,12 @@ impl Engine {
                             "前回の関係回答を支えた現在有効な根拠が変わっています。新しい問いで確認してください。",
                         );
                     }
-                    units.push(format!("前回の結論: {}。", describe(&proposition)));
-                    let mut displayed_fact_ids = Vec::new();
-                    for id in &proof_dependencies {
-                        if let Some(fact) = memory.facts.iter().find(|fact| {
-                            &fact.id == id
-                                && fact.valid
-                                && fact.guarantee == Guarantee::UserPremise
-                                && fact.dependencies.is_empty()
-                        }) {
-                            units.push(format!(
-                                "直接提示された前提: {}（根拠ID: {}）",
-                                describe(&fact.proposition),
-                                fact.id
-                            ));
-                            displayed_fact_ids.push(fact.id.clone());
-                        }
-                    }
-                    for fact in &answer.facts {
-                        if displayed_fact_ids.contains(&fact.id) {
-                            continue;
-                        }
-                        let label = if fact.guarantee == Guarantee::Derived {
-                            "導出された事実"
-                        } else {
-                            "直接提示された前提"
-                        };
-                        let lineage = if fact.dependencies.is_empty() {
-                            format!("根拠ID: {}", fact.id)
-                        } else {
-                            format!(
-                                "導出ID: {}; 依存ID: {}",
-                                fact.id,
-                                fact.dependencies.join(", ")
-                            )
-                        };
-                        units.push(format!(
-                            "{label}: {}（{lineage}）",
-                            describe(&fact.proposition)
-                        ));
-                    }
-                    for id in &answer.used_rules {
-                        if let Some(rule) = memory.rules.iter().find(|rule| &rule.id == id) {
-                            units.push(format!(
-                                "適用規則: {} ならば {}（規則ID: {}）",
-                                describe(&rule.premise),
-                                describe(&rule.conclusion),
-                                rule.id
-                            ));
-                        }
-                    }
-                    units.push(
-                        "この説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。"
-                            .into(),
-                    );
+                    units.extend(relation_explanation_lines(
+                        &memory,
+                        &proposition,
+                        &answer,
+                        "前回の結論",
+                    ));
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
@@ -1391,6 +1343,48 @@ impl Engine {
                     _=>return self.stop(&mut state,Lifecycle::Suspend,"MISSING_PREMISES",
                         "この問いに必要な有効な前提または導出経路がありません。"),
                 }
+            }
+            Intent::AskWhy { proposition } => {
+                let memory = self.store.load_memory(actor)?;
+                let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
+                let answer_dependencies = relations::answer_dependencies(&answer);
+                let answer_guarantee = relations::answer_guarantee(&answer);
+                let explained = match answer.status.as_str() {
+                    "SUPPORTED" => proposition.clone(),
+                    "CONTRADICTED" => {
+                        let mut opposite = proposition.clone();
+                        opposite.negative = !opposite.negative;
+                        units.push(format!(
+                            "提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
+                            describe(&opposite)
+                        ));
+                        opposite
+                    }
+                    "CONFLICT" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONFLICTING_PREMISES",
+                            "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                        );
+                    }
+                    _ => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_PREMISES",
+                            "この関係を説明する有効な前提または導出経路がありません。",
+                        );
+                    }
+                };
+                units.extend(relation_explanation_lines(
+                    &memory,
+                    &explained,
+                    &answer,
+                    "提示された証拠が支える結論",
+                ));
+                result.dependencies = answer_dependencies;
+                result.guarantee = answer_guarantee;
             }
             Intent::InspectPremises { subject } => {
                 let memory = self.store.load_memory(actor)?;
@@ -2289,6 +2283,68 @@ pub(crate) fn previous_relation_answer(text: &str) -> Result<Option<Proposition>
         return Ok(None);
     };
     input::parse_proposition(statement, false)
+}
+fn relation_explanation_lines(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    answer: &relations::QueryOutcome,
+    heading: &str,
+) -> Vec<String> {
+    let mut lines = vec![format!("{heading}: {}。", describe(proposition))];
+    let proof_dependencies = relations::answer_dependencies(answer);
+    let mut displayed_fact_ids = Vec::new();
+    for id in &proof_dependencies {
+        if let Some(fact) = memory.facts.iter().find(|fact| {
+            &fact.id == id
+                && fact.valid
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+        }) {
+            lines.push(format!(
+                "直接提示された前提: {}（根拠ID: {}）",
+                describe(&fact.proposition),
+                fact.id
+            ));
+            displayed_fact_ids.push(fact.id.clone());
+        }
+    }
+    for fact in &answer.facts {
+        if displayed_fact_ids.contains(&fact.id) {
+            continue;
+        }
+        let label = if fact.guarantee == Guarantee::Derived {
+            "導出された事実"
+        } else {
+            "直接提示された前提"
+        };
+        let lineage = if fact.dependencies.is_empty() {
+            format!("根拠ID: {}", fact.id)
+        } else {
+            format!(
+                "導出ID: {}; 依存ID: {}",
+                fact.id,
+                fact.dependencies.join(", ")
+            )
+        };
+        lines.push(format!(
+            "{label}: {}（{lineage}）",
+            describe(&fact.proposition)
+        ));
+    }
+    for id in &answer.used_rules {
+        if let Some(rule) = memory.rules.iter().find(|rule| &rule.id == id) {
+            lines.push(format!(
+                "適用規則: {} ならば {}（規則ID: {}）",
+                describe(&rule.premise),
+                describe(&rule.conclusion),
+                rule.id
+            ));
+        }
+    }
+    lines.push(
+        "この説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。".into(),
+    );
+    lines
 }
 fn describe(p: &Proposition) -> String {
     if p.predicate == "is" {
