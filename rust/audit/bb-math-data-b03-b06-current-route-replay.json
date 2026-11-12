@@ -1,0 +1,142 @@
+{
+  "work_item": "BB-MATH-DATA current route replay for bounded B03 mathematics and B06 multi-step calculation",
+  "recorded_at": "2026-11-12T23:55:52Z",
+  "phase": "BODY-1",
+  "base_commit": "3859d100c7d759e91956a1336c8b5664a455e7a7",
+  "final_commit_at_observation": "3859d100c7d759e91956a1336c8b5664a455e7a7",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v52-search-candidate-body",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "working_directory": "rust/",
+  "source_and_artifact_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "c3588039dba15be56976cb5ff810af906c06449466407af027155fab4f2fd254",
+    "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
+    "rust/crates/minidora-engine/src/math.rs": "2dde9fa725710f5cccc30df04d9f019fba75c79a1706122fe1831af777de59cc",
+    "rust/crates/minidora-engine/src/core.rs": "0b9fcfa4fd199debe92a548dfafbadf9fd81395f336c40496e58459c098ea0b9",
+    "rust/crates/minidora-engine/src/language.rs": "087aedd7ffda14e848c3893b91dc9a09423a09dea5e7f6480c023c4a6ba0120e",
+    "rust/crates/minidora-engine/src/scheduler.rs": "8fa52123f47fdfca1d1be9d8d1482fd15e5bdead83e9050a90d5721535916543",
+    "rust/crates/minidora-engine/src/output.rs": "cfd0fc6d5808239e67dc82ee4c5af03835b59b75022bbf143705590b97dc129e",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e",
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "73a52e0a5a4776da64f30dff424068ef5a04fcc623db7a7eae1384b33e2b0c2d",
+    "rust/audit/requirements.tsv": "361a4f76759d9086d667e17e001e04b94465e149b6d4edfca566db9e7c27b8d7",
+    "rust/target/debug/minidora-rust": "b975ce79702315c1baa04ceb5b2f0b547c6705f27fa8ebe0eb23943ddfc33c50",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "4309aeddc208cfd452dd9669fe071d7f91a4c1829417e13f30b6f2561deff793"
+  },
+  "test_execution": {
+    "route_method": "The normal_route integration tests start the actual minidora-rust executable in child processes with fresh temporary stores; no result or action is injected. Assertions inspect returned and stored route values.",
+    "selected_test_total": 12,
+    "passed": 12,
+    "failed": 0,
+    "full_workspace_tests": "NOT_RUN during BODY-1",
+    "commands": [
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route calculation_sequence_route",
+        "exit_code": 0,
+        "passed": 5,
+        "failed": 0,
+        "test_names": [
+          "calculation_sequence_route_scalar_maps_order_and_capacity",
+          "calculation_sequence_route_units_consume_whole_exact_operands",
+          "calculation_sequence_route_typed_stops_preserve_only_actual_progress",
+          "calculation_sequence_route_retry_explanation_and_version_history",
+          "calculation_sequence_route_file_effect_is_confirmed_once"
+        ]
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route decimal_statistics_are_exact_and_retain_actual_observations -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route probability_normalization_reports_exact_intermediate_values_on_the_normal_route -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route finite_expectation_and_variance_report_exact_intermediate_values -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route finite_event_probability_reports_membership_and_exact_mass_on_the_normal_route -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route polynomial_evaluation_reports_each_exact_contribution_on_the_normal_route -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route explicit_linear_and_quadratic_equations_reach_the_normal_cli_route -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route linear_equation_result_preserves_matrix_and_exact_solution -- --exact",
+        "exit_code": 0,
+        "passed": 1
+      }
+    ],
+    "unproductive_filter_probe": {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route calculation_sequence_route -- --exact",
+      "exit_code": 0,
+      "selected_tests": 0,
+      "counted_as_pass": false,
+      "reason": "The exact filter did not match the five suffixed test names; the corrected non-exact filter above ran those five tests."
+    }
+  },
+  "route_observations": {
+    "B03": {
+      "scope": "Selected normal CLI cases, not the complete algebra/statistics/probability contract.",
+      "tests": 7,
+      "observed": [
+        "Japanese decimal statistics input [0.1,0.2,0.3] retains the original decimal lexemes and reports exact sum 3/5, mean/median 1/5, extrema 1/10 and 3/10, population variance 1/150 and sample variance 1/100.",
+        "Japanese and English finite-weight normalization reports exact normalized fractions and sum 1; zero-total weights produce a typed SUSPEND.",
+        "Japanese and English finite expectation/variance reports include normalized probabilities and per-outcome contribution arrays; examples report expectation 2/1 and variance 3.",
+        "Japanese and English finite-event probability reports include membership and exact per-outcome mass; examples report 9/10 and 1/4.",
+        "Japanese and English bounded polynomial evaluation reports each exact term contribution; examples report 3 and 17.",
+        "Normal CLI linear/quadratic equation cases report exact rational solutions, identity and contradiction classes, and suspend on an unsupported degree; a supplied 2x2 linear system retains its original matrix and exact solution [2,1]."
+      ]
+    },
+    "B06": {
+      "scope": "Bounded declared calculation sequences; not general natural-language multi-step planning.",
+      "tests": 5,
+      "example_request": "calculation-sequence:\nu: 2+3\nfinal: @{u}*2",
+      "observed": [
+        "The final step consumes the exact prior value 5 and yields 10; the sequence report, graph and result retain step identities and dependencies.",
+        "A fresh CLI process follow-up `詳しく説明して` references the saved result and exact calculation; explicit version 2 computes 14 while preserving the original result.",
+        "Malformed references, unsupported quantity contexts, action/deadline/evidence limits and arithmetic errors preserve only actual step progress and do not create a final report or effect receipt.",
+        "With an exact local write grant, emitted file bytes match rendered text and one CONFIRMED receipt records the target/hash/length; exact retry leaves bytes and modification time unchanged and retains one action receipt."
+      ]
+    }
+  },
+  "requirements_trace": {
+    "updated": [
+      "B03",
+      "B06"
+    ],
+    "acceptance_status": "UNVERIFIED for both; no release or acceptance claim",
+    "baseline_source_identity": "UNMAPPED remains as recorded; this replay maps only the current Rust route.",
+    "full_successor_acceptance": "UNVERIFIED"
+  },
+  "not_run_or_not_established": [
+    "Full workspace tests, Clippy, full B02/B03/B04/B06 acceptance, independent held-out mathematics population, general scientific reasoning, unrestricted natural-language multi-step planning, broad inherited coverage, non-Linux targets, physical 8 GB envelope, release and deployment.",
+    "General natural-language Q&A and open-ended writing remain an upstream BB-LANG/BB-CONTENT BUILD_GAP."
+  ],
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "73a52e0a5a4776da64f30dff424068ef5a04fcc623db7a7eae1384b33e2b0c2d",
+    "rust/audit/requirements.tsv": "361a4f76759d9086d667e17e001e04b94465e149b6d4edfca566db9e7c27b8d7"
+  }
+}

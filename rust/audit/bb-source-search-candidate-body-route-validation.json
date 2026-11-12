@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-SOURCE live search-list to selected body to summary",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-12T23:51:56+00:00",
-  "base_commit": "e90e3dfbe590fd2e2566dd68326eff668234c02b",
+  "recorded_at": "2026-11-12T23:58:26+00:00",
+  "base_commit": "3859d100c7d759e91956a1336c8b5664a455e7a7",
   "requirement_ids": [
     "A07",
     "A14",
@@ -42,8 +42,8 @@
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "d81be067b5a9b0198313312d352c41e1222fa1a8b045bfe1297bb94bf240ed6d",
-    "rust/audit/requirements.tsv": "3e27cda8f5ffa1b0d21e01ca327b2fc6a499b4337793ea5724eb1fbf12b3f0d9"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "73a52e0a5a4776da64f30dff424068ef5a04fcc623db7a7eae1384b33e2b0c2d",
+    "rust/audit/requirements.tsv": "361a4f76759d9086d667e17e001e04b94465e149b6d4edfca566db9e7c27b8d7"
   },
   "execution_mode": "fresh CLI process per request; LIVE public Wikipedia read; temporary actor/case state",
   "permissions": {
@@ -58,7 +58,7 @@
     "lifecycle": "COMMIT",
     "guarantee": "SOURCE_REPORT",
     "query": "石灰水",
-    "search_observation_ref": "eee1d605a0b9f848fb5478adb51a59525fe8d6c8a721dc7ec5024e97588cfcb2",
+    "search_observation_ref": "d4e6f77c5564e931bf6646933fd752d0c06b6bd1a2789993916f12daba6033d7",
     "text": "検索一覧（本文は未取得。題名・URLは本文の事実根拠ではありません）:\n1: 水酸化カルシウム\nhttps://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0\n2: フレスコ\nhttps://ja.wikipedia.org/wiki/%E3%83%95%E3%83%AC%E3%82%B9%E3%82%B3\n3: マサ\nhttps://ja.wikipedia.org/wiki/%E3%83%9E%E3%82%B5\n4: カノムピアックプーン\nhttps://ja.wikipedia.org/wiki/%E3%82%AB%E3%83%8E%E3%83%A0%E3%83%94%E3%82%A2%E3%83%83%E3%82%AF%E3%83%97%E3%83%BC%E3%83%B3\n5: アステカ料理\nhttps://ja.wikipedia.org/wiki/%E3%82%A2%E3%82%B9%E3%83%86%E3%82%AB%E6%96%99%E7%90%86"
   },
   "selected_body_result": {
@@ -67,12 +67,12 @@
     "context_result_ref": "66a7486162edf991ce2210822bccb58f1438203c5a3dcafc8aa137e2bafeb152",
     "dependencies": [
       "66a7486162edf991ce2210822bccb58f1438203c5a3dcafc8aa137e2bafeb152",
-      "eee1d605a0b9f848fb5478adb51a59525fe8d6c8a721dc7ec5024e97588cfcb2",
-      "83e0901cef4cf45f08c239fd3958b0ada1f08c21133921dae978076b1980252a"
+      "d4e6f77c5564e931bf6646933fd752d0c06b6bd1a2789993916f12daba6033d7",
+      "9fe487c5f20a91877d50e99847727c59178069f53074fe44b502e41cd2c81e4f"
     ],
     "candidate_title": "1: 水酸化カルシウム",
     "candidate_uri": "https://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0?action=raw",
-    "body_packet_ref": "83e0901cef4cf45f08c239fd3958b0ada1f08c21133921dae978076b1980252a",
+    "body_packet_ref": "9fe487c5f20a91877d50e99847727c59178069f53074fe44b502e41cd2c81e4f",
     "body_packet_id": "2ec4a8a54d4351e6359435225ee3ac266416dc29858209bdb4ac04c7aca22b71",
     "body_mode": "LIVE",
     "body_http_status": 200,
@@ -91,11 +91,11 @@
   "summary_consumer": {
     "lifecycle": "COMMIT",
     "guarantee": "HYPOTHESIS",
-    "context_result_ref": "fc78771a35a97667da4b3c71ee1fb56cfe59a9565e71b0bba71b8f64b1bc58a1",
+    "context_result_ref": "ac3f163ea4c936147e6050b7b7d6346f29c82b85e5f69f88e1c38d185a33038d",
     "dependencies": [
-      "fc78771a35a97667da4b3c71ee1fb56cfe59a9565e71b0bba71b8f64b1bc58a1",
-      "83e0901cef4cf45f08c239fd3958b0ada1f08c21133921dae978076b1980252a",
-      "78514b15c63c7a71f653aa913744a88f66e6738f4f07e55c42078c5635205e19"
+      "ac3f163ea4c936147e6050b7b7d6346f29c82b85e5f69f88e1c38d185a33038d",
+      "9fe487c5f20a91877d50e99847727c59178069f53074fe44b502e41cd2c81e4f",
+      "bb29915269d27cfa395858cc6cfe5ff3ac303fbf4ed042843065500cc3b22257"
     ],
     "text": "出典: https://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0?action=raw\n出典packet: 2ec4a8a54d4351e6359435225ee3ac266416dc29858209bdb4ac04c7aca22b71\n取得本文SHA-256: 82e6206cec80121c8a41feb1511898ab64451d86b76689138e798832669c8fe6\nライセンス情報: 未記録。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- [Ca+2]\n- 950P }}</ref>\n- <ref name=PGCH/>",
     "exact_body_sha_referenced": true
