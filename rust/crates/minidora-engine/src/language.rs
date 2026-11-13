@@ -142,6 +142,25 @@ pub(crate) fn calculation_explanation_surfaces(calculation: &Calculation) -> Vec
     }
 }
 
+/// Keep every Core-authored proof and disclaimer unit intact while offering
+/// two equivalent, non-factual transitions for native sequence ranking.
+pub(crate) fn relation_explanation_surfaces(units: &[String]) -> Vec<String> {
+    let exact = units.join("\n");
+    if units.len() < 3 {
+        return vec![exact];
+    }
+    let evidence = units[1..units.len() - 1].join("\n");
+    if evidence.is_empty() {
+        return vec![exact];
+    }
+    let opening = &units[0];
+    let disclosure = &units[units.len() - 1];
+    vec![
+        format!("{opening}\n根拠のつながりは次のとおりです。\n{evidence}\n{disclosure}"),
+        format!("{opening}\n結論を支える記録を順に示します。\n{evidence}\n{disclosure}"),
+    ]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SequenceValue {
     pub exact_value: String,
@@ -1829,6 +1848,24 @@ mod tests {
         for surface in calculation_explanation_surfaces(&literal) {
             assert!(surface.contains("演算過程はありません。"));
             assert!(surface.contains(&literal.exact_value));
+        }
+    }
+
+    #[test]
+    fn relation_explanation_surfaces_preserve_core_units_and_vary_only_transition() {
+        let units = vec![
+            "提示された証拠が支える結論: ココは動物である。".into(),
+            "直接提示された前提: ココは鳥である（根拠ID: fact:bird）".into(),
+            "適用規則: 鳥なら動物（規則ID: rule:bird-animal）".into(),
+            "この説明は保存された前提・規則に基づきます。".into(),
+        ];
+        let surfaces = relation_explanation_surfaces(&units);
+        assert_eq!(surfaces.len(), 2);
+        assert_ne!(surfaces[0], surfaces[1]);
+        for surface in &surfaces {
+            for unit in &units {
+                assert!(surface.contains(unit));
+            }
         }
     }
 }

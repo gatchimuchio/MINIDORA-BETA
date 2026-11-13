@@ -996,6 +996,7 @@ fn inspect(
                 | "declarative-ja-en-v61-three-clause-relation-question"
                 | "declarative-ja-en-v62-constrained-source-summary"
                 | "declarative-ja-en-v63-previous-output-edit"
+                | "declarative-ja-en-v68-previous-result-summary"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -1281,20 +1282,42 @@ fn inspect(
     let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes)?;
     let authorized_surfaces = match &emission.authorized_surfaces {
         Some(surfaces) => {
-            let calculation = result.calculation.as_ref().ok_or_else(|| {
-                failure(
-                    "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                    "multi-surface output has no retained calculation",
-                )
-            })?;
-            if !matches!(goal.intent, Intent::ExplainPrevious)
-                || surfaces.as_slice()
-                    != language::calculation_explanation_surfaces(calculation).as_slice()
-                || !surfaces.contains(&plan.text)
-            {
+            let expected_surfaces = match (&goal.intent, result.calculation.as_ref()) {
+                (Intent::ExplainPrevious, Some(calculation)) => {
+                    Some(language::calculation_explanation_surfaces(calculation))
+                }
+                (Intent::AskWhy { proposition }, None) => {
+                    let memory = store.load_memory(actor)?;
+                    let answer =
+                        crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+                    let explanation_units = crate::core::relation_why_explanation_units(
+                        &memory,
+                        proposition,
+                        &answer,
+                    )
+                    .map_err(|_| {
+                        failure(
+                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                            "the current relation proof has no matching explanation surfaces",
+                        )
+                    })?;
+                    if crate::relations::answer_dependencies(&answer) != result.dependencies
+                        || crate::relations::answer_guarantee(&answer) != result.guarantee
+                        || explanation_units != plan.required_units
+                    {
+                        return Err(failure(
+                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                            "the current proof lineage differs from the adopted explanation",
+                        ));
+                    }
+                    Some(language::relation_explanation_surfaces(&explanation_units))
+                }
+                _ => None,
+            };
+            if expected_surfaces.as_ref() != Some(surfaces) || !surfaces.contains(&plan.text) {
                 return Err(failure(
                     "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                    "retained multi-surface output differs from the Core-approved calculation surfaces",
+                    "retained multi-surface output differs from the Core-approved current explanation",
                 ));
             }
             surfaces.clone()

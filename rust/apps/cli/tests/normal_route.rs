@@ -3909,6 +3909,31 @@ fn natural_why_question_explains_only_current_relation_proofs() {
             .unwrap()
             .contains(&bird["dependencies"][0])
     );
+    let model_observation_ref = why["content_plan"]["model_observation_ref"]
+        .as_str()
+        .unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let model_observation: Value = serde_json::from_slice(
+        &store
+            .get_bytes("owner", "normal-route", model_observation_ref)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(model_observation["text"], why["text"]);
+    assert!(model_observation["sequence_probability"].is_string());
+    assert_eq!(
+        model_observation["decoder_version"],
+        "bounded-finite-surface-literal-exact-v1"
+    );
+    let approved_surfaces = model_observation["authorized_surfaces"].as_array().unwrap();
+    assert_eq!(approved_surfaces.len(), 2);
+    assert!(approved_surfaces.contains(&why["text"]));
+    for surface in approved_surfaces {
+        let surface = surface.as_str().unwrap();
+        assert!(surface.contains("直接提示された前提: ココは鳥である"));
+        assert!(surface.contains("適用規則: $xは鳥である ならば $xは動物である"));
+        assert!(surface.contains("現実世界での真偽確認ではありません。"));
+    }
 
     record(&execute(
         &scratch.0,

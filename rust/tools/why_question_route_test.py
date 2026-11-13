@@ -37,6 +37,7 @@ def main() -> None:
         "crates/minidora-domain/src/lib.rs",
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/language.rs",
         "crates/minidora-engine/src/recovery.rs",
     ]
     test_paths = [
@@ -99,6 +100,56 @@ def main() -> None:
             )
             return result
 
+        def model_records(result: dict) -> tuple[dict, dict]:
+            plan = result["content_plan"]
+            emission = json.loads(
+                (database / "blobs" / plan["model_observation_ref"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            model = json.loads(
+                (database / "blobs" / plan["model_artifact_ref"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            return model, emission
+
+        def assert_ranked_explanation(result: dict) -> dict:
+            model, emission = model_records(result)
+            candidates = emission["authorized_surfaces"]
+            assert len(candidates) == 2
+            assert result["text"] == emission["text"]
+            assert result["text"] in candidates
+            assert emission["sequence_probability"] is not None
+            assert emission["objective"] == (
+                "maximum exact sequence probability over Core-authorized equivalent surfaces"
+            )
+            assert emission["decoder_version"] == "bounded-finite-surface-literal-exact-v1"
+            assert all("直接提示された前提:" in candidate for candidate in candidates)
+            assert all("現実世界での真偽確認ではありません。" in candidate for candidate in candidates)
+            for candidate in candidates:
+                assert all(
+                    unit in candidate
+                    for unit in result["content_plan"]["required_units"]
+                )
+                if result["guarantee"] == "DERIVED":
+                    assert "適用規則:" in candidate
+                else:
+                    assert "適用規則:" not in candidate
+            return {
+                "model_revision": emission["model_revision"],
+                "model_artifact_ref": result["content_plan"]["model_artifact_ref"],
+                "model_observation_ref": result["content_plan"]["model_observation_ref"],
+                "model_order": model["order"],
+                "candidate_count": len(candidates),
+                "candidates": candidates,
+                "selected_text": emission["text"],
+                "sequence_probability": emission["sequence_probability"],
+                "decoder_version": emission["decoder_version"],
+                "token_count": emission["token_count"],
+                "lossless_raw_sha256": emission["lossless_projection"]["raw_sha256"],
+            }
+
         actor = "fixture-why-reader"
         case = "why-question"
         rule = run(actor, case, "rule-ja", "もしXは鳥ならXは動物")
@@ -110,6 +161,7 @@ def main() -> None:
         assert "適用規則: $xは鳥である ならば $xは動物である" in japanese["text"]
         assert rule["dependencies"][0] in japanese["dependencies"]
         assert bird["dependencies"][0] in japanese["dependencies"]
+        observations[-1]["native_model_selection"] = assert_ranked_explanation(japanese)
 
         run(actor, case, "rule-en", "If X is a bird then X is an animal")
         run(actor, case, "premise-en", "Coco is a bird")
@@ -117,6 +169,7 @@ def main() -> None:
         assert english["lifecycle"] == "COMMIT"
         assert english["guarantee"] == "DERIVED"
         assert "適用規則:" in english["text"]
+        observations[-1]["native_model_selection"] = assert_ranked_explanation(english)
 
         missing = run(actor, case, "why-missing", "どうしてミケは鳥ですか", expected_exit=2)
         assert missing["lifecycle"] == "SUSPEND"
@@ -128,6 +181,7 @@ def main() -> None:
         assert "問いの関係を支持せず" in refuted["text"]
         assert "直接提示された前提: ミケは鳥ではない" in refuted["text"]
         assert negative["dependencies"][0] in refuted["dependencies"]
+        observations[-1]["native_model_selection"] = assert_ranked_explanation(refuted)
         run(actor, case, "positive-premise", "ミケは鳥")
         conflict = run(actor, case, "why-conflict", "なぜミケは鳥ですか", expected_exit=2)
         assert conflict["lifecycle"] == "SUSPEND"
@@ -158,6 +212,7 @@ def main() -> None:
         delivered_result = json.loads(delivered.stdout)
         assert delivered_result["lifecycle"] == "COMMIT"
         assert delivered_result["guarantee"] == "DERIVED"
+        delivered_model = assert_ranked_explanation(delivered_result)
         assert recovery_rule["dependencies"][0] in delivered_result["dependencies"]
         assert recovery_bird["dependencies"][0] in delivered_result["dependencies"]
         observations.append(
@@ -196,7 +251,7 @@ def main() -> None:
                 ):
                     assert state["bundle"]["meaning"]["intent"]["kind"] == "ASK_WHY"
                     assert state["bundle"]["meaning"]["parser_version"] == (
-                        "declarative-ja-en-v52-search-candidate-body"
+                        "declarative-ja-en-v68-previous-result-summary"
                     )
                     adopted = (revision_number, saved)
             assert adopted is not None, "Core did not retain the adopted why-answer result"
@@ -265,33 +320,39 @@ def main() -> None:
         )
 
         report = {
-            "work_item": "BODY-1 bounded BB-LANG proof-backed why questions",
+            "work_item": "BODY-1 BB-LANG proof-backed explanation through native surface ranking",
             "stage": "BODY-1_EXECUTION",
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "base_commit": base_commit,
             "subject": "MINIDORA Rust successor engine",
-            "requirement_ids": ["A13", "A12", "A15", "E08", "E12"],
+            "requirement_ids": ["A01", "A02", "A07", "A12", "A13", "A15", "E08", "E12"],
             "software_version": "0.7.0-alpha.8",
             "schema_version": "minidora-rust/0.7.0-alpha.8",
-            "parser_version": "declarative-ja-en-v52-search-candidate-body",
+            "parser_version": "declarative-ja-en-v68-previous-result-summary",
             "toolchain": toolchain,
             "source_snapshot_sha256": sha256_paths(source_paths),
             "test_and_tool_snapshot_sha256": sha256_paths(test_paths),
             "documentation_snapshot_sha256": sha256_paths(documentation_paths),
             "execution_mode": "fresh CLI process per request; user-declared actor-scoped premises and rules",
             "producer_consumer": (
-                "ordinary Japanese/English why question -> relation proof query -> "
-                "direct premise and rule explanation -> content/render/dependency ledger"
+                "ordinary Japanese/English why question -> sealed AskWhy -> actor-scoped relation proof -> "
+                "Core explanation units -> two Core-approved equivalent surfaces -> native SequenceModel ranking "
+                "-> rendered result and proof dependency ledger"
             ),
             "scope": (
                 "Supports explicit copular why questions over current declared premises/rules. "
                 "Shows the premise and rule IDs; a refuted question states the supported opposite; "
-                "missing/conflicting evidence suspends. This is not a world-truth claim or empirical learning."
+                "the non-neural sequence model ranks two Core-approved surfaces that preserve identical proof "
+                "units and differ only in transition wording. Missing/conflicting evidence suspends. This is not "
+                "open-domain writing, a world-truth claim or empirical learning."
             ),
             "observations": observations,
             "adopted_file_recovery": {
                 "lifecycle": recovered["lifecycle"],
                 "guarantee": recovered["guarantee"],
+                "native_model_selection": delivered_model,
+                "file_sha256": delivered_result["render"]["actual_sha256"],
+                "file_bytes": output_path.stat().st_size,
                 "receipt_phase": receipt["phase"],
                 "receipt_reason": receipt["reason"],
                 "dependencies_unchanged": True,
@@ -301,24 +362,26 @@ def main() -> None:
             "commands": [
                 "cargo fmt --all -- --check",
                 "cargo check --workspace --all-targets --locked",
-                "cargo test -p minidora-engine why_questions_parse_only_one_supported_relation --lib",
-                "cargo test -p minidora-cli --test normal_route natural_why_question_explains_only_current_relation_proofs",
-                "python3 tools/why_question_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-why-question-v52-route-validation.json",
+                "cargo clippy --workspace --all-targets --locked -- -D warnings",
+                "cargo test --locked -p minidora-engine relation_explanation_surfaces_preserve_core_units_and_vary_only_transition --lib",
+                "cargo test --locked -p minidora-cli --test normal_route natural_why_question_explains_only_current_relation_proofs -- --exact",
+                "cargo build --workspace --locked",
+                "python3 tools/why_question_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-proof-backed-native-surface-selection-route-validation.json",
             ],
             "regression_checks": [
                 {
                     "command": "python3 tools/related_answer_explanation_test.py --binary target/debug/minidora-rust",
                     "outcome": "PASS",
-                    "scope": "Existing v48 prior-answer explanation, stale-proof suspension and adopted-file recovery through the v52 binary",
+                    "scope": "Existing prior-answer explanation and stale-proof recovery regression through the v68 binary",
                 }
             ],
             "not_run": [
-                "full workspace test suite and Clippy for this batch",
+                "full workspace all-features runtime suite for this batch",
                 "unrestricted causal why/how understanding and full BB-LANG/A13 acceptance",
             ],
             "acceptance_boundary": (
                 "Finite relation why-question route only. General causal understanding, unrestricted why/how "
-                "questions and BB-LANG/A13 acceptance remain BUILD_GAP/UNVERIFIED."
+                "questions, open-domain writing and full A01/A02/A07/A13 acceptance remain BUILD_GAP/UNVERIFIED."
             ),
         }
         if arguments.evidence_output:

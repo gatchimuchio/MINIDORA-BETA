@@ -3662,17 +3662,8 @@ impl Engine {
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
                 let answer_dependencies = relations::answer_dependencies(&answer);
                 let answer_guarantee = relations::answer_guarantee(&answer);
-                let explained = match answer.status.as_str() {
-                    "SUPPORTED" => proposition.clone(),
-                    "CONTRADICTED" => {
-                        let mut opposite = proposition.clone();
-                        opposite.negative = !opposite.negative;
-                        units.push(format!(
-                            "提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
-                            describe(&opposite)
-                        ));
-                        opposite
-                    }
+                match answer.status.as_str() {
+                    "SUPPORTED" | "CONTRADICTED" => {}
                     "CONFLICT" => {
                         return self.stop(
                             &mut state,
@@ -3689,13 +3680,12 @@ impl Engine {
                             "この関係を説明する有効な前提または導出経路がありません。",
                         );
                     }
-                };
-                units.extend(relation_explanation_lines(
-                    &memory,
-                    &explained,
-                    &answer,
-                    "提示された証拠が支える結論",
-                ));
+                }
+                let explanation_units =
+                    relation_why_explanation_units(&memory, proposition, &answer)?;
+                approved_surfaces =
+                    Some(language::relation_explanation_surfaces(&explanation_units));
+                units.extend(explanation_units);
                 result.dependencies = answer_dependencies;
                 result.guarantee = answer_guarantee;
             }
@@ -4895,6 +4885,39 @@ pub(crate) fn previous_relation_answer(text: &str) -> Result<Option<Proposition>
     };
     input::parse_proposition(statement, false)
 }
+pub(crate) fn relation_why_explanation_units(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    answer: &relations::QueryOutcome,
+) -> Result<Vec<String>> {
+    let mut units = Vec::new();
+    let explained = match answer.status.as_str() {
+        "SUPPORTED" => proposition.clone(),
+        "CONTRADICTED" => {
+            let mut opposite = proposition.clone();
+            opposite.negative = !opposite.negative;
+            units.push(format!(
+                "提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
+                describe(&opposite)
+            ));
+            opposite
+        }
+        _ => {
+            return Err(failure(
+                "RELATION_EXPLANATION_UNSUPPORTED",
+                "only a supported or refuted relation has an explanation surface",
+            ));
+        }
+    };
+    units.extend(relation_explanation_lines(
+        memory,
+        &explained,
+        answer,
+        "提示された証拠が支える結論",
+    ));
+    Ok(units)
+}
+
 fn relation_explanation_lines(
     memory: &MemoryState,
     proposition: &Proposition,
