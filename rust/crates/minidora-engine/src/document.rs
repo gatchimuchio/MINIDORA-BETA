@@ -357,7 +357,7 @@ pub(crate) fn previous_json_table_group_statistics_explanation(
 /// input, then explain the exact retained report and original byte ranges. The
 /// source input bundle and the report are returned separately so Core and
 /// local-file recovery can bind the same lineage.
-pub(crate) fn previous_json_table_transform_explanation(
+pub(crate) fn previous_json_table_operation_explanation(
     store: &crate::store::Store,
     actor: &str,
     case: &str,
@@ -376,7 +376,31 @@ pub(crate) fn previous_json_table_transform_explanation(
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
-    let operation = if value.get("left_key_column").is_some()
+    let comparison_shape = value.as_object().is_some_and(|object| {
+        object.len() == 7
+            && [
+                "source_sha256",
+                "left_sha256",
+                "right_sha256",
+                "key_column",
+                "equal",
+                "changes",
+                "guarantee",
+            ]
+            .iter()
+            .all(|field| object.contains_key(*field))
+            && value.get("source_sha256").and_then(serde_json::Value::as_str).is_some()
+            && value.get("left_sha256").and_then(serde_json::Value::as_str).is_some()
+            && value.get("right_sha256").and_then(serde_json::Value::as_str).is_some()
+            && value.get("key_column").and_then(serde_json::Value::as_str).is_some()
+            && value.get("equal").and_then(serde_json::Value::as_bool).is_some()
+            && value.get("changes").and_then(serde_json::Value::as_array).is_some()
+            && value.get("guarantee").and_then(serde_json::Value::as_str)
+                == Some("bounded keyed comparison of explicitly string-typed tables; exact key/value matching, identical column order and unique keys required; source ranges retained; no semantic truth inferred")
+    });
+    let operation = if comparison_shape {
+        "comparison"
+    } else if value.get("left_key_column").is_some()
         && value.get("right_key_column").is_some()
         && value.get("left_source_row_indices").is_some()
     {
@@ -405,8 +429,14 @@ pub(crate) fn previous_json_table_transform_explanation(
                 "the prior table operation has no retained sealed input bundle",
             )
         })?;
+    if operation == "comparison"
+        && !matches!(bundle.meaning.intent, Intent::JsonTableCompare { .. })
+    {
+        return Ok(None);
+    }
 
     enum Report {
+        Comparison(Box<crate::ports::JsonTableComparisonReport>),
         Filter(crate::ports::JsonTableFilterReport),
         Sort(crate::ports::JsonTableSortReport),
         Select(crate::ports::JsonTableSelectReport),
@@ -415,6 +445,15 @@ pub(crate) fn previous_json_table_transform_explanation(
     }
 
     let report = match (operation, &bundle.meaning.intent) {
+        (
+            "comparison",
+            Intent::JsonTableCompare {
+                document,
+                key_column,
+            },
+        ) => Report::Comparison(Box::new(crate::ports::json_table_compare(
+            document, key_column,
+        )?)),
         (
             "inner_join",
             Intent::JsonTableInnerJoin {
@@ -462,6 +501,167 @@ pub(crate) fn previous_json_table_transform_explanation(
     };
 
     let (report_bytes, report_text, source_document, mut lines) = match report {
+        Report::Comparison(report) => {
+            let bytes = canonical(&report)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            let document = match &bundle.meaning.intent {
+                Intent::JsonTableCompare { document, .. } => document.as_str(),
+                _ => unreachable!("operation and sealed intent were checked"),
+            };
+            let cell_changes = report
+                .changes
+                .iter()
+                .filter(|change| change.change == "CELL_CHANGED")
+                .count();
+            let removed_rows = report
+                .changes
+                .iter()
+                .filter(|change| change.change == "ROW_REMOVED")
+                .count();
+            let added_rows = report
+                .changes
+                .iter()
+                .filter(|change| change.change == "ROW_ADDED")
+                .count();
+            if cell_changes + removed_rows + added_rows != report.changes.len() {
+                return Err(failure(
+                    "JSON_TABLE_CONTEXT_INVALID",
+                    "the recomputed JSON table comparison contains an unknown change kind",
+                ));
+            }
+            let mut lines = vec![
+                "前回のJSON表比較を、保存済みの元入力から再計算しました。".into(),
+                format!(
+                    "比較キー: {:?}; 結果: {} (厳密な文字列比較)",
+                    report.key_column,
+                    if report.equal {
+                        "一致"
+                    } else {
+                        "差分あり"
+                    }
+                ),
+                format!(
+                    "差分: {}件 (セル変更: {}; 左側のみの行: {}; 右側のみの行: {})",
+                    report.changes.len(),
+                    cell_changes,
+                    removed_rows,
+                    added_rows
+                ),
+                "値の意味や現実の真偽は判定していません。".into(),
+            ];
+            for change in report.changes.iter().take(8) {
+                match change.change.as_str() {
+                    "CELL_CHANGED" => {
+                        let column = change.column.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no column name",
+                            )
+                        })?;
+                        let left_value = change.left_value.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no left value",
+                            )
+                        })?;
+                        let right_value = change.right_value.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no right value",
+                            )
+                        })?;
+                        let left_pointer = change.left_pointer.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no left pointer",
+                            )
+                        })?;
+                        let right_pointer = change.right_pointer.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no right pointer",
+                            )
+                        })?;
+                        let left_span = change.left.as_ref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no left source range",
+                            )
+                        })?;
+                        let right_span = change.right.as_ref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a changed comparison cell has no right source range",
+                            )
+                        })?;
+                        lines.push(format!(
+                            "セル変更 キー {:?} / 列 {:?}: 左 {:?} {} {}; 右 {:?} {} {}",
+                            preview(&change.key),
+                            preview(column),
+                            preview(left_value),
+                            left_pointer,
+                            table_span(document, left_span)?,
+                            preview(right_value),
+                            right_pointer,
+                            table_span(document, right_span)?
+                        ));
+                    }
+                    "ROW_REMOVED" => {
+                        let pointer = change.left_pointer.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a removed comparison row has no left pointer",
+                            )
+                        })?;
+                        let span = change.left.as_ref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "a removed comparison row has no left source range",
+                            )
+                        })?;
+                        lines.push(format!(
+                            "左側のみの行 キー {:?}: 左 {} {}",
+                            preview(&change.key),
+                            pointer,
+                            table_span(document, span)?
+                        ));
+                    }
+                    "ROW_ADDED" => {
+                        let pointer = change.right_pointer.as_deref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "an added comparison row has no right pointer",
+                            )
+                        })?;
+                        let span = change.right.as_ref().ok_or_else(|| {
+                            failure(
+                                "JSON_TABLE_CONTEXT_INVALID",
+                                "an added comparison row has no right source range",
+                            )
+                        })?;
+                        lines.push(format!(
+                            "右側のみの行 キー {:?}: 右 {} {}",
+                            preview(&change.key),
+                            pointer,
+                            table_span(document, span)?
+                        ));
+                    }
+                    _ => {
+                        return Err(failure(
+                            "JSON_TABLE_CONTEXT_INVALID",
+                            "the recomputed JSON table comparison contains an unknown change kind",
+                        ));
+                    }
+                }
+            }
+            if report.changes.len() > 8 {
+                lines.push(format!(
+                    "残りの差分 {}件はreport artifactに保持されています。",
+                    report.changes.len() - 8
+                ));
+            }
+            (bytes, text, document, lines)
+        }
         Report::Join(report) => {
             let bytes = canonical(&report)?;
             let text = serde_json::to_string_pretty(&report)?;

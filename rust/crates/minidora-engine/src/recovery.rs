@@ -927,7 +927,7 @@ fn inspect(
         } else {
             None
         };
-    let previous_json_table_transform_explanation =
+    let previous_json_table_operation_explanation =
         if matches!(goal.intent, Intent::ExplainPrevious) {
             bundle
                 .meaning
@@ -935,7 +935,7 @@ fn inspect(
                 .as_ref()
                 .and_then(|id| state.prior_results.get(id))
                 .map(|previous| {
-                    crate::document::previous_json_table_transform_explanation(
+                    crate::document::previous_json_table_operation_explanation(
                         store,
                         actor,
                         case,
@@ -1230,7 +1230,7 @@ fn inspect(
         }
     }
     if let Some((bundle_ref, report_ref, expected_units)) =
-        &previous_json_table_transform_explanation
+        &previous_json_table_operation_explanation
     {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
@@ -1538,7 +1538,7 @@ fn inspect(
         });
         sources.push(report_id);
     }
-    if previous_json_table_transform_explanation.is_some() {
+    if previous_json_table_operation_explanation.is_some() {
         let input_id = "previous-json-table-transform-input".to_string();
         let report_id = "previous-json-table-transform-report".to_string();
         expected_nodes.push(GoalNode {
@@ -1727,7 +1727,7 @@ fn inspect(
         )?;
         source_refs.insert(report_id, report_ref.clone());
     }
-    if let Some((bundle_ref, report_ref, _)) = &previous_json_table_transform_explanation {
+    if let Some((bundle_ref, report_ref, _)) = &previous_json_table_operation_explanation {
         let input_id = "previous-json-table-transform-input".to_string();
         let report_id = "previous-json-table-transform-report".to_string();
         graph.observe(&input_id, bundle_ref, &BTreeMap::new())?;
@@ -2593,6 +2593,14 @@ mod tests {
         let target = directory.join("json-table-explanation.txt");
         let mut engine = Engine::open(&state).unwrap();
         let request = match operation {
+            "comparison" => {
+                let left =
+                    r#"{"columns":["id","name"],"rows":[["north","cat"],["removed","dog"]]}"#;
+                let right =
+                    r#"{"columns":["id","name"],"rows":[["north","fox"],["added","bird"]]}"#;
+                let source = format!(r#"{{"left":{left},"right":{right}}}"#);
+                format!("JSON表を列「id」で比較して:\n{source}")
+            }
             "filter" => {
                 let source = r#"{"columns":["state","name"],"rows":[["open","Mina"],["closed","Nia"],["open","Kai"]]}"#;
                 format!("JSON表の列「state」が値「open」の行を選択して:\n{source}")
@@ -2756,6 +2764,7 @@ mod tests {
         for (operation, expected_marker) in [
             ("filter", "前回のJSON表フィルター"),
             ("inner_join", "前回のJSON表内部結合"),
+            ("comparison", "前回のJSON表比較"),
         ] {
             let fixture = attempted_json_table_context_explanation_prefix(operation);
             let original = fs::read(&fixture.target).unwrap();

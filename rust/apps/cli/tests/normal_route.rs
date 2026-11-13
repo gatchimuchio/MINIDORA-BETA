@@ -11182,6 +11182,154 @@ fn json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys() {
 }
 
 #[test]
+fn json_table_comparison_explanation_replays_two_sided_cells_and_changed_rows() {
+    let left = r#"{"columns":["id","name"],"rows":[["north","\u732b"],["removed","犬"]]}"#;
+    let right = r#"{"columns":["id","name"],"rows":[["north","狐"],["added","鳥"]]}"#;
+    let source = format!(r#"{{"left":{left},"right":{right}}}"#);
+    let request = format!("JSON表を列「id」で比較して:\n{source}");
+    let scratch = Scratch::new();
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "compare-explain", &request],
+    ));
+    let report = normal_row_report(&scratch.0, "owner", &first, &request, &source);
+    assert_eq!(report["equal"], false);
+    assert_eq!(report["changes"].as_array().unwrap().len(), 3);
+    let cell_change = &report["changes"][0];
+    assert_eq!(cell_change["change"], "CELL_CHANGED");
+    assert_eq!(cell_change["key"], "north");
+    assert_eq!(cell_change["column"], "name");
+    assert_eq!(cell_change["left_pointer"], "/left/rows/0/1");
+    assert_eq!(cell_change["right_pointer"], "/right/rows/0/1");
+    for (side, raw) in [("left", r#""\u732b""#), ("right", r#""狐""#)] {
+        let span = &cell_change[side];
+        let start = span["source_start"].as_u64().unwrap() as usize;
+        let end = span["source_end"].as_u64().unwrap() as usize;
+        assert_eq!(&source[start..end], raw);
+        assert_eq!(
+            span["source_sha256"],
+            minidora_domain::digest(raw.as_bytes())
+        );
+    }
+    assert_eq!(report["changes"][1]["change"], "ROW_REMOVED");
+    assert_eq!(report["changes"][1]["left_pointer"], "/left/rows/1");
+    assert_eq!(report["changes"][2]["change"], "ROW_ADDED");
+    assert_eq!(report["changes"][2]["right_pointer"], "/right/rows/1");
+    for change in report["changes"].as_array().unwrap() {
+        for side in ["left", "right"] {
+            let Some(span) = change[side].as_object() else {
+                continue;
+            };
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            let raw = &source[start..end];
+            assert_eq!(
+                span["source_sha256"],
+                minidora_domain::digest(raw.as_bytes())
+            );
+        }
+    }
+
+    let original_revision = inspect_normal_case(&scratch.0, "owner");
+    let input_bundle_ref =
+        minidora_domain::digest(&minidora_domain::canonical(&original_revision["bundle"]).unwrap());
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(&report).unwrap());
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    let text = explanation["text"].as_str().unwrap();
+    for expected in [
+        "前回のJSON表比較",
+        "比較キー: \"id\"; 結果: 差分あり",
+        "差分: 3件 (セル変更: 1; 左側のみの行: 1; 右側のみの行: 1)",
+        "セル変更 キー \"north\" / 列 \"name\"",
+        "左 \"猫\" /left/rows/0/1",
+        "右 \"狐\" /right/rows/0/1",
+        "/left/rows/0/1",
+        "/right/rows/0/1",
+        "左側のみの行 キー \"removed\"",
+        "右側のみの行 キー \"added\"",
+        "値の意味や現実の真偽は判定していません。",
+        "封印済みInputBundle SHA-256",
+        "report artifact SHA-256",
+        "byte[",
+        "sha256=",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    for change in report["changes"].as_array().unwrap() {
+        for side in ["left", "right"] {
+            let Some(span) = change[side].as_object() else {
+                continue;
+            };
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            assert!(text.contains(&format!("byte[{start}..{end})")));
+            assert!(text.contains(span["source_sha256"].as_str().unwrap()));
+        }
+    }
+    assert_eq!(
+        explanation["dependencies"].as_array().unwrap(),
+        &vec![
+            first["id"].clone(),
+            Value::String(input_bundle_ref.clone()),
+            Value::String(report_ref.clone()),
+        ]
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let graph = sequence_artifact(&store, &explanation["execution_graph_ref"]);
+    let input_id = "previous-json-table-transform-input";
+    let report_id = "previous-json-table-transform-report";
+    let nodes = graph[0].as_array().unwrap();
+    assert!(nodes.iter().any(|node| node["id"] == input_id));
+    assert!(nodes.iter().any(|node| {
+        node["id"] == report_id
+            && node["kind"] == "COMPUTED_VALUE"
+            && node["requires"] == serde_json::json!([input_id])
+    }));
+    assert_eq!(graph[1][input_id], input_bundle_ref);
+    assert_eq!(graph[1][report_id], report_ref);
+    assert_eq!(
+        graph[5][report_id],
+        serde_json::json!({input_id:input_bundle_ref})
+    );
+    assert_eq!(
+        explanation["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let revision = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        revision["bundle"]["meaning"]["context_result_ref"],
+        first["id"]
+    );
+    assert_eq!(revision["result"], explanation);
+
+    let equal_scratch = Scratch::new();
+    let equal_source = format!(r#"{{"left":{left},"right":{left}}}"#);
+    let equal_request = format!("json-table-compare \"id\":\n{equal_source}");
+    let equal_first = record(&execute(
+        &equal_scratch.0,
+        "owner",
+        &["--input", "equal-compare-explain", &equal_request],
+    ));
+    let equal_result = record(&execute(&equal_scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(equal_result["lifecycle"], "COMMIT");
+    assert!(
+        equal_result["text"]
+            .as_str()
+            .unwrap()
+            .contains("結果: 一致")
+    );
+    assert!(
+        equal_result["text"]
+            .as_str()
+            .unwrap()
+            .contains("差分: 0件 (セル変更: 0; 左側のみの行: 0; 右側のみの行: 0)")
+    );
+    assert_eq!(equal_result["dependencies"][0], equal_first["id"]);
+}
+
+#[test]
 fn table_row_missing_columns_and_unsupported_operators_stop_durably() {
     for (header, document, code) in [
         (

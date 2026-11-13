@@ -507,11 +507,11 @@ impl Engine {
             } else {
                 None
             };
-        let previous_json_table_transform_explanation =
+        let previous_json_table_operation_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
                     Some(prior) => {
-                        match crate::document::previous_json_table_transform_explanation(
+                        match crate::document::previous_json_table_operation_explanation(
                             &self.store,
                             actor,
                             &request.case_id,
@@ -917,7 +917,7 @@ impl Engine {
             });
             compute_requires.push(report_id);
         }
-        if previous_json_table_transform_explanation.is_some() {
+        if previous_json_table_operation_explanation.is_some() {
             let input_id = "previous-json-table-transform-input".to_string();
             let report_id = "previous-json-table-transform-report".to_string();
             nodes.push(GoalNode {
@@ -2909,7 +2909,7 @@ impl Engine {
                     ]);
                     result.guarantee = prior.guarantee.clone();
                 } else if let Some((bundle_ref, report_ref, explanation)) =
-                    &previous_json_table_transform_explanation
+                    &previous_json_table_operation_explanation
                 {
                     let input_id = "previous-json-table-transform-input".to_string();
                     let report_id = "previous-json-table-transform-report".to_string();

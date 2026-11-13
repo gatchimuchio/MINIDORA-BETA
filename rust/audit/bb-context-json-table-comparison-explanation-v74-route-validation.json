@@ -1,0 +1,181 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT JSON table comparison explanation consumer and no-resend recovery",
+  "recorded_at": "2026-11-13T17:28:59+00:00",
+  "base_commit": "dbcbb5644c01f1ae0f35859b97d6c8e980f2c8b5",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "An actual strict JSON-table comparison -> ordinary same-case ExplainPrevious -> exact sealed-input/report replay -> two-sided source-range explanation -> local-file recovery without resend",
+  "build_contract": {
+    "phase": "BODY-1",
+    "archive_path": "rust/audit/construction/MB-BUILD-20261113/MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+    "archive_sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf",
+    "normative_spec": {
+      "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+      "revision": "R2",
+      "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+    },
+    "verified_archive_members": {
+      "01_MINIDORA_BETA_BUILD仕様書_20261113.md": {
+        "bytes": 19617,
+        "sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474"
+      },
+      "02_MINIDORA_BETA_BUILD工程表_20261113.md": {
+        "bytes": 19061,
+        "sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8"
+      },
+      "03_MINIDORA_BETA_Codex施工指示書_20261113.md": {
+        "bytes": 21690,
+        "sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d"
+      }
+    }
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v70-generic-transitive-verbs",
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "work_type": "BODY-1_BOUNDED_PRODUCER_CONSUMER_ROUTE",
+  "product_source_changed": true,
+  "new_dependencies": [],
+  "changed_source_paths": {
+    "rust/crates/minidora-engine/src/document.rs": "9817fb806cabc1d44e029426d1de179e114d3cb64be5ae6ff9fea9b1db720203",
+    "rust/crates/minidora-engine/src/core.rs": "359d4c2045e2707c9ab437d2db58f7c6ef9b221f1079db68c0304db0b92e2b43",
+    "rust/crates/minidora-engine/src/recovery.rs": "ee2f0a827f63b9150470e716d85a3c28c3eb2927b2609dfcf2cf50a71c909e20",
+    "rust/apps/cli/tests/normal_route.rs": "d3aa91152753eef0e3bd35a36fa40163b45fc4750570309ba89a338f10dcef18"
+  },
+  "changed_test_paths": [
+    {
+      "path": "rust/apps/cli/tests/normal_route.rs",
+      "sha256": "d3aa91152753eef0e3bd35a36fa40163b45fc4750570309ba89a338f10dcef18",
+      "tests": [
+        "json_table_comparison_explanation_replays_two_sided_cells_and_changed_rows"
+      ]
+    },
+    {
+      "path": "rust/crates/minidora-engine/src/recovery.rs",
+      "sha256": "ee2f0a827f63b9150470e716d85a3c28c3eb2927b2609dfcf2cf50a71c909e20",
+      "tests": [
+        "recovery::tests::json_table_operation_explanation_reconciles_without_resending"
+      ]
+    }
+  ],
+  "changed_audit_paths": [
+    "rust/README.md",
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/README.md",
+    "rust/audit/requirements.tsv",
+    "rust/audit/bb-context-json-table-comparison-explanation-v74-route-validation.json"
+  ],
+  "implementation": {
+    "recognition": "The consumer recognizes the seven-field JsonTableComparisonReport shape and exact keyed-string-table comparison guarantee, then requires the retained sealed input intent to be JsonTableCompare before selecting this explanation path.",
+    "replay": "It loads the actor/case/input/version InputBundle, recomputes ports::json_table_compare from the sealed document/key, and checks the sole prior report dependency, canonical stored report bytes, pretty prior result text, ContentPlan identity/text/guarantee, RenderObservation and both stored content/render artifact bytes.",
+    "explanation": "The result reports exact-string equality and change counts; it explains up to eight CELL_CHANGED, ROW_REMOVED or ROW_ADDED records, with JSON Pointers and the applicable left/right decoded values, original byte ranges and per-range SHA-256. The complete typed report remains stored. No semantic-equivalence or factual-truth claim is made.",
+    "core_graph": "Core retains the prior result, sealed input-bundle hash and report hash. Existing execution-graph node IDs previous-json-table-transform-input/report were deliberately preserved so pending historical local-file recovery retains its stored identity.",
+    "recovery": "The recovery fixture writes the actual rendered explanation, drops the Engine while an effect is pending, reopens the saved state through reconciliation, verifies the same dependencies, confirms the existing target bytes and modification time, and returns CONFIRMED without a second write.",
+    "stops": [
+      "A nonmatching sealed intent is not interpreted as a JSON-table comparison result.",
+      "Missing/mismatched sealed input, report, prior text, ContentPlan, RenderObservation, dependency lineage or source-range digest yields a typed stop.",
+      "Explanations exceeding the request evidence budget return RESOURCE_LIMIT."
+    ]
+  },
+  "producer_consumer": "Ordinary Japanese JSON table comparison -> strict exact-string keyed report with two-sided source spans -> same-case 詳しく説明して -> sealed-input/report/content/render replay -> bounded change explanation and dependency graph -> authorized local-file receipt -> reconciliation confirms without resend.",
+  "normal_cli_route": {
+    "test": "json_table_comparison_explanation_replays_two_sided_cells_and_changed_rows",
+    "result": "PASS",
+    "observed": "The changed case reports one changed cell, one left-only row and one right-only row. Assertions verify escaped/decoded Japanese values, both JSON Pointers, every reported byte slice and hash, displayed span/hash pairs, equal-table explanation, exact prior/input/report dependency order, execution-graph inputs and actual render hash.",
+    "scoped_command": "cargo test -p minidora-cli --test normal_route json_table_ --locked",
+    "scoped_result": {
+      "passed": 7,
+      "failed": 0,
+      "filtered_out": 133
+    }
+  },
+  "recovery_route": {
+    "test": "recovery::tests::json_table_operation_explanation_reconciles_without_resending",
+    "result": "PASS",
+    "observed": "Comparison, filter and inner-join explanations reconcile. The comparison action is confirmed with one saved effect identity, unchanged target bytes and modification time, exact three-item dependencies, and no second write.",
+    "scoped_command": "cargo test -p minidora-engine json_table_operation_explanation_reconciles_without_resending --locked",
+    "scoped_result": {
+      "passed": 1,
+      "failed": 0,
+      "filtered_out": 227
+    },
+    "process_boundary": "The test drops and reopens the Engine state in its recovery fixture, but reconciliation is invoked in the same test process; no separate-process claim is made."
+  },
+  "command_results": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route json_table_ --locked",
+      "exit_code": 0,
+      "passed": 7,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine json_table_operation_explanation_reconciles_without_resending --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "build_artifact": {
+    "path": "/workspace/.minidora-cloud/rust-target/debug/minidora-rust",
+    "sha256": "a2a582079144866c773d766e78684d58015c22c6c9f435eda697698cbd61e726"
+  },
+  "asset_closure": {
+    "uploaded_three_document_archive": "KEPT in repository and verified against package manifest and extracted member SHA-256 values",
+    "rust_target": "IN_USE and retained (2.6 GiB at rust/target and 2.6 GiB at /workspace/.minidora-cloud/rust-target)",
+    "temporary_recovery_fixtures": "No matching minidora-recovery-json-table-context fixture directories remained under /tmp.",
+    "downloaded_or_user_data": "No new external data downloaded; synthetic route fixture only."
+  },
+  "full_workspace_runtime_tests": "NOT_RUN; the scoped normal-route/recovery cases and workspace format/check/Clippy/build gates were executed.",
+  "acceptance_status": "UNVERIFIED",
+  "requirements": {
+    "B04": "UNVERIFIED beyond one JSON table-comparison consumer route.",
+    "A07": "UNVERIFIED beyond this same-case structured-result route.",
+    "A14": "UNVERIFIED beyond this bounded explanation form.",
+    "E08": "UNVERIFIED beyond this local-file reconciliation edge."
+  },
+  "privacy_and_publication_audit": {
+    "fixture_data": "Synthetic keys north/removed/added and values cat/dog/fox/bird plus Japanese cat/fox values; no personal data.",
+    "secrets": "No credentials, tokens or secret values introduced.",
+    "egress": "No external provider request or data upload occurred.",
+    "authorization": "Existing user authorization to update and preserve work on GitHub main applies; no release, deployment, PR, tag update or external communication."
+  },
+  "rollback": {
+    "revert_to_base": "dbcbb5644c01f1ae0f35859b97d6c8e980f2c8b5",
+    "backup_refs_not_rotated": true,
+    "local_backup_main_branch_and_tag": "7210fc6efd5206aabd3c5ce783dc6e31454184bb",
+    "local_backup_main_prev_branch_and_tag": "33a5b067dc5edc225dbfd0e9d84262eabc1584ca",
+    "remote_backup_main_tag": "33a5b067dc5edc225dbfd0e9d84262eabc1584ca",
+    "remote_backup_main_prev_tag": "62053b76ec6a8ed4ef8c4f8c26028e5905996cb9"
+  },
+  "limitations": [
+    "Only strict keyed JSON string-table comparisons use this new consumer.",
+    "Only the first eight changes are rendered in the explanation; all differences remain in the report artifact.",
+    "No complete B04/A07/A14/E08 acceptance, full successor acceptance or full workspace runtime suite is claimed."
+  ]
+}
