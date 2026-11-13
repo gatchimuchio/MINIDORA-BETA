@@ -1,0 +1,418 @@
+{
+  "work_item": "BODY-1 BB-LANG bounded common-relation comparison for two named subjects",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T07:18:52+00:00",
+  "base_commit": "15b5df7fbc2615f69247383b340d7110a5ac830b",
+  "requirement_ids": [
+    "A02",
+    "A04",
+    "A05",
+    "A09",
+    "A12",
+    "A13",
+    "A15",
+    "B01"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v67-common-relation-questions",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "implementation_change": "Ordinary Japanese and English commonality questions now seal two explicit subjects and a scope. Core enumerates bounded relation candidates from relevant actor premises/rules, queries both subjects under finite action budgets, and reports only propositions supported for both with direct/derived proof lineage.",
+  "binary_sha256": "a81e889574862a1a9727a5154a9258d624fc159238cf2d2a063643d2e3d0bc81",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "68280d4332322badb363c09f88566e64d3ee81389954ba5329de3ed1ed3898dd",
+    "rust/crates/minidora-engine/src/core.rs": "d4821e7337519b5641870f1ae73300034caf0e5f99c651782b7d736d9227d7ef",
+    "rust/crates/minidora-engine/src/input.rs": "244c448cde60cbae604f152cb8cafd61b3d308fd71bccf2fb0e54c4a85f2d7e4",
+    "rust/crates/minidora-engine/src/relations.rs": "5b1b8d7cd10c4347e6fc84b77bd393150653d14c2529f140acff2a59cf7af84d"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "244c448cde60cbae604f152cb8cafd61b3d308fd71bccf2fb0e54c4a85f2d7e4",
+    "rust/apps/cli/tests/normal_route.rs": "e18d2546e4d357a278f44d4d8dfa410bcfce72931dfd08eb05a74591bcb39363",
+    "rust/tools/common_relation_question_route_test.py": "a453de8ef490c2f3de4c295c3d796a2fecc31e29d2041275da5f1de7f22278c3"
+  },
+  "documentation_snapshot_sha256": {
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "rust/README.md": "37bd47840be866de87d69f71e5f2290042ec23d2e2871dcb7dbb2e6c62c7bb36"
+  },
+  "execution_mode": "fresh CLI process per request, one temporary actor-scoped SQLite store, ordinary input route, no fixture injection or external effect",
+  "scope": "Two distinct named subjects; shared positive or negative relation claims in one exact scope; Japanese and English commonality phrasing.",
+  "observations": [
+    {
+      "actor": "common-direct",
+      "case": "common-direct-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:5b01ac04c202ea4c79c439113141aba419331aa899c651b4cce561a17ff470a4\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5b01ac04c202ea4c79c439113141aba419331aa899c651b4cce561a17ff470a4"
+      ]
+    },
+    {
+      "actor": "common-direct",
+      "case": "common-direct-case",
+      "input_id": "mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:347e72fd938343baf077dc9c004ba33425cc798e54de3f2ff74ddf0954c53cd7\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:347e72fd938343baf077dc9c004ba33425cc798e54de3f2ff74ddf0954c53cd7"
+      ]
+    },
+    {
+      "actor": "common-direct",
+      "case": "common-direct-case",
+      "input_id": "coco-feathers",
+      "request": "ココは羽毛持ち",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは羽毛持ちである。\n前提ID: fact:4d6392d09581d274bd5b243be851e5f68384e7e7e9d20d1c5bda69309e177f1e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:4d6392d09581d274bd5b243be851e5f68384e7e7e9d20d1c5bda69309e177f1e"
+      ]
+    },
+    {
+      "actor": "common-direct",
+      "case": "common-direct-case",
+      "input_id": "common-ja",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:5b01ac04c202ea4c79c439113141aba419331aa899c651b4cce561a17ff470a4）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:347e72fd938343baf077dc9c004ba33425cc798e54de3f2ff74ddf0954c53cd7）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:347e72fd938343baf077dc9c004ba33425cc798e54de3f2ff74ddf0954c53cd7",
+        "fact:5b01ac04c202ea4c79c439113141aba419331aa899c651b4cce561a17ff470a4"
+      ]
+    },
+    {
+      "actor": "common-derived",
+      "case": "common-derived-case",
+      "input_id": "bird-animal-rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2"
+      ]
+    },
+    {
+      "actor": "common-derived",
+      "case": "common-derived-case",
+      "input_id": "derived-coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:320c21ee1edb12afa9e193a3f974f8c4e99be1ee5b18a921503241abbcb7d2c4\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:320c21ee1edb12afa9e193a3f974f8c4e99be1ee5b18a921503241abbcb7d2c4"
+      ]
+    },
+    {
+      "actor": "common-derived",
+      "case": "common-derived-case",
+      "input_id": "derived-mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:08ba9f460cec2da84c9decefb748c3548187f2660b8e274667dd8b75c4bf4989\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:08ba9f460cec2da84c9decefb748c3548187f2660b8e274667dd8b75c4bf4989"
+      ]
+    },
+    {
+      "actor": "common-derived",
+      "case": "common-derived-case",
+      "input_id": "common-derived-ja",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは動物である（規則導出）／ミケは動物である（規則導出）\nココ側の根拠: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:320c21ee1edb12afa9e193a3f974f8c4e99be1ee5b18a921503241abbcb7d2c4）\n導出された事実: ココは動物である（導出ID: fact:2bbb0df2c16816c2f361638d05d70a59cf201540c28181143717c206c149d8f2; 依存ID: fact:320c21ee1edb12afa9e193a3f974f8c4e99be1ee5b18a921503241abbcb7d2c4, rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは動物である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:08ba9f460cec2da84c9decefb748c3548187f2660b8e274667dd8b75c4bf4989）\n導出された事実: ミケは動物である（導出ID: fact:8671d49eddf1bf912b1dbe19b25169fffa160aee86058ced527091368d782ea5; 依存ID: fact:08ba9f460cec2da84c9decefb748c3548187f2660b8e274667dd8b75c4bf4989, rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:320c21ee1edb12afa9e193a3f974f8c4e99be1ee5b18a921503241abbcb7d2c4）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:08ba9f460cec2da84c9decefb748c3548187f2660b8e274667dd8b75c4bf4989）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:08ba9f460cec2da84c9decefb748c3548187f2660b8e274667dd8b75c4bf4989",
+        "fact:2bbb0df2c16816c2f361638d05d70a59cf201540c28181143717c206c149d8f2",
+        "fact:320c21ee1edb12afa9e193a3f974f8c4e99be1ee5b18a921503241abbcb7d2c4",
+        "fact:8671d49eddf1bf912b1dbe19b25169fffa160aee86058ced527091368d782ea5",
+        "rule:5707fba12fb3f446f07520cb3ce39eb6313d859ed6390a1f1395a8b26c1b8ac2"
+      ]
+    },
+    {
+      "actor": "common-english",
+      "case": "common-english-case",
+      "input_id": "coco-bird-en",
+      "request": "Coco is a bird",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはbirdである。\n前提ID: fact:8e3eb248803cb4f3041e31681d24d9d148b37fd19340936dad6ffb88d77400c0\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:8e3eb248803cb4f3041e31681d24d9d148b37fd19340936dad6ffb88d77400c0"
+      ]
+    },
+    {
+      "actor": "common-english",
+      "case": "common-english-case",
+      "input_id": "mike-bird-en",
+      "request": "Mike is a bird",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Mikeはbirdである。\n前提ID: fact:5ae11697871623182aa0e96c1596ec7ccd3e3ced988c26158aec8e853b02d922\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5ae11697871623182aa0e96c1596ec7ccd3e3ced988c26158aec8e853b02d922"
+      ]
+    },
+    {
+      "actor": "common-english",
+      "case": "common-english-case",
+      "input_id": "common-en",
+      "request": "What do Coco and Mike have in common?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: Cocoはbirdである（直接提示）／Mikeはbirdである（直接提示）\nCoco側の根拠: Cocoはbirdである。\n直接提示された前提: Cocoはbirdである（根拠ID: fact:8e3eb248803cb4f3041e31681d24d9d148b37fd19340936dad6ffb88d77400c0）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nMike側の根拠: Mikeはbirdである。\n直接提示された前提: Mikeはbirdである（根拠ID: fact:5ae11697871623182aa0e96c1596ec7ccd3e3ced988c26158aec8e853b02d922）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5ae11697871623182aa0e96c1596ec7ccd3e3ced988c26158aec8e853b02d922",
+        "fact:8e3eb248803cb4f3041e31681d24d9d148b37fd19340936dad6ffb88d77400c0"
+      ]
+    },
+    {
+      "actor": "common-negative",
+      "case": "common-negative-case",
+      "input_id": "coco-not-mammal",
+      "request": "ココは哺乳類ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類ではない。\n前提ID: fact:c8246604b0cd7dc71e20739549fcbd571c026d693663eabc878caaf146bb3eaa\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:c8246604b0cd7dc71e20739549fcbd571c026d693663eabc878caaf146bb3eaa"
+      ]
+    },
+    {
+      "actor": "common-negative",
+      "case": "common-negative-case",
+      "input_id": "mike-not-mammal",
+      "request": "ミケは哺乳類ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは哺乳類ではない。\n前提ID: fact:5365199214daaa804c149b22b2f71ed370bb5d10ebe49731c200dd63397ddb4b\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5365199214daaa804c149b22b2f71ed370bb5d10ebe49731c200dd63397ddb4b"
+      ]
+    },
+    {
+      "actor": "common-negative",
+      "case": "common-negative-case",
+      "input_id": "common-negative-ja",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは哺乳類ではない（直接提示）／ミケは哺乳類ではない（直接提示）\nココ側の根拠: ココは哺乳類ではない。\n直接提示された前提: ココは哺乳類ではない（根拠ID: fact:c8246604b0cd7dc71e20739549fcbd571c026d693663eabc878caaf146bb3eaa）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは哺乳類ではない。\n直接提示された前提: ミケは哺乳類ではない（根拠ID: fact:5365199214daaa804c149b22b2f71ed370bb5d10ebe49731c200dd63397ddb4b）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5365199214daaa804c149b22b2f71ed370bb5d10ebe49731c200dd63397ddb4b",
+        "fact:c8246604b0cd7dc71e20739549fcbd571c026d693663eabc878caaf146bb3eaa"
+      ]
+    },
+    {
+      "actor": "common-missing",
+      "case": "common-missing-case",
+      "input_id": "coco-only-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:5a5363d89a7fefea3f01f3729cdb46051488400fe8aedf8bb691731f749339d6\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5a5363d89a7fefea3f01f3729cdb46051488400fe8aedf8bb691731f749339d6"
+      ]
+    },
+    {
+      "actor": "common-missing",
+      "case": "common-missing-case",
+      "input_id": "mike-not-bird",
+      "request": "ミケは鳥ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥ではない。\n前提ID: fact:b05b56d4b74466106bb423b52210dff5cc5dc66fb4ea9ab3dd47d4416f991922\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:b05b56d4b74466106bb423b52210dff5cc5dc66fb4ea9ab3dd47d4416f991922"
+      ]
+    },
+    {
+      "actor": "common-missing",
+      "case": "common-missing-case",
+      "input_id": "common-no-proof",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。",
+      "reason": "MISSING_PREMISES: 保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。",
+      "dependencies": []
+    },
+    {
+      "actor": "common-scope",
+      "case": "common-scope-case",
+      "input_id": "coco-biology",
+      "request": "[scope=biology]ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:748480a2aced3383fa7f850a447edb07b97de4aca575e7154622ae9a33dc4905\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:748480a2aced3383fa7f850a447edb07b97de4aca575e7154622ae9a33dc4905"
+      ]
+    },
+    {
+      "actor": "common-scope",
+      "case": "common-scope-case",
+      "input_id": "mike-default",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:26f37170317f11fcf1b1c082fa0e37e33a7c4023a865c38f2f5fe760adc8a385\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:26f37170317f11fcf1b1c082fa0e37e33a7c4023a865c38f2f5fe760adc8a385"
+      ]
+    },
+    {
+      "actor": "common-scope",
+      "case": "common-scope-case",
+      "input_id": "common-biology",
+      "request": "[scope=biology]ココとミケの共通点は何ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。",
+      "reason": "MISSING_PREMISES: 保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。",
+      "dependencies": []
+    },
+    {
+      "actor": "common-conflict",
+      "case": "common-conflict-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:b6bb339f763523eabe6c982627720ea6bd71541f937fba294d8755255b1ad439\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:b6bb339f763523eabe6c982627720ea6bd71541f937fba294d8755255b1ad439"
+      ]
+    },
+    {
+      "actor": "common-conflict",
+      "case": "common-conflict-case",
+      "input_id": "coco-not-bird",
+      "request": "ココは鳥ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥ではない。\n前提ID: fact:a683bdb99e6970a6db60a98a5ec9ecb22e47623150f8cb3b17b49e59019cdb79\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:a683bdb99e6970a6db60a98a5ec9ecb22e47623150f8cb3b17b49e59019cdb79"
+      ]
+    },
+    {
+      "actor": "common-conflict",
+      "case": "common-conflict-case",
+      "input_id": "mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:bebea6dc7fcf1cbdfb3ebd21725d5767428dc1fc91bf7595e54bbfca86ecbb2c\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:bebea6dc7fcf1cbdfb3ebd21725d5767428dc1fc91bf7595e54bbfca86ecbb2c"
+      ]
+    },
+    {
+      "actor": "common-conflict",
+      "case": "common-conflict-case",
+      "input_id": "common-conflict",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "比較対象のいずれかに肯定・否定の競合があります。共通関係を選択せず停止します。",
+      "reason": "CONFLICTING_PREMISES: 比較対象のいずれかに肯定・否定の競合があります。共通関係を選択せず停止します。",
+      "dependencies": []
+    },
+    {
+      "actor": "common-other-actor",
+      "case": "common-other-actor-case",
+      "input_id": "common-empty-actor",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "二つの対象について比較できる保存済み関係がありません。共通点がないとは断定しません。",
+      "reason": "MISSING_PREMISES: 二つの対象について比較できる保存済み関係がありません。共通点がないとは断定しません。",
+      "dependencies": []
+    }
+  ],
+  "summary": {
+    "total_requests": 25,
+    "lifecycle_counts": {
+      "COMMIT": 21,
+      "SUSPEND": 4
+    }
+  },
+  "targeted_checks": {
+    "direct_shared_premises_and_one_sided_exclusion": "PASS",
+    "derived_shared_relation_and_rule_lineage": "PASS",
+    "english_commonality_question": "PASS",
+    "negative_shared_relations": "PASS",
+    "missing_evidence_not_reported_as_absence": "PASS",
+    "exact_scope_and_actor_isolation": "PASS",
+    "conflicting_evidence_typed_stop": "PASS"
+  },
+  "requirements_status": "This bounded evidence-backed comparison does not establish general semantic comparison, open-domain knowledge or A02/A04/A05/A09/A12/A13/A15/B01 acceptance; those remain UNVERIFIED.",
+  "limitations": [
+    "Only two explicit distinct subjects and relations already represented by actor premises or rules are compared.",
+    "The result lists supported shared relations only; absence from this non-exhaustive list is not evidence of a difference or no commonality.",
+    "Conflicting evidence suspends. Missing evidence does not become a negative fact.",
+    "Candidate scan and each pair of relation queries use the request's finite action budget.",
+    "Outside-world truth, unrestricted semantic comparison and the independent acceptance population were not tested."
+  ]
+}

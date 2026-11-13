@@ -385,6 +385,11 @@ pub enum Intent {
     AskConjunction {
         propositions: Vec<Proposition>,
     },
+    AskCommonRelations {
+        subject_a: String,
+        subject_b: String,
+        scope: String,
+    },
     AskPreviousRelation {
         proposition: Proposition,
         explain: bool,

@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v66-contextual-why-followup";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v67-common-relation-questions";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1050,6 +1050,49 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn common_relations_question_intent(text: &str) -> Result<Option<Intent>> {
+    let scoped = regex(r"^\[scope=([^\]]*)\]\s*(.+)$")?.captures(text);
+    let scope = scoped
+        .as_ref()
+        .map(|capture| capture[1].trim().to_string())
+        .unwrap_or_else(|| "default".into());
+    let body = scoped.as_ref().map_or(text, |capture| {
+        capture.get(2).expect("matched body").as_str()
+    });
+    let japanese = regex(r"^(.+?)と(.+?)の共通点は(?:何ですか|何でしょうか|何か|何)$")?;
+    let english = regex(r"(?i)^what do (.+?) and (.+?) have in common$")?;
+    let captures = japanese.captures(body).or_else(|| english.captures(body));
+    let Some(captures) = captures else {
+        return Ok(None);
+    };
+    let subject_a = captures[1].trim();
+    let subject_b = captures[2].trim();
+    let valid_subject = |subject: &str| {
+        !subject.is_empty()
+            && subject.len() <= 512
+            && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
+            && !matches!(
+                subject.to_ascii_lowercase().as_str(),
+                "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
+            )
+            && !matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら")
+    };
+    if !valid_subject(subject_a)
+        || !valid_subject(subject_b)
+        || subject_a == subject_b
+        || scope.is_empty()
+    {
+        return Ok(Some(Intent::Unknown {
+            reason: "common-relation questions require two distinct explicit subjects and one nonempty scope".into(),
+        }));
+    }
+    Ok(Some(Intent::AskCommonRelations {
+        subject_a: subject_a.into(),
+        subject_b: subject_b.into(),
+        scope,
+    }))
+}
+
 fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
     let patterns = [
         r"(?i)^(?:which|what) group(?:'s)? (?:has )?(?:the )?highest (?:mean|average)(?: value)?$",
@@ -1443,6 +1486,9 @@ fn interpret(text: &str) -> Result<Intent> {
         });
     }
     if let Some(intent) = why_question_intent(body)? {
+        return Ok(intent);
+    }
+    if let Some(intent) = common_relations_question_intent(body)? {
         return Ok(intent);
     }
     if let Some(intent) = inspect_premises_intent(body)? {
@@ -2539,6 +2585,48 @@ mod tests {
                 && proposition.object == "ノート"
                 && proposition.predicate == "use"
         ));
+    }
+
+    #[test]
+    fn common_relation_questions_preserve_two_subjects_and_scope() {
+        for (text, subject_a, subject_b, scope) in [
+            ("ココとミケの共通点は何ですか", "ココ", "ミケ", "default"),
+            (
+                "[scope=biology]ココとミケの共通点は何?",
+                "ココ",
+                "ミケ",
+                "biology",
+            ),
+            (
+                "What do Coco and Mike have in common?",
+                "Coco",
+                "Mike",
+                "default",
+            ),
+        ] {
+            match interpret(text).unwrap() {
+                Intent::AskCommonRelations {
+                    subject_a: parsed_a,
+                    subject_b: parsed_b,
+                    scope: parsed_scope,
+                } => {
+                    assert_eq!(parsed_a, subject_a, "{text}");
+                    assert_eq!(parsed_b, subject_b, "{text}");
+                    assert_eq!(parsed_scope, scope, "{text}");
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        for text in [
+            "ココとココの共通点は何ですか",
+            "ココとミケとサキの共通点は何ですか",
+            "それとミケの共通点は何ですか",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 
     #[test]

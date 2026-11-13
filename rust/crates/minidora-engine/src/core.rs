@@ -2329,6 +2329,224 @@ impl Engine {
                     Guarantee::UserPremise
                 };
             }
+            Intent::AskCommonRelations {
+                subject_a,
+                subject_b,
+                scope,
+            } => {
+                let memory = self.store.load_memory(actor)?;
+                let scanned_records = memory
+                    .facts
+                    .len()
+                    .checked_add(memory.rules.len())
+                    .ok_or_else(|| {
+                        failure(
+                            "RESOURCE_LIMIT",
+                            "common-relation memory scan count overflowed its bounded representation",
+                        )
+                    })?;
+                let action_budget =
+                    usize::try_from(request.budget.max_actions).unwrap_or(usize::MAX);
+                if scanned_records > action_budget {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "保存済みの関係を比較候補として走査する量が推論予算を超えました。",
+                    );
+                }
+                let scanned_actions = u32::try_from(scanned_records).map_err(|_| {
+                    failure(
+                        "RESOURCE_LIMIT",
+                        "common-relation scan count exceeds the bounded action representation",
+                    )
+                })?;
+                let remaining_actions = request.budget.max_actions.saturating_sub(scanned_actions);
+                let mut candidates = BTreeSet::new();
+                let includes_subject = |subject: &str| {
+                    subject == subject_a
+                        || subject == subject_b
+                        || subject.starts_with('$')
+                        || subject.starts_with('?')
+                };
+                let mut include_candidate = |proposition: &Proposition| {
+                    if proposition.scope == *scope
+                        && includes_subject(&proposition.subject)
+                        && !proposition.predicate.starts_with(['$', '?'])
+                        && !proposition.object.starts_with(['$', '?'])
+                    {
+                        candidates.insert((
+                            proposition.predicate.clone(),
+                            proposition.object.clone(),
+                            proposition.negative,
+                        ));
+                    }
+                };
+                for fact in &memory.facts {
+                    if fact.valid
+                        && !matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown)
+                    {
+                        include_candidate(&fact.proposition);
+                    }
+                }
+                for rule in memory.rules.iter().filter(|rule| rule.valid) {
+                    for proposition in std::iter::once(&rule.premise)
+                        .chain(rule.additional_premises.iter())
+                        .chain(std::iter::once(&rule.conclusion))
+                    {
+                        include_candidate(proposition);
+                    }
+                }
+                drop(include_candidate);
+                if candidates.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "二つの対象について比較できる保存済み関係がありません。共通点がないとは断定しません。",
+                    );
+                }
+                let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
+                    failure(
+                        "RESOURCE_LIMIT",
+                        "common-relation candidate count exceeds the bounded representation",
+                    )
+                })?;
+                let query_count = candidate_count.checked_mul(2).ok_or_else(|| {
+                    failure(
+                        "RESOURCE_LIMIT",
+                        "common-relation query count exceeds the bounded action representation",
+                    )
+                })?;
+                if query_count > remaining_actions {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "各比較候補を両方の対象について照合する推論予算が不足しています。",
+                    );
+                }
+                let per_query_budget = remaining_actions / query_count;
+                if per_query_budget == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "関係比較を最後まで行う推論予算がありません。",
+                    );
+                }
+
+                let mut common = Vec::new();
+                let mut dependencies = BTreeSet::new();
+                let mut any_derived = false;
+                for (predicate, object, negative) in candidates {
+                    let proposition_a = Proposition {
+                        subject: subject_a.clone(),
+                        predicate: predicate.clone(),
+                        object: object.clone(),
+                        negative,
+                        scope: scope.clone(),
+                    };
+                    let proposition_b = Proposition {
+                        subject: subject_b.clone(),
+                        ..proposition_a.clone()
+                    };
+                    let answer_a = relations::query(&memory, &proposition_a, per_query_budget)?;
+                    let answer_b = relations::query(&memory, &proposition_b, per_query_budget)?;
+                    if answer_a.status == "CONFLICT" || answer_b.status == "CONFLICT" {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONFLICTING_PREMISES",
+                            "比較対象のいずれかに肯定・否定の競合があります。共通関係を選択せず停止します。",
+                        );
+                    }
+                    if !matches!(
+                        answer_a.status.as_str(),
+                        "SUPPORTED" | "CONTRADICTED" | "UNKNOWN"
+                    ) || !matches!(
+                        answer_b.status.as_str(),
+                        "SUPPORTED" | "CONTRADICTED" | "UNKNOWN"
+                    ) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "UNSUPPORTED_RELATION_RESULT",
+                            "比較対象の関係照合が既知の終端状態を返しませんでした。",
+                        );
+                    }
+                    if answer_a.status != "SUPPORTED" || answer_b.status != "SUPPORTED" {
+                        continue;
+                    }
+                    let guarantee_a = relations::answer_guarantee(&answer_a);
+                    let guarantee_b = relations::answer_guarantee(&answer_b);
+                    dependencies.extend(relations::answer_dependencies(&answer_a));
+                    dependencies.extend(relations::answer_dependencies(&answer_b));
+                    any_derived |=
+                        guarantee_a == Guarantee::Derived || guarantee_b == Guarantee::Derived;
+                    common.push((
+                        proposition_a,
+                        proposition_b,
+                        answer_a,
+                        answer_b,
+                        guarantee_a,
+                        guarantee_b,
+                    ));
+                }
+                if common.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。",
+                    );
+                }
+                let origin = |guarantee: &Guarantee| match guarantee {
+                    Guarantee::UserPremise => "直接提示",
+                    Guarantee::Derived => "規則導出",
+                    _ => "根拠付き",
+                };
+                let mut report = vec!["保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。".to_string()];
+                for (proposition_a, proposition_b, answer_a, answer_b, guarantee_a, guarantee_b) in
+                    common
+                {
+                    report.push(format!(
+                        "共通関係: {}（{}）／{}（{}）",
+                        describe(&proposition_a),
+                        origin(&guarantee_a),
+                        describe(&proposition_b),
+                        origin(&guarantee_b)
+                    ));
+                    report.extend(relation_explanation_lines(
+                        &memory,
+                        &proposition_a,
+                        &answer_a,
+                        &format!("{}側の根拠", subject_a),
+                    ));
+                    report.extend(relation_explanation_lines(
+                        &memory,
+                        &proposition_b,
+                        &answer_b,
+                        &format!("{}側の根拠", subject_b),
+                    ));
+                }
+                let report = report.join("\n");
+                if report.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "共通関係と証拠の出力が要求の証拠予算を超えました。",
+                    );
+                }
+                units.push(report);
+                result.dependencies = dependencies.into_iter().collect();
+                result.guarantee = if any_derived {
+                    Guarantee::Derived
+                } else {
+                    Guarantee::UserPremise
+                };
+            }
             Intent::AskPreviousRelation {
                 proposition,
                 explain,

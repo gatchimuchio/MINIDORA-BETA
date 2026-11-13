@@ -4147,6 +4147,321 @@ fn elliptical_why_questions_explain_the_previous_committed_result() {
 }
 
 #[test]
+fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() {
+    let scratch = Scratch::new();
+
+    let direct_actor = "common-relation-direct";
+    let direct_case = "common-relation-direct-case";
+    let coco_bird = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "coco-bird", "ココは鳥"],
+    ));
+    let mike_bird = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "mike-bird", "ミケは鳥"],
+    ));
+    let coco_feathers = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "coco-feathers", "ココは羽毛持ち"],
+    ));
+    let direct_common = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "common-ja", "ココとミケの共通点は何ですか"],
+    ));
+    assert_eq!(direct_common["lifecycle"], "COMMIT");
+    assert_eq!(direct_common["guarantee"], "USER_PREMISE");
+    let direct_text = direct_common["text"].as_str().unwrap();
+    assert!(direct_text.contains("ココは鳥である"));
+    assert!(direct_text.contains("ミケは鳥である"));
+    assert!(!direct_text.contains("羽毛持ち"));
+    assert!(direct_text.contains("網羅的な比較でも"));
+    for premise in [&coco_bird["dependencies"][0], &mike_bird["dependencies"][0]] {
+        assert!(
+            direct_common["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(premise)
+        );
+    }
+    assert!(
+        !direct_common["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&coco_feathers["dependencies"][0])
+    );
+
+    let derived_actor = "common-relation-derived";
+    let derived_case = "common-relation-derived-case";
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &["--input", "bird-animal-rule", "もしXは鳥ならXは動物"],
+    ));
+    let derived_coco = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &["--input", "derived-coco-bird", "ココは鳥"],
+    ));
+    let derived_mike = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &["--input", "derived-mike-bird", "ミケは鳥"],
+    ));
+    let derived_common = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &[
+            "--input",
+            "derived-common-ja",
+            "ココとミケの共通点は何ですか",
+        ],
+    ));
+    assert_eq!(derived_common["lifecycle"], "COMMIT");
+    assert_eq!(derived_common["guarantee"], "DERIVED");
+    let derived_text = derived_common["text"].as_str().unwrap();
+    assert!(derived_text.contains("ココは動物である"));
+    assert!(derived_text.contains("ミケは動物である"));
+    assert!(derived_text.contains("適用規則:"));
+    for dependency in [
+        &rule["dependencies"][0],
+        &derived_coco["dependencies"][0],
+        &derived_mike["dependencies"][0],
+    ] {
+        assert!(
+            derived_common["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency)
+        );
+    }
+
+    let english_actor = "common-relation-english";
+    let english_case = "common-relation-english-case";
+    record(&execute_in_case(
+        &scratch.0,
+        english_actor,
+        english_case,
+        &["--input", "coco-bird-en", "Coco is a bird"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        english_actor,
+        english_case,
+        &["--input", "mike-bird-en", "Mike is a bird"],
+    ));
+    let english_common = record(&execute_in_case(
+        &scratch.0,
+        english_actor,
+        english_case,
+        &[
+            "--input",
+            "common-en",
+            "What do Coco and Mike have in common?",
+        ],
+    ));
+    assert_eq!(english_common["lifecycle"], "COMMIT");
+    assert!(
+        english_common["text"]
+            .as_str()
+            .unwrap()
+            .contains("Cocoはbirdである")
+    );
+    assert!(
+        english_common["text"]
+            .as_str()
+            .unwrap()
+            .contains("Mikeはbirdである")
+    );
+
+    let negative_actor = "common-relation-negative";
+    let negative_case = "common-relation-negative-case";
+    let coco_negative = record(&execute_in_case(
+        &scratch.0,
+        negative_actor,
+        negative_case,
+        &["--input", "coco-not-mammal", "ココは哺乳類ではない"],
+    ));
+    let mike_negative = record(&execute_in_case(
+        &scratch.0,
+        negative_actor,
+        negative_case,
+        &["--input", "mike-not-mammal", "ミケは哺乳類ではない"],
+    ));
+    let negative_common = record(&execute_in_case(
+        &scratch.0,
+        negative_actor,
+        negative_case,
+        &["--input", "negative-common", "ココとミケの共通点は何ですか"],
+    ));
+    assert_eq!(negative_common["lifecycle"], "COMMIT");
+    assert!(
+        negative_common["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは哺乳類ではない")
+    );
+    assert!(
+        negative_common["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミケは哺乳類ではない")
+    );
+    for premise in [
+        &coco_negative["dependencies"][0],
+        &mike_negative["dependencies"][0],
+    ] {
+        assert!(
+            negative_common["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(premise)
+        );
+    }
+
+    let missing_actor = "common-relation-missing";
+    let missing_case = "common-relation-missing-case";
+    record(&execute_in_case(
+        &scratch.0,
+        missing_actor,
+        missing_case,
+        &["--input", "coco-only-bird", "ココは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        missing_actor,
+        missing_case,
+        &["--input", "mike-not-bird", "ミケは鳥ではない"],
+    ));
+    let missing = stopped(
+        &execute_in_case(
+            &scratch.0,
+            missing_actor,
+            missing_case,
+            &["--input", "no-common-proof", "ココとミケの共通点は何ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    assert!(
+        !missing["text"]
+            .as_str()
+            .unwrap()
+            .contains("共通点はありません")
+    );
+
+    let scope_actor = "common-relation-scope";
+    let scope_case = "common-relation-scope-case";
+    record(&execute_in_case(
+        &scratch.0,
+        scope_actor,
+        scope_case,
+        &["--input", "coco-biology", "[scope=biology]ココは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        scope_actor,
+        scope_case,
+        &["--input", "mike-default", "ミケは鳥"],
+    ));
+    let wrong_scope = stopped(
+        &execute_in_case(
+            &scratch.0,
+            scope_actor,
+            scope_case,
+            &[
+                "--input",
+                "biology-common",
+                "[scope=biology]ココとミケの共通点は何ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrong_scope["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    let conflict_actor = "common-relation-conflict";
+    let conflict_case = "common-relation-conflict-case";
+    record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &["--input", "coco-bird", "ココは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &["--input", "coco-not-bird", "ココは鳥ではない"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &["--input", "mike-bird", "ミケは鳥"],
+    ));
+    let conflict = stopped(
+        &execute_in_case(
+            &scratch.0,
+            conflict_actor,
+            conflict_case,
+            &[
+                "--input",
+                "conflicting-common",
+                "ココとミケの共通点は何ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        conflict["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONFLICTING_PREMISES")
+    );
+
+    let actor_isolated = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "common-relation-other-actor",
+            "common-relation-other-actor-case",
+            &["--input", "no-actor-memory", "ココとミケの共通点は何ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        actor_isolated["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+}
+
+#[test]
 fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
     let scratch = Scratch::new();
     let rule = record(&execute(
