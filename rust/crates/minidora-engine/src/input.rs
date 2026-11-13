@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v56-natural-premise-correction";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v57-contextual-premise-correction";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -875,12 +875,12 @@ fn premise_correction_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(None);
     }
     let raw_statement = terminal_trim(text);
-    let (scope, statement) =
-        if let Some(capture) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(raw_statement) {
-            (capture[1].trim().to_string(), capture[2].trim().to_string())
-        } else {
-            ("default".to_string(), raw_statement.to_string())
-        };
+    let explicit_scope = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?
+        .captures(raw_statement)
+        .map(|capture| (capture[1].trim().to_string(), capture[2].trim().to_string()));
+    let (scope, statement) = explicit_scope
+        .clone()
+        .unwrap_or_else(|| ("default".to_string(), raw_statement.to_string()));
 
     let japanese = regex(r"^(?:(?:訂正|訂正します)[：:]\s*)?(.+?)(?:は|が)(.+?)ではなく(.+)$")?;
     let english = regex(r"(?i)^(?:correction:\s*)?(.+?)\s+(?:is|are)\s+(.+?),\s+not\s+(.+)$")?;
@@ -935,13 +935,21 @@ fn premise_correction_intent(text: &str) -> Result<Option<Intent>> {
         }));
     };
     let lower_subject = superseded.subject.to_ascii_lowercase();
-    if matches!(
+    let previous_subject = matches!(lower_subject.as_str(), "it" | "this" | "that")
+        || matches!(superseded.subject.as_str(), "これ" | "それ" | "あれ");
+    let unresolved_pronoun = matches!(
         lower_subject.as_str(),
-        "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
-    ) || matches!(
-        superseded.subject.as_str(),
-        "これ" | "それ" | "あれ" | "これら" | "それら"
-    ) {
+        "these" | "those" | "they" | "he" | "she"
+    ) || matches!(superseded.subject.as_str(), "これら" | "それら");
+    if previous_subject {
+        return Ok(Some(Intent::CorrectPreviousPremise {
+            predicate: superseded.predicate,
+            superseded_object: superseded.object,
+            replacement_object: replacement.object,
+            scope: explicit_scope.map(|(scope, _)| scope),
+        }));
+    }
+    if unresolved_pronoun {
         return Ok(Some(Intent::Unknown {
             reason: "premise correction needs one explicit named subject; pronouns are unresolved"
                 .into(),
@@ -2158,6 +2166,28 @@ mod tests {
         }
         assert!(matches!(
             interpret("It is a fish, not a bird").unwrap(),
+            Intent::CorrectPreviousPremise {
+                predicate,
+                superseded_object,
+                replacement_object,
+                scope: None,
+            } if predicate == "is"
+                && superseded_object == "bird"
+                && replacement_object == "fish"
+        ));
+        assert!(matches!(
+            interpret("[scope=story]それは哺乳類ではなく魚です").unwrap(),
+            Intent::CorrectPreviousPremise {
+                superseded_object,
+                replacement_object,
+                scope: Some(scope),
+                ..
+            } if superseded_object == "哺乳類"
+                && replacement_object == "魚"
+                && scope == "story"
+        ));
+        assert!(matches!(
+            interpret("They are fish, not birds").unwrap(),
             Intent::Unknown { .. }
         ));
         assert!(!matches!(

@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import tempfile
 
-PARSER_VERSION = "declarative-ja-en-v56-natural-premise-correction"
+PARSER_VERSION = "declarative-ja-en-v57-contextual-premise-correction"
 
 
 def main() -> None:

@@ -347,6 +347,12 @@ pub enum Intent {
         superseded: Proposition,
         replacement: Proposition,
     },
+    CorrectPreviousPremise {
+        predicate: String,
+        superseded_object: String,
+        replacement_object: String,
+        scope: Option<String>,
+    },
     AddRule {
         premise: Proposition,
         conclusion: Proposition,

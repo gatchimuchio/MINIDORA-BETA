@@ -1,0 +1,551 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT prior-result-anchored natural premise correction",
+  "stage": "BODY-1_EXECUTION",
+  "parser_version": "declarative-ja-en-v57-contextual-premise-correction",
+  "requirement_ids": [
+    "A07",
+    "A08",
+    "CAP-D04",
+    "CAP-D07",
+    "CAP-D11",
+    "CAP-D13"
+  ],
+  "execution_mode": "ordinary CLI request per fresh process; same-case ResultRecord dependency anchoring; actor-scoped durable memory; temporary SQLite/blob store",
+  "producer_consumer": "ordinary Japanese/English correction with a supported singular pronoun -> sealed v57 CorrectPreviousPremise intent -> Core selects only active direct USER_PREMISE facts referenced by the selected same-case committed ResultRecord -> exact unique proposition/scope match -> one-revision invalidation and replacement -> fresh-process listing observes the update while old result history remains",
+  "scope": "The finite forms it/this/that and これ/それ/あれ can refer only to one unique active direct premise with the exact superseded predicate/object among the selected same-case prior committed result dependencies. An explicit scope further narrows candidates; without it, multiple scopes or subjects suspend. Missing same-case context, no matching direct premise, and derived-only prior conclusions suspend without changing memory. This is not general co-reference, plural reference, empirical learning, or outside-world truth verification.",
+  "observations": [
+    {
+      "actor_id": "owner",
+      "case_id": "natural-ja",
+      "input_id": "coco-mammal",
+      "request": "ココは哺乳類",
+      "input_sha256": "dc187d8838a700095e08929afb583f1dab069112d8619363bc498c43d1e1c0f1",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類である。\n前提ID: fact:5304ca673012607de939cc6ef426ca90f962a8c4416687be8345b7b7a90bd637\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "text_sha256": "e2b4f1243980c1cc88cb6b6f16d1761c0def1b2fcb71085bc47358f57113dde0",
+      "reason": null,
+      "result_id": "04739c0311957452e372ad6ec915ac4fb1955467e5c456710206825f373fbe38",
+      "render_sha256": "e2b4f1243980c1cc88cb6b6f16d1761c0def1b2fcb71085bc47358f57113dde0",
+      "dependencies": [
+        "fact:5304ca673012607de939cc6ef426ca90f962a8c4416687be8345b7b7a90bd637"
+      ]
+    },
+    {
+      "actor_id": "owner",
+      "case_id": "natural-ja",
+      "input_id": "ask-coco-mammal",
+      "request": "ココは哺乳類ですか",
+      "input_sha256": "f4cb03c3f0a598264e4272765bd657abf4ab3e0612bb8749c795da06c1e4ddb0",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ココは哺乳類である。",
+      "text_sha256": "c3de417fd2ae6c8895f79df6c47a51f54d4fda8e872c57cb54f2eebaaf08931c",
+      "reason": null,
+      "result_id": "53eb65c4f66616d44f18f8b08dee603ac44e694c770239a09e4b2ff31805bb11",
+      "render_sha256": "c3de417fd2ae6c8895f79df6c47a51f54d4fda8e872c57cb54f2eebaaf08931c",
+      "dependencies": [
+        "fact:5304ca673012607de939cc6ef426ca90f962a8c4416687be8345b7b7a90bd637"
+      ]
+    },
+    {
+      "actor_id": "owner",
+      "case_id": "natural-ja",
+      "input_id": "pronoun-correction",
+      "request": "それは哺乳類ではなく鳥です",
+      "input_sha256": "55cce0bdeab89d01b4dea9a01d04b58e5af706ec2e66ba13208f810b42dd5c43",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "直前の回答が参照した提示前提IDから訂正対象を特定しました: ココは哺乳類である。\n訂正を会話内の提示前提として記録しました: ココは哺乳類ではない。\n置き換え後の提示前提: ココは鳥である。\n以前の前提とその依存記録を1件失効させ、元の記録は保持しました。\n現実世界の真偽を検証したものではありません。",
+      "text_sha256": "a84c4756193cee18e2d5a58c1800eff57ea2b3a7a2c48a0806f6ed6dacbece2c",
+      "reason": null,
+      "result_id": "28aa82e0964f1c61a630c40f34f7eb84c435b902bec29cbed021550c642e9658",
+      "render_sha256": "a84c4756193cee18e2d5a58c1800eff57ea2b3a7a2c48a0806f6ed6dacbece2c",
+      "dependencies": [
+        "fact:5304ca673012607de939cc6ef426ca90f962a8c4416687be8345b7b7a90bd637",
+        "fact:ec3f0bc8cc34759bb790d43af5dbaae93098212f34bf33314964bca6134883ea",
+        "fact:d3020a27a88db52f9909535186f85b885a6b19dc91003c52c9c179d33c212787"
+      ]
+    },
+    {
+      "actor_id": "owner",
+      "case_id": "natural-ja",
+      "input_id": "coco-premises-after",
+      "request": "ココとは何ですか",
+      "input_sha256": "b1b3f9bec286f0276c88026a22cb97e2b7729a004c2a29560dac96a253e0f731",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類ではない（範囲: default; 提示前提ID: fact:ec3f0bc8cc34759bb790d43af5dbaae93098212f34bf33314964bca6134883ea）\n・ココは鳥である（範囲: default; 提示前提ID: fact:d3020a27a88db52f9909535186f85b885a6b19dc91003c52c9c179d33c212787）",
+      "text_sha256": "53520be31fb667c26e39b810588d6301463a9f75802138dd268f5b659bf77e35",
+      "reason": null,
+      "result_id": "ee55e1effe00d71a9c7a5b9e1f91dff9981cf8c0659bba8b9bc34173ba6507c4",
+      "render_sha256": "53520be31fb667c26e39b810588d6301463a9f75802138dd268f5b659bf77e35",
+      "dependencies": [
+        "fact:ec3f0bc8cc34759bb790d43af5dbaae93098212f34bf33314964bca6134883ea",
+        "fact:d3020a27a88db52f9909535186f85b885a6b19dc91003c52c9c179d33c212787"
+      ]
+    },
+    {
+      "actor_id": "owner",
+      "case_id": "different-case",
+      "input_id": "pronoun-without-case-result",
+      "request": "It is a fish, not a mammal.",
+      "input_sha256": "625405fd96c9f7ac2e12d30941bf18a029180ceeaa89637bd544907c8be62b64",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "代名詞の対象を決める直前の同一ケース確定回答がありません。記憶は変更していません。",
+      "text_sha256": "a90ca7228647812dbf01508f2e89a32989f9f431d3d1f1136dbee33619d2b7ab",
+      "reason": "MISSING_CORRECTION_CONTEXT: 代名詞の対象を決める直前の同一ケース確定回答がありません。記憶は変更していません。",
+      "result_id": "c9f1d86a7ed30a932103ae15f8977b2c89526991981eb9c329f8e59b8c4af53f",
+      "render_sha256": null,
+      "dependencies": []
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "default-premise",
+      "request": "ココは哺乳類",
+      "input_sha256": "dc187d8838a700095e08929afb583f1dab069112d8619363bc498c43d1e1c0f1",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類である。\n前提ID: fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "text_sha256": "0e314b2f2dfe6bf346721d874f3b6ae6b13b6cb8003e698915ebc204eb01f7a3",
+      "reason": null,
+      "result_id": "16670ec52f132223573cad7e41815210348beafc12b553ec38cc79e712b721b1",
+      "render_sha256": "0e314b2f2dfe6bf346721d874f3b6ae6b13b6cb8003e698915ebc204eb01f7a3",
+      "dependencies": [
+        "fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76"
+      ]
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "story-premise",
+      "request": "[scope=story]ココは哺乳類",
+      "input_sha256": "4253f0f43ee35b9efdb1bbf766120dff3f1ae2e5ebbff7affcaa786ddc2be386",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類である。\n前提ID: fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "text_sha256": "fef348b7b15a6a31b5e512da7111e201cf474f44acc70591c2de7619854d1bd1",
+      "reason": null,
+      "result_id": "87f7d25f8c47c70b266a82b2a989812c07eb48e516c3747a42094a5dd2e633d3",
+      "render_sha256": "fef348b7b15a6a31b5e512da7111e201cf474f44acc70591c2de7619854d1bd1",
+      "dependencies": [
+        "fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27"
+      ]
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "list-scopes",
+      "request": "ココとは何ですか",
+      "input_sha256": "b1b3f9bec286f0276c88026a22cb97e2b7729a004c2a29560dac96a253e0f731",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類である（範囲: default; 提示前提ID: fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76）\n・ココは哺乳類である（範囲: story; 提示前提ID: fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27）",
+      "text_sha256": "ae0e77cafb7cf59e6726cba4419551eda39b3bf61af823d53416fe2fbcaf6b2b",
+      "reason": null,
+      "result_id": "5854b06cef968a6a541222ae741941f193f3c1b85ee0fb8a2f46ef7fe51a00fc",
+      "render_sha256": "ae0e77cafb7cf59e6726cba4419551eda39b3bf61af823d53416fe2fbcaf6b2b",
+      "dependencies": [
+        "fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76",
+        "fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27"
+      ]
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "ambiguous-pronoun",
+      "request": "それは哺乳類ではなく鳥です",
+      "input_sha256": "55cce0bdeab89d01b4dea9a01d04b58e5af706ec2e66ba13208f810b42dd5c43",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "直前の回答が同じ訂正文に一致する複数の対象を参照しています。範囲を明示して再質問してください。記憶は変更していません。",
+      "text_sha256": "ff7217d0a4f23b266d95015c2205e1ec5fb8cb4384dceb189bd161992b30057a",
+      "reason": "AMBIGUOUS_CORRECTION_CONTEXT: 直前の回答が同じ訂正文に一致する複数の対象を参照しています。範囲を明示して再質問してください。記憶は変更していません。",
+      "result_id": "7ac1ae67e4199ce178b2f1c5fb861b7a2419193fccdefcef3e877ea2098e0345",
+      "render_sha256": null,
+      "dependencies": []
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "relist-scopes",
+      "request": "ココとは何ですか",
+      "input_sha256": "b1b3f9bec286f0276c88026a22cb97e2b7729a004c2a29560dac96a253e0f731",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類である（範囲: default; 提示前提ID: fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76）\n・ココは哺乳類である（範囲: story; 提示前提ID: fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27）",
+      "text_sha256": "ae0e77cafb7cf59e6726cba4419551eda39b3bf61af823d53416fe2fbcaf6b2b",
+      "reason": null,
+      "result_id": "d35e8007a671533eda01dcc3478d347dc96c167998f4392591ab56f187ef9101",
+      "render_sha256": "ae0e77cafb7cf59e6726cba4419551eda39b3bf61af823d53416fe2fbcaf6b2b",
+      "dependencies": [
+        "fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76",
+        "fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27"
+      ]
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "scoped-pronoun",
+      "request": "[scope=story]それは哺乳類ではなく鳥です",
+      "input_sha256": "28cb96876384a3d4b49d44e5bd0eb1e255d1301129a128f5594ba590fbf99d75",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "直前の回答が参照した提示前提IDから訂正対象を特定しました: ココは哺乳類である。\n訂正を会話内の提示前提として記録しました: ココは哺乳類ではない。\n置き換え後の提示前提: ココは鳥である。\n以前の前提とその依存記録を1件失効させ、元の記録は保持しました。\n現実世界の真偽を検証したものではありません。",
+      "text_sha256": "a84c4756193cee18e2d5a58c1800eff57ea2b3a7a2c48a0806f6ed6dacbece2c",
+      "reason": null,
+      "result_id": "465c77fcdf6e2703bf381716907888e6da3be309b4cb7897f2b8860436412b2e",
+      "render_sha256": "a84c4756193cee18e2d5a58c1800eff57ea2b3a7a2c48a0806f6ed6dacbece2c",
+      "dependencies": [
+        "fact:dd23c6e6880d8a8e7e64a9491ad5ab081b5b77856c5259302bbd24c346172d27",
+        "fact:0a684d688cc0530737492fa391f5eea1d3c86a88bf4a176bf847c2da0d56e6d2",
+        "fact:e42d6e78b6259f78b94448566c2e25888a9fcc8286428c51e94c21bc00b4a1b7"
+      ]
+    },
+    {
+      "actor_id": "scope-owner",
+      "case_id": "scoped-ja",
+      "input_id": "list-after-scoped-correction",
+      "request": "ココとは何ですか",
+      "input_sha256": "b1b3f9bec286f0276c88026a22cb97e2b7729a004c2a29560dac96a253e0f731",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類である（範囲: default; 提示前提ID: fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76）\n・ココは哺乳類ではない（範囲: story; 提示前提ID: fact:0a684d688cc0530737492fa391f5eea1d3c86a88bf4a176bf847c2da0d56e6d2）\n・ココは鳥である（範囲: story; 提示前提ID: fact:e42d6e78b6259f78b94448566c2e25888a9fcc8286428c51e94c21bc00b4a1b7）",
+      "text_sha256": "100863e561978b0d52eaeb3ad1f5f64d482f8b40dbdd2751abf1dd20bc520165",
+      "reason": null,
+      "result_id": "b7c4c36afcdcd6e7cb4b02ee40d60b4c9f1291c35005de4d3725aabeb4c8cecc",
+      "render_sha256": "100863e561978b0d52eaeb3ad1f5f64d482f8b40dbdd2751abf1dd20bc520165",
+      "dependencies": [
+        "fact:c1713fe43faf44bdbab9008e5acfcb4c2c7ba0c2fa948542a90aa0fa08053e76",
+        "fact:0a684d688cc0530737492fa391f5eea1d3c86a88bf4a176bf847c2da0d56e6d2",
+        "fact:e42d6e78b6259f78b94448566c2e25888a9fcc8286428c51e94c21bc00b4a1b7"
+      ]
+    },
+    {
+      "actor_id": "derived-owner",
+      "case_id": "derived",
+      "input_id": "derived-coco-mammal",
+      "request": "Coco is a mammal",
+      "input_sha256": "902dda2e90c1ff1480b817185adbb463ee093ee6a8c08d07e067dc3db0ec22a0",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはmammalである。\n前提ID: fact:01b5e94dc1a8540b71bca322ff8231031ce9f534bc8189a81b3b07811a11b021\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "text_sha256": "2af7f846059fa88b96e9acf4542536475aa051a17010f68b396587f2ec4493ff",
+      "reason": null,
+      "result_id": "360884ead78c76274a9fe5fc37a061ca7c34a401c4b34254db19e00429240cb9",
+      "render_sha256": "2af7f846059fa88b96e9acf4542536475aa051a17010f68b396587f2ec4493ff",
+      "dependencies": [
+        "fact:01b5e94dc1a8540b71bca322ff8231031ce9f534bc8189a81b3b07811a11b021"
+      ]
+    },
+    {
+      "actor_id": "derived-owner",
+      "case_id": "derived",
+      "input_id": "mammal-rule",
+      "request": "If X is a mammal then X is an animal",
+      "input_sha256": "e061b58e1a46db33f22ec7faff1f4cc376099c11f0ea56ba0b31e74885a2b7bf",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはmammalである ならば $xはanimalである。\n規則ID: rule:1cde16c563c5a8d89497994266ca01361cabc56f77a8d762c1a8e2dc8a07b20b\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "text_sha256": "19e5bf836163bbf6cafbeec9f807c3bec96121076a174bf1934f0160f1fdd361",
+      "reason": null,
+      "result_id": "c93134037b8e6ff8c041bec14dccaaa8d7921a291c130d6eb105a43bf066146a",
+      "render_sha256": "19e5bf836163bbf6cafbeec9f807c3bec96121076a174bf1934f0160f1fdd361",
+      "dependencies": [
+        "rule:1cde16c563c5a8d89497994266ca01361cabc56f77a8d762c1a8e2dc8a07b20b"
+      ]
+    },
+    {
+      "actor_id": "derived-owner",
+      "case_id": "derived",
+      "input_id": "coco-animal",
+      "request": "Is Coco an animal?",
+      "input_sha256": "50e927c57a089170c0b099c9e533f560ad1736a0cb191eecb884035dde965ede",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、Cocoはanimalである。",
+      "text_sha256": "c26ce9b2d490efbff0a6566d73a5eca298459350b4d7b94f83a942bc511ba4ed",
+      "reason": null,
+      "result_id": "67829ccb18a8e3ea50353c9f5db3c473c711e9181fe252846026bfdc79a3889c",
+      "render_sha256": "c26ce9b2d490efbff0a6566d73a5eca298459350b4d7b94f83a942bc511ba4ed",
+      "dependencies": [
+        "fact:01b5e94dc1a8540b71bca322ff8231031ce9f534bc8189a81b3b07811a11b021",
+        "fact:bfbbda7258651bd183c521335e1f273b311770ae4145b4118395a5bd50a55cf8",
+        "rule:1cde16c563c5a8d89497994266ca01361cabc56f77a8d762c1a8e2dc8a07b20b"
+      ]
+    },
+    {
+      "actor_id": "derived-owner",
+      "case_id": "derived",
+      "input_id": "pronoun-derived-only",
+      "request": "It is a fish, not an animal.",
+      "input_sha256": "ba9c9876222835e97ab984f132d711d47fc7e84b07e4668e6419dde670d1a75c",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "直前の回答が参照した有効な同一範囲の提示前提に訂正対象がありません。記憶は変更していません。",
+      "text_sha256": "24f936e434ea4d108d50c98e93b9691a6a08b81a7337ddf879457e6fac232170",
+      "reason": "MISSING_CORRECTION_TARGET: 直前の回答が参照した有効な同一範囲の提示前提に訂正対象がありません。記憶は変更していません。",
+      "result_id": "a8458a0b047b25dd13cbe6329121098eb3293370a140d9f64221c0324e264a85",
+      "render_sha256": null,
+      "dependencies": []
+    },
+    {
+      "actor_id": "derived-owner",
+      "case_id": "derived",
+      "input_id": "still-mammal",
+      "request": "Is Coco a mammal?",
+      "input_sha256": "abb4c8795e27a0d8af77df446dbe0911aa7e25bc1906430c0df2e1fff5e898c3",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、Cocoはmammalである。",
+      "text_sha256": "ab32ab02fa4bb1716c076836fde1c4cb7c293e5bb3c785c8b9c2fa88a3500036",
+      "reason": null,
+      "result_id": "dbdf2b235b546b12615a144d1e22a0b2fcda98cab32576a159ea21509593222a",
+      "render_sha256": "ab32ab02fa4bb1716c076836fde1c4cb7c293e5bb3c785c8b9c2fa88a3500036",
+      "dependencies": [
+        "fact:01b5e94dc1a8540b71bca322ff8231031ce9f534bc8189a81b3b07811a11b021"
+      ]
+    },
+    {
+      "actor_id": "english-owner",
+      "case_id": "natural-en",
+      "input_id": "coco-mammal-en",
+      "request": "Coco is a mammal",
+      "input_sha256": "902dda2e90c1ff1480b817185adbb463ee093ee6a8c08d07e067dc3db0ec22a0",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはmammalである。\n前提ID: fact:8ec12263a59658bf0ef699579b2e200ac15319c7a41017bdaf1420b2ec1f4527\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "text_sha256": "f39b24c50a1610e1e8b04ae9eb0dbd3553adc68ba2b03e0b9ac10b9f06b44705",
+      "reason": null,
+      "result_id": "7c86842d9ce38fa8aa75a13ab9fb66ae15384a2460f6dd268d4b54e973d86a60",
+      "render_sha256": "f39b24c50a1610e1e8b04ae9eb0dbd3553adc68ba2b03e0b9ac10b9f06b44705",
+      "dependencies": [
+        "fact:8ec12263a59658bf0ef699579b2e200ac15319c7a41017bdaf1420b2ec1f4527"
+      ]
+    },
+    {
+      "actor_id": "english-owner",
+      "case_id": "natural-en",
+      "input_id": "ask-mammal-en",
+      "request": "Is Coco a mammal?",
+      "input_sha256": "abb4c8795e27a0d8af77df446dbe0911aa7e25bc1906430c0df2e1fff5e898c3",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、Cocoはmammalである。",
+      "text_sha256": "ab32ab02fa4bb1716c076836fde1c4cb7c293e5bb3c785c8b9c2fa88a3500036",
+      "reason": null,
+      "result_id": "4c9392ccfe0f6f9a649a82ee08bd6ffd5e2902358eef07e99901ed9ffa39b1c3",
+      "render_sha256": "ab32ab02fa4bb1716c076836fde1c4cb7c293e5bb3c785c8b9c2fa88a3500036",
+      "dependencies": [
+        "fact:8ec12263a59658bf0ef699579b2e200ac15319c7a41017bdaf1420b2ec1f4527"
+      ]
+    },
+    {
+      "actor_id": "english-owner",
+      "case_id": "natural-en",
+      "input_id": "pronoun-correction-en",
+      "request": "It is a bird, not a mammal.",
+      "input_sha256": "1c67cc85d480e1789f5162f3b7022c3d1ab017969102bba04fa683810b21587e",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "直前の回答が参照した提示前提IDから訂正対象を特定しました: Cocoはmammalである。\n訂正を会話内の提示前提として記録しました: Cocoはmammalではない。\n置き換え後の提示前提: Cocoはbirdである。\n以前の前提とその依存記録を1件失効させ、元の記録は保持しました。\n現実世界の真偽を検証したものではありません。",
+      "text_sha256": "24acc7e7d809886dda1e1ddf467cdfd9b3a926eeb121f214328db66d997446d6",
+      "reason": null,
+      "result_id": "6904dd149fb1f19ee8033d39b77313a352eed17ede94d9f0af05d86fc0f0f70e",
+      "render_sha256": "24acc7e7d809886dda1e1ddf467cdfd9b3a926eeb121f214328db66d997446d6",
+      "dependencies": [
+        "fact:8ec12263a59658bf0ef699579b2e200ac15319c7a41017bdaf1420b2ec1f4527",
+        "fact:1e11838721750be9cca50b85432f67b19da5365cba9fc8830b3525321416e889",
+        "fact:bf1535904abb188633d260c2500b62ceeaf4b95841824bc8d343c74bfa86efcc"
+      ]
+    },
+    {
+      "actor_id": "english-owner",
+      "case_id": "natural-en",
+      "input_id": "list-coco-en",
+      "request": "What is Coco?",
+      "input_sha256": "1de9a41cada291d58eb4dc13b68733e30aca7ec67b0d1dd506804b5b17b37b8f",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「Coco」の提示前提です。現実世界の真偽は確認していません。\n・Cocoはbirdである（範囲: default; 提示前提ID: fact:bf1535904abb188633d260c2500b62ceeaf4b95841824bc8d343c74bfa86efcc）\n・Cocoはmammalではない（範囲: default; 提示前提ID: fact:1e11838721750be9cca50b85432f67b19da5365cba9fc8830b3525321416e889）",
+      "text_sha256": "9edb31bcc9a03339a18f36a2c106898c605465fbeef48c9f51add673d1948901",
+      "reason": null,
+      "result_id": "74568d4f6e966b84f9fa06515b35d9a8786ba93c746e87cf3fd5b2743e92ee56",
+      "render_sha256": "9edb31bcc9a03339a18f36a2c106898c605465fbeef48c9f51add673d1948901",
+      "dependencies": [
+        "fact:bf1535904abb188633d260c2500b62ceeaf4b95841824bc8d343c74bfa86efcc",
+        "fact:1e11838721750be9cca50b85432f67b19da5365cba9fc8830b3525321416e889"
+      ]
+    }
+  ],
+  "failures_and_corrections": [
+    {
+      "stage": "scope-route-fixture",
+      "failure": "The first normal-route scoped example supplied an English stored object (mammal) and then tried to correct it with a Japanese object (哺乳類); exact proposition matching correctly suspended with MISSING_CORRECTION_TARGET.",
+      "correction": "The scope test now uses Japanese for both premise and correction. A same-language retry passed; the product matching rule was unchanged."
+    }
+  ],
+  "state_checks": {
+    "prior_result_dependencies_anchor_subject_and_scope": true,
+    "old_fact_retained_but_inactive": true,
+    "replacement_and_explicit_negative_claim_persisted": true,
+    "previous_answer_remains_in_immutable_case_history": true,
+    "cross_case_context_does_not_resolve_actor_global_memory": true,
+    "multiple_scopes_suspend_without_mutation": true,
+    "explicit_scope_selects_only_prior_supported_target": true,
+    "derived_only_context_cannot_rewrite_its_support_fact": true,
+    "english_and_japanese_routes": "PASS"
+  },
+  "effect_receipts": "No external effect. CLI requests use a temporary SQLite/blob store removed on exit.",
+  "outcome": "PASS bounded prior-result contextual correction route",
+  "acceptance_boundary": "This extends one evidence-backed correction form; broad A07/A08/CAP-D04/CAP-D07/CAP-D11/CAP-D13 and BB-CONTEXT/BB-LEARN acceptance remain BUILD_GAP/UNVERIFIED.",
+  "recorded_at": "2026-11-13T03:28:07Z",
+  "repository": {
+    "name": "MINIDORA-BETA",
+    "branch_at_execution": "main",
+    "base_commit": "bc810f39c882a6039a05354be39e5cc0f94cdbe1",
+    "previous_commit": "8450296ed69505fa59ee3159cb2fb80d0f528b72",
+    "remote": "https://github.com/gatchimuchio/MINIDORA-BETA.git",
+    "remote_main_at_execution": "bc810f39c882a6039a05354be39e5cc0f94cdbe1"
+  },
+  "rollback_commit": "bc810f39c882a6039a05354be39e5cc0f94cdbe1",
+  "rollback_refs": {
+    "codex/backup-main": "bc810f39c882a6039a05354be39e5cc0f94cdbe1",
+    "codex/backup-main-prev": "8450296ed69505fa59ee3159cb2fb80d0f528b72"
+  },
+  "execution_environment": {
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "free_disk_gib_at_start": 54,
+    "worktree_count": 1,
+    "working_tree_clean_at_start": true,
+    "active_writer_processes_at_start": 0
+  },
+  "software": {
+    "application": "minidora-rust/0.7.0-alpha.8",
+    "schema_version": "0.7.0-alpha.8"
+  },
+  "construction_set": {
+    "archive": {
+      "path": "rust/audit/construction/MB-BUILD-20261113/MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+      "sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb"
+    },
+    "specification": {
+      "path": "rust/audit/construction/MB-BUILD-20261113/01_MINIDORA_BETA_BUILD仕様書_20261113.md",
+      "sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474"
+    },
+    "schedule": {
+      "path": "rust/audit/construction/MB-BUILD-20261113/02_MINIDORA_BETA_BUILD工程表_20261113.md",
+      "sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8"
+    },
+    "codex_instructions": {
+      "path": "rust/audit/construction/MB-BUILD-20261113/03_MINIDORA_BETA_Codex施工指示書_20261113.md",
+      "sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d"
+    }
+  },
+  "snapshot_sha256": {
+    "source": {
+      "rust/crates/minidora-domain/src/lib.rs": "b60999933252c0b380521899c0124bf7d0a47133e83f81205ab9d792240c15cb",
+      "rust/crates/minidora-engine/src/input.rs": "9b267f25b33fa38fab5f3172c707e5100ae91849160bcb7cbe6affdc1b4080ae",
+      "rust/crates/minidora-engine/src/core.rs": "201df32fd931a1bd8ae1709ec8332b233e4f5340d63c0473309ee20ad411d5e3",
+      "rust/crates/minidora-engine/src/relations.rs": "b2a06ff0c80cbf27f469964b7d333648803c5f586c62c4d9062b88992a802459",
+      "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+    },
+    "tests_and_tools": {
+      "rust/apps/cli/tests/normal_route.rs": "11088ea634ee9e354e4ef706f46e44ed914bc703aaffef2efe5ac055c2467cf8",
+      "rust/tools/contextual_premise_correction_route_test.py": "1466378947562e461925b7d6f0bf1f1b9d49bd6be7eafadea19aefb60acec9ef",
+      "rust/tools/natural_premise_correction_route_test.py": "c72dfbd8faa3d80632591f40192f762da60163ea43434a0f584819b058fc2edd",
+      "rust/tools/premise_inspection_route_test.py": "8d020f2a80cb9ce03926b5408b320e0121e97f5947f19609c0a7467fdaeafed4"
+    },
+    "documentation_and_ledgers": {
+      "rust/README.md": "b2be6d242dc8cbba9fa7c082d3a0927163bc50154851874123f74a5623efbba0",
+      "rust/audit/README.md": "ad61c3fa58c2b13491badc2a3b67e3d250219a421d3965622b2c3a68c0c91dfa",
+      "rust/audit/IMPLEMENTATION_STATUS.md": "0146413e6a40342b93a70b6379e7478a8b2e52881d9322b98846e26567f892b7",
+      "rust/audit/requirements.tsv": "2b4fd7561a9bf3c390047d201af1163e01b8a4798ef731722cef2ea6686bbb70",
+      "rust/audit/rust-requirement-observations.json": "3152395c523a62187843b3a1af875b14eb22995080fee312a8c24004437e8241"
+    }
+  },
+  "commands": [
+    {
+      "command": "$HOME/.cargo/bin/cargo fmt --all",
+      "outcome": "PASS; formatting applied"
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo test -p minidora-engine --lib natural_premise_corrections_keep_both_relations_and_exact_scope --locked",
+      "outcome": "PASS; 1 passed, 0 failed"
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo test -p minidora-cli --test normal_route contextual_natural_correction_uses_only_unique_prior_direct_premise --locked",
+      "outcome": "The first run failed on the cross-language fixture mismatch documented above; after fixture correction, PASS; 1 passed, 0 failed."
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo test -p minidora-cli --test normal_route natural_premise_correction_invalidates_only_exact_scope_and_dependents --locked",
+      "outcome": "PASS; 1 passed, 0 failed"
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo check -p minidora-cli --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo clippy -p minidora-cli --all-targets --locked -- -D warnings",
+      "outcome": "PASS"
+    },
+    {
+      "command": "$HOME/.cargo/bin/cargo build -p minidora-cli --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "python3 tools/premise_inspection_route_test.py --binary target/debug/minidora-rust",
+      "outcome": "PASS; fresh-process premise listing/recovery"
+    },
+    {
+      "command": "python3 tools/natural_premise_correction_route_test.py --binary target/debug/minidora-rust",
+      "outcome": "PASS; named-subject Japanese/English compatibility route"
+    },
+    {
+      "command": "python3 tools/contextual_premise_correction_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-context-prior-result-correction-route-validation.json",
+      "outcome": "PASS; 21 fresh-process observations and memory/history assertions"
+    },
+    {
+      "command": "git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "not_run": [
+    "Full workspace runtime suite; cargo test --workspace was NOT_RUN during BODY-1 route construction.",
+    "General plural, multi-clause, role-based and conversation-wide co-reference; only a bounded singular pronoun anchored by a selected same-case prior committed result was exercised.",
+    "Persisted descendant fact/rule invalidation beyond the exact source premise path.",
+    "Empirical/open-world learning and full A07/A08/CAP-D04/CAP-D07/CAP-D11/CAP-D13/BB-CONTEXT/BB-LEARN or all-93 requirement acceptance; those remain UNVERIFIED.",
+    "External-world truth verification of user-supplied claims.",
+    "Windows 8 GB resource acceptance; environment was Linux."
+  ],
+  "next_consumer": "General plural and multi-clause co-reference across topic changes, and learning effects on a genuinely new task, remain later BUILD gaps."
+}

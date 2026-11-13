@@ -1850,19 +1850,7 @@ impl Engine {
                 replacement,
             } => {
                 let mut memory = self.store.load_memory(actor)?;
-                let original_memory_revision = memory.revision;
-                let targets: Vec<_> = memory
-                    .facts
-                    .iter()
-                    .filter(|fact| {
-                        fact.valid
-                            && fact.guarantee == Guarantee::UserPremise
-                            && fact.dependencies.is_empty()
-                            && !fact.source_input.is_empty()
-                            && fact.proposition == *superseded
-                    })
-                    .map(|fact| fact.id.clone())
-                    .collect();
+                let targets = active_direct_premise_ids(&memory, superseded);
                 if targets.is_empty() {
                     return self.stop(
                         &mut state,
@@ -1872,28 +1860,19 @@ impl Engine {
                     );
                 }
 
-                let mut invalidated = Vec::new();
-                for id in targets {
-                    for affected in relations::invalidate(&mut memory, &id)? {
-                        if !invalidated.contains(&affected) {
-                            invalidated.push(affected);
-                        }
-                    }
-                }
+                let (dependencies, invalidated_count) = apply_premise_correction(
+                    &self.store,
+                    actor,
+                    &mut memory,
+                    &targets,
+                    superseded,
+                    replacement,
+                    &fingerprint,
+                )?;
                 let negative_superseded = Proposition {
                     negative: true,
                     ..superseded.clone()
                 };
-                let negative_fact =
-                    relations::assert_fact(&mut memory, negative_superseded.clone(), &fingerprint)?;
-                let replacement_fact =
-                    relations::assert_fact(&mut memory, replacement.clone(), &fingerprint)?;
-                // Several relation helpers mutate one in-memory candidate.
-                // Persist the correction as one actor-memory CAS revision.
-                memory.revision = original_memory_revision
-                    .checked_add(1)
-                    .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))?;
-                self.store.save_memory(actor, &memory)?;
                 units.push(format!(
                     "訂正を会話内の提示前提として記録しました: {}。",
                     describe(&negative_superseded)
@@ -1901,12 +1880,120 @@ impl Engine {
                 units.push(format!("置き換え後の提示前提: {}。", describe(replacement)));
                 units.push(format!(
                     "以前の前提とその依存記録を{}件失効させ、元の記録は保持しました。",
-                    invalidated.len()
+                    invalidated_count
                 ));
                 units.push("現実世界の真偽を検証したものではありません。".into());
-                result.dependencies = invalidated;
-                result.dependencies.push(negative_fact.id);
-                result.dependencies.push(replacement_fact.id);
+                result.dependencies = dependencies;
+                result.guarantee = Guarantee::UserPremise;
+            }
+            Intent::CorrectPreviousPremise {
+                predicate,
+                superseded_object,
+                replacement_object,
+                scope,
+            } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_CORRECTION_CONTEXT",
+                        "代名詞の対象を決める直前の同一ケース確定回答がありません。記憶は変更していません。",
+                    );
+                };
+                if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_CORRECTION_CONTEXT",
+                        "訂正の文脈参照が直前の同一ケース確定回答と一致しません。記憶は変更していません。",
+                    );
+                }
+
+                let mut memory = self.store.load_memory(actor)?;
+                let prior_dependencies: std::collections::BTreeSet<_> =
+                    prior.dependencies.iter().map(String::as_str).collect();
+                let candidates: std::collections::BTreeSet<_> = memory
+                    .facts
+                    .iter()
+                    .filter(|fact| {
+                        fact.valid
+                            && fact.guarantee == Guarantee::UserPremise
+                            && fact.dependencies.is_empty()
+                            && !fact.source_input.is_empty()
+                            && !fact.proposition.negative
+                            && fact.proposition.predicate == *predicate
+                            && fact.proposition.object == *superseded_object
+                            && scope
+                                .as_ref()
+                                .is_none_or(|scope| fact.proposition.scope == *scope)
+                            && prior_dependencies.contains(fact.id.as_str())
+                    })
+                    .map(|fact| fact.proposition.clone())
+                    .collect();
+                if candidates.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_CORRECTION_TARGET",
+                        "直前の回答が参照した有効な同一範囲の提示前提に訂正対象がありません。記憶は変更していません。",
+                    );
+                }
+                if candidates.len() != 1 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "AMBIGUOUS_CORRECTION_CONTEXT",
+                        "直前の回答が同じ訂正文に一致する複数の対象を参照しています。範囲を明示して再質問してください。記憶は変更していません。",
+                    );
+                }
+                let superseded = candidates.into_iter().next().expect("one candidate");
+                let replacement = Proposition {
+                    object: replacement_object.clone(),
+                    negative: false,
+                    ..superseded.clone()
+                };
+                let targets = active_direct_premise_ids(&memory, &superseded);
+                if targets.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_CORRECTION_TARGET",
+                        "直前の回答が示した前提は既に有効な訂正対象ではありません。記憶は変更していません。",
+                    );
+                }
+
+                let (dependencies, invalidated_count) = apply_premise_correction(
+                    &self.store,
+                    actor,
+                    &mut memory,
+                    &targets,
+                    &superseded,
+                    &replacement,
+                    &fingerprint,
+                )?;
+                let negative_superseded = Proposition {
+                    negative: true,
+                    ..superseded.clone()
+                };
+                units.push(format!(
+                    "直前の回答が参照した提示前提IDから訂正対象を特定しました: {}。",
+                    describe(&superseded)
+                ));
+                units.push(format!(
+                    "訂正を会話内の提示前提として記録しました: {}。",
+                    describe(&negative_superseded)
+                ));
+                units.push(format!(
+                    "置き換え後の提示前提: {}。",
+                    describe(&replacement)
+                ));
+                units.push(format!(
+                    "以前の前提とその依存記録を{}件失効させ、元の記録は保持しました。",
+                    invalidated_count
+                ));
+                units.push("現実世界の真偽を検証したものではありません。".into());
+                result.dependencies = dependencies;
                 result.guarantee = Guarantee::UserPremise;
             }
             Intent::Assert { proposition } => {
@@ -2958,6 +3045,55 @@ impl Engine {
         self.advance(state, lifecycle, result.reason.clone())?;
         Ok(result)
     }
+}
+fn active_direct_premise_ids(memory: &MemoryState, proposition: &Proposition) -> Vec<String> {
+    memory
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.valid
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+                && !fact.source_input.is_empty()
+                && fact.proposition == *proposition
+        })
+        .map(|fact| fact.id.clone())
+        .collect()
+}
+fn apply_premise_correction(
+    store: &Store,
+    actor: &str,
+    memory: &mut MemoryState,
+    targets: &[String],
+    superseded: &Proposition,
+    replacement: &Proposition,
+    fingerprint: &str,
+) -> Result<(Vec<String>, usize)> {
+    let original_memory_revision = memory.revision;
+    let mut invalidated = Vec::new();
+    for id in targets {
+        for affected in relations::invalidate(memory, id)? {
+            if !invalidated.contains(&affected) {
+                invalidated.push(affected);
+            }
+        }
+    }
+    let negative_superseded = Proposition {
+        negative: true,
+        ..superseded.clone()
+    };
+    let negative_fact = relations::assert_fact(memory, negative_superseded, fingerprint)?;
+    let replacement_fact = relations::assert_fact(memory, replacement.clone(), fingerprint)?;
+    // Several relation helpers mutate one in-memory candidate. Persist the
+    // compound correction as one actor-memory CAS revision.
+    memory.revision = original_memory_revision
+        .checked_add(1)
+        .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))?;
+    store.save_memory(actor, memory)?;
+    let invalidated_count = invalidated.len();
+    invalidated.push(negative_fact.id);
+    invalidated.push(replacement_fact.id);
+    Ok((invalidated, invalidated_count))
 }
 fn base_result(request: &RequestEnvelope) -> ResultRecord {
     ResultRecord {
