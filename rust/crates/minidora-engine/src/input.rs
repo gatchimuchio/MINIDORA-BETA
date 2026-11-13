@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v58-prior-result-pronoun-query";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v59-conjunctive-relation-question";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1135,6 +1135,108 @@ fn explicit_scope_prefix(text: &str) -> Result<Option<String>> {
         .map(|capture| capture[1].trim().to_string()))
 }
 
+fn unsupported_conjunctive_relation_question() -> Intent {
+    Intent::Unknown {
+        reason: "conjunctive relation questions require exactly two supported relation clauses with one explicit subject and scope".into(),
+    }
+}
+
+fn conjunctive_relation_question_intent(text: &str) -> Result<Option<Intent>> {
+    let scope_match = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(text);
+    let scope = scope_match
+        .as_ref()
+        .map(|capture| capture[1].trim().to_string());
+    let body = scope_match.as_ref().map_or(text, |capture| {
+        capture.get(2).expect("matched body").as_str()
+    });
+    let english = regex(r"(?i)\s+and\s+")?;
+    let english_connectors: Vec<_> = english.find_iter(body).collect();
+    let japanese_katsu: Vec<_> = body.match_indices("かつ").collect();
+    let japanese_kanji_katsu: Vec<_> = body.match_indices("且つ").collect();
+    let connector_count =
+        english_connectors.len() + japanese_katsu.len() + japanese_kanji_katsu.len();
+    if connector_count == 0 {
+        return Ok(None);
+    }
+    if connector_count != 1 {
+        return Ok(Some(unsupported_conjunctive_relation_question()));
+    }
+    let (left, right, english_form) = if let Some(connector) = english_connectors.first() {
+        (
+            body[..connector.start()].trim(),
+            body[connector.end()..].trim(),
+            true,
+        )
+    } else if let Some((start, _)) = japanese_katsu.first() {
+        (
+            body[..*start].trim(),
+            body[start + "かつ".len()..].trim(),
+            false,
+        )
+    } else if let Some((start, _)) = japanese_kanji_katsu.first() {
+        (
+            body[..*start].trim(),
+            body[start + "且つ".len()..].trim(),
+            false,
+        )
+    } else {
+        unreachable!("the connector count is nonzero");
+    };
+    let with_scope = |clause: &str| {
+        scope.as_ref().map_or_else(
+            || clause.to_string(),
+            |scope| format!("[scope={scope}] {clause}"),
+        )
+    };
+    let Some(first) = parse_proposition(&with_scope(left), false)? else {
+        return Ok(Some(unsupported_conjunctive_relation_question()));
+    };
+    let referential_subject = matches!(
+        first.subject.to_ascii_lowercase().as_str(),
+        "i" | "it" | "this" | "that" | "these" | "those" | "we" | "they" | "you" | "he" | "she"
+    ) || matches!(
+        first.subject.as_str(),
+        "これ"
+            | "それ"
+            | "あれ"
+            | "これら"
+            | "それら"
+            | "あれら"
+            | "私"
+            | "わたし"
+            | "僕"
+            | "ぼく"
+            | "俺"
+            | "あなた"
+            | "君"
+            | "彼"
+            | "彼女"
+    );
+    if referential_subject {
+        return Ok(Some(unsupported_conjunctive_relation_question()));
+    }
+    let right_clause = with_scope(right);
+    let second = if let Some(proposition) = parse_proposition(&right_clause, false)? {
+        proposition
+    } else {
+        let expanded = if english_form {
+            format!("{} is {}", first.subject, right)
+        } else {
+            format!("{}は{}", first.subject, right)
+        };
+        let Some(proposition) = parse_proposition(&with_scope(&expanded), false)? else {
+            return Ok(Some(unsupported_conjunctive_relation_question()));
+        };
+        proposition
+    };
+    if first.subject != second.subject || first.scope != second.scope {
+        return Ok(Some(unsupported_conjunctive_relation_question()));
+    }
+    Ok(Some(Intent::AskConjunction {
+        propositions: vec![first, second],
+    }))
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     let header = text
         .split_once('\n')
@@ -1369,6 +1471,9 @@ fn interpret(text: &str) -> Result<Intent> {
         .strip_suffix("ですか")
         .or_else(|| body.strip_suffix("なのか"))
         .unwrap_or(body);
+    if question && let Some(intent) = conjunctive_relation_question_intent(query_body)? {
+        return Ok(intent);
+    }
     if let Some(proposition) = parse_proposition(query_body, false)? {
         return Ok(
             if question && singular_previous_subject(&proposition.subject) {
@@ -2170,6 +2275,60 @@ mod tests {
             interpret("それらは動物ですか").unwrap(),
             Intent::Ask { proposition } if proposition.subject == "それら"
         ));
+    }
+
+    #[test]
+    fn conjunctive_relation_questions_keep_both_same_subject_clauses() {
+        assert!(matches!(
+            interpret("[scope=biology]ココは鳥かつ動物ですか").unwrap(),
+            Intent::AskConjunction { propositions }
+                if propositions.len() == 2
+                    && propositions[0].subject == "ココ"
+                    && propositions[0].object == "鳥"
+                    && propositions[0].scope == "biology"
+                    && propositions[1].subject == "ココ"
+                    && propositions[1].object == "動物"
+                    && propositions[1].scope == "biology"
+        ));
+        assert!(matches!(
+            interpret("ココは鳥且つ動物ですか").unwrap(),
+            Intent::AskConjunction { propositions } if propositions.len() == 2
+        ));
+        assert!(matches!(
+            interpret("Is Coco a bird and an animal?").unwrap(),
+            Intent::AskConjunction { propositions }
+                if propositions.len() == 2
+                    && propositions[0].subject == "Coco"
+                    && propositions[0].object == "bird"
+                    && propositions[1].subject == "Coco"
+                    && propositions[1].object == "animal"
+        ));
+        assert!(matches!(
+            interpret("Coco is a bird and an animal?").unwrap(),
+            Intent::AskConjunction { propositions } if propositions.len() == 2
+        ));
+        assert!(matches!(
+            interpret("Is Coco not a bird and an animal?").unwrap(),
+            Intent::AskConjunction { propositions }
+                if propositions.len() == 2
+                    && propositions[0].object == "bird"
+                    && propositions[0].negative
+                    && propositions[1].object == "animal"
+                    && !propositions[1].negative
+        ));
+        for text in [
+            "ココは鳥かつ動物かつ哺乳類ですか",
+            "ココは鳥かつミケは動物ですか",
+            "それは鳥かつ動物ですか",
+            "We are birds and animals?",
+            "ココは鳥または動物ですか",
+            "ココは鳥かつ動物です",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 
     #[test]

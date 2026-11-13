@@ -23,9 +23,15 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/language.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/language.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/conjunctive_relation_question_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB-LANG_CONJUNCTIVE_RELATION_QUERY: ordinary Japanese/English two-clause copular question joined by かつ/且つ/and -> sealed v59 AskConjunction with two same-subject, same-scope propositions -> Core evaluates each against the same actor memory within a shared inference budget -> fully classified supported/refuted conjunction including explicitly negated clauses, with unioned premise/rule dependencies; missing, conflicting, wrong-scope, alternative, three-clause, different-subject and unresolved-pronoun inputs suspend. See bb-lang-conjunctive-relation-question-v59-route-validation.json. Scoped gates passed: focused input unit test, normal-CLI regression, formatting check, workspace all-target check, warnings-denied workspace Clippy and workspace build. Full workspace runtime suite, open-domain Q&A/writing and complete requirement acceptance remain NOT_RUN/UNVERIFIED. Explicitly negated conjunct and polarity-flipped proof lineage were observed.",
       "full_acceptance_gap": "Novel phrase variants preserve scope and compose a useful result",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -55,9 +61,11 @@
         "crates/minidora-domain/src/lib.rs",
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/conjunctive_relation_question_route_test.py",
         "tools/contextual_relation_pronoun_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance BODY-1 BB_CONTEXT_SINGULAR_PRONOUN_RELATION_QUERY: fresh-process Japanese/English Ask and AskWhy resolve a singular pronoun only through one active direct premise ID in the selected committed same-case result; Core inherits/selects its scope and runs the ordinary proof query. Missing, wrong-scope, unrelated-topic, cross-case/actor and ambiguous contexts stop. See bb-context-singular-pronoun-relation-query-v58-route-validation.json. Full capability acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance BODY-1 BB_CONTEXT_SINGULAR_PRONOUN_RELATION_QUERY: fresh-process Japanese/English Ask and AskWhy resolve a singular pronoun only through one active direct premise ID in the selected committed same-case result; Core inherits/selects its scope and runs the ordinary proof query. Missing, wrong-scope, unrelated-topic, cross-case/actor and ambiguous contexts stop. See bb-context-singular-pronoun-relation-query-v58-route-validation.json. Full capability acceptance remains UNVERIFIED; BODY-1 BB-LANG_CONJUNCTIVE_RELATION_QUERY: ordinary Japanese/English two-clause copular question joined by かつ/且つ/and -> sealed v59 AskConjunction with two same-subject, same-scope propositions -> Core evaluates each against the same actor memory within a shared inference budget -> fully classified supported/refuted conjunction including explicitly negated clauses, with unioned premise/rule dependencies; missing, conflicting, wrong-scope, alternative, three-clause, different-subject and unresolved-pronoun inputs suspend. See bb-lang-conjunctive-relation-question-v59-route-validation.json. Scoped gates passed: focused input unit test, normal-CLI regression, formatting check, workspace all-target check, warnings-denied workspace Clippy and workspace build. Full workspace runtime suite, open-domain Q&A/writing and complete requirement acceptance remain NOT_RUN/UNVERIFIED. Explicitly negated conjunct and polarity-flipped proof lineage were observed.",
       "full_acceptance_gap": "Ambiguous and omitted subjects handled without inventing ownership",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -69,9 +77,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/input.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/conjunctive_relation_question_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB-LANG_CONJUNCTIVE_RELATION_QUERY: ordinary Japanese/English two-clause copular question joined by かつ/且つ/and -> sealed v59 AskConjunction with two same-subject, same-scope propositions -> Core evaluates each against the same actor memory within a shared inference budget -> fully classified supported/refuted conjunction including explicitly negated clauses, with unioned premise/rule dependencies; missing, conflicting, wrong-scope, alternative, three-clause, different-subject and unresolved-pronoun inputs suspend. See bb-lang-conjunctive-relation-question-v59-route-validation.json. Scoped gates passed: focused input unit test, normal-CLI regression, formatting check, workspace all-target check, warnings-denied workspace Clippy and workspace build. Full workspace runtime suite, open-domain Q&A/writing and complete requirement acceptance remain NOT_RUN/UNVERIFIED. Explicitly negated conjunct and polarity-flipped proof lineage were observed.",
       "full_acceptance_gap": "Meaning-preserving and polarity-flipping metamorphic pairs remain distinguishable",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -149,9 +162,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/relations.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/conjunctive_relation_question_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB-LANG_CONJUNCTIVE_RELATION_QUERY: ordinary Japanese/English two-clause copular question joined by かつ/且つ/and -> sealed v59 AskConjunction with two same-subject, same-scope propositions -> Core evaluates each against the same actor memory within a shared inference budget -> fully classified supported/refuted conjunction including explicitly negated clauses, with unioned premise/rule dependencies; missing, conflicting, wrong-scope, alternative, three-clause, different-subject and unresolved-pronoun inputs suspend. See bb-lang-conjunctive-relation-question-v59-route-validation.json. Scoped gates passed: focused input unit test, normal-CLI regression, formatting check, workspace all-target check, warnings-denied workspace Clippy and workspace build. Full workspace runtime suite, open-domain Q&A/writing and complete requirement acceptance remain NOT_RUN/UNVERIFIED. Explicitly negated conjunct and polarity-flipped proof lineage were observed.",
       "full_acceptance_gap": "Cross-document relation tests do not turn lexical overlap into factual implication",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -247,9 +265,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/input.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/conjunctive_relation_question_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB-LANG_CONJUNCTIVE_RELATION_QUERY: ordinary Japanese/English two-clause copular question joined by かつ/且つ/and -> sealed v59 AskConjunction with two same-subject, same-scope propositions -> Core evaluates each against the same actor memory within a shared inference budget -> fully classified supported/refuted conjunction including explicitly negated clauses, with unioned premise/rule dependencies; missing, conflicting, wrong-scope, alternative, three-clause, different-subject and unresolved-pronoun inputs suspend. See bb-lang-conjunctive-relation-question-v59-route-validation.json. Scoped gates passed: focused input unit test, normal-CLI regression, formatting check, workspace all-target check, warnings-denied workspace Clippy and workspace build. Full workspace runtime suite, open-domain Q&A/writing and complete requirement acceptance remain NOT_RUN/UNVERIFIED. Explicitly negated conjunct and polarity-flipped proof lineage were observed.",
       "full_acceptance_gap": "Repeated input is not reinterpreted by downstream stages into a different premise",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -261,9 +284,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/input.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/conjunctive_relation_question_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB-LANG_CONJUNCTIVE_RELATION_QUERY: ordinary Japanese/English two-clause copular question joined by かつ/且つ/and -> sealed v59 AskConjunction with two same-subject, same-scope propositions -> Core evaluates each against the same actor memory within a shared inference budget -> fully classified supported/refuted conjunction including explicitly negated clauses, with unioned premise/rule dependencies; missing, conflicting, wrong-scope, alternative, three-clause, different-subject and unresolved-pronoun inputs suspend. See bb-lang-conjunctive-relation-question-v59-route-validation.json. Scoped gates passed: focused input unit test, normal-CLI regression, formatting check, workspace all-target check, warnings-denied workspace Clippy and workspace build. Full workspace runtime suite, open-domain Q&A/writing and complete requirement acceptance remain NOT_RUN/UNVERIFIED. Explicitly negated conjunct and polarity-flipped proof lineage were observed.",
       "full_acceptance_gap": "Unseen requests dispatch to correct capability through ordinary entry point",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

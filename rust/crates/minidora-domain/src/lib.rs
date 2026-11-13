@@ -360,6 +360,9 @@ pub enum Intent {
     Ask {
         proposition: Proposition,
     },
+    AskConjunction {
+        propositions: Vec<Proposition>,
+    },
     AskPreviousRelation {
         proposition: Proposition,
         explain: bool,

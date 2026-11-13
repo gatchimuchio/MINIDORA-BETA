@@ -1,7 +1,7 @@
 use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
 use crate::{input, language, output, ports, relations, store::Store};
 use minidora_domain::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -2033,6 +2033,93 @@ impl Engine {
                 units.push("保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。".into());
                 result.dependencies.push(rule.id);
                 result.guarantee = Guarantee::UserPremise;
+            }
+            Intent::AskConjunction { propositions } => {
+                if propositions.len() != 2 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Reject,
+                        "INVALID_CONJUNCTION_QUERY",
+                        "この質問経路は二つの関係節だけを受け付けます。",
+                    );
+                }
+                let first = &propositions[0];
+                if propositions.iter().any(|proposition| {
+                    proposition.subject != first.subject || proposition.scope != first.scope
+                }) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Reject,
+                        "INVALID_CONJUNCTION_QUERY",
+                        "二つの関係節で主語とscopeが一致しません。",
+                    );
+                }
+                let per_relation_budget = request.budget.max_actions / 2;
+                if per_relation_budget == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "二つの関係を確認するための推論予算が不足しています。",
+                    );
+                }
+                let memory = self.store.load_memory(actor)?;
+                let mut dependencies = BTreeSet::new();
+                let mut all_supported = true;
+                let mut any_derived = false;
+                let mut conclusions = Vec::with_capacity(propositions.len());
+                for proposition in propositions {
+                    let answer = relations::query(&memory, proposition, per_relation_budget)?;
+                    match answer.status.as_str() {
+                        "SUPPORTED" => {
+                            conclusions.push(format!("- 支持: {}。", describe(proposition)))
+                        }
+                        "CONTRADICTED" => {
+                            all_supported = false;
+                            let mut opposite = proposition.clone();
+                            opposite.negative = !opposite.negative;
+                            conclusions.push(format!(
+                                "- 質問された関係は支持されず、提示された根拠は反対に「{}」を支持します。",
+                                describe(&opposite)
+                            ));
+                        }
+                        "CONFLICT" => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONFLICTING_PREMISES",
+                                "複数の関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+                            );
+                        }
+                        _ => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "MISSING_PREMISES",
+                                "複数の関係節をすべて判定する有効な前提または導出経路がありません。",
+                            );
+                        }
+                    }
+                    dependencies.extend(relations::answer_dependencies(&answer));
+                    any_derived |= relations::answer_guarantee(&answer) == Guarantee::Derived;
+                }
+                if all_supported {
+                    units.push(
+                        "提示された前提の範囲では、尋ねた二つの関係がともに支持されます。".into(),
+                    );
+                } else {
+                    units.push(
+                        "提示された根拠は、尋ねた二つの関係がともに成立するという組み合わせを支持しません。"
+                            .into(),
+                    );
+                }
+                units.extend(conclusions);
+                result.dependencies = dependencies.into_iter().collect();
+                result.guarantee = if any_derived {
+                    Guarantee::Derived
+                } else {
+                    Guarantee::UserPremise
+                };
             }
             Intent::AskPreviousRelation {
                 proposition,

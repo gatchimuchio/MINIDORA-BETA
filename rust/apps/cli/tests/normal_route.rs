@@ -3133,6 +3133,212 @@ fn natural_why_question_explains_only_current_relation_proofs() {
 }
 
 #[test]
+fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
+    let scratch = Scratch::new();
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-biology-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let bird = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-coco-bird",
+            "[scope=biology]ココは鳥",
+        ],
+    ));
+    let supported = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-both-supported",
+            "[scope=biology]ココは鳥かつ動物ですか",
+        ],
+    ));
+    assert_eq!(supported["lifecycle"], "COMMIT");
+    assert_eq!(supported["guarantee"], "DERIVED");
+    let supported_text = supported["text"].as_str().unwrap();
+    assert!(supported_text.contains("二つの関係"));
+    assert!(supported_text.contains("鳥である"));
+    assert!(supported_text.contains("動物である"));
+    assert!(
+        supported["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule["dependencies"][0])
+    );
+    assert!(
+        supported["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&bird["dependencies"][0])
+    );
+    let negative_clause = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-negative-clause",
+            "[scope=biology]ココは鳥ではないかつ動物ですか",
+        ],
+    ));
+    assert_eq!(negative_clause["lifecycle"], "COMMIT");
+    assert!(
+        negative_clause["text"]
+            .as_str()
+            .unwrap()
+            .contains("組み合わせを支持しません")
+    );
+    assert!(
+        negative_clause["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは鳥である")
+    );
+    assert!(
+        negative_clause["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&bird["dependencies"][0])
+    );
+
+    let not_mammal = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-coco-not-mammal",
+            "[scope=biology]ココは哺乳類ではない",
+        ],
+    ));
+    let refuted = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-one-refuted",
+            "[scope=biology]ココは鳥かつ哺乳類ですか",
+        ],
+    ));
+    assert_eq!(refuted["lifecycle"], "COMMIT");
+    assert!(
+        refuted["text"]
+            .as_str()
+            .unwrap()
+            .contains("組み合わせを支持しません")
+    );
+    assert!(
+        refuted["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは哺乳類ではない")
+    );
+    assert!(
+        refuted["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&not_mammal["dependencies"][0])
+    );
+
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "conjunction-missing-clause",
+                "[scope=biology]ココは鳥かつふわふわですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "conjunction-coco-mammal",
+            "[scope=biology]ココは哺乳類",
+        ],
+    ));
+    let conflict = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "conjunction-conflicting-clause",
+                "[scope=biology]ココは鳥かつ哺乳類ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        conflict["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONFLICTING_PREMISES")
+    );
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "conjunction-english",
+        &[
+            "--input",
+            "conjunction-english-rule",
+            "If X is a bird then X is an animal",
+        ],
+    ));
+    let english_bird = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "conjunction-english",
+        &["--input", "conjunction-english-bird", "Coco is a bird"],
+    ));
+    let english = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "conjunction-english",
+        &[
+            "--input",
+            "conjunction-english-question",
+            "Is Coco a bird and an animal?",
+        ],
+    ));
+    assert_eq!(english["lifecycle"], "COMMIT");
+    assert_eq!(english["guarantee"], "DERIVED");
+    assert!(
+        english["text"]
+            .as_str()
+            .unwrap()
+            .contains("Cocoはanimalである")
+    );
+    assert!(
+        english["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&english_bird["dependencies"][0])
+    );
+}
+
+#[test]
 fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context() {
     let scratch = Scratch::new();
     let rule = record(&execute(
