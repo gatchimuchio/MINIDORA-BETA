@@ -14,6 +14,29 @@ struct CalculationSequenceStepArtifact {
     consumed: Vec<language::CalculationReferenceUse>,
 }
 
+const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v1";
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreComputationArtifact {
+    kind: String,
+    calculation: Option<Calculation>,
+    units: Vec<String>,
+    evidence: Vec<EvidencePacket>,
+    dependencies: Vec<String>,
+    relation_meaning: Proposition,
+    relation_proof_dependencies: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PriorRelationMeaning {
+    OriginalQuestion(Proposition),
+    AdoptedConclusion {
+        proposition: Proposition,
+        proof_dependencies: Vec<String>,
+    },
+}
+
 const COMMON_RELATIONS_REPORT_KIND: &str = "minidora.common-relations-report.v1";
 const COMMON_RELATIONS_REPORT_HEADER: &str = "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。";
 const RELATION_COMPARISON_REPORT_KIND: &str = "minidora.relation-comparison-report.v1";
@@ -1186,6 +1209,8 @@ impl Engine {
         let mut result = base_result(&request);
         let mut units = Vec::new();
         let mut approved_surfaces = None;
+        let mut adopted_relation_meaning = None;
+        let mut relation_proof_dependencies = None;
         match &bundle.meaning.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
@@ -2126,25 +2151,7 @@ impl Engine {
                     );
                 };
                 let prior_relation = if prior.calculation.is_none() {
-                    match self.store.get_input_bundle(
-                        actor,
-                        &request.case_id,
-                        &prior.input_id,
-                        prior.input_version,
-                    )? {
-                        Some((_, prior_bundle)) => {
-                            if identity(&prior_bundle.request)? != prior.id {
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Fail,
-                                    "PRIOR_INPUT_RESULT_MISMATCH",
-                                    "保存された前回入力と採用済み結果の識別子が一致しません。",
-                                );
-                            }
-                            relation_question_proposition(&prior_bundle.meaning.intent).cloned()
-                        }
-                        None => None,
-                    }
+                    previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
                 } else {
                     None
                 };
@@ -2157,13 +2164,15 @@ impl Engine {
                     result.calculation = Some(calculation.clone());
                     result.dependencies.push(prior.id.clone());
                     result.guarantee = prior.guarantee.clone();
-                } else if let Some(proposition) = prior_relation {
+                } else if let Some(PriorRelationMeaning::OriginalQuestion(proposition)) =
+                    prior_relation.as_ref()
+                {
                     let memory = self.store.load_memory(actor)?;
                     let answer =
-                        relations::query(&memory, &proposition, request.budget.max_actions)?;
+                        relations::query(&memory, proposition, request.budget.max_actions)?;
                     let proof_dependencies = relations::answer_dependencies(&answer);
                     let answer_guarantee = relations::answer_guarantee(&answer);
-                    let Some(explained) = relation_explanation_target(&proposition, &answer) else {
+                    let Some(explained) = relation_explanation_target(proposition, &answer) else {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
@@ -2190,13 +2199,18 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
-                } else if let Some(proposition) = previous_relation_answer(&prior.text)? {
+                } else if let Some(PriorRelationMeaning::AdoptedConclusion {
+                    proposition,
+                    proof_dependencies: expected_proof_dependencies,
+                }) = prior_relation.as_ref()
+                {
                     let memory = self.store.load_memory(actor)?;
                     let answer =
-                        relations::query(&memory, &proposition, request.budget.max_actions)?;
+                        relations::query(&memory, proposition, request.budget.max_actions)?;
                     let proof_dependencies = relations::answer_dependencies(&answer);
                     let answer_guarantee = relations::answer_guarantee(&answer);
                     if answer.status != "SUPPORTED"
+                        || proof_dependencies != *expected_proof_dependencies
                         || proof_dependencies != prior.dependencies
                         || answer_guarantee != prior.guarantee
                     {
@@ -2209,7 +2223,7 @@ impl Engine {
                     }
                     units.extend(relation_explanation_lines(
                         &memory,
-                        &proposition,
+                        proposition,
                         &answer,
                         "前回の結論",
                     ));
@@ -4172,6 +4186,16 @@ impl Engine {
                 }
                 result.dependencies = answer_dependencies;
                 result.guarantee = answer_guarantee;
+                let Some(adopted_meaning) = relation_explanation_target(&resolved, &answer) else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "採用した関係結論を型付き命題として確定できません。",
+                    );
+                };
+                adopted_relation_meaning = Some(adopted_meaning);
+                relation_proof_dependencies = Some(result.dependencies.clone());
             }
             Intent::Ask { proposition } => {
                 let memory = self.store.load_memory(actor)?;
@@ -5137,16 +5161,34 @@ impl Engine {
             );
         }
         state.result = Some(result.clone());
-        let compute_artifact = self.store.put_artifact(
-            actor,
-            &request.case_id,
-            &(
-                &result.calculation,
-                &units,
-                &result.evidence,
-                &result.dependencies,
-            ),
-        )?;
+        let compute_artifact = if let (Some(relation_meaning), Some(relation_proof_dependencies)) =
+            (adopted_relation_meaning, relation_proof_dependencies)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &CoreComputationArtifact {
+                    kind: CORE_COMPUTATION_ARTIFACT_KIND.into(),
+                    calculation: result.calculation.clone(),
+                    units: units.clone(),
+                    evidence: result.evidence.clone(),
+                    dependencies: result.dependencies.clone(),
+                    relation_meaning,
+                    relation_proof_dependencies,
+                },
+            )?
+        } else {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &(
+                    &result.calculation,
+                    &units,
+                    &result.evidence,
+                    &result.dependencies,
+                ),
+            )?
+        };
         let source_refs = graph
             .nodes()
             .iter()
@@ -5537,6 +5579,82 @@ pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposit
         Intent::Ask { proposition } | Intent::AskWhy { proposition } => Some(proposition),
         _ => None,
     }
+}
+
+pub(crate) fn previous_relation_meaning(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<PriorRelationMeaning>> {
+    if previous.calculation.is_some() {
+        return Ok(None);
+    }
+    if let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    {
+        if identity(&prior_bundle.request)? != previous.id {
+            return Err(failure(
+                "PRIOR_INPUT_RESULT_MISMATCH",
+                "the sealed prior input and committed result identities differ",
+            ));
+        }
+        if let Some(proposition) = relation_question_proposition(&prior_bundle.meaning.intent) {
+            return Ok(Some(PriorRelationMeaning::OriginalQuestion(
+                proposition.clone(),
+            )));
+        }
+    }
+
+    if let Some(plan) = previous.content_plan.as_ref()
+        && let Some(compute_ref) = plan.dependencies.last()
+    {
+        let Some(bytes) = store.get_bytes_if_present(actor, case, compute_ref)? else {
+            return Err(failure(
+                "PRIOR_COMPUTATION_ARTIFACT_UNAVAILABLE",
+                "the committed prior computation artifact is not available in this case",
+            ));
+        };
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let artifact_kind = value.get("kind").and_then(serde_json::Value::as_str);
+        if artifact_kind.is_some_and(|kind| {
+            kind.starts_with("minidora.core-computation.relation-meaning.")
+                && kind != CORE_COMPUTATION_ARTIFACT_KIND
+        }) {
+            return Err(failure(
+                "PRIOR_COMPUTATION_ARTIFACT_VERSION_UNSUPPORTED",
+                "the prior relation meaning uses an unsupported computation artifact version",
+            ));
+        }
+        if artifact_kind == Some(CORE_COMPUTATION_ARTIFACT_KIND) {
+            let artifact: CoreComputationArtifact = serde_json::from_value(value)?;
+            if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND
+                || artifact.calculation != previous.calculation
+                || artifact.units != plan.required_units
+                || artifact.evidence != previous.evidence
+                || artifact.dependencies != previous.dependencies
+                || artifact.relation_proof_dependencies != previous.dependencies
+            {
+                return Err(failure(
+                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
+                    "the retained relation meaning does not match its committed computation",
+                ));
+            }
+            return Ok(Some(PriorRelationMeaning::AdoptedConclusion {
+                proposition: artifact.relation_meaning,
+                proof_dependencies: artifact.relation_proof_dependencies,
+            }));
+        }
+    }
+
+    Ok(
+        previous_relation_answer(&previous.text)?.map(|proposition| {
+            PriorRelationMeaning::AdoptedConclusion {
+                proposition,
+                proof_dependencies: previous.dependencies.clone(),
+            }
+        }),
+    )
 }
 
 pub(crate) fn relation_explanation_target(

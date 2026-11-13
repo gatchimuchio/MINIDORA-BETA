@@ -265,40 +265,32 @@ fn verify_previous_relation_context(
     if previous.calculation.is_some() {
         return Ok(());
     }
-    let prior_bundle =
-        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?;
-    let typed_proposition = if let Some((_, prior_bundle)) = prior_bundle {
-        if identity(&prior_bundle.request)? != previous.id {
-            return Err(failure(
-                "RECOVERY_CONTEXT_IDENTITY_MISMATCH",
-                "the retained prior meaning and result identity differ",
-            ));
-        }
-        crate::core::relation_question_proposition(&prior_bundle.meaning.intent).cloned()
-    } else {
-        None
+    let prior_meaning = crate::core::previous_relation_meaning(store, actor, case, previous)?;
+    let Some(prior_meaning) = prior_meaning else {
+        return Ok(());
     };
     let memory = store.load_memory(actor)?;
-    let answer = if let Some(proposition) = typed_proposition {
-        let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
-        if crate::core::relation_explanation_target(&proposition, &answer).is_none() {
-            return Err(failure(
-                "RECOVERY_CONTEXT_PROOF_CHANGED",
-                "the sealed prior relation no longer has a supported or refuted result",
-            ));
+    let answer = match prior_meaning {
+        crate::core::PriorRelationMeaning::OriginalQuestion(proposition) => {
+            let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
+            if crate::core::relation_explanation_target(&proposition, &answer).is_none() {
+                return Err(failure(
+                    "RECOVERY_CONTEXT_PROOF_CHANGED",
+                    "the sealed prior relation no longer has a supported or refuted result",
+                ));
+            }
+            answer
         }
-        answer
-    } else if let Some(proposition) = crate::core::previous_relation_answer(&previous.text)? {
-        let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
-        if answer.status != "SUPPORTED" {
-            return Err(failure(
-                "RECOVERY_CONTEXT_PROOF_CHANGED",
-                "the legacy prior relation answer is no longer supported",
-            ));
+        crate::core::PriorRelationMeaning::AdoptedConclusion { proposition, .. } => {
+            let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
+            if answer.status != "SUPPORTED" {
+                return Err(failure(
+                    "RECOVERY_CONTEXT_PROOF_CHANGED",
+                    "the adopted prior relation conclusion is no longer supported",
+                ));
+            }
+            answer
         }
-        answer
-    } else {
-        return Ok(());
     };
     let answer_dependencies = crate::relations::answer_dependencies(&answer);
     let mut expected_dependencies = vec![previous.id.clone()];
