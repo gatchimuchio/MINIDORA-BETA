@@ -781,15 +781,19 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        let epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let serial = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "minidora-cli-{}-{epoch}-{serial}",
-            std::process::id()
-        ));
+        let path = if let Some(path) = std::env::var_os("MINIDORA_SOURCE_QUESTION_STATE_DIR") {
+            PathBuf::from(path)
+        } else {
+            let epoch = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let serial = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            std::env::temp_dir().join(format!(
+                "minidora-cli-{}-{epoch}-{serial}",
+                std::process::id()
+            ))
+        };
         std::fs::create_dir(&path).unwrap();
         Self(path)
     }

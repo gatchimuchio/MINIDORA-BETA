@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-SOURCE natural question over a prior fetched body",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-13T01:38:30+00:00",
-  "base_commit": "93ae08e56d029bd719e785171b842fee5742e1f8",
+  "recorded_at": "2026-11-13T01:42:24+00:00",
+  "base_commit": "16e7975c0640892b183ebfd2acb916ceb75394b4",
   "requirement_ids": [
     "A07",
     "A13",
@@ -34,14 +34,15 @@
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
   },
   "test_snapshot_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "d458fb9e38bed28bb455cdc15fb1bdc100213a7d256c2d3166b2e3ec87fa890d"
+    "rust/apps/cli/tests/normal_route.rs": "0d2448eb02fcdcd5ff0595e760fbefc5425db7f8f0dd58d71709bed2ff3faf51",
+    "rust/tools/source_question_route_recovery_test.py": "979a4d1f32540c7c16360f627f22a2d96a3181d41d76a8d3a73b01abc668402a"
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/README.md": "f1c9c7d28b7513cc6b4efcdc2807c35ac93cb73dcb0d62e1e49ba7322cfd563b",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "eb125f9c2203f31f4de0387b896dd866ce3cfd681f9ca95541a1bd176352b357",
-    "rust/audit/requirements.tsv": "774b0de4e2eacf91706ed0eae37dd50cab68c450d3c197aef49eed175cdfd0fe",
-    "rust/audit/rust-requirement-observations.json": "89e639136b0148bddbdec5045e040953d01b0f71ba39ddb039c642554b5f7186"
+    "rust/audit/README.md": "79c58d0df4866e5d45d984bf6e434936f8602d042ec62bcca1c22cbbe40cc8c8",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "4d4eeae6a0f01cffb82287b516d628d8c66863ff1c87aea340603fbf4c741496",
+    "rust/audit/requirements.tsv": "35bfa806cbd81532e39324dbd29a62194fd3cfffb5e5dcb98b069ec85cbaa127",
+    "rust/audit/rust-requirement-observations.json": "2680936970a7a03a00546700cac59dfe2395e403d972457be7c7b68cc494426e"
   },
   "execution_mode": "ordinary CLI process against a same-case committed FETCHED_BODY fixture; the fixture is synthetic and no live fetch occurred in this question-consumer test",
   "producer_consumer": {
@@ -65,9 +66,11 @@
     "local_file_receipt": "CONFIRMED under the exact output path grant; file bytes equal rendered answer"
   },
   "recovery_revalidation": {
-    "check": "Recovery verifier recomputes candidate answer bytes, source packet dependencies, required output units and guarantee.",
-    "result": "PASS in focused unit test.",
-    "crash_injected_end_to_end_no_resend": "NOT_RUN"
+    "check": "Recovery recomputes candidate answer bytes, source packet dependencies, required output units and guarantee, then verifies the saved source-question result before reconciling the existing local file.",
+    "focused_verifier_test": "PASS",
+    "crash_injected_end_to_end_no_resend": "PASS: LOCAL_FILE_RECONCILED_NO_RESEND",
+    "file_inode_mtime_size_unchanged": true,
+    "write_resent": false
   },
   "outcome": "PASS",
   "focused_validation": {
@@ -77,7 +80,8 @@
     "source_question_recovery_revalidation_test": "1 passed, 0 failed",
     "source_question_normal_cli_tests": "2 passed, 0 failed: source fixture to authorized local file receipt; missing prior, missing body and unmatched topic typed stops",
     "full_workspace_tests": "NOT_RUN",
-    "clippy": "NOT_RUN"
+    "clippy": "NOT_RUN",
+    "crash_injected_source_question_recovery_script": "PASS: exact-grant receipt reconciled; file inode/mtime/size unchanged; no resend"
   },
   "failures_and_corrections": [
     {
@@ -112,13 +116,16 @@
     {
       "command": "cargo test -p minidora-cli --test normal_route natural_source_question --locked",
       "outcome": "2 passed, 0 failed"
+    },
+    {
+      "command": "python3 tools/source_question_route_recovery_test.py --binary target/debug/minidora-rust",
+      "outcome": "PASS: LOCAL_FILE_RECONCILED_NO_RESEND; unchanged file identity; write_resent=false"
     }
   ],
   "not_run": [
     "Full workspace runtime suite",
     "Clippy",
     "Live provider retrieval in this consumer replay",
-    "Crash-injected end-to-end no-resend for this new route",
     "Full 93-requirement and full C01-C13 acceptance"
   ],
   "acceptance_boundary": "One ordinary Japanese/English source-topic question consumes a same-case fetched-body artifact and returns lexical sentence candidates with exact offsets and hashes. It is not semantic question answering, source comparison, source-quality validation or evidence of full successor acceptance. A synthetic committed body fixture exercised the consumer; live acquisition remains separately evidenced."
