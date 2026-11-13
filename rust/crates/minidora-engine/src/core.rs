@@ -128,7 +128,9 @@ pub(crate) fn relation_objects_answer(
             "CONFLICT" => {
                 return Err(failure(
                     "CONFLICTING_PREMISES",
-                    "対象・predicate・scopeが同じ関係に肯定と否定の根拠があります。選択せず停止します。",
+                    format!(
+                        "範囲「{scope}」の「{subject}」について、「{predicate}」関係に肯定と否定の根拠があります。選択せず停止します。"
+                    ),
                 ));
             }
             "CONTRADICTED" | "UNKNOWN" | "MISSING_PREMISES" => {}
@@ -143,7 +145,9 @@ pub(crate) fn relation_objects_answer(
     if supported.is_empty() {
         return Err(failure(
             "MISSING_PREMISES",
-            "質問された極性を支える同一subject・predicate・scopeの前提または導出がありません。",
+            format!(
+                "範囲「{scope}」で「{subject}」の「{predicate}」関係を支える有効な前提または導出がありません。"
+            ),
         ));
     }
     let descriptions = supported
@@ -154,12 +158,16 @@ pub(crate) fn relation_objects_answer(
                 Guarantee::Derived => "規則導出",
                 _ => "根拠付き",
             };
-            format!("{origin}: {}", describe(proposition))
+            format!(
+                "{origin}: {}（範囲: {}）",
+                describe(proposition),
+                proposition.scope
+            )
         })
         .collect::<Vec<_>>()
         .join("；");
     let text = format!(
-        "提示された前提の範囲では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
+        "範囲「{scope}」の保存済み前提では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
     );
     if text.len() > max_evidence_bytes {
         return Err(failure(
@@ -3561,24 +3569,23 @@ impl Engine {
                 for proposition in propositions {
                     let answer = relations::query(&memory, proposition, per_relation_budget)?;
                     match answer.status.as_str() {
-                        "SUPPORTED" => {
-                            conclusions.push(format!("- 支持: {}。", describe(proposition)))
-                        }
+                        "SUPPORTED" => conclusions
+                            .push(format!("- {}", relation_answer_surface(proposition, false))),
                         "CONTRADICTED" => {
                             all_supported = false;
-                            let mut opposite = proposition.clone();
-                            opposite.negative = !opposite.negative;
-                            conclusions.push(format!(
-                                "- 質問された関係は支持されず、提示された根拠は反対に「{}」を支持します。",
-                                describe(&opposite)
-                            ));
+                            conclusions
+                                .push(format!("- {}", relation_answer_surface(proposition, true)));
                         }
                         "CONFLICT" => {
                             return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "CONFLICTING_PREMISES",
-                                "関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+                                &format!(
+                                    "範囲「{}」の「{}」に肯定・否定の競合があります。個別の根拠を確認してください。",
+                                    proposition.scope,
+                                    describe(proposition)
+                                ),
                             );
                         }
                         _ => {
@@ -3586,7 +3593,11 @@ impl Engine {
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "MISSING_PREMISES",
-                                "関係節をすべて判定する有効な前提または導出経路がありません。",
+                                &format!(
+                                    "範囲「{}」の「{}」を判定する有効な前提または導出経路がありません。",
+                                    proposition.scope,
+                                    describe(proposition)
+                                ),
                             );
                         }
                     }
@@ -4037,10 +4048,7 @@ impl Engine {
                         "CONTRADICTED" => {
                             let mut opposite = resolved.clone();
                             opposite.negative = !opposite.negative;
-                            units.push(format!(
-                                "提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
-                                describe(&opposite)
-                            ));
+                            units.push(relation_answer_surface(&resolved, true));
                             opposite
                         }
                         "CONFLICT" => {
@@ -4048,7 +4056,11 @@ impl Engine {
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "CONFLICTING_PREMISES",
-                                "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                                &format!(
+                                    "範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                                    resolved.scope,
+                                    describe(&resolved)
+                                ),
                             );
                         }
                         _ => {
@@ -4056,7 +4068,11 @@ impl Engine {
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "MISSING_PREMISES",
-                                "この関係を説明する有効な前提または導出経路がありません。",
+                                &format!(
+                                    "範囲「{}」の「{}」を説明する有効な前提または導出経路がありません。",
+                                    resolved.scope,
+                                    describe(&resolved)
+                                ),
                             );
                         }
                     };
@@ -4068,24 +4084,20 @@ impl Engine {
                     ));
                 } else {
                     match answer.status.as_str() {
-                        "SUPPORTED" => units.push(format!(
-                            "提示された前提の範囲では、{}。",
-                            describe(&resolved)
-                        )),
+                        "SUPPORTED" => units.push(relation_answer_surface(&resolved, false)),
                         "CONTRADICTED" => {
-                            let mut opposite = resolved.clone();
-                            opposite.negative = !opposite.negative;
-                            units.push(format!(
-                                "提示された前提の範囲では、{}。",
-                                describe(&opposite)
-                            ));
+                            units.push(relation_answer_surface(&resolved, true));
                         }
                         "CONFLICT" => {
                             return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "CONFLICTING_PREMISES",
-                                "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                                &format!(
+                                    "範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                                    resolved.scope,
+                                    describe(&resolved)
+                                ),
                             );
                         }
                         _ => {
@@ -4093,7 +4105,11 @@ impl Engine {
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "MISSING_PREMISES",
-                                "この問いに必要な有効な前提または導出経路がありません。",
+                                &format!(
+                                    "範囲「{}」の「{}」を判定する有効な前提または導出経路がありません。",
+                                    resolved.scope,
+                                    describe(&resolved)
+                                ),
                             );
                         }
                     }
@@ -4108,20 +4124,19 @@ impl Engine {
                 let answer_guarantee = relations::answer_guarantee(&answer);
                 match answer.status.as_str() {
                     "SUPPORTED"=>{
-                        units.push(format!("提示された前提の範囲では、{}。",describe(proposition)));
+                        units.push(relation_answer_surface(proposition, false));
                         result.dependencies.extend(answer_dependencies.iter().cloned());
                         result.guarantee=answer_guarantee;
                     },
                     "CONTRADICTED"=>{
-                        let mut opposite=proposition.clone(); opposite.negative = !opposite.negative;
-                        units.push(format!("提示された前提の範囲では、{}。",describe(&opposite)));
+                        units.push(relation_answer_surface(proposition, true));
                         result.dependencies.extend(answer_dependencies);
                         result.guarantee=answer_guarantee;
                     },
                     "CONFLICT"=>return self.stop(&mut state,Lifecycle::Suspend,"CONFLICTING_PREMISES",
-                        "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。"),
+                        &format!("範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",proposition.scope,describe(proposition))),
                     _=>return self.stop(&mut state,Lifecycle::Suspend,"MISSING_PREMISES",
-                        "この問いに必要な有効な前提または導出経路がありません。"),
+                        &format!("範囲「{}」の「{}」を判定する有効な前提または導出経路がありません。",proposition.scope,describe(proposition))),
                 }
             }
             Intent::AskRelationObjects {
@@ -4165,7 +4180,11 @@ impl Engine {
                             &mut state,
                             Lifecycle::Suspend,
                             "CONFLICTING_PREMISES",
-                            "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                            &format!(
+                                "範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                                proposition.scope,
+                                describe(proposition)
+                            ),
                         );
                     }
                     _ => {
@@ -4173,7 +4192,11 @@ impl Engine {
                             &mut state,
                             Lifecycle::Suspend,
                             "MISSING_PREMISES",
-                            "この関係を説明する有効な前提または導出経路がありません。",
+                            &format!(
+                                "範囲「{}」の「{}」を説明する有効な前提または導出経路がありません。",
+                                proposition.scope,
+                                describe(proposition)
+                            ),
                         );
                     }
                 }
@@ -5423,13 +5446,53 @@ fn rejected(request: &RequestEnvelope, code: &str, message: &str) -> ResultRecor
     r
 }
 pub(crate) fn previous_relation_answer(text: &str) -> Result<Option<Proposition>> {
-    let Some(statement) = text
+    let Some(mut statement) = text
         .strip_prefix("提示された前提の範囲では、")
         .and_then(|value| value.strip_suffix('。'))
     else {
         return Ok(None);
     };
-    input::parse_proposition(statement, false)
+    if let Some(value) = statement.strip_prefix("問われた関係「") {
+        let Some((_, answer)) = value.split_once("」は支持されず、反対に、") else {
+            return Ok(None);
+        };
+        statement = answer;
+    }
+    let (statement, scope) = statement
+        .strip_suffix('）')
+        .and_then(|value| value.rsplit_once("（範囲: "))
+        .map_or((statement, None), |(statement, scope)| {
+            (statement, Some(scope))
+        });
+    let Some(mut proposition) = input::parse_proposition(statement, false)? else {
+        return Ok(None);
+    };
+    if let Some(scope) = scope {
+        if scope.is_empty() {
+            return Ok(None);
+        }
+        proposition.scope = scope.into();
+    }
+    Ok(Some(proposition))
+}
+
+fn relation_answer_surface(proposition: &Proposition, contradicted: bool) -> String {
+    if contradicted {
+        let mut opposite = proposition.clone();
+        opposite.negative = !opposite.negative;
+        format!(
+            "提示された前提の範囲では、問われた関係「{}」は支持されず、反対に、{}（範囲: {}）。",
+            describe(proposition),
+            describe(&opposite),
+            proposition.scope
+        )
+    } else {
+        format!(
+            "提示された前提の範囲では、{}（範囲: {}）。",
+            describe(proposition),
+            proposition.scope
+        )
+    }
 }
 pub(crate) fn relation_why_explanation_units(
     memory: &MemoryState,
@@ -5442,11 +5505,7 @@ pub(crate) fn relation_why_explanation_units(
         "CONTRADICTED" => {
             let mut opposite = proposition.clone();
             opposite.negative = !opposite.negative;
-            units.push(format!(
-                "範囲「{}」では、提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
-                proposition.scope,
-                describe(&opposite)
-            ));
+            units.push(relation_answer_surface(proposition, true));
             opposite
         }
         _ => {
