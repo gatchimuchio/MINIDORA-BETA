@@ -517,6 +517,38 @@ fn inspect(
         } else {
             None
         };
+    let previous_json_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
+        bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .filter(|previous| previous.lifecycle == Lifecycle::Commit)
+            .map(|previous| -> Result<Option<(String, String, String, String, Vec<u8>, Vec<String>)>> {
+                let Some((source_ref, report_ref, answer)) =
+                    crate::document::previous_json_table_highest_group_mean(
+                        store, actor, case, previous,
+                    )?
+                else {
+                    return Ok(None);
+                };
+                let answer_bytes = canonical(&answer)?;
+                let answer_ref = digest(&answer_bytes);
+                let expected_units = crate::document::json_group_mean_answer_lines(&answer);
+                Ok(Some((
+                    previous.id.clone(),
+                    source_ref,
+                    report_ref,
+                    answer_ref,
+                    answer_bytes,
+                    expected_units,
+                )))
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
     let previous_math_report_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         bundle
             .meaning
@@ -544,6 +576,7 @@ fn inspect(
                 | "declarative-ja-en-v50-code-context-explanation"
                 | "declarative-ja-en-v51-generated-code-verification"
                 | "declarative-ja-en-v52-search-candidate-body"
+                | "declarative-ja-en-v53-group-mean-query"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -589,6 +622,7 @@ fn inspect(
             | "declarative-ja-en-v50-code-context-explanation"
             | "declarative-ja-en-v51-generated-code-verification"
             | "declarative-ja-en-v52-search-candidate-body"
+            | "declarative-ja-en-v53-group-mean-query"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -681,6 +715,33 @@ fn inspect(
             ));
         }
     }
+    if let Some((previous_id, source_ref, report_ref, answer_ref, answer_bytes, expected_units)) =
+        &previous_json_group_mean_answer
+    {
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_JSON_GROUP_MEAN_CHANGED",
+                "the queried grouped-statistics result is no longer retained",
+            )
+        })?;
+        let expected_dependencies = vec![
+            previous.id.clone(),
+            source_ref.clone(),
+            report_ref.clone(),
+            answer_ref.clone(),
+        ];
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != expected_dependencies
+            || plan.required_units != *expected_units
+            || result.guarantee != Guarantee::Computed
+            || store.get_bytes(actor, case, answer_ref)? != *answer_bytes
+        {
+            return Err(failure(
+                "RECOVERY_JSON_GROUP_MEAN_CHANGED",
+                "the revalidated source, grouped means or highest-group answer changed",
+            ));
+        }
+    }
     if let Some(expected_units) = &previous_math_report_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
@@ -709,6 +770,7 @@ fn inspect(
         bundle.meaning.parser_version.as_str(),
         "declarative-ja-en-v51-generated-code-verification"
             | "declarative-ja-en-v52-search-candidate-body"
+            | "declarative-ja-en-v53-group-mean-query"
     ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
@@ -876,6 +938,27 @@ fn inspect(
         });
         sources.push(report_id);
     }
+    if previous_json_group_mean_answer.is_some() {
+        let source_id = "previous-json-group-statistics-source".to_string();
+        let report_id = "previous-json-group-statistics-report".to_string();
+        let answer_id = "previous-json-group-mean-answer".to_string();
+        expected_nodes.push(GoalNode {
+            id: source_id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        expected_nodes.push(GoalNode {
+            id: report_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![source_id],
+        });
+        expected_nodes.push(GoalNode {
+            id: answer_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![report_id],
+        });
+        sources.push(answer_id);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -937,6 +1020,23 @@ fn inspect(
             &BTreeMap::from([(source_id, source_ref.clone())]),
         )?;
         source_refs.insert(report_id, report_ref.clone());
+    }
+    if let Some((_, source_ref, report_ref, answer_ref, _, _)) = &previous_json_group_mean_answer {
+        let source_id = "previous-json-group-statistics-source".to_string();
+        let report_id = "previous-json-group-statistics-report".to_string();
+        let answer_id = "previous-json-group-mean-answer".to_string();
+        graph.observe(&source_id, source_ref, &BTreeMap::new())?;
+        graph.observe(
+            &report_id,
+            report_ref,
+            &BTreeMap::from([(source_id.clone(), source_ref.clone())]),
+        )?;
+        graph.observe(
+            &answer_id,
+            answer_ref,
+            &BTreeMap::from([(report_id.clone(), report_ref.clone())]),
+        )?;
+        source_refs.insert(answer_id, answer_ref.clone());
     }
     let compute = (
         &result.calculation,

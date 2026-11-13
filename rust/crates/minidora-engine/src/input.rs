@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v52-search-candidate-body";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v53-group-mean-query";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -45,6 +45,12 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     };
     if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
         unresolved.push("no actual adopted previous result is available".into());
+    }
+    if matches!(intent, Intent::AskPreviousGroupMean)
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved
+            .push("no actual committed previous grouped-statistics result is available".into());
     }
     if matches!(intent, Intent::VerifyPreviousCode { .. })
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -884,6 +890,21 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
+    let patterns = [
+        r"(?i)^(?:which|what) group(?:'s)? (?:has )?(?:the )?highest (?:mean|average)(?: value)?$",
+        r"(?i)^which group(?:'s)? (?:mean|average)(?: value)? (?:is )?(?:the )?highest$",
+        r"^(?:(?:この|その)(?:集計|統計)?表(?:から|で)?[、， ]*)?(?:平均(?:値)?が(?:最も|一番|いちばん)(?:高い|大きい)|(?:最も|一番|いちばん)(?:高い|大きい)平均(?:値)?の)(?:グループ|分類|カテゴリ)(?:は|が)?(?:どれ|何|どの(?:グループ|分類|カテゴリ))(?:ですか|でしょうか|か)?$",
+        r"^どの(?:グループ|分類|カテゴリ)の平均(?:値)?(?:が|は)(?:最も|一番|いちばん)(?:高い|大きい)(?:ですか|でしょうか|か)?$",
+    ];
+    for pattern in patterns {
+        if regex(pattern)?.is_match(text) {
+            return Ok(Some(Intent::AskPreviousGroupMean));
+        }
+    }
+    Ok(None)
+}
+
 fn why_question_intent(text: &str) -> Result<Option<Intent>> {
     let statement = if let Some(value) = text.strip_prefix("なぜ") {
         Some(value)
@@ -1021,6 +1042,9 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = inspect_premises_intent(body)? {
         return Ok(intent);
     }
+    if let Some(intent) = previous_group_mean_question_intent(body)? {
+        return Ok(intent);
+    }
     if let Some(capture) =
         regex(r"(?is)^(?:もし\s*)?(.+?)(?:ならば|なら|であれば)[、,\s]*(.+)$")?.captures(body)
     {
@@ -1130,6 +1154,13 @@ fn interpret(text: &str) -> Result<Intent> {
     }
     if let Some(expression) = arithmetic_expression(body)? {
         return Ok(Intent::Calculate { expression });
+    }
+    if regex(r"(?i)^(?:which|what|who|where|when|how)\b")?.is_match(body)
+        || regex(r"^(?:どの|どれ|何|なに|誰|だれ|どこ|いつ|どう|いくら|いくつ)")?.is_match(body)
+    {
+        return Ok(Intent::Unknown {
+            reason: "the wh-question is outside the supported typed question grammar".into(),
+        });
     }
     let question = text.trim_end().ends_with(['?', '？'])
         || body.ends_with("ですか")
@@ -1907,6 +1938,30 @@ mod tests {
         }
         assert!(matches!(
             interpret("ココについて何が分かっているか、ミケについても").unwrap(),
+            Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn highest_group_mean_questions_have_explicit_japanese_and_english_shapes() {
+        for text in [
+            "平均が最も高いグループはどれですか",
+            "どのグループの平均値が一番高いですか",
+            "この統計表で平均がいちばん高いカテゴリはどれ",
+            "Which group has the highest mean?",
+            "Which group's average is highest?",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::AskPreviousGroupMean),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("平均が最も低いグループはどれですか").unwrap(),
+            Intent::Unknown { .. }
+        ));
+        assert!(matches!(
+            interpret("どのグループの平均が高いですか").unwrap(),
             Intent::Unknown { .. }
         ));
     }

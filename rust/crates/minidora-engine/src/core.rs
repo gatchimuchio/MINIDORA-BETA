@@ -305,6 +305,34 @@ impl Engine {
             } else {
                 None
             };
+        let previous_json_group_mean_answer =
+            if matches!(bundle.meaning.intent, Intent::AskPreviousGroupMean) {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => match crate::document::previous_json_table_highest_group_mean(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        prior,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "JSON_GROUP_MEAN_UNSUPPORTED",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
+                        }
+                    },
+                    None => None,
+                }
+            } else {
+                None
+            };
         let previous_math_report_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -366,6 +394,27 @@ impl Engine {
                 requires: vec![source_id],
             });
             compute_requires.push(report_id);
+        }
+        if previous_json_group_mean_answer.is_some() {
+            let source_id = "previous-json-group-statistics-source".to_string();
+            let report_id = "previous-json-group-statistics-report".to_string();
+            let answer_id = "previous-json-group-mean-answer".to_string();
+            nodes.push(GoalNode {
+                id: source_id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            nodes.push(GoalNode {
+                id: report_id.clone(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: vec![source_id],
+            });
+            nodes.push(GoalNode {
+                id: answer_id.clone(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: vec![report_id],
+            });
+            compute_requires.push(answer_id);
         }
         if let Intent::CalculateSequence { steps } = &bundle.meaning.intent {
             for step in steps {
@@ -1392,6 +1441,67 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.guarantee = prior.guarantee.clone();
                 }
+            }
+            Intent::AskPreviousGroupMean => {
+                let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "前回の採用済み結果がありません。先にグループ別統計を計算してください。",
+                    );
+                };
+                let Some((source_ref, report_ref, answer)) = &previous_json_group_mean_answer
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_GROUP_STATISTICS_CONTEXT",
+                        "前回の結果に再検証できるJSON表グループ統計がありません。",
+                    );
+                };
+                let answer_bytes = canonical(answer)?;
+                if answer_bytes.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "グループ平均の比較結果が要求の証拠予算を超えました。",
+                    );
+                }
+                let answer_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &answer_bytes)?;
+                graph.observe(
+                    "previous-json-group-statistics-source",
+                    source_ref,
+                    &BTreeMap::new(),
+                )?;
+                graph.observe(
+                    "previous-json-group-statistics-report",
+                    report_ref,
+                    &BTreeMap::from([(
+                        "previous-json-group-statistics-source".into(),
+                        source_ref.clone(),
+                    )]),
+                )?;
+                graph.observe(
+                    "previous-json-group-mean-answer",
+                    &answer_ref,
+                    &BTreeMap::from([(
+                        "previous-json-group-statistics-report".into(),
+                        report_ref.clone(),
+                    )]),
+                )?;
+                result.dependencies.extend([
+                    prior.id.clone(),
+                    source_ref.clone(),
+                    report_ref.clone(),
+                    answer_ref,
+                ]);
+                units.extend(crate::document::json_group_mean_answer_lines(answer));
+                result.guarantee = Guarantee::Computed;
             }
             Intent::SummarizePreviousSource => {
                 let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)

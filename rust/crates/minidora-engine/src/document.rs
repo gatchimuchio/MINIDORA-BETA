@@ -341,6 +341,206 @@ pub(crate) fn previous_json_table_group_statistics_explanation(
     Ok(Some((source_ref, report_ref, lines)))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct JsonGroupMeanComparison {
+    pub group: String,
+    pub mean: String,
+    pub highest: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct JsonGroupMeanWinner {
+    pub group: String,
+    pub mean: String,
+    pub source_row_count: usize,
+    pub sampled_source_row_indices: Vec<usize>,
+    pub sampled_group_source_spans: Vec<crate::ports::JsonComparisonSpan>,
+    pub sampled_value_source_spans: Vec<crate::ports::JsonComparisonSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct JsonGroupMeanAnswer {
+    pub source_sha256: String,
+    pub group_by: String,
+    pub value_column: String,
+    pub comparison_unit: Option<String>,
+    pub comparisons: Vec<JsonGroupMeanComparison>,
+    pub winners: Vec<JsonGroupMeanWinner>,
+    pub guarantee: String,
+}
+
+/// Revalidate a previous grouped-statistics result, then answer the bounded
+/// question using its exact group means. Different units are refused until a
+/// cross-group conversion is explicitly implemented and verified.
+pub(crate) fn previous_json_table_highest_group_mean(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<(String, String, JsonGroupMeanAnswer)>> {
+    let Some((source_ref, report_ref, _)) =
+        previous_json_table_group_statistics_explanation(store, actor, case, previous)?
+    else {
+        return Ok(None);
+    };
+    let report: crate::ports::JsonTableGroupStatisticsReport = serde_json::from_str(&previous.text)
+        .map_err(|_| {
+            failure(
+                "JSON_GROUP_MEAN_CONTEXT_INVALID",
+                "the prior grouped-statistics report cannot be decoded",
+            )
+        })?;
+    let first = report.groups.first().ok_or_else(|| {
+        failure(
+            "JSON_GROUP_MEAN_CONTEXT_INVALID",
+            "the validated grouped-statistics report has no groups",
+        )
+    })?;
+    let comparison_unit = first.statistics.unit.clone();
+    if report
+        .groups
+        .iter()
+        .any(|group| group.statistics.unit != comparison_unit)
+    {
+        return Err(failure(
+            "JSON_GROUP_MEAN_UNIT_MISMATCH",
+            "group means use different or mixed units; no cross-group conversion was applied",
+        ));
+    }
+    let means: Vec<_> = report
+        .groups
+        .iter()
+        .map(|group| group.statistics.mean.clone())
+        .collect();
+    let winner_indices = crate::math::maximum_exact_indices(&means)?;
+    let winner_set: BTreeSet<_> = winner_indices.iter().copied().collect();
+    let comparisons = report
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| JsonGroupMeanComparison {
+            group: group.value.clone(),
+            mean: group.statistics.mean.clone(),
+            highest: winner_set.contains(&index),
+        })
+        .collect();
+    let winners = winner_indices
+        .iter()
+        .map(|index| {
+            let group = &report.groups[*index];
+            let sample_count = group.source_row_indices.len().min(8);
+            JsonGroupMeanWinner {
+                group: group.value.clone(),
+                mean: group.statistics.mean.clone(),
+                source_row_count: group.source_row_indices.len(),
+                sampled_source_row_indices: group
+                    .source_row_indices
+                    .iter()
+                    .take(sample_count)
+                    .copied()
+                    .collect(),
+                sampled_group_source_spans: group
+                    .group_source_spans
+                    .iter()
+                    .take(sample_count)
+                    .cloned()
+                    .collect(),
+                sampled_value_source_spans: group
+                    .value_source_spans
+                    .iter()
+                    .take(sample_count)
+                    .cloned()
+                    .collect(),
+            }
+        })
+        .collect();
+    let answer = JsonGroupMeanAnswer {
+        source_sha256: report.source_sha256,
+        group_by: report.group_by,
+        value_column: report.value_column,
+        comparison_unit,
+        comparisons,
+        winners,
+        guarantee: "exact comparison of the revalidated per-group means from this supplied JSON string table; no population representativeness or external-world claim".into(),
+    };
+    Ok(Some((source_ref, report_ref, answer)))
+}
+
+pub(crate) fn json_group_mean_answer_lines(answer: &JsonGroupMeanAnswer) -> Vec<String> {
+    let unit = answer
+        .comparison_unit
+        .as_deref()
+        .map_or_else(String::new, |unit| format!(" {unit}"));
+    let mut lines = vec![
+        "前回のJSON表グループ統計を再検証し、全グループの平均を正確に比較しました。".into(),
+        format!(
+            "集計対象: {}列ごとの{}列の平均。元資料 SHA-256: {}",
+            answer.group_by, answer.value_column, answer.source_sha256
+        ),
+    ];
+    if answer.winners.len() == 1 {
+        let winner = &answer.winners[0];
+        lines.push(format!(
+            "平均が最も高いグループ: {:?}（平均={}{}）",
+            winner.group, winner.mean, unit
+        ));
+    } else {
+        lines.push(format!(
+            "平均が最も高いグループは同率で{}件です。いずれか一つには絞れません。",
+            answer.winners.len()
+        ));
+        for winner in &answer.winners {
+            lines.push(format!(
+                "同率グループ: {:?}（平均={}{}）",
+                winner.group, winner.mean, unit
+            ));
+        }
+    }
+    lines.push("比較内訳（グループの初出順）:".into());
+    for comparison in &answer.comparisons {
+        lines.push(format!(
+            "{:?}: 平均={}{}{}",
+            comparison.group,
+            comparison.mean,
+            unit,
+            if comparison.highest {
+                "（最高）"
+            } else {
+                ""
+            }
+        ));
+    }
+    for winner in &answer.winners {
+        lines.push(format!(
+            "根拠セル: グループ {:?} の元値{}件。",
+            winner.group, winner.source_row_count
+        ));
+        for ((row, group_span), value_span) in winner
+            .sampled_source_row_indices
+            .iter()
+            .zip(&winner.sampled_group_source_spans)
+            .zip(&winner.sampled_value_source_spans)
+        {
+            lines.push(format!(
+                "  データ行{}: グループbyte[{}..{}), 値byte[{}..{})",
+                row + 1,
+                group_span.source_start,
+                group_span.source_end,
+                value_span.source_start,
+                value_span.source_end
+            ));
+        }
+        if winner.source_row_count > winner.sampled_source_row_indices.len() {
+            lines.push(format!(
+                "  残り{}行の元セル範囲は回答artifactと元資料に保持されています。",
+                winner.source_row_count - winner.sampled_source_row_indices.len()
+            ));
+        }
+    }
+    lines.push(format!("保証範囲: {}。", answer.guarantee));
+    lines
+}
+
 fn admission(document: &str) -> Result<()> {
     if document.is_empty() || document.len() > MAX_DOCUMENT_BYTES {
         return Err(failure(

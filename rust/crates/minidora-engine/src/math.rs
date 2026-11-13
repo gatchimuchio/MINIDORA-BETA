@@ -107,6 +107,27 @@ fn scalar(text: &str) -> Result<BigRational> {
     Budget::default().check(value)
 }
 
+/// Return every first-class position tied at the greatest exact scalar.
+/// Callers must establish that the compared values share a compatible unit.
+pub(crate) fn maximum_exact_indices(values: &[String]) -> Result<Vec<usize>> {
+    if values.is_empty() || values.len() > MAX_OBSERVATIONS {
+        return Err(failure(
+            "MATH_INPUT_LIMIT",
+            "expected 1..4096 exact values for comparison",
+        ));
+    }
+    let parsed = values
+        .iter()
+        .map(|value| scalar(value))
+        .collect::<Result<Vec<_>>>()?;
+    let maximum = parsed.iter().max().expect("the nonempty input was checked");
+    Ok(parsed
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (value == maximum).then_some(index))
+        .collect())
+}
+
 pub(crate) fn json_number_equal(left: &str, right: &str) -> Result<bool> {
     Ok(scalar(left)? == scalar(right)?)
 }
@@ -1707,6 +1728,16 @@ mod tests {
         let reversed = summarize(&strings(&["0.4", "0.3", "0.2", "0.1"]), None).unwrap();
         assert_eq!(reversed.mean, result.mean);
         assert_eq!(reversed.population_variance, result.population_variance);
+    }
+
+    #[test]
+    fn exact_maximum_comparison_preserves_all_rational_ties() {
+        assert_eq!(
+            maximum_exact_indices(&strings(&["1/3", "0.25", "2/6", "0.3"])).unwrap(),
+            vec![0, 2]
+        );
+        assert!(maximum_exact_indices(&[]).is_err());
+        assert!(maximum_exact_indices(&strings(&["1/0"])).is_err());
     }
 
     #[test]

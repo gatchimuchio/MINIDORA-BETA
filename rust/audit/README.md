@@ -113,3 +113,5 @@ python3 rust/audit/static_graph.py --upstream /workspace/.minidora-cloud/upstrea
 ```
 
 `implementation-obligations.md` preserves the full 93-requirement population, S01–S12, R2-01–R2-22, complete source/test accounting and external/platform prerequisites. Unresolved items remain required; this ledger does not authorize a reduced acceptance scope.
+
+- `bb-lang-json-group-mean-query-route-validation.json` records a Japanese/English same-case natural question consuming an actual JSON grouped-statistics result, exact source/report recomputation, rational highest-mean selection, tied winners, original winner-cell spans, mixed-unit and missing-context suspensions, and confirmed local-file no-resend recovery. Focused parser/math tests and three normal-route CLI tests passed; broad A07/A13/B04 and full successor acceptance remain `UNVERIFIED`.

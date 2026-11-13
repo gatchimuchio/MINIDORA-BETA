@@ -2698,6 +2698,206 @@ fn json_table_group_statistics_feed_a_recomputed_same_case_explanation() {
 }
 
 #[test]
+fn natural_group_mean_question_consumes_the_actual_prior_json_statistics() {
+    let scratch = Scratch::new();
+    let document = r#"{"columns":["score","team"],"rows":[["0.1","north"],["1.0","south"],["0.3","north"],["2.0","south"],["0.4","east"]]}"#;
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "group-mean-source",
+            &format!("JSON表の「team」ごとに「score」の統計量を計算して:\n{document}"),
+        ],
+    ));
+    assert_eq!(original["lifecycle"], "COMMIT");
+
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "group-mean-question",
+            "どのグループの平均値が一番高いですか",
+        ],
+    ));
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "COMPUTED");
+    assert_eq!(answer["dependencies"][0], original["id"]);
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("平均が最も高いグループ: \"south\"（平均=3/2）")
+    );
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"north\": 平均=1/5")
+    );
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"east\": 平均=2/5")
+    );
+    assert!(answer["text"].as_str().unwrap().contains("データ行2:"));
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let answer_ref = answer["dependencies"][3].as_str().unwrap();
+    let answer_bytes = store
+        .get_bytes("owner", "normal-route", answer_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
+    let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(typed["comparisons"].as_array().unwrap().len(), 3);
+    assert_eq!(typed["winners"][0]["group"], "south");
+    assert_eq!(typed["winners"][0]["mean"], "3/2");
+    assert_eq!(typed["winners"][0]["source_row_count"], 2);
+
+    let graph: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                "owner",
+                "normal-route",
+                answer["execution_graph_ref"].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(graph.to_string().contains(answer_ref));
+    assert!(
+        graph
+            .to_string()
+            .contains("previous-json-group-mean-answer")
+    );
+}
+
+#[test]
+fn natural_group_mean_question_preserves_ties_and_refuses_mixed_units() {
+    let tied = Scratch::new();
+    let tied_document = r#"{"columns":["score","team"],"rows":[["0.2","north"],["0.8","north"],["0.5","south"],["0.1","east"]]}"#;
+    let _ = record(&execute(
+        &tied.0,
+        "owner",
+        &[
+            "--input",
+            "group-mean-source",
+            &format!("JSON表の「team」ごとに「score」の統計量を計算して:\n{tied_document}"),
+        ],
+    ));
+    let tied_answer = record(&execute(
+        &tied.0,
+        "owner",
+        &[
+            "--input",
+            "group-mean-question",
+            "Which group has the highest mean?",
+        ],
+    ));
+    assert_eq!(tied_answer["lifecycle"], "COMMIT");
+    assert!(tied_answer["text"].as_str().unwrap().contains("同率で2件"));
+    assert!(
+        tied_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"north\"（平均=1/2）")
+    );
+    assert!(
+        tied_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"south\"（平均=1/2）")
+    );
+
+    let mixed = Scratch::new();
+    let mixed_document =
+        r#"{"columns":["score","team"],"rows":[["1 cm","north"],["1 m","south"]]}"#;
+    let _ = record(&execute(
+        &mixed.0,
+        "owner",
+        &[
+            "--input",
+            "group-mean-source",
+            &format!("JSON表の「team」ごとに「score」の統計量を計算して:\n{mixed_document}"),
+        ],
+    ));
+    let mixed_answer = stopped(
+        &execute(
+            &mixed.0,
+            "owner",
+            &[
+                "--input",
+                "group-mean-question",
+                "平均が最も高いグループはどれですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        mixed_answer["reason"]
+            .as_str()
+            .unwrap()
+            .contains("JSON_GROUP_MEAN_UNIT_MISMATCH")
+    );
+    assert!(mixed_answer["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn natural_group_mean_question_requires_an_actual_prior_statistics_result() {
+    let empty = Scratch::new();
+    let missing = stopped(
+        &execute(
+            &empty.0,
+            "owner",
+            &[
+                "--input",
+                "group-mean-question",
+                "Which group has the highest mean?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_ACTUAL_RESULT")
+    );
+
+    let wrong = Scratch::new();
+    let calculation = record(&execute(
+        &wrong.0,
+        "owner",
+        &["--input", "prior-calc", "2+3"],
+    ));
+    assert_eq!(calculation["lifecycle"], "COMMIT");
+    let unsupported = stopped(
+        &execute(
+            &wrong.0,
+            "owner",
+            &[
+                "--input",
+                "group-mean-question",
+                "平均が最も高いグループはどれですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        unsupported["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_GROUP_STATISTICS_CONTEXT")
+    );
+    assert!(unsupported["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn json_table_group_statistics_mixed_values_suspend_with_a_durable_typed_error() {
     let scratch = Scratch::new();
     let document = r#"{"columns":["region","sales"],"rows":[["north","1 m"],["north","2"]]}"#;

@@ -1,0 +1,184 @@
+{
+  "work_item": "BODY-1 BB-LANG natural follow-up over BB-MATH-DATA grouped means",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T01:16:11+00:00",
+  "base_commit": "46f6b80b7e0f9f4001750ad11496919fc5ff7243",
+  "requirement_ids": [
+    "A07",
+    "A13",
+    "B04",
+    "B06",
+    "E03",
+    "E06",
+    "E08",
+    "E09",
+    "E12",
+    "F04"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v53-group-mean-query",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "4a3ae291b4e6f8a6f967bd09af909a813c0828a7ae666a9bc4b428903655f993",
+    "rust/crates/minidora-engine/src/input.rs": "fbacc711e8bf93c7ad6f476620e4fa23b21ae6c18f5c612ee9da4c5982b31358",
+    "rust/crates/minidora-engine/src/math.rs": "584f5b4e03313c7e42779caae5b96d8c360d72026218d0c279231357dc2f3f57",
+    "rust/crates/minidora-engine/src/document.rs": "6f442fa5ef93086dedabcdb404c3d0dd3ba3e34d7a8437f3b4b4ab4e0ee593eb",
+    "rust/crates/minidora-engine/src/core.rs": "7a81bb1d3671077fa9c339ff181f868a7334b7efc2f030f672927bcfb4509a8d",
+    "rust/crates/minidora-engine/src/recovery.rs": "a236b9b145b12ff697c16c9d5a29bbcf3b6bcdc04e40d969acc479f1487d6a91",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "86a93e504bd5df048ea53c4150e1c3835c86263c147f904488c3fc3f24638298",
+    "rust/tools/json_group_mean_query_route_test.py": "4c28ef29979ff45516482be024f35c141dff4c59f21c5d74699cdf710e7a9011"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/README.md": "b9607095974ea2958763672cc32307351ae2e405f3b22b697e284a69d7fc4a84",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "82426825196312fcce22a3ce1b9a4ffd8f594da1b7a17ce8aad53d5ebe56e9bf",
+    "rust/audit/requirements.tsv": "06b76675529d9041ced1160794378050605c72a928b39b40e39ded6a1c92cf6a",
+    "rust/audit/rust-requirement-observations.json": "6c27c2426317dd96e484bbf09a429e903756ab760a85cae1c05f647faf6513a2"
+  },
+  "execution_mode": "fresh CLI process per request; same actor/case; temporary SQLite and artifact state",
+  "producer_consumer": "ordinary JSON grouped-statistics request -> exact per-group means and original source ranges -> same-case Japanese/English highest-mean question -> source/report identity and exact recomputation -> all-group comparison, tied winners, answer artifact and local-file receipt -> Core recovery with no resend",
+  "statistics_result": {
+    "lifecycle": "COMMIT",
+    "result_id": "d882c75c84eac6ec3cc06cbb4881abf2e57ac209ce5d22a7e46963eda73830f7",
+    "source_ref": "e2321703f56d83fd612fe58e49ac15a55df0b5030a9d482249d36f5e41e748c7",
+    "report_ref": "dbf84cfa463198aab2a8af507d27af5ff69d33a2461c70265786015b416fab51",
+    "means": [
+      "1/5",
+      "3/2",
+      "2/5"
+    ]
+  },
+  "natural_question": "どのグループの平均値が一番高いですか",
+  "answer_result": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "dependencies": [
+      "d882c75c84eac6ec3cc06cbb4881abf2e57ac209ce5d22a7e46963eda73830f7",
+      "e2321703f56d83fd612fe58e49ac15a55df0b5030a9d482249d36f5e41e748c7",
+      "dbf84cfa463198aab2a8af507d27af5ff69d33a2461c70265786015b416fab51",
+      "597e4d755fc02177c993192807ec561667a6c576e6d45e52d1d272140cda4aae"
+    ],
+    "text": "前回のJSON表グループ統計を再検証し、全グループの平均を正確に比較しました。\n集計対象: team列ごとのscore列の平均。元資料 SHA-256: e2321703f56d83fd612fe58e49ac15a55df0b5030a9d482249d36f5e41e748c7\n平均が最も高いグループ: \"south\"（平均=3/2）\n比較内訳（グループの初出順）:\n\"north\": 平均=1/5\n\"south\": 平均=3/2（最高）\n\"east\": 平均=2/5\n根拠セル: グループ \"south\" の元値2件。\n  データ行2: グループbyte[59..66), 値byte[53..58)\n  データ行4: グループbyte[91..98), 値byte[85..90)\n保証範囲: exact comparison of the revalidated per-group means from this supplied JSON string table; no population representativeness or external-world claim。",
+    "answer_artifact_sha256": "597e4d755fc02177c993192807ec561667a6c576e6d45e52d1d272140cda4aae",
+    "typed_answer": {
+      "comparison_unit": null,
+      "comparisons": [
+        {
+          "group": "north",
+          "highest": false,
+          "mean": "1/5"
+        },
+        {
+          "group": "south",
+          "highest": true,
+          "mean": "3/2"
+        },
+        {
+          "group": "east",
+          "highest": false,
+          "mean": "2/5"
+        }
+      ],
+      "group_by": "team",
+      "guarantee": "exact comparison of the revalidated per-group means from this supplied JSON string table; no population representativeness or external-world claim",
+      "source_sha256": "e2321703f56d83fd612fe58e49ac15a55df0b5030a9d482249d36f5e41e748c7",
+      "value_column": "score",
+      "winners": [
+        {
+          "group": "south",
+          "mean": "3/2",
+          "sampled_group_source_spans": [
+            {
+              "source_end": 66,
+              "source_sha256": "c44926e20290c13324a8ecdf2353f7f67537d68d18e3fc2eb296c5a465be69d6",
+              "source_start": 59
+            },
+            {
+              "source_end": 98,
+              "source_sha256": "c44926e20290c13324a8ecdf2353f7f67537d68d18e3fc2eb296c5a465be69d6",
+              "source_start": 91
+            }
+          ],
+          "sampled_source_row_indices": [
+            1,
+            3
+          ],
+          "sampled_value_source_spans": [
+            {
+              "source_end": 58,
+              "source_sha256": "a51162aeeb057ca4e3df627977231de20b581f0d0d418ca3a111bc0e408ac6cc",
+              "source_start": 53
+            },
+            {
+              "source_end": 90,
+              "source_sha256": "86169bcf42397928e1828b0a8e09ab69037ac05474b33486513c2fea65908565",
+              "source_start": 85
+            }
+          ],
+          "source_row_count": 2
+        }
+      ]
+    },
+    "graph_consumption": {
+      "previous-json-group-statistics-report": "dbf84cfa463198aab2a8af507d27af5ff69d33a2461c70265786015b416fab51"
+    }
+  },
+  "file_recovery": {
+    "lifecycle": "COMMIT",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true,
+    "write_resent": false
+  },
+  "outcome": "PASS",
+  "focused_validation": {
+    "normal_route_unique_tied_mixed_unit_and_context_stops": "3 normal-route CLI tests passed; 0 failed",
+    "question_parser_and_exact_rational_tie_tests": "2 focused engine tests passed; 0 failed",
+    "mixed_unit_stop": "PASS",
+    "fresh_process_cli_consumer": "PASS",
+    "local_file_receipt_and_no_resend_recovery": "PASS",
+    "format_all_check": "PASS",
+    "minidora_cli_all_targets_check_locked": "PASS",
+    "minidora_cli_build_locked": "PASS"
+  },
+  "failures_and_corrections": [
+    {
+      "stage": "input_parser_trial",
+      "failure": "A non-superlative Japanese wh-question fell through to the copular relation parser.",
+      "correction": "Recognized unsupported wh-question forms now remain UNKNOWN before generic copular parsing; focused parser coverage passes."
+    },
+    {
+      "stage": "normal_route_assertion",
+      "failure": "The first assertion expected unquoted group names in comparison-detail lines.",
+      "correction": "The actual output retains quoted exact group identities; assertions now check those emitted values."
+    },
+    {
+      "stage": "route_graph_inspection",
+      "failure": "The initial evidence script searched the graph node list instead of the persisted dependency map.",
+      "correction": "The assertion now verifies the answer-to-report edge in the graph dependency map; the fresh CLI/recovery replay passes."
+    }
+  ],
+  "commands": [
+    "cargo fmt --all; cargo fmt --all -- --check",
+    "cargo check -p minidora-cli --all-targets --locked",
+    "cargo build -p minidora-cli --locked",
+    "cargo test -p minidora-engine --lib highest_group_mean --locked",
+    "cargo test -p minidora-engine --lib exact_maximum_comparison --locked",
+    "cargo test -p minidora-cli --test normal_route natural_group_mean --locked",
+    "python3 tools/json_group_mean_query_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-json-group-mean-query-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite and Clippy during BODY-1",
+    "cross-group unit conversion, CSV grouped-statistics questions, broader natural Q&A, and full A07/A13/B04 acceptance"
+  ],
+  "acceptance_boundary": "This implements one finite natural question over an actual same-case JSON grouped-statistics result. It proves the selected group by exact comparison of the validated saved means and retains source ranges. Different units suspend. Full natural-language and capability acceptance remain UNVERIFIED."
+}
