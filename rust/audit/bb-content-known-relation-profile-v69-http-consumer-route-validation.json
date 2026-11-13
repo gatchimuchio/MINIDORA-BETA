@@ -1,0 +1,223 @@
+{
+  "work_item": "BODY-2 BB-RENDER authenticated loopback HTTP profile consumer",
+  "stage": "BODY-2_EXECUTION",
+  "recorded_at": "2026-11-13T09:42:15+00:00",
+  "base_commit": "a15195f921ddd415662fa220974cdef636319527",
+  "changed_paths": [
+    "rust/README.md",
+    "rust/apps/cli/tests/normal_route.rs",
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/requirements.tsv",
+    "rust/audit/bb-content-known-relation-profile-v69-http-consumer-route-validation.json",
+    "rust/tools/known_relation_profile_http_route_test.py"
+  ],
+  "subject": "MINIDORA Rust successor engine",
+  "requirement_ids": [
+    "A01",
+    "A02",
+    "A07",
+    "A08",
+    "A13",
+    "B08",
+    "R10"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v69-relation-profile-draft",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "applied_build_set": {
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf",
+    "source_artifacts": [
+      {
+        "artifact_name": "MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+        "sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+        "bytes": 31553,
+        "role": "original_user_archive",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip"
+      },
+      {
+        "artifact_name": "01_MINIDORA_BETA_BUILD仕様書_20261113.md",
+        "sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474",
+        "bytes": 19617,
+        "role": "build_specification",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/01_MINIDORA_BETA_BUILD仕様書_20261113.md"
+      },
+      {
+        "artifact_name": "02_MINIDORA_BETA_BUILD工程表_20261113.md",
+        "sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8",
+        "bytes": 19061,
+        "role": "build_schedule",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/02_MINIDORA_BETA_BUILD工程表_20261113.md"
+      },
+      {
+        "artifact_name": "03_MINIDORA_BETA_Codex施工指示書_20261113.md",
+        "sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d",
+        "bytes": 21690,
+        "role": "codex_work_instruction",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/03_MINIDORA_BETA_Codex施工指示書_20261113.md"
+      }
+    ]
+  },
+  "binary_sha256": "a61792722bdf52d0698af5c7f44e4056072feeefd52092d0361cfaa9b67ae8f4",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "d9702217d93e908cebc07a566915140b221881c9dd66e05fe41db553f6a1fe44",
+    "rust/crates/minidora-engine/src/core.rs": "47fccfc37dda4a381e51ee0e9d26be3b08b2fc12e7639b044df7c90dd9da6431",
+    "rust/crates/minidora-engine/src/input.rs": "8dbc2d56324a3735ce856fc23b825f1049a192b07d0a80e82ab91c602b2ccd02",
+    "rust/crates/minidora-engine/src/language.rs": "24abaeb5d7b398740371930bf0599d6fa6b22109801e0ce4a11a0546f7c460f2",
+    "rust/crates/minidora-engine/src/recovery.rs": "f8964d7e810e262f4681d2b4dbdb37db1ccd59cf7bb5ee58838bfa8288238f35",
+    "rust/crates/minidora-engine/src/relations.rs": "ae8df81caa0bbdb254ebd587b8d474b132163db3f7b9ab028a2add66765b7520"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "707da4ada97fecd97d36076931b0a9115498a86b078b6d788e4ca6f5906e57d3",
+    "rust/tools/known_relation_profile_http_route_test.py": "6b9de01482c7b045be6e193fe04eede3682eba9f7f68d53ec6ef135d83a3cd0d"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "50b2d7b1feb339d3fc76b585a0f03c1667e37cb7c64a34b7062fd0080e0dab07",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "4b13e86b1b8ba3a26b9e0dae258ca86221271037a501ea78fff91e8ac1e8de60",
+    "rust/audit/requirements.tsv": "2c08b0622ddb45765a523352942f4ba3b5382db2e771ea05d97ea068b354ce5c",
+    "rust/docs/IMPLEMENTATION_CHOICES.md": "33eba1505e6a43667b9c112cc9e3c39906742e0bd88a0151a560a4bdcfc7517e",
+    "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf"
+  },
+  "execution_mode": "normal CLI processes save declared facts and consume the HTTP result; one isolated local loopback server process handles an authenticated RequestEnvelope; the test harness creates the bearer token in memory and writes no external data",
+  "previous_producer_gap": "The generic loopback HTTP consumer existed, and the CLI profile producer existed, but this natural profile had not been observed through HTTP or passed from that HTTP result to a second consumer.",
+  "producer_consumer": "CLI-declared actor memory -> authenticated loopback POST /v1/execute -> the same Engine::execute and Core relation-profile producer -> HYPOTHESIS ContentPlan and native model observation -> HTTP JSON result -> following CLI previous-result summary consuming that exact result ID",
+  "scope": "The HTTP service authenticates a local bearer token, enforces its configured actor, returns the same bounded named-subject profile and exact proof dependencies as Core, rejects a wrong token, and shares the committed case with the ordinary CLI follow-up. This does not establish public deployment, browser UI, streaming, external HTTP exposure, or full A01/A02/A07/A08/A13/B08/R10 acceptance.",
+  "actual_input": {
+    "actor": "profile-http-owner",
+    "case": "profile-http-case",
+    "input_id": "http-profile-request",
+    "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+    "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+    "http_status": 200,
+    "authenticated_actor": "profile-http-owner"
+  },
+  "summary": {
+    "fresh_client_observation_count": 4,
+    "lifecycle_counts": {
+      "COMMIT": 4
+    },
+    "http_result_id": "dff6fab054c78bff50764386011d3645b4502d28142f56e7b416372b4bdbf5ed",
+    "cli_follow_up_result_id": "8bb5c17763d573bfa4157341bcaa29406ff43b9b7862d9c4479f46067185e421",
+    "cli_follow_up_consumed_http_result": true,
+    "actor_rule_and_fact_dependencies_retained": true,
+    "wrong_bearer_rejected_with_401": true,
+    "local_server_terminated": true,
+    "added_dependencies": "NONE",
+    "external_network_or_messages": "NOT_USED",
+    "test_token": "generated in memory, not emitted or stored",
+    "server_bind": "127.0.0.1 only; process terminated",
+    "secret_pattern_scan": "NO_MATCH",
+    "private_HDS_copied_to_public_evidence": false,
+    "validation_commands": [
+      {
+        "command": "cargo fmt --all -- --check",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo check --workspace --all-targets --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test -p minidora-cli --test normal_route http_profile_request_flows_through_core_and_cli_summary --locked",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo build --workspace --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "python3 rust/tools/known_relation_profile_http_route_test.py --binary rust/target/debug/minidora-rust --evidence-output rust/audit/bb-content-known-relation-profile-v69-http-consumer-route-validation.json",
+        "exit_code": 0,
+        "fresh_client_observations": 4
+      }
+    ],
+    "full_workspace_runtime_suite": "NOT_RUN",
+    "browser_stream_and_public_deployment": "NOT_RUN",
+    "full_requirement_acceptance": "UNVERIFIED",
+    "next_consumer": "Browser/streaming result rendering remains a separate consumer gap; the prior-result CLI consumer is now connected after HTTP."
+  },
+  "observations": [
+    {
+      "operation": "normal_cli_input",
+      "actor": "profile-http-owner",
+      "case": "profile-http-case",
+      "input_id": "http-profile-rule",
+      "request": "もしXは鳥ならXは動物",
+      "request_sha256": "5af8707ddb3c122841a95fd6affc589446845e9d7ae9ceb2cf433ca6eeddc706",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:5347b17c9604f11350708f823a0c71299ed9ba4d26c220afef095de0466143e9\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "dependencies": [
+        "rule:5347b17c9604f11350708f823a0c71299ed9ba4d26c220afef095de0466143e9"
+      ]
+    },
+    {
+      "operation": "normal_cli_input",
+      "actor": "profile-http-owner",
+      "case": "profile-http-case",
+      "input_id": "http-profile-premise",
+      "request": "ココは鳥",
+      "request_sha256": "2ab163cfac2b22adba11a5f3b49a18b3ffc3c587c4fee07335cb8701876dbd94",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "dependencies": [
+        "fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de"
+      ]
+    },
+    {
+      "operation": "authenticated_loopback_http_input",
+      "actor": "profile-http-owner",
+      "case": "profile-http-case",
+      "input_id": "http-profile-request",
+      "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+      "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+      "http_status": 200,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "「ココ」の紹介文案です。\n会話に記録された内容から、次の紹介文案をまとめました。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:a03d69890b59d2dfa62cc57c0313dfcb3f6238b499946f3cba0669a9e690cc69; 依存ID: fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de, rule:5347b17c9604f11350708f823a0c71299ed9ba4d26c220afef095de0466143e9）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
+      "dependencies": [
+        "fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de",
+        "fact:a03d69890b59d2dfa62cc57c0313dfcb3f6238b499946f3cba0669a9e690cc69",
+        "rule:5347b17c9604f11350708f823a0c71299ed9ba4d26c220afef095de0466143e9"
+      ],
+      "model_observation_ref": "affdefa24986e46062d3d2c4db83b6f15d1cafca3dc6820c72911d69e6b0992b",
+      "authorized_surface_count": 2,
+      "wrong_bearer_status": 401
+    },
+    {
+      "operation": "normal_cli_input",
+      "actor": "profile-http-owner",
+      "case": "profile-http-case",
+      "input_id": "http-profile-summary",
+      "request": "前回の説明を2文以内で要約して",
+      "request_sha256": "f101348207607f862dc70321c9415bc8ce1a2a272fb24492893cf0bb20fd1215",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果からの抽出候補（結果ID: dff6fab054c78bff50764386011d3645b4502d28142f56e7b416372b4bdbf5ed）。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 「ココ」の紹介文案です。\n- 会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de）。",
+      "dependencies": [
+        "702eecbb00b4d5bbebcd97f497dbeb4444328c1b04636c4973ec3d2a5c554a58",
+        "dff6fab054c78bff50764386011d3645b4502d28142f56e7b416372b4bdbf5ed",
+        "d47a34e23509a0681d1784c20ce694e49778a2c282e39af2d084dbc5070ca42a",
+        "cd0d36fcec7083c665c13b0022876b45ff021c05158308bff82eacb865fd24b8",
+        "fact:12b162382db5fac868da8815e5d10b05b5782d5b156ef420c8486edbd23da4de",
+        "fact:a03d69890b59d2dfa62cc57c0313dfcb3f6238b499946f3cba0669a9e690cc69",
+        "rule:5347b17c9604f11350708f823a0c71299ed9ba4d26c220afef095de0466143e9"
+      ],
+      "cli_follow_up_result_id": "8bb5c17763d573bfa4157341bcaa29406ff43b9b7862d9c4479f46067185e421"
+    }
+  ]
+}

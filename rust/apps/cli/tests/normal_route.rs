@@ -1474,6 +1474,127 @@ fn authenticated_http_and_cli_share_actual_case_result() {
     );
 }
 
+#[test]
+fn http_profile_request_flows_through_core_and_cli_summary() {
+    let scratch = Scratch::new();
+    let actor = "http-profile-owner";
+    let case = "http-profile-case";
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "http-profile-rule", "もしXは鳥ならXは動物"],
+    ));
+    let bird = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "http-profile-premise", "ココは鳥"],
+    ));
+    let token = "test-only-constant-not-a-secret-0123456789";
+    let child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args([
+            "serve",
+            "--db",
+            scratch.0.to_str().unwrap(),
+            "--actor",
+            actor,
+            "--bind",
+            "127.0.0.1:0",
+        ])
+        .env("MINIDORA_API_TOKEN", token)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut server = Server(child);
+    let stderr = server.0.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let outcome = BufReader::new(stderr).read_line(&mut line).map(|_| line);
+        let _ = sender.send(outcome);
+    });
+    let line = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("server startup timeout")
+        .unwrap();
+    let address: SocketAddr = line
+        .split("listening on ")
+        .nth(1)
+        .expect("server readiness line")
+        .split(';')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let request = minidora_domain::RequestEnvelope::new(
+        case,
+        "http-profile-request",
+        actor,
+        "ココについて保存されている情報をもとに短い紹介文を書いて",
+    );
+    let body = serde_json::to_vec(&request).unwrap();
+    assert_eq!(http(address, "incorrect", &body).0, 401);
+    let (status, profile) = http(address, token, &body);
+    assert_eq!(status, 200);
+    assert_eq!(profile["lifecycle"], "COMMIT");
+    assert_eq!(profile["guarantee"], "HYPOTHESIS");
+    let text = profile["text"].as_str().unwrap();
+    assert!(text.contains("会話で提示された前提は「ココは鳥である」"));
+    assert!(text.contains("保存された規則による導出は「ココは動物である」"));
+    assert!(text.contains("現実世界の真偽や記録の網羅性は確認していません"));
+    for dependency in [
+        bird["dependencies"][0].as_str().unwrap(),
+        rule["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            profile["dependencies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| { value.as_str().is_some_and(|text| text == dependency) })
+        );
+    }
+
+    let model_observation_ref = profile["content_plan"]["model_observation_ref"]
+        .as_str()
+        .unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let emission: Value =
+        serde_json::from_slice(&store.get_bytes(actor, case, model_observation_ref).unwrap())
+            .unwrap();
+    assert_eq!(emission["text"], profile["text"]);
+    let surfaces = emission["authorized_surfaces"].as_array().unwrap();
+    assert_eq!(surfaces.len(), 2);
+    assert!(surfaces.iter().all(|surface| {
+        surface
+            .as_str()
+            .unwrap()
+            .contains("現実世界の真偽や記録の網羅性は確認していません")
+    }));
+    drop(store);
+
+    let summary = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &[
+            "--input",
+            "http-profile-follow-up-summary",
+            "前回の説明を2文以内で要約して",
+        ],
+    ));
+    assert_eq!(summary["lifecycle"], "COMMIT");
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    assert!(
+        summary["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&profile["id"])
+    );
+}
+
 fn stopped(output: &Output, exit_code: i32, state: &str) -> Value {
     assert_eq!(
         output.status.code(),
