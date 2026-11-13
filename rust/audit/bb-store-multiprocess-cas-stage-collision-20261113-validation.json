@@ -1,7 +1,7 @@
 {
   "work_item": "BB-RECOVER / QC2-01 durable-store concurrency and stale stage-name follow-up",
   "stage": "BODY-2_EXECUTION",
-  "recorded_at": "2026-11-13T10:35:32Z",
+  "recorded_at": "2026-11-13T10:41:59Z",
   "base_commit": "bde5c88b9e310760ad0136518e146a9916b8e23f",
   "changed_paths": [
     "rust/crates/minidora-engine/src/store.rs",
@@ -19,12 +19,12 @@
     "platform": "Linux 6.18.57 x86_64"
   },
   "source_snapshot_sha256": {
-    "rust/crates/minidora-engine/src/store.rs": "b1c305294b3b12535491a9dd1a6e72a497afb49a1d11baf536390843b2712122"
+    "rust/crates/minidora-engine/src/store.rs": "2712651a8c8c606ec3f5f9414ebb6c662a953556b8c1214072ccd3ca4671e12a"
   },
-  "test_binary_sha256": "93effe0c84f902d3888f7442bc01f037e3e4efaa5668239a477be646e0345132",
+  "test_binary_sha256": "38c389d4d1400f03901e8d1266438e58aa46fc85e7361fc6da24ad211a5530e4",
   "observed_gap": "Blob stage identities were process ID plus a process-local serial that restarts at zero. An orphan from abrupt termination could collide after process ID reuse; create_new prevented overwrite but returned an error instead of choosing another name.",
   "effect_idempotency_gap": "save_action used INSERT OR IGNORE for action_identity. A different action ID reusing a saved idempotency key did not return ACTION_IDENTITY_COLLISION; the focused regression initially failed its expected typed-error assertion.",
-  "change": "Exclusive blob stage creation now advances the checked serial on AlreadyExists, preserves the pre-existing orphan, and reports serial exhaustion as STORE_TEMP_SERIAL_EXHAUSTED. Action identity is checked under the SQLite immediate transaction before insertion; new identities use a strict insert, exact replay remains idempotent, and a reused key owned by another action ID returns ACTION_IDENTITY_COLLISION. Startup verifies each journal action against its identity mapping, and SQLite triggers make the mapping immutable.",
+  "change": "Exclusive blob stage creation now advances the checked serial on AlreadyExists, preserves the pre-existing orphan, and reports serial exhaustion as STORE_TEMP_SERIAL_EXHAUSTED. Action identity is checked under the SQLite immediate transaction before insertion; new identities use a strict insert, exact replay remains idempotent, and a reused key owned by another action ID returns ACTION_IDENTITY_COLLISION. Startup verifies each journal action against its identity mapping, and SQLite triggers make the mapping immutable. The guards install only after alpha 8 schema validation; explicit alpha 7 migration installs them after the metadata transition.",
   "observations": {
     "stale_stage_name": {
       "setup": "Seeded .stage-4242-41 with orphan bytes, then requested a stage using serials 41 and 42.",
@@ -97,6 +97,23 @@
       "after_test_only_trigger_removal_and_mapping_tamper": "INTEGRITY_FAILURE on Store::open",
       "action_history": "unchanged"
     },
+    "legacy_schema_guard_boundary": {
+      "ordinary_alpha7_open": "SCHEMA_MISMATCH",
+      "guard_trigger_count_after_rejected_open": 0,
+      "successful_explicit_migration_guard_trigger_count": 2
+    },
+    "abrupt_exit_after_blob_publication": {
+      "termination": "process::exit before any database reference transaction",
+      "exit_code": 86,
+      "restart": "one orphan blob, no case revision"
+    },
+    "abrupt_exit_after_attempted_action": {
+      "termination": "process::exit immediately after committed ATTEMPTED action append without Rust destructors",
+      "exit_code": 87,
+      "restart_phase": "UNKNOWN",
+      "action_id_and_idempotency_key_preserved": true,
+      "recovery_read_did_not_invoke_an_effect_port": true
+    },
     "existing_recovery_regressions_in_engine_suite": [
       "orphan blob before database commit leaves no case revision",
       "missing or corrupt referenced blob blocks restart",
@@ -136,9 +153,23 @@
       "failed": 0
     },
     {
+      "command": "cargo test -p minidora-engine store::tests::explicit_alpha7_migration_preserves_legacy_case_blobs_and_is_idempotent -- --exact --nocapture",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine store::tests::action_idempotency_mapping_is_immutable_and_verified_on_open -- --exact --nocapture",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine store::tests::abrupt_process_exit_ -- --nocapture",
+      "exit_code": 0,
+      "passed": 2,
+      "failed": 0
+    },
+    {
       "command": "cargo test -p minidora-engine --lib --locked",
       "exit_code": 0,
-      "passed": 218,
+      "passed": 222,
       "failed": 0
     },
     {
@@ -152,7 +183,7 @@
   ],
   "scope_limits": [
     "The stale-name test is deterministic seeded-state coverage, not an observed OS process-ID reuse event.",
-    "No process was killed at every WAL, file-write, link, sync, database-commit, or receipt boundary.",
+    "Only two controlled process-exit points were exercised; exits during file write, hard-link, filesystem sync, WAL commit, or receipt persistence were not injected.",
     "Physical power loss, network or multi-host filesystems, Windows/macOS, larger than pairwise concurrent populations, and the full workspace runtime suite were not run.",
     "This scoped result does not close BB-RECOVER or QC2-01; the full required fault and concurrency populations remain UNVERIFIED."
   ],

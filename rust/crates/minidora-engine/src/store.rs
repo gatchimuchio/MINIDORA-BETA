@@ -50,6 +50,14 @@ fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn install_action_identity_guards(connection: &Connection) -> Result<()> {
+    sql(connection.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS action_identity_no_update BEFORE UPDATE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;
+         CREATE TRIGGER IF NOT EXISTS action_identity_no_delete BEFORE DELETE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;",
+    ))?;
+    Ok(())
+}
+
 fn next_temp_serial() -> Result<u64> {
     let mut current = TEMP_SERIAL.load(Ordering::Relaxed);
     loop {
@@ -206,6 +214,7 @@ impl Store {
             ));
         }
         if initialize {
+            install_action_identity_guards(&connection)?;
             sync_directory(path)?;
         }
         let store = Self { connection, blobs };
@@ -253,6 +262,12 @@ impl Store {
             return Err(failure(
                 "MIGRATION_DURABILITY_UNKNOWN",
                 format!("SQLite commit outcome could not be confirmed: {error}"),
+            ));
+        }
+        if let Err(error) = install_action_identity_guards(&store.connection) {
+            return Err(failure(
+                "MIGRATION_DURABILITY_UNKNOWN",
+                format!("schema migration committed, but action identity guards failed: {error}"),
             ));
         }
         if let Err(error) = sync_directory(path) {
@@ -1318,8 +1333,6 @@ CREATE TRIGGER IF NOT EXISTS action_history_no_delete BEFORE DELETE ON action_hi
 CREATE TRIGGER IF NOT EXISTS memory_revision_no_update BEFORE UPDATE ON memory_revision BEGIN SELECT RAISE(ABORT,'immutable memory revision'); END;
 CREATE TRIGGER IF NOT EXISTS memory_revision_no_delete BEFORE DELETE ON memory_revision BEGIN SELECT RAISE(ABORT,'immutable memory revision'); END;
 CREATE TRIGGER IF NOT EXISTS case_owner_no_update BEFORE UPDATE ON case_registry BEGIN SELECT RAISE(ABORT,'immutable case owner'); END;
-CREATE TRIGGER IF NOT EXISTS action_identity_no_update BEFORE UPDATE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;
-CREATE TRIGGER IF NOT EXISTS action_identity_no_delete BEFORE DELETE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;
 CREATE TRIGGER IF NOT EXISTS input_identity_no_rebind BEFORE UPDATE OF fingerprint,request_sha256 ON input_identity BEGIN SELECT RAISE(ABORT,'immutable input identity'); END;
 CREATE TRIGGER IF NOT EXISTS input_identity_no_delete BEFORE DELETE ON input_identity BEGIN SELECT RAISE(ABORT,'durable input tombstone'); END;
 CREATE TRIGGER IF NOT EXISTS artifact_no_update BEFORE UPDATE ON artifact_ref BEGIN SELECT RAISE(ABORT,'immutable artifact'); END;
@@ -1471,6 +1484,54 @@ mod tests {
             .collect();
         outcomes.sort();
         outcomes
+    }
+
+    fn run_abrupt_store_worker(
+        store_directory: &Path,
+        worker_test: &str,
+        record: Option<&[u8]>,
+        expected_exit: i32,
+    ) -> PathBuf {
+        let scenario = store_directory.join(format!("crash-{worker_test}"));
+        fs::create_dir(&scenario).unwrap();
+        let gate = scenario.join("release");
+        let ready = scenario.join("ready");
+        let result = scenario.join("result");
+        let record_path = scenario.join("record.json");
+        if let Some(record) = record {
+            fs::write(&record_path, record).unwrap();
+        }
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", worker_test, "--nocapture"])
+            .env("MINIDORA_STORE_CRASH_DIR", store_directory)
+            .env("MINIDORA_STORE_CRASH_GATE", &gate)
+            .env("MINIDORA_STORE_CRASH_READY", &ready)
+            .env("MINIDORA_STORE_CRASH_RESULT", &result);
+        if record.is_some() {
+            command.env("MINIDORA_STORE_CRASH_RECORD", &record_path);
+        }
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("abrupt worker exited before the barrier: {status}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "abrupt worker did not reach the barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(&gate, b"exit now").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(expected_exit),
+            "unexpected abrupt-worker status: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        result
     }
 
     fn action(store: &Store, request: &RequestEnvelope) -> ActionRecord {
@@ -1920,6 +1981,37 @@ mod tests {
         transaction.commit().unwrap();
         drop(store);
 
+        let database_path = directory.0.join("state.sqlite3");
+        let legacy = Connection::open(&database_path).unwrap();
+        legacy
+            .execute_batch(
+                "DROP TRIGGER action_identity_no_update;
+                 DROP TRIGGER action_identity_no_delete;",
+            )
+            .unwrap();
+        drop(legacy);
+        let error = match Store::open(&directory.0) {
+            Ok(_) => panic!("ordinary open must reject alpha 7 metadata"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. } if code == "SCHEMA_MISMATCH"
+        ));
+        let legacy = Connection::open(&database_path).unwrap();
+        let guard_count: i64 = legacy
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('action_identity_no_update','action_identity_no_delete')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            guard_count, 0,
+            "rejected open must not mutate alpha 7 guards"
+        );
+        drop(legacy);
+
         let state_blob = directory.0.join("blobs").join(&state_sha);
         let original_blob = fs::read(&state_blob).unwrap();
         fs::write(&state_blob, b"corrupt legacy blob").unwrap();
@@ -1941,6 +2033,16 @@ mod tests {
         fs::write(&state_blob, original_blob).unwrap();
 
         assert!(Store::migrate_alpha7_to_alpha8(&directory.0).unwrap());
+        let migrated_db = Connection::open(&database_path).unwrap();
+        let guard_count: i64 = migrated_db
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('action_identity_no_update','action_identity_no_delete')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(guard_count, 2, "explicit migration installs both guards");
+        drop(migrated_db);
         let migrated = Store::open(&directory.0).unwrap();
         let latest = migrated.load_case("alice", "case-a").unwrap().unwrap();
         assert_eq!(latest.schema_version, LEGACY_SCHEMA_VERSION);
@@ -1991,6 +2093,107 @@ mod tests {
         assert_eq!(store.orphan_blobs().unwrap(), vec![sha]);
         assert!(store.load_case("alice", "case-a").unwrap().is_none());
     }
+
+    #[test]
+    fn abrupt_process_exit_after_blob_publication_leaves_only_an_orphan() {
+        let directory = Directory::new();
+        Store::open(&directory.0).unwrap();
+        let result = run_abrupt_store_worker(
+            &directory.0,
+            "store::tests::abrupt_blob_publisher_worker",
+            None,
+            86,
+        );
+        let sha = fs::read_to_string(result).unwrap();
+
+        let store = Store::open(&directory.0).unwrap();
+        assert_eq!(store.orphan_blobs().unwrap(), vec![sha]);
+        assert!(store.load_case("alice", "case-a").unwrap().is_none());
+    }
+
+    #[test]
+    fn abrupt_process_exit_after_attempted_action_recovers_unknown() {
+        let directory = Directory::new();
+        let request = request();
+        let action_bytes = {
+            let store = Store::open(&directory.0).unwrap();
+            register(&store, &request);
+            serde_json::to_vec(&action(&store, &request)).unwrap()
+        };
+        run_abrupt_store_worker(
+            &directory.0,
+            "store::tests::abrupt_attempt_worker",
+            Some(&action_bytes),
+            87,
+        );
+
+        let store = Store::open(&directory.0).unwrap();
+        let recovered = store.actions("alice", "case-a").unwrap().remove(0);
+        assert_eq!(recovered.phase, EffectPhase::Unknown);
+        assert_eq!(recovered.action_id, "write-a");
+        assert_eq!(recovered.idempotency_key, "stable-token");
+        assert!(recovered.receipt.is_none());
+    }
+
+    #[test]
+    fn abrupt_blob_publisher_worker() {
+        let Ok(directory) = std::env::var("MINIDORA_STORE_CRASH_DIR") else {
+            return;
+        };
+        let store = Store::open(directory).unwrap();
+        fs::write(
+            std::env::var("MINIDORA_STORE_CRASH_READY").unwrap(),
+            b"ready",
+        )
+        .unwrap();
+        let gate = std::env::var("MINIDORA_STORE_CRASH_GATE").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !Path::new(&gate).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "parent did not release abrupt-blob barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let sha = store.publish_blob(&request()).unwrap().0;
+        fs::write(std::env::var("MINIDORA_STORE_CRASH_RESULT").unwrap(), sha).unwrap();
+        std::process::exit(86);
+    }
+
+    #[test]
+    fn abrupt_attempt_worker() {
+        let Ok(directory) = std::env::var("MINIDORA_STORE_CRASH_DIR") else {
+            return;
+        };
+        let record = fs::read(std::env::var("MINIDORA_STORE_CRASH_RECORD").unwrap()).unwrap();
+        let mut action: ActionRecord = serde_json::from_slice(&record).unwrap();
+        let store = Store::open(directory).unwrap();
+        fs::write(
+            std::env::var("MINIDORA_STORE_CRASH_READY").unwrap(),
+            b"ready",
+        )
+        .unwrap();
+        let gate = std::env::var("MINIDORA_STORE_CRASH_GATE").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !Path::new(&gate).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "parent did not release abrupt-attempt barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for phase in [
+            EffectPhase::Proposed,
+            EffectPhase::Authorized,
+            EffectPhase::Prepared,
+            EffectPhase::Attempted,
+        ] {
+            action.phase = phase;
+            store.save_action("alice", &action).unwrap();
+        }
+        std::process::exit(87);
+    }
+
     #[test]
     fn interrupted_attempt_is_unknown_and_cannot_be_reissued() {
         let directory = Directory::new();
