@@ -159,6 +159,188 @@ pub(crate) fn previous_csv_statistics_explanation(
     Ok(found)
 }
 
+/// Revalidate a prior JSON string-table grouped-statistics report against its
+/// exact source document and explain bounded group results with original cell
+/// ranges. The source and typed report are separate immutable artifacts.
+pub(crate) fn previous_json_table_group_statistics_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<(String, String, Vec<String>)>> {
+    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let Ok(report) =
+        serde_json::from_str::<crate::ports::JsonTableGroupStatisticsReport>(&previous.text)
+    else {
+        return Ok(None);
+    };
+    let source_ref = report.source_sha256.clone();
+    if !previous.dependencies.contains(&source_ref) {
+        // Earlier alpha 8 grouped-statistics results retained the report only.
+        // Preserve their old display behavior because no source artifact is
+        // available for an exact same-case recomputation.
+        if previous.dependencies.len() == 1 {
+            return Ok(None);
+        }
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the prior grouped-statistics result does not retain its source artifact",
+        ));
+    }
+    let source_bytes = store
+        .get_bytes_if_present(actor, case, &source_ref)?
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "the prior grouped-statistics source artifact is missing",
+            )
+        })?;
+    let source_document = std::str::from_utf8(&source_bytes).map_err(|_| {
+        failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the prior grouped-statistics source is not valid UTF-8",
+        )
+    })?;
+    let report_bytes = canonical(&report)?;
+    let report_ref = digest(&report_bytes);
+    let stored_report = store
+        .get_bytes_if_present(actor, case, &report_ref)?
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "the prior grouped-statistics report artifact is missing",
+            )
+        })?;
+    if source_ref == report_ref
+        || previous.dependencies.len() != 2
+        || !previous.dependencies.contains(&report_ref)
+        || digest(&source_bytes) != source_ref
+        || stored_report != report_bytes
+        || previous.text != serde_json::to_string_pretty(&report)?
+    {
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the prior grouped-statistics source or report identity no longer matches",
+        ));
+    }
+    let recomputed = crate::ports::json_table_group_statistics(
+        source_document,
+        &report.group_by,
+        &report.value_column,
+    )?;
+    if canonical(&recomputed)? != report_bytes {
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the saved JSON grouped-statistics report does not match exact recomputation",
+        ));
+    }
+
+    let check_source_span = |span: &crate::ports::JsonComparisonSpan| -> Result<()> {
+        let raw = source_document
+            .get(span.source_start..span.source_end)
+            .ok_or_else(|| {
+                failure(
+                    "JSON_TABLE_CONTEXT_INVALID",
+                    "a retained JSON source-cell range is invalid",
+                )
+            })?;
+        if digest(raw.as_bytes()) != span.source_sha256 {
+            return Err(failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "a retained JSON source-cell digest does not match its source bytes",
+            ));
+        }
+        Ok(())
+    };
+    check_source_span(&report.group_by_source)?;
+    check_source_span(&report.value_column_source)?;
+    for group in &report.groups {
+        for span in group
+            .group_source_spans
+            .iter()
+            .chain(&group.value_source_spans)
+        {
+            check_source_span(span)?;
+        }
+    }
+
+    let preview = |value: &str| {
+        let mut chars = value.chars();
+        let prefix: String = chars.by_ref().take(128).collect();
+        if chars.next().is_some() {
+            format!("{prefix}…")
+        } else {
+            prefix
+        }
+    };
+    let mut lines = vec![
+        "前回のJSON表グループ統計を元資料から再計算し、保存レポートと照合しました。".into(),
+        format!(
+            "グループ列: {}; 集計列: {}",
+            report.group_by, report.value_column
+        ),
+        format!("元資料 SHA-256: {}", report.source_sha256),
+        format!("集計artifact SHA-256: {report_ref}"),
+        format!(
+            "行数: {}; グループ数: {}",
+            report.row_count,
+            report.groups.len()
+        ),
+    ];
+    for (group_index, group) in report.groups.iter().take(8).enumerate() {
+        let statistics = &group.statistics;
+        lines.push(format!(
+            "グループ {:?}: n={}; 合計={}; 平均={}; 中央値={}; 最小={}; 最大={}; 母分散={}; 標本分散={}",
+            preview(&group.value),
+            statistics.count,
+            preview(&statistics.sum),
+            preview(&statistics.mean),
+            preview(&statistics.median),
+            preview(&statistics.min),
+            preview(&statistics.max),
+            preview(&statistics.population_variance),
+            statistics
+                .sample_variance
+                .as_deref()
+                .map_or_else(|| "未定義".into(), &preview),
+        ));
+        if let Some(unit) = &statistics.unit {
+            lines.push(format!("  単位: {}", preview(unit)));
+        }
+        for (row, span) in group
+            .source_row_indices
+            .iter()
+            .zip(&group.value_source_spans)
+            .take(8)
+        {
+            let raw = &source_document[span.source_start..span.source_end];
+            lines.push(format!(
+                "  元値 行{}・列{} byte[{}..{}): {}",
+                row + 1,
+                report.value_column_index + 1,
+                span.source_start,
+                span.source_end,
+                preview(raw)
+            ));
+        }
+        if group.source_row_indices.len() > 8 {
+            lines.push(format!(
+                "  残りの元値 {}件は保存artifactに保持されています。",
+                group.source_row_indices.len() - 8
+            ));
+        }
+        if group_index + 1 == 8 && report.groups.len() > 8 {
+            lines.push(format!(
+                "残りのグループ {}件は保存artifactに保持されています。",
+                report.groups.len() - 8
+            ));
+        }
+    }
+    Ok(Some((source_ref, report_ref, lines)))
+}
+
 fn admission(document: &str) -> Result<()> {
     if document.is_empty() || document.len() > MAX_DOCUMENT_BYTES {
         return Err(failure(

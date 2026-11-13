@@ -1,0 +1,237 @@
+{
+  "work_item": "BODY-1 BB-MATH-DATA JSON table grouped statistics to BB-CONTEXT source-cell explanation",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T00:53:44+00:00",
+  "base_commit": "8d2ac2cbf6c13762fedafd9d0ced7b07017f3868",
+  "requirement_ids": [
+    "A07",
+    "A14",
+    "B02",
+    "B03",
+    "B04",
+    "E03",
+    "E06",
+    "E08",
+    "E09",
+    "E12",
+    "F04"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v52-search-candidate-body",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/ports.rs": "afaae5b6446cc25f42b6a8bd240f4c761eeb1b58d846afef1f1bc882c6683c21",
+    "rust/crates/minidora-engine/src/document.rs": "955f69b673e8790995571dda6c138e114409cb030baddcdb3bc13c3702c4f3d2",
+    "rust/crates/minidora-engine/src/core.rs": "f1e8eb5dd8c150a80f2423be11e0d819e25c533f3d6f26ef38a76aeb2bd58472",
+    "rust/crates/minidora-engine/src/recovery.rs": "6c6a78b78701b2facaa8cd70bd221b0a8fd72b9ef26295ca6faa2e1e9d5a0242",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "aecc06e1aef1fe01033fd0bcdd1d75295180f05ae9254ea6f42cf40d96a7bdfd",
+    "rust/tools/json_table_group_statistics_context_route_test.py": "e9f5b8b5492a33fc6310f9d7a754dc544ab7695487a5927005b1ab8960ea5055"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "34cfd6a2877ebec37fb95a4c43ee34eceb0f4941fa9383c8f335d9860909f187",
+    "rust/audit/requirements.tsv": "312f64271c8f0211708a06e866ff44a2e7e8fdeabf97535acbc031832d04c2b5"
+  },
+  "execution_mode": "fresh CLI process per request; same actor/case; temporary SQLite and artifact state",
+  "producer_consumer": "ordinary JSON table request -> exact grouped statistics with original JSON token ranges -> separate immutable raw source and typed report artifacts -> same-case 詳しく説明して -> source/report hash and recomputation checks -> exact group values, source-cell ranges and authorized local-file recovery without resend",
+  "statistics_result": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "result_id": "360e6b464af8d76afa0e9c75af432cba996edbbb3e7c8b4e9215356ccbc0e270",
+    "source_ref": "21e9b59738625ede48c9559cb3d2664b8744aa477b33860f332ed50b6d267883",
+    "report_ref": "8a34011d689233d6e958fbc721d8b2c91ce38ec0d977ebce955a343f791ed4c5",
+    "report": {
+      "group_by": "地域",
+      "group_by_index": 1,
+      "group_by_source": {
+        "source_end": 29,
+        "source_sha256": "010ec43d4d5cf16ea513931b3ad57a86187741f4e76b24ca21d608d29341acc9",
+        "source_start": 21
+      },
+      "groups": [
+        {
+          "group_source_spans": [
+            {
+              "source_end": 51,
+              "source_sha256": "d3dd8f2ea9d92fbbe2df6a8ba56a0e8507617953821eb7b7882d67b759eb11c4",
+              "source_start": 46
+            },
+            {
+              "source_end": 79,
+              "source_sha256": "d3dd8f2ea9d92fbbe2df6a8ba56a0e8507617953821eb7b7882d67b759eb11c4",
+              "source_start": 74
+            }
+          ],
+          "source_row_indices": [
+            0,
+            2
+          ],
+          "statistics": {
+            "count": 2,
+            "input_units": null,
+            "input_values": [
+              "0.1",
+              "0.3"
+            ],
+            "max": "3/10",
+            "mean": "1/5",
+            "median": "1/5",
+            "min": "1/10",
+            "normalized_values": [
+              "1/10",
+              "3/10"
+            ],
+            "population_variance": "1/100",
+            "sample_variance": "1/50",
+            "scope": "descriptive exact statistics of the supplied values; no inference about population representativeness or causal effects",
+            "sorted_values": [
+              "1/10",
+              "3/10"
+            ],
+            "sum": "2/5",
+            "unit": null,
+            "variance_unit": null
+          },
+          "value": "北",
+          "value_source_spans": [
+            {
+              "source_end": 45,
+              "source_sha256": "5a4747fcdafec66d8d8812022e3b7d2666d886ec0e0ee7926ec8c50db40f29d5",
+              "source_start": 40
+            },
+            {
+              "source_end": 73,
+              "source_sha256": "59d720a1ab8d6974a057e11e4b77890669f8d6177371630c78eab78f0065f9cf",
+              "source_start": 68
+            }
+          ]
+        },
+        {
+          "group_source_spans": [
+            {
+              "source_end": 65,
+              "source_sha256": "90b60af0991066c573e926d6d58e8df23125c21e86a11609f44711e0b7a6a33d",
+              "source_start": 60
+            },
+            {
+              "source_end": 93,
+              "source_sha256": "90b60af0991066c573e926d6d58e8df23125c21e86a11609f44711e0b7a6a33d",
+              "source_start": 88
+            }
+          ],
+          "source_row_indices": [
+            1,
+            3
+          ],
+          "statistics": {
+            "count": 2,
+            "input_units": null,
+            "input_values": [
+              "1.0",
+              "2.0"
+            ],
+            "max": "2",
+            "mean": "3/2",
+            "median": "3/2",
+            "min": "1",
+            "normalized_values": [
+              "1",
+              "2"
+            ],
+            "population_variance": "1/4",
+            "sample_variance": "1/2",
+            "scope": "descriptive exact statistics of the supplied values; no inference about population representativeness or causal effects",
+            "sorted_values": [
+              "1",
+              "2"
+            ],
+            "sum": "3",
+            "unit": null,
+            "variance_unit": null
+          },
+          "value": "南",
+          "value_source_spans": [
+            {
+              "source_end": 59,
+              "source_sha256": "a51162aeeb057ca4e3df627977231de20b581f0d0d418ca3a111bc0e408ac6cc",
+              "source_start": 54
+            },
+            {
+              "source_end": 87,
+              "source_sha256": "86169bcf42397928e1828b0a8e09ab69037ac05474b33486513c2fea65908565",
+              "source_start": 82
+            }
+          ]
+        }
+      ],
+      "guarantee": "bounded exact descriptive statistics grouped by exact decoded JSON string values; groups retain first-seen order and original key/value source ranges; no numeric inference for unselected columns, normalization or population inference",
+      "row_count": 4,
+      "source_sha256": "21e9b59738625ede48c9559cb3d2664b8744aa477b33860f332ed50b6d267883",
+      "value_column": "売上",
+      "value_column_index": 0,
+      "value_column_source": {
+        "source_end": 20,
+        "source_sha256": "1d589330c0c25917564e4820ef894a347e15716441e025df71741b33e372e8bb",
+        "source_start": 12
+      }
+    }
+  },
+  "recovery_verifier_correction": {
+    "initial_attempt": "FAIL: UNSUPPORTED_RECOVERY_GRAPH because the verifier did not yet recognize the source-evidence -> computed-report edge",
+    "correction": "recovery now reconstructs the exact source and report nodes and verifies the report consumed the retained source",
+    "final_retry": "PASS; no resend, receipt identity and file inode/mtime/size unchanged"
+  },
+  "explanation_consumer": {
+    "lifecycle": "COMMIT",
+    "guarantee": "COMPUTED",
+    "dependencies": [
+      "360e6b464af8d76afa0e9c75af432cba996edbbb3e7c8b4e9215356ccbc0e270",
+      "21e9b59738625ede48c9559cb3d2664b8744aa477b33860f332ed50b6d267883",
+      "8a34011d689233d6e958fbc721d8b2c91ce38ec0d977ebce955a343f791ed4c5"
+    ],
+    "text": "前回のJSON表グループ統計を元資料から再計算し、保存レポートと照合しました。\nグループ列: 地域; 集計列: 売上\n元資料 SHA-256: 21e9b59738625ede48c9559cb3d2664b8744aa477b33860f332ed50b6d267883\n集計artifact SHA-256: 8a34011d689233d6e958fbc721d8b2c91ce38ec0d977ebce955a343f791ed4c5\n行数: 4; グループ数: 2\nグループ \"北\": n=2; 合計=2/5; 平均=1/5; 中央値=1/5; 最小=1/10; 最大=3/10; 母分散=1/100; 標本分散=1/50\n  元値 行1・列1 byte[40..45): \"0.1\"\n  元値 行3・列1 byte[68..73): \"0.3\"\nグループ \"南\": n=2; 合計=3; 平均=3/2; 中央値=3/2; 最小=1; 最大=2; 母分散=1/4; 標本分散=1/2\n  元値 行2・列1 byte[54..59): \"1.0\"\n  元値 行4・列1 byte[82..87): \"2.0\"",
+    "execution_graph_ref": "877a3d2b4043f72ee3047d890f791d37554c608c5791c94ebe38be701b902cac",
+    "source_consumption": {
+      "previous-json-group-statistics-source": "21e9b59738625ede48c9559cb3d2664b8744aa477b33860f332ed50b6d267883"
+    },
+    "file_sha256": "c24735d2349a037e4eb73a08664ef37319c8608b9bbfef8005346cf52111e4a3"
+  },
+  "file_recovery": {
+    "lifecycle": "COMMIT",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true,
+    "write_resent": false
+  },
+  "outcome": "PASS",
+  "focused_validation": {
+    "normal_route_json_group_statistics": "3 passed; 0 failed",
+    "csv_statistics_context_regression": "1 passed; 0 failed",
+    "b03_statistics_context_regression": "1 passed; 0 failed",
+    "b06_calculation_sequence_regressions": "5 passed; 0 failed",
+    "format_all_check": "PASS",
+    "minidora_cli_all_targets_check_locked": "PASS",
+    "minidora_cli_build_locked": "PASS"
+  },
+  "commands": [
+    "cargo fmt --all; cargo fmt --all -- --check",
+    "cargo check -p minidora-cli --all-targets --locked",
+    "cargo build -p minidora-cli --locked",
+    "cargo test -p minidora-cli --test normal_route json_table_group_statistics --locked",
+    "python3 tools/json_table_group_statistics_context_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-math-data-json-group-statistics-context-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite and Clippy during BODY-1",
+    "other JSON/CSV report types, general explanation, and complete BB-MATH-DATA/BB-CONTEXT/B03/B04 acceptance"
+  ],
+  "acceptance_boundary": "One strict JSON string-table grouped-statistics producer now feeds an exact same-case explanation with source-cell provenance and local-file no-resend recovery. B02, B03, B04, A07, A14 and F04 remain UNVERIFIED outside this bounded route. Earlier reports without a retained source artifact continue to use their previous result surface because exact recomputation is unavailable."
+}

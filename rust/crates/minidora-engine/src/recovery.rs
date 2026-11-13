@@ -499,6 +499,24 @@ fn inspect(
     } else {
         None
     };
+    let previous_json_table_group_statistics_explanation =
+        if matches!(goal.intent, Intent::ExplainPrevious) {
+            match bundle
+                .meaning
+                .context_result_ref
+                .as_ref()
+                .and_then(|id| state.prior_results.get(id))
+            {
+                Some(previous) => {
+                    crate::document::previous_json_table_group_statistics_explanation(
+                        store, actor, case, previous,
+                    )?
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
     let previous_math_report_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         bundle
             .meaning
@@ -632,6 +650,34 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_CSV_CONTEXT_CHANGED",
                 "the exact statistics report or source-cell explanation changed",
+            ));
+        }
+    }
+    if let Some((source_ref, report_ref, expected_units)) =
+        &previous_json_table_group_statistics_explanation
+    {
+        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+            failure(
+                "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
+                "the prior JSON grouped-statistics result reference is missing",
+            )
+        })?;
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
+                "the prior JSON grouped-statistics result is no longer retained",
+            )
+        })?;
+        let expected_dependencies =
+            vec![previous.id.clone(), source_ref.clone(), report_ref.clone()];
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != expected_dependencies
+            || plan.required_units != *expected_units
+            || result.guarantee != previous.guarantee
+        {
+            return Err(failure(
+                "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
+                "the exact JSON source, grouped-statistics report or explanation changed",
             ));
         }
     }
@@ -815,6 +861,21 @@ fn inspect(
             requires: Vec::new(),
         });
     }
+    if previous_json_table_group_statistics_explanation.is_some() {
+        let source_id = "previous-json-group-statistics-source".to_string();
+        let report_id = "previous-json-group-statistics-report".to_string();
+        expected_nodes.push(GoalNode {
+            id: source_id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        expected_nodes.push(GoalNode {
+            id: report_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![source_id],
+        });
+        sources.push(report_id);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -865,6 +926,17 @@ fn inspect(
         let id = "previous-csv-statistics".to_string();
         graph.observe(&id, report_ref, &BTreeMap::new())?;
         source_refs.insert(id, report_ref.clone());
+    }
+    if let Some((source_ref, report_ref, _)) = &previous_json_table_group_statistics_explanation {
+        let source_id = "previous-json-group-statistics-source".to_string();
+        let report_id = "previous-json-group-statistics-report".to_string();
+        graph.observe(&source_id, source_ref, &BTreeMap::new())?;
+        graph.observe(
+            &report_id,
+            report_ref,
+            &BTreeMap::from([(source_id, source_ref.clone())]),
+        )?;
+        source_refs.insert(report_id, report_ref.clone());
     }
     let compute = (
         &result.calculation,

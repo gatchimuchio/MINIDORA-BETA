@@ -289,6 +289,22 @@ impl Engine {
             } else {
                 None
             };
+        let previous_json_table_group_statistics_explanation =
+            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => {
+                        crate::document::previous_json_table_group_statistics_explanation(
+                            &self.store,
+                            actor,
+                            &request.case_id,
+                            prior,
+                        )?
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
         let previous_math_report_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -335,6 +351,21 @@ impl Engine {
                 requires: Vec::new(),
             });
             compute_requires.push(id);
+        }
+        if previous_json_table_group_statistics_explanation.is_some() {
+            let source_id = "previous-json-group-statistics-source".to_string();
+            let report_id = "previous-json-group-statistics-report".to_string();
+            nodes.push(GoalNode {
+                id: source_id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            nodes.push(GoalNode {
+                id: report_id.clone(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: vec![source_id],
+            });
+            compute_requires.push(report_id);
         }
         if let Intent::CalculateSequence { steps } = &bundle.meaning.intent {
             for step in steps {
@@ -1329,6 +1360,29 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.push(report_ref.clone());
                     result.guarantee = prior.guarantee.clone();
+                } else if let Some((source_ref, report_ref, explanation)) =
+                    &previous_json_table_group_statistics_explanation
+                {
+                    graph.observe(
+                        "previous-json-group-statistics-source",
+                        source_ref,
+                        &BTreeMap::new(),
+                    )?;
+                    graph.observe(
+                        "previous-json-group-statistics-report",
+                        report_ref,
+                        &BTreeMap::from([(
+                            "previous-json-group-statistics-source".into(),
+                            source_ref.clone(),
+                        )]),
+                    )?;
+                    units.extend(explanation.clone());
+                    result.dependencies.extend([
+                        prior.id.clone(),
+                        source_ref.clone(),
+                        report_ref.clone(),
+                    ]);
+                    result.guarantee = prior.guarantee.clone();
                 } else if let Some(explanation) = &previous_math_report_explanation {
                     units.extend(explanation.clone());
                     result.dependencies.push(prior.id.clone());
@@ -2069,8 +2123,24 @@ impl Engine {
                         "JSON table grouped statistics report exceeds the request output budget",
                     );
                 }
-                let artifact = self.store.put_artifact(actor, &request.case_id, &report)?;
-                result.dependencies.push(artifact);
+                let report_bytes = canonical(&report)?;
+                if document.len().saturating_add(report_bytes.len())
+                    > request.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "JSON table grouped statistics source and report exceed the evidence budget",
+                    );
+                }
+                let source_ref =
+                    self.store
+                        .put_bytes(actor, &request.case_id, document.as_bytes())?;
+                let report_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &report_bytes)?;
+                result.dependencies.extend([source_ref, report_ref]);
                 units.push(text);
                 result.guarantee = Guarantee::Computed;
             }

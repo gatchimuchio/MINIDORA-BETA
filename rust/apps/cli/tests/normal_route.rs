@@ -2505,7 +2505,7 @@ fn json_table_group_statistics_preserve_exact_values_and_original_lexemes() {
         let result = record(&execute(&scratch.0, actor, &[&request]));
         assert_eq!(result["lifecycle"], "COMMIT");
         assert_eq!(result["guarantee"], "COMPUTED");
-        assert_eq!(result["dependencies"].as_array().unwrap().len(), 1);
+        assert_eq!(result["dependencies"].as_array().unwrap().len(), 2);
         assert_eq!(result["content_plan"]["text"], result["text"]);
         assert_eq!(result["render"]["status"], "RENDERED");
         assert_eq!(
@@ -2522,6 +2522,24 @@ fn json_table_group_statistics_preserve_exact_values_and_original_lexemes() {
         assert_eq!(report["value_column"], "売上");
         assert_eq!(report["value_column_index"], 1);
         assert_eq!(report["row_count"], 4);
+        let dependencies = result["dependencies"].as_array().unwrap();
+        assert_eq!(
+            dependencies[0],
+            minidora_domain::digest(document.as_bytes())
+        );
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        assert_eq!(
+            store
+                .get_bytes(actor, "normal-route", dependencies[0].as_str().unwrap())
+                .unwrap(),
+            document.as_bytes()
+        );
+        assert_eq!(
+            store
+                .get_bytes(actor, "normal-route", dependencies[1].as_str().unwrap())
+                .unwrap(),
+            minidora_domain::canonical(&report).unwrap()
+        );
         let check_span = |span: &Value, expected: &str| {
             let start = span["source_start"].as_u64().unwrap() as usize;
             let end = span["source_end"].as_u64().unwrap() as usize;
@@ -2611,6 +2629,72 @@ fn json_table_group_statistics_preserve_exact_values_and_original_lexemes() {
         );
         assert_eq!(revision["result"], result);
     }
+}
+
+#[test]
+fn json_table_group_statistics_feed_a_recomputed_same_case_explanation() {
+    let scratch = Scratch::new();
+    let document = r#"{"columns":["売上","地域"],"rows":[["0.1","北"],["1.0","南"],["0.3","北"],["2.0","南"]]}"#;
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "json-group-statistics",
+            &format!("JSON表の「地域」ごとに「売上」の統計量を計算して:\n{document}"),
+        ],
+    ));
+    assert_eq!(original["lifecycle"], "COMMIT");
+    let source_ref = minidora_domain::digest(document.as_bytes());
+    let report_ref = original["dependencies"][1].as_str().unwrap();
+    assert_eq!(
+        original["dependencies"],
+        serde_json::json!([source_ref, report_ref])
+    );
+
+    let explained = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "json-group-statistics-explanation",
+            "詳しく説明して",
+        ],
+    ));
+    assert_eq!(explained["lifecycle"], "COMMIT");
+    assert_eq!(explained["guarantee"], "COMPUTED");
+    assert_eq!(
+        explained["dependencies"],
+        serde_json::json!([original["id"], source_ref, report_ref])
+    );
+    let text = explained["text"].as_str().unwrap();
+    for expected in [
+        "再計算し、保存レポートと照合しました",
+        "元資料 SHA-256:",
+        "グループ列: 地域; 集計列: 売上",
+        "グループ \"北\": n=2; 合計=2/5; 平均=1/5",
+        "元値 行1・列1",
+        "元値 行3・列1",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?}: {text}");
+    }
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let graph: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                "owner",
+                "normal-route",
+                explained["execution_graph_ref"].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        graph[5]["previous-json-group-statistics-report"]["previous-json-group-statistics-source"],
+        source_ref
+    );
+    assert_ne!(explained["text"], original["text"]);
 }
 
 #[test]
