@@ -2125,6 +2125,29 @@ impl Engine {
                         "説明対象となる実際の採用済み成果がありません。",
                     );
                 };
+                let prior_relation = if prior.calculation.is_none() {
+                    match self.store.get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &prior.input_id,
+                        prior.input_version,
+                    )? {
+                        Some((_, prior_bundle)) => {
+                            if identity(&prior_bundle.request)? != prior.id {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Fail,
+                                    "PRIOR_INPUT_RESULT_MISMATCH",
+                                    "保存された前回入力と採用済み結果の識別子が一致しません。",
+                                );
+                            }
+                            relation_question_proposition(&prior_bundle.meaning.intent).cloned()
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
                 if let Some(ref calculation) = prior.calculation {
                     units.push(format!("計算式: {}", calculation.expression));
                     units.extend(calculation.steps.clone());
@@ -2134,6 +2157,39 @@ impl Engine {
                     result.calculation = Some(calculation.clone());
                     result.dependencies.push(prior.id.clone());
                     result.guarantee = prior.guarantee.clone();
+                } else if let Some(proposition) = prior_relation {
+                    let memory = self.store.load_memory(actor)?;
+                    let answer =
+                        relations::query(&memory, &proposition, request.budget.max_actions)?;
+                    let proof_dependencies = relations::answer_dependencies(&answer);
+                    let answer_guarantee = relations::answer_guarantee(&answer);
+                    let Some(explained) = relation_explanation_target(&proposition, &answer) else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTEXT_PROOF_CHANGED",
+                            "前回入力の型付き関係を、現在有効な根拠で再確認できません。",
+                        );
+                    };
+                    if proof_dependencies != prior.dependencies
+                        || answer_guarantee != prior.guarantee
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTEXT_PROOF_CHANGED",
+                            "前回の関係回答を支えた現在有効な根拠が変わっています。新しい問いで確認してください。",
+                        );
+                    }
+                    units.extend(relation_explanation_lines(
+                        &memory,
+                        &explained,
+                        &answer,
+                        "前回の結論",
+                    ));
+                    result.dependencies.push(prior.id.clone());
+                    result.dependencies.extend(proof_dependencies);
+                    result.guarantee = answer_guarantee;
                 } else if let Some(proposition) = previous_relation_answer(&prior.text)? {
                     let memory = self.store.load_memory(actor)?;
                     let answer =
@@ -5476,6 +5532,28 @@ pub(crate) fn previous_relation_answer(text: &str) -> Result<Option<Proposition>
     Ok(Some(proposition))
 }
 
+pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposition> {
+    match intent {
+        Intent::Ask { proposition } | Intent::AskWhy { proposition } => Some(proposition),
+        _ => None,
+    }
+}
+
+pub(crate) fn relation_explanation_target(
+    proposition: &Proposition,
+    answer: &relations::QueryOutcome,
+) -> Option<Proposition> {
+    match answer.status.as_str() {
+        "SUPPORTED" => Some(proposition.clone()),
+        "CONTRADICTED" => {
+            let mut opposite = proposition.clone();
+            opposite.negative = !opposite.negative;
+            Some(opposite)
+        }
+        _ => None,
+    }
+}
+
 fn relation_answer_surface(proposition: &Proposition, contradicted: bool) -> String {
     if contradicted {
         let mut opposite = proposition.clone();
@@ -5787,7 +5865,7 @@ pub(crate) fn relation_profile_units(
     units
 }
 
-fn relation_explanation_lines(
+pub(crate) fn relation_explanation_lines(
     memory: &MemoryState,
     proposition: &Proposition,
     answer: &relations::QueryOutcome,

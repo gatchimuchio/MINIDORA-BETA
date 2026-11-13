@@ -238,6 +238,85 @@ fn recompute_source_question_artifact(
     }
 }
 
+fn verify_previous_relation_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Some(previous_id) = state
+        .bundle
+        .as_ref()
+        .and_then(|bundle| bundle.meaning.context_result_ref.as_ref())
+    else {
+        return Ok(());
+    };
+    let Some(previous) = state.prior_results.get(previous_id) else {
+        return Ok(());
+    };
+    if previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the prior result is not committed",
+        ));
+    }
+    if previous.calculation.is_some() {
+        return Ok(());
+    }
+    let prior_bundle =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?;
+    let typed_proposition = if let Some((_, prior_bundle)) = prior_bundle {
+        if identity(&prior_bundle.request)? != previous.id {
+            return Err(failure(
+                "RECOVERY_CONTEXT_IDENTITY_MISMATCH",
+                "the retained prior meaning and result identity differ",
+            ));
+        }
+        crate::core::relation_question_proposition(&prior_bundle.meaning.intent).cloned()
+    } else {
+        None
+    };
+    let memory = store.load_memory(actor)?;
+    let answer = if let Some(proposition) = typed_proposition {
+        let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
+        if crate::core::relation_explanation_target(&proposition, &answer).is_none() {
+            return Err(failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the sealed prior relation no longer has a supported or refuted result",
+            ));
+        }
+        answer
+    } else if let Some(proposition) = crate::core::previous_relation_answer(&previous.text)? {
+        let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
+        if answer.status != "SUPPORTED" {
+            return Err(failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the legacy prior relation answer is no longer supported",
+            ));
+        }
+        answer
+    } else {
+        return Ok(());
+    };
+    let answer_dependencies = crate::relations::answer_dependencies(&answer);
+    let mut expected_dependencies = vec![previous.id.clone()];
+    expected_dependencies.extend(answer_dependencies.iter().cloned());
+    let guarantee = crate::relations::answer_guarantee(&answer);
+    if answer_dependencies != previous.dependencies
+        || expected_dependencies != result.dependencies
+        || guarantee != previous.guarantee
+        || guarantee != result.guarantee
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the relation proof behind the previous-answer explanation changed",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
@@ -1155,26 +1234,10 @@ fn inspect(
             | "declarative-ja-en-v62-constrained-source-summary"
             | "declarative-ja-en-v63-previous-output-edit"
             | "declarative-ja-en-v70-generic-transitive-verbs"
+            | "declarative-ja-en-v71-saved-relation-comparison"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
-        && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
-        && let Some(previous) = state.prior_results.get(previous_id)
-        && let Some(proposition) = crate::core::previous_relation_answer(&previous.text)?
     {
-        let memory = store.load_memory(actor)?;
-        let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
-        let mut dependencies = vec![previous.id.clone()];
-        dependencies.extend(crate::relations::answer_dependencies(&answer));
-        if previous.lifecycle != Lifecycle::Commit
-            || answer.status != "SUPPORTED"
-            || dependencies != result.dependencies
-            || previous.guarantee != crate::relations::answer_guarantee(&answer)
-            || result.guarantee != crate::relations::answer_guarantee(&answer)
-        {
-            return Err(failure(
-                "RECOVERY_CONTEXT_PROOF_CHANGED",
-                "the relation proof behind the previous-answer explanation changed",
-            ));
-        }
+        verify_previous_relation_context(store, actor, case, state, result, &goal)?;
     }
     if matches!(
         bundle.meaning.parser_version.as_str(),
