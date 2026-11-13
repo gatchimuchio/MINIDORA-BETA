@@ -229,15 +229,15 @@ pub fn add_rule_with_premises(
             continue;
         }
         for (left, right) in [(&other, &rule), (&rule, &other)] {
-            if let Some(composed) = compose(left, right)?
-                && !memory.rules.iter().any(|old| {
+            for composed in compose(left, right)? {
+                if !memory.rules.iter().any(|old| {
                     old.premise == composed.premise
                         && old.additional_premises == composed.additional_premises
                         && old.conclusion == composed.conclusion
                         && old.valid
-                })
-            {
-                additions.insert(composed.id.clone(), composed);
+                }) {
+                    additions.insert(composed.id.clone(), composed);
+                }
             }
         }
     }
@@ -298,65 +298,120 @@ fn substitute(proposition: &Proposition, bindings: &BTreeMap<String, String>) ->
         ..proposition.clone()
     }
 }
-fn canonical_variables(premise: &mut Proposition, conclusion: &mut Proposition) {
+fn canonical_rule_variables(premises: &mut [Proposition], conclusion: &mut Proposition) {
     let mut names = BTreeMap::new();
-    for term in [
-        &mut premise.subject,
-        &mut premise.object,
-        &mut conclusion.subject,
-        &mut conclusion.object,
-    ] {
+    let terms = premises
+        .iter_mut()
+        .flat_map(|premise| [&mut premise.subject, &mut premise.object])
+        .chain([&mut conclusion.subject, &mut conclusion.object]);
+    for term in terms {
         if variable(term) {
             let next = format!("$v{}", names.len());
             *term = names.entry(term.clone()).or_insert(next).clone();
         }
     }
 }
-fn compose(left: &RelationRule, right: &RelationRule) -> Result<Option<RelationRule>> {
-    // A shortcut must retain every antecedent. Leave multi-premise rules for
-    // the ordinary query closure until composition can preserve full joins.
-    if !left.additional_premises.is_empty() || !right.additional_premises.is_empty() {
-        return Ok(None);
+fn compose(left: &RelationRule, right: &RelationRule) -> Result<Vec<RelationRule>> {
+    let left_multi = !left.additional_premises.is_empty();
+    let right_multi = !right.additional_premises.is_empty();
+    // Two two-premise rules can require three antecedents after composition.
+    // Keep that path in ordinary query closure until a bounded three-premise
+    // record exists; never flatten either rule to its first premise.
+    if left_multi && right_multi {
+        return Ok(Vec::new());
     }
-    let left_premise = renamed(&left.premise, "left");
     let left_conclusion = renamed(&left.conclusion, "left");
-    let right_premise = renamed(&right.premise, "right");
     let right_conclusion = renamed(&right.conclusion, "right");
-    if !same_shape(&left_conclusion, &right_premise) {
-        return Ok(None);
-    }
-    let mut bindings = BTreeMap::new();
-    if !unify_term(
-        &left_conclusion.subject,
-        &right_premise.subject,
-        &mut bindings,
-    ) || !unify_term(
-        &left_conclusion.object,
-        &right_premise.object,
-        &mut bindings,
-    ) {
-        return Ok(None);
-    }
-    let mut premise = substitute(&left_premise, &bindings);
-    let mut conclusion = substitute(&right_conclusion, &bindings);
-    canonical_variables(&mut premise, &mut conclusion);
-    if premise == conclusion || !variables(&conclusion).is_subset(&variables(&premise)) {
-        return Ok(None);
-    }
+    let left_premises: Vec<_> = std::iter::once(&left.premise)
+        .chain(left.additional_premises.iter())
+        .map(|premise| renamed(premise, "left"))
+        .collect();
+    let right_premises: Vec<_> = std::iter::once(&right.premise)
+        .chain(right.additional_premises.iter())
+        .map(|premise| renamed(premise, "right"))
+        .collect();
     let dependencies = vec![left.id.clone(), right.id.clone()];
-    let id = format!(
-        "rule:{}",
-        identity(&("proof-composition-v1", &premise, &conclusion, &dependencies))?
-    );
-    Ok(Some(RelationRule {
-        id,
-        premise,
-        additional_premises: Vec::new(),
-        conclusion,
-        source_input: "derived:proof-composition-v1".into(),
-        dependencies,
-        valid: true,
-    }))
+    let mut composed_rules = BTreeMap::new();
+    for (matched_index, right_premise) in right_premises.iter().enumerate() {
+        if !same_shape(&left_conclusion, right_premise) {
+            continue;
+        }
+        let mut bindings = BTreeMap::new();
+        if !unify_term(
+            &left_conclusion.subject,
+            &right_premise.subject,
+            &mut bindings,
+        ) || !unify_term(
+            &left_conclusion.object,
+            &right_premise.object,
+            &mut bindings,
+        ) {
+            continue;
+        }
+        let mut premises: Vec<_> = left_premises
+            .iter()
+            .map(|premise| substitute(premise, &bindings))
+            .collect();
+        premises.extend(
+            right_premises
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != matched_index)
+                .map(|(_, premise)| substitute(premise, &bindings)),
+        );
+        if !(1..=2).contains(&premises.len())
+            || premises
+                .iter()
+                .enumerate()
+                .any(|(index, premise)| premises[index + 1..].contains(premise))
+        {
+            continue;
+        }
+        let mut conclusion = substitute(&right_conclusion, &bindings);
+        canonical_rule_variables(&mut premises, &mut conclusion);
+        let bound_variables: BTreeSet<_> = premises.iter().flat_map(variables).collect();
+        if (premises.len() == 1 && premises[0] == conclusion)
+            || !variables(&conclusion).is_subset(&bound_variables)
+            || (premises.len() == 2
+                && variables(&premises[0]).is_disjoint(&variables(&premises[1])))
+        {
+            continue;
+        }
+        let id = if premises.len() == 1 {
+            format!(
+                "rule:{}",
+                identity(&(
+                    "proof-composition-v1",
+                    &premises[0],
+                    &conclusion,
+                    &dependencies
+                ))?
+            )
+        } else {
+            format!(
+                "rule:{}",
+                identity(&(
+                    "proof-composition-conjunctive-v1",
+                    &premises,
+                    &conclusion,
+                    &dependencies
+                ))?
+            )
+        };
+        composed_rules.insert(
+            id.clone(),
+            RelationRule {
+                id,
+                premise: premises[0].clone(),
+                additional_premises: premises[1..].to_vec(),
+                conclusion,
+                source_input: "derived:proof-composition-v1".into(),
+                dependencies: dependencies.clone(),
+                valid: true,
+            },
+        );
+    }
+    Ok(composed_rules.into_values().collect())
 }
 
 fn permitted_rule<'a>(
@@ -891,6 +946,41 @@ mod conjunctive_rule_tests {
     }
 
     #[test]
+    fn single_premise_composition_identity_stays_compatible() {
+        let mut memory = MemoryState::default();
+        let first_premise = p("$x", "bird");
+        let first_conclusion = p("$x", "animal");
+        let first = add_rule(
+            &mut memory,
+            first_premise,
+            first_conclusion,
+            "first-rule-input",
+        )
+        .unwrap();
+        let second = add_rule(
+            &mut memory,
+            p("$y", "animal"),
+            p("$y", "organism"),
+            "second-rule-input",
+        )
+        .unwrap();
+        let composed_premise = p("$v0", "bird");
+        let composed_conclusion = p("$v0", "organism");
+        let dependencies = vec![first.id.clone(), second.id.clone()];
+        let expected = format!(
+            "rule:{}",
+            identity(&(
+                "proof-composition-v1",
+                &composed_premise,
+                &composed_conclusion,
+                &dependencies
+            ))
+            .unwrap()
+        );
+        assert!(memory.rules.iter().any(|rule| rule.id == expected));
+    }
+
+    #[test]
     fn shared_variable_join_binds_a_new_conclusion_subject() {
         let mut memory = MemoryState::default();
         let rule = add_rule_with_premises(
@@ -927,11 +1017,21 @@ mod conjunctive_rule_tests {
             "single-rule-input",
         )
         .unwrap();
-        assert_eq!(
-            memory.rules.len(),
-            2,
-            "multi-premise rules must not be flattened into a shortcut"
-        );
+        assert_eq!(memory.rules.len(), 3);
+        let composed = memory
+            .rules
+            .iter()
+            .find(|candidate| {
+                candidate.dependencies.len() == 2
+                    && candidate.additional_premises.len() == 1
+                    && candidate.conclusion == p("$v0", "animal")
+            })
+            .cloned()
+            .expect("the composed shortcut must retain both antecedents");
+        assert_eq!(composed.premise, p("$v0", "bird"));
+        assert_eq!(composed.additional_premises[0], p("$v0", "feathered"));
+        assert!(composed.dependencies.contains(&conjunction.id));
+        assert!(composed.dependencies.contains(&follow_up.id));
 
         let bird = assert_fact(&mut memory, p("osprey", "bird"), "new-bird-input").unwrap();
         assert_eq!(
@@ -944,8 +1044,8 @@ mod conjunctive_rule_tests {
         let answer = query(&memory, &p("osprey", "animal"), 32).unwrap();
         assert_eq!(answer.status, "SUPPORTED");
         assert_eq!(
-            answer.steps, 2,
-            "each joined rule and follow-up is charged once"
+            answer.steps, 3,
+            "each matching relation rule path is charged once"
         );
         assert_eq!(answer_guarantee(&answer), Guarantee::Derived);
         let dependencies = answer_dependencies(&answer);
@@ -953,6 +1053,7 @@ mod conjunctive_rule_tests {
         assert!(dependencies.contains(&feathers.id));
         assert!(dependencies.contains(&conjunction.id));
         assert!(dependencies.contains(&follow_up.id));
+        assert!(dependencies.contains(&composed.id));
 
         invalidate(&mut memory, &feathers.id).unwrap();
         assert_eq!(
@@ -960,6 +1061,48 @@ mod conjunctive_rule_tests {
             "UNKNOWN",
             "invalidating either antecedent must remove the joined proof"
         );
+    }
+
+    #[test]
+    fn a_single_rule_before_a_two_premise_rule_keeps_the_other_antecedent() {
+        let mut memory = MemoryState::default();
+        let first = add_rule(
+            &mut memory,
+            p("$x", "bird"),
+            p("$x", "feathered"),
+            "single-rule-input",
+        )
+        .unwrap();
+        let second = add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "feathered"), p("$x", "mammal")],
+            p("$x", "animal"),
+            "conjunctive-rule-input",
+        )
+        .unwrap();
+        let composed = memory
+            .rules
+            .iter()
+            .find(|candidate| {
+                candidate.dependencies.len() == 2 && candidate.conclusion == p("$v0", "animal")
+            })
+            .cloned()
+            .expect("single-to-conjunctive composition should retain its unmatched premise");
+        assert_eq!(composed.premise, p("$v0", "bird"));
+        assert_eq!(composed.additional_premises, vec![p("$v0", "mammal")]);
+        assert!(composed.dependencies.contains(&first.id));
+        assert!(composed.dependencies.contains(&second.id));
+
+        let bird = assert_fact(&mut memory, p("osprey", "bird"), "bird-input").unwrap();
+        let mammal = assert_fact(&mut memory, p("osprey", "mammal"), "mammal-input").unwrap();
+        let answer = query(&memory, &p("osprey", "animal"), 32).unwrap();
+        assert_eq!(answer.status, "SUPPORTED");
+        let dependencies = answer_dependencies(&answer);
+        assert!(dependencies.contains(&bird.id));
+        assert!(dependencies.contains(&mammal.id));
+        assert!(dependencies.contains(&first.id));
+        assert!(dependencies.contains(&second.id));
+        assert!(dependencies.contains(&composed.id));
     }
 
     #[test]

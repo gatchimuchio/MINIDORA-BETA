@@ -2245,6 +2245,99 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
     assert!(explanation.contains("適用規則: $xはbirdである かつ $xはfeatheredである"));
     assert_eq!(why["dependencies"], answer["dependencies"]);
 
+    let followup_rule = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "rule-origin",
+        &[
+            "--input",
+            "warm-blooded-to-animal",
+            "[scope=biology]Xはwarm-bloodedなら[scope=biology]Xはanimal",
+        ],
+    ));
+    let animal_answer = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &[
+            "--input",
+            "mira-animal",
+            "[scope=biology]Miraはanimalですか",
+        ],
+    ));
+    assert_eq!(animal_answer["guarantee"], "DERIVED");
+    for id in [
+        rule_id,
+        followup_rule["dependencies"][0].as_str().unwrap(),
+        bird["dependencies"][0].as_str().unwrap(),
+        feathered["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            animal_answer["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(id.into())),
+            "composed proof lineage is missing {id}"
+        );
+    }
+    let animal_why = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &[
+            "--input",
+            "mira-animal-why",
+            "なぜ[scope=biology]Miraはanimalですか",
+        ],
+    ));
+    let animal_explanation = animal_why["text"].as_str().unwrap();
+    assert!(animal_explanation.contains("Miraはbirdである"));
+    assert!(animal_explanation.contains("Miraはfeatheredである"));
+    assert!(animal_explanation.contains("ならば $v0はanimalである"));
+    assert_eq!(animal_why["dependencies"], animal_answer["dependencies"]);
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "rule-origin",
+        &[
+            "--input",
+            "invalidate-followup-rule",
+            &format!(
+                "{}を無効化して",
+                followup_rule["dependencies"][0].as_str().unwrap()
+            ),
+        ],
+    ));
+    stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "new-subject",
+            &[
+                "--input",
+                "mira-animal-after-rule-invalidation",
+                "[scope=biology]Miraはanimalですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert_eq!(
+        record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            "new-subject",
+            &[
+                "--input",
+                "mira-warm-blooded",
+                "[scope=biology]Mira is warm-blooded?"
+            ],
+        )),
+        answer,
+        "composed-rule invalidation must retain earlier case results"
+    );
+
     let feather_id = feathered["dependencies"][0].as_str().unwrap();
     record(&execute_in_case(
         &scratch.0,
