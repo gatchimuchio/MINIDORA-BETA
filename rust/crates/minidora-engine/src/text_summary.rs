@@ -116,7 +116,7 @@ pub(crate) struct SourceQuestionAnswer {
     pub guarantee: String,
 }
 
-const MAX_QUESTION_SOURCE_PACKETS: usize = 16;
+pub(crate) const MAX_QUESTION_SOURCE_PACKETS: usize = 16;
 const MAX_QUESTION_TERMS: usize = 32;
 const MAX_QUESTION_CANDIDATES: usize = 5;
 

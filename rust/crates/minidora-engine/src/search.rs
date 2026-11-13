@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use url::{Host, Url};
 
 const SEARCH_ROWS: usize = 5;
+const MAX_RETAINED_BODY_PACKETS: usize = crate::text_summary::MAX_QUESTION_SOURCE_PACKETS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -490,6 +491,121 @@ pub(crate) fn previous_observation(
     Ok(found)
 }
 
+/// Keep the validated search listing and previously fetched candidate bodies
+/// on the next body-fetch result. This lets a later candidate selection reuse
+/// the same listing and lets a following source question consume all retained
+/// body packets. The listing's LIVE authority is checked by
+/// `previous_observation`; these body records are checked here for exact
+/// content identity without requesting their original read grants again.
+pub(crate) fn carry_forward_candidate_evidence(
+    previous: &ResultRecord,
+    observation: &SearchObservation,
+) -> Result<Vec<EvidencePacket>> {
+    if !previous
+        .evidence
+        .iter()
+        .any(|packet| packet == &observation.listing)
+        || observation.listing.packet_kind != "SEARCH_LIST"
+    {
+        return Err(failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The prior result does not retain the exact validated search listing",
+        ));
+    }
+
+    let candidate_body_uris = observation
+        .candidates
+        .iter()
+        .map(candidate_body_uri)
+        .collect::<Result<BTreeSet<_>>>()?;
+    let mut carried = vec![observation.listing.clone()];
+    for packet in previous
+        .evidence
+        .iter()
+        .filter(|packet| packet.packet_kind == "FETCHED_BODY")
+    {
+        let extracted_text = std::str::from_utf8(&packet.raw_body).map_err(|_| {
+            failure(
+                "SEARCH_CONTEXT_INVALID",
+                "A retained candidate body is not valid UTF-8",
+            )
+        })?;
+        let identity_is_valid = packet.id
+            == identity(&(
+                &packet.mode,
+                &packet.packet_kind,
+                &packet.request_uri,
+                &packet.final_uri,
+                packet.http_status,
+                &packet.raw_sha256,
+                &packet.parser_version,
+                &packet.independence_group,
+                &packet.failure,
+                &packet.redirect_chain,
+                &packet.provider_id,
+            ))?;
+        let live_contract_is_valid = packet.mode != "LIVE"
+            || (packet.provider_id == "https-direct-url-v1"
+                && packet.parser_version == "strict-utf8-identity-v1");
+        if packet.failure.is_some()
+            || packet.http_status != 200
+            || !packet.request_uri.starts_with("https://")
+            || !packet.final_uri.starts_with("https://")
+            || packet.independence_group != packet.final_uri
+            || packet.redirect_chain.first() != Some(&packet.request_uri)
+            || packet.redirect_chain.last() != Some(&packet.final_uri)
+            || packet
+                .redirect_chain
+                .iter()
+                .any(|uri| !uri.starts_with("https://"))
+            || !candidate_body_uris.contains(&packet.request_uri)
+            || packet.raw_sha256 != digest(&packet.raw_body)
+            || packet.extracted_text.as_deref() != Some(extracted_text)
+            || extracted_text.trim().is_empty()
+            || extracted_text.chars().count() > 100_000
+            || !matches!(packet.mode.as_str(), "LIVE" | "FIXTURE" | "FIXED_PACKET")
+            || !live_contract_is_valid
+            || !identity_is_valid
+        {
+            return Err(failure(
+                "SEARCH_CONTEXT_INVALID",
+                "A retained candidate body no longer matches its selected source and packet identity",
+            ));
+        }
+        if !carried.iter().any(|retained| retained == packet) {
+            carried.push(packet.clone());
+        }
+    }
+
+    if carried
+        .iter()
+        .filter(|packet| packet.packet_kind == "FETCHED_BODY")
+        .count()
+        > MAX_RETAINED_BODY_PACKETS
+    {
+        return Err(failure(
+            "SOURCE_BODY_PACKET_LIMIT",
+            "A search case can retain at most 16 candidate body packets",
+        ));
+    }
+    Ok(carried)
+}
+
+pub(crate) fn validate_next_candidate_body_capacity(evidence: &[EvidencePacket]) -> Result<()> {
+    if evidence
+        .iter()
+        .filter(|packet| packet.packet_kind == "FETCHED_BODY")
+        .count()
+        >= MAX_RETAINED_BODY_PACKETS
+    {
+        return Err(failure(
+            "SOURCE_BODY_PACKET_LIMIT",
+            "A search case can retain at most 16 candidate body packets",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn candidate_body_uri(candidate: &SearchCandidate) -> Result<String> {
     let checked = source_uri(&candidate.uri)?;
     let mut uri = Url::parse(&checked)
@@ -541,7 +657,7 @@ pub fn fetch_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minidora_domain::digest;
+    use minidora_domain::{Lifecycle, digest};
     fn packet(raw: &str) -> EvidencePacket {
         EvidencePacket {
             id: digest(raw.as_bytes()),
@@ -591,6 +707,167 @@ mod tests {
         ))
         .unwrap();
         value
+    }
+
+    fn fixture_candidate_body(candidate: &SearchCandidate, text: &str) -> EvidencePacket {
+        let request_uri = candidate_body_uri(candidate).unwrap();
+        let raw_body = text.as_bytes().to_vec();
+        let mut value = EvidencePacket {
+            id: String::new(),
+            mode: "FIXTURE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: request_uri.clone(),
+            final_uri: request_uri.clone(),
+            redirect_chain: vec![request_uri.clone()],
+            observed_at_unix_ms: 123,
+            provider_id: "test-body-fixture".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            extracted_text: Some(text.into()),
+            raw_body,
+            parser_version: "test-exact-utf8-v1".into(),
+            independence_group: request_uri,
+            failure: None,
+        };
+        value.id = identity(&(
+            &value.mode,
+            &value.packet_kind,
+            &value.request_uri,
+            &value.final_uri,
+            value.http_status,
+            &value.raw_sha256,
+            &value.parser_version,
+            &value.independence_group,
+            &value.failure,
+            &value.redirect_chain,
+            &value.provider_id,
+        ))
+        .unwrap();
+        value
+    }
+
+    #[test]
+    fn candidate_body_lineage_retains_the_listing_and_all_verified_prior_bodies() {
+        let observation = parse_listing(
+            SearchProvider::Wikipedia,
+            "photosynthesis",
+            fixture(
+                SearchProvider::Wikipedia,
+                "photosynthesis",
+                r#"{"pages":[{"key":"First","title":"First"},{"key":"Second","title":"Second"}]}"#,
+            ),
+        )
+        .unwrap();
+        let first_body = fixture_candidate_body(
+            &observation.candidates[0],
+            "Photosynthesis stores light energy.",
+        );
+        let second_body = fixture_candidate_body(
+            &observation.candidates[1],
+            "Photosynthesis converts sunlight into chemical energy.",
+        );
+        let mut repeated_body = first_body.clone();
+        repeated_body.observed_at_unix_ms += 1;
+        assert_eq!(repeated_body.id, first_body.id);
+        let prior = ResultRecord {
+            id: "a".repeat(64),
+            input_id: "first-fetch".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: "fixture candidate body".into(),
+            reason: None,
+            guarantee: minidora_domain::Guarantee::SourceReport,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: vec![
+                observation.listing.clone(),
+                first_body.clone(),
+                second_body.clone(),
+                repeated_body.clone(),
+            ],
+            dependencies: Vec::new(),
+            execution_graph_ref: None,
+        };
+
+        let carried = carry_forward_candidate_evidence(&prior, &observation).unwrap();
+
+        assert_eq!(
+            carried,
+            vec![
+                observation.listing.clone(),
+                first_body,
+                second_body,
+                repeated_body
+            ]
+        );
+        assert_eq!(carried[0].packet_kind, "SEARCH_LIST");
+        assert_eq!(carried[1].mode, "FIXTURE");
+        assert_eq!(carried[2].mode, "FIXTURE");
+        assert_eq!(carried[3].mode, "FIXTURE");
+    }
+
+    #[test]
+    fn candidate_body_lineage_rejects_changed_packet_or_unlisted_source() {
+        let observation = parse_listing(
+            SearchProvider::Wikipedia,
+            "photosynthesis",
+            fixture(
+                SearchProvider::Wikipedia,
+                "photosynthesis",
+                r#"{"pages":[{"key":"First","title":"First"}]}"#,
+            ),
+        )
+        .unwrap();
+        let mut body = fixture_candidate_body(
+            &observation.candidates[0],
+            "Photosynthesis stores light energy.",
+        );
+        body.extracted_text = Some("altered content".into());
+        let prior = ResultRecord {
+            id: "a".repeat(64),
+            input_id: "first-fetch".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: "fixture candidate body".into(),
+            reason: None,
+            guarantee: minidora_domain::Guarantee::SourceReport,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: vec![observation.listing.clone(), body],
+            dependencies: Vec::new(),
+            execution_graph_ref: None,
+        };
+
+        let error = carry_forward_candidate_evidence(&prior, &observation).unwrap_err();
+        assert!(error.to_string().contains("SEARCH_CONTEXT_INVALID"));
+    }
+
+    #[test]
+    fn candidate_body_lineage_stops_before_the_seventeenth_packet() {
+        let observation = parse_listing(
+            SearchProvider::Wikipedia,
+            "photosynthesis",
+            fixture(
+                SearchProvider::Wikipedia,
+                "photosynthesis",
+                r#"{"pages":[{"key":"First","title":"First"},{"key":"Second","title":"Second"}]}"#,
+            ),
+        )
+        .unwrap();
+        let mut evidence = vec![observation.listing.clone()];
+        for index in 0..MAX_RETAINED_BODY_PACKETS {
+            evidence.push(fixture_candidate_body(
+                &observation.candidates[index % observation.candidates.len()],
+                &format!("Photosynthesis fixture candidate {index} has a distinct packet."),
+            ));
+        }
+
+        let error = validate_next_candidate_body_capacity(&evidence).unwrap_err();
+        assert!(error.to_string().contains("SOURCE_BODY_PACKET_LIMIT"));
     }
     #[test]
     fn wikipedia_listing_preserves_rank_raw_source_and_separates_snippets() {

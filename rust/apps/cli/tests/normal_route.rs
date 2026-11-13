@@ -38,6 +38,20 @@ fn sequence_step(
 }
 
 fn seed_fetched_source_case(directory: &Path, actor: &str) -> (String, String, String) {
+    let sources = [(
+        "https://example.test/article",
+        "Energy enters the ecosystem. Photosynthesis stores light energy. Plants use photosynthesis in their leaves.",
+    )];
+    let (result_id, packet_refs, texts) =
+        seed_fetched_source_case_with_sources(directory, actor, &sources);
+    (result_id, packet_refs[0].clone(), texts[0].clone())
+}
+
+fn seed_fetched_source_case_with_sources(
+    directory: &Path,
+    actor: &str,
+    sources: &[(&str, &str)],
+) -> (String, Vec<String>, Vec<String>) {
     use minidora_domain::{
         CaseRevision, EvidencePacket, GoalContract, Guarantee, Lifecycle, RequestEnvelope,
         ResultRecord, SCHEMA_VERSION, digest, identity,
@@ -49,26 +63,46 @@ fn seed_fetched_source_case(directory: &Path, actor: &str) -> (String, String, S
     let fingerprint = identity(&request).unwrap();
     let store = minidora_engine::store::Store::open(directory).unwrap();
     store.register_input(actor, &request, &fingerprint).unwrap();
-    let extracted_text = "Energy enters the ecosystem. Photosynthesis stores light energy. Plants use photosynthesis in their leaves.";
-    let raw_body = extracted_text.as_bytes().to_vec();
-    let packet = EvidencePacket {
-        id: identity(&("fetched-body-fixture-v1", extracted_text)).unwrap(),
-        mode: "FIXTURE".into(),
-        packet_kind: "FETCHED_BODY".into(),
-        request_uri: "https://example.test/article".into(),
-        final_uri: "https://example.test/article".into(),
-        redirect_chain: Vec::new(),
-        observed_at_unix_ms: 1,
-        provider_id: "normal-route-test-fixture".into(),
-        http_status: 200,
-        raw_sha256: digest(&raw_body),
-        raw_body,
-        extracted_text: Some(extracted_text.into()),
-        parser_version: "fixture-exact-text-v1".into(),
-        independence_group: "https://example.test/article".into(),
-        failure: None,
-    };
-    let packet_ref = store.put_artifact(actor, case, &packet).unwrap();
+    let mut packets = Vec::new();
+    let mut packet_refs = Vec::new();
+    let mut texts = Vec::new();
+    for (index, (uri, extracted_text)) in sources.iter().enumerate() {
+        let raw_body = extracted_text.as_bytes().to_vec();
+        let mut packet = EvidencePacket {
+            id: String::new(),
+            mode: "FIXTURE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: (*uri).into(),
+            final_uri: (*uri).into(),
+            redirect_chain: vec![(*uri).into()],
+            observed_at_unix_ms: index as u64 + 1,
+            provider_id: "normal-route-test-fixture".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            raw_body,
+            extracted_text: Some((*extracted_text).into()),
+            parser_version: "fixture-exact-text-v1".into(),
+            independence_group: (*uri).into(),
+            failure: None,
+        };
+        packet.id = identity(&(
+            &packet.mode,
+            &packet.packet_kind,
+            &packet.request_uri,
+            &packet.final_uri,
+            packet.http_status,
+            &packet.raw_sha256,
+            &packet.parser_version,
+            &packet.independence_group,
+            &packet.failure,
+            &packet.redirect_chain,
+            &packet.provider_id,
+        ))
+        .unwrap();
+        packet_refs.push(store.put_artifact(actor, case, &packet).unwrap());
+        packets.push(packet);
+        texts.push((*extracted_text).into());
+    }
     let graph_ref = store
         .put_artifact(
             actor,
@@ -98,8 +132,8 @@ fn seed_fetched_source_case(directory: &Path, actor: &str) -> (String, String, S
         content_plan: None,
         render: None,
         receipts: Vec::new(),
-        evidence: vec![packet],
-        dependencies: vec![packet_ref.clone()],
+        evidence: packets,
+        dependencies: packet_refs.clone(),
         execution_graph_ref: Some(graph_ref),
     };
     let mut state = CaseRevision {
@@ -139,7 +173,7 @@ fn seed_fetched_source_case(directory: &Path, actor: &str) -> (String, String, S
     state.lifecycle = Lifecycle::Commit;
     state.result = Some(result);
     store.append_case(actor, &state).unwrap();
-    (fingerprint, packet_ref, extracted_text.into())
+    (fingerprint, packet_refs, texts)
 }
 
 fn sequence_artifact(store: &minidora_engine::store::Store, sha: &Value) -> Value {
@@ -3075,6 +3109,101 @@ fn natural_source_question_consumes_the_actual_prior_fetched_body() {
             .contains("previous-source-question-answer")
     );
     assert!(graph.to_string().contains(&packet_ref));
+}
+
+#[test]
+fn natural_source_question_consumes_every_retained_candidate_body_in_order() {
+    let scratch = Scratch::new();
+    let sources = [
+        (
+            "https://ja.wikipedia.org/wiki/First?action=raw",
+            "Photosynthesis stores light energy.",
+        ),
+        (
+            "https://ja.wikipedia.org/wiki/Second?action=raw",
+            "Photosynthesis converts sunlight into chemical energy.",
+        ),
+    ];
+    let (source_result_id, packet_refs, texts) =
+        seed_fetched_source_case_with_sources(&scratch.0, "owner", &sources);
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "source-question-multiple",
+            "What does the source say about photosynthesis?",
+        ],
+    ));
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "HYPOTHESIS");
+
+    let dependencies = answer["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies[0], source_result_id);
+    assert_eq!(dependencies[1].as_str(), Some(packet_refs[0].as_str()));
+    assert_eq!(dependencies[2].as_str(), Some(packet_refs[1].as_str()));
+    let answer_ref = dependencies[3].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let answer_bytes = store
+        .get_bytes("owner", "normal-route", answer_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
+    let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(typed["matched_sentence_count"], 2);
+    assert_eq!(typed["candidates"].as_array().unwrap().len(), 2);
+    let expected_sentences = [
+        "Photosynthesis stores light energy.",
+        "Photosynthesis converts sunlight into chemical energy.",
+    ];
+    for (index, candidate) in typed["candidates"].as_array().unwrap().iter().enumerate() {
+        let packet_ref = &packet_refs[index];
+        let packet_bytes = store
+            .get_bytes("owner", "normal-route", packet_ref)
+            .unwrap();
+        let packet: Value = serde_json::from_slice(&packet_bytes).unwrap();
+        assert_eq!(
+            candidate["source_packet_ref"].as_str(),
+            Some(packet_ref.as_str())
+        );
+        assert_eq!(
+            candidate["source_packet_id"].as_str(),
+            packet["id"].as_str()
+        );
+        assert_eq!(candidate["source_mode"], "FIXTURE");
+        assert_eq!(candidate["source_final_uri"], sources[index].0);
+        let body_sha = minidora_domain::digest(texts[index].as_bytes());
+        assert_eq!(candidate["raw_body_sha256"], body_sha);
+        assert_eq!(candidate["extracted_text_sha256"], body_sha);
+        assert_eq!(candidate["text"], expected_sentences[index]);
+        let start = candidate["source_start"].as_u64().unwrap() as usize;
+        let end = candidate["source_end"].as_u64().unwrap() as usize;
+        assert_eq!(&texts[index][start..end], expected_sentences[index]);
+    }
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("Photosynthesis stores light energy.")
+    );
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("Photosynthesis converts sunlight into chemical energy.")
+    );
+    let graph: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                "owner",
+                "normal-route",
+                answer["execution_graph_ref"].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    for packet_ref in &packet_refs {
+        assert!(graph.to_string().contains(packet_ref));
+    }
 }
 
 #[test]

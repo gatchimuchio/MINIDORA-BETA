@@ -429,12 +429,18 @@ impl Engine {
             }
         }
         if let Intent::FetchPreviousSearchCandidate { rank } = &bundle.meaning.intent {
+            let listing_id = "search-candidate-listing".to_string();
             let id = format!("search-candidate-body-{rank}");
             compute_requires.push(id.clone());
             nodes.push(GoalNode {
-                id,
+                id: listing_id.clone(),
                 kind: GoalNodeKind::Evidence,
                 requires: Vec::new(),
+            });
+            nodes.push(GoalNode {
+                id,
+                kind: GoalNodeKind::Evidence,
+                requires: vec![listing_id],
             });
         }
         for index in &source_followup_indices {
@@ -1385,6 +1391,85 @@ impl Engine {
                         "指定順位の有効な検索候補が直前の一覧にありません。",
                     );
                 };
+                let carried_evidence =
+                    match crate::search::carry_forward_candidate_evidence(prior, &observation) {
+                        Ok(evidence) => evidence,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "SEARCH_CONTEXT_INVALID",
+                            };
+                            let lifecycle = if code == "SOURCE_BODY_PACKET_LIMIT" {
+                                Lifecycle::Suspend
+                            } else {
+                                Lifecycle::Fail
+                            };
+                            return self.stop(&mut state, lifecycle, code, &error.to_string());
+                        }
+                    };
+                if let Err(error) =
+                    crate::search::validate_next_candidate_body_capacity(&carried_evidence)
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SOURCE_BODY_PACKET_LIMIT",
+                        &error.to_string(),
+                    );
+                }
+                if !graph
+                    .ready()
+                    .iter()
+                    .any(|ready| ready == "search-candidate-listing")
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "UNOBSERVED_PREREQUISITE",
+                        "検索候補の本文取得に必要な検索一覧が未観測です。",
+                    );
+                }
+                graph.observe("search-candidate-listing", &search_ref, &BTreeMap::new())?;
+                let body_id = format!("search-candidate-body-{rank}");
+                if !graph.ready().iter().any(|ready| ready == &body_id) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "UNOBSERVED_PREREQUISITE",
+                        "本文取得前に検索一覧の依存関係を完了できません。",
+                    );
+                }
+                result.evidence = carried_evidence;
+                result.dependencies.push(prior.id.clone());
+                result.dependencies.push(search_ref.clone());
+                for packet in result
+                    .evidence
+                    .iter()
+                    .filter(|packet| packet.packet_kind == "FETCHED_BODY")
+                {
+                    let packet_bytes = canonical(packet)?;
+                    let packet_ref = digest(&packet_bytes);
+                    match self.store.get_bytes(actor, &request.case_id, &packet_ref) {
+                        Ok(stored) if stored == packet_bytes => {}
+                        Ok(_) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Fail,
+                                "SEARCH_CONTEXT_INVALID",
+                                "保持中の本文packetと保存artifactの内容が一致しません。",
+                            );
+                        }
+                        Err(error) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Fail,
+                                "SEARCH_CONTEXT_INVALID",
+                                &error.to_string(),
+                            );
+                        }
+                    }
+                    result.dependencies.push(packet_ref);
+                }
                 let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                 let mut remaining = request.budget.clone();
                 remaining.deadline_ms = remaining.deadline_ms.saturating_sub(elapsed);
@@ -1420,14 +1505,14 @@ impl Engine {
                 }
                 let body_ref = self.store.put_artifact(actor, &request.case_id, &packet)?;
                 graph.observe(
-                    &format!("search-candidate-body-{rank}"),
+                    &body_id,
                     &body_ref,
-                    &BTreeMap::new(),
+                    &BTreeMap::from([("search-candidate-listing".into(), search_ref)]),
                 )?;
-                result
-                    .dependencies
-                    .extend([prior.id.clone(), search_ref, body_ref]);
-                result.evidence.push(packet.clone());
+                result.dependencies.push(body_ref);
+                if !result.evidence.iter().any(|existing| existing == &packet) {
+                    result.evidence.push(packet.clone());
+                }
                 if packet.failure.is_some() || packet.extracted_text.is_none() {
                     state.result = Some(result);
                     return self.stop(

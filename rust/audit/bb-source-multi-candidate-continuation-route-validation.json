@@ -1,0 +1,90 @@
+{
+  "work_item": "BODY-1 BB-SOURCE multi-candidate same-case continuation",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T02:04:18+00:00",
+  "base_commit": "9f11d2a1f0e41f1fe8bfd30e87c542ff8505c075",
+  "requirement_ids": [
+    "A07",
+    "B05",
+    "B09",
+    "C01",
+    "C03",
+    "C04",
+    "C11",
+    "C13",
+    "E03",
+    "E08",
+    "E09"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux c11e90bda0c3 6.18.57 x86_64 GNU/Linux"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/core.rs": "75401d3abf0258bd1d86ac922d576a7bcfaa0231760251b8c2d3f0a8fc454c33",
+    "rust/crates/minidora-engine/src/search.rs": "e88ed5573d94a12f1a7d94d8bbaba29109bae270e3bad3d7b8e95cf3ad514011",
+    "rust/crates/minidora-engine/src/text_summary.rs": "792c9b47c068ed50cc1957ce7990b2359861dc537262c4f3e68efd57b29ee1e8"
+  },
+  "test_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "06c8e59a385aca8b856ad8f3964360c9363f6dd39baf1630d480513c4f4c7a68"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/README.md": "3690af7a8adacdd05e5d20b8d42c678a6469b10b036add85597b91f0630b9927",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "efccf66795946e0d42cd08e1be58c2a43c367a3b6298fdf1db044e96612c4e57",
+    "rust/audit/requirements.tsv": "f7ab9442a200eef77180fe2af32982bda9d957940ca63ba9afbcec51866343fe",
+    "rust/audit/rust-requirement-observations.json": "fc760b47accdcaf030998e1f3f241d576fe788e9be1c41064693d8aac5125b0b"
+  },
+  "execution_mode": "Offline Linux targeted unit and normal-CLI validation. The seeded fetched-body packets are explicitly labeled FIXTURE. The repeated LIVE candidate-fetch Core path was not invoked.",
+  "producer_consumer": {
+    "preexisting_gap": "A successful first candidate-body fetch retained only its new packet. The next rank selection could not revalidate its prior SearchObservation because the committed fetch result no longer contained the exact SEARCH_LIST packet; a later question also saw only the newest body.",
+    "implemented_route": "Validated SearchObservation and listing -> candidate body fetch with the listing artifact as a required graph prerequisite -> same-case result carries the listing and prior successful candidate-body packets with exact packet-blob checks -> later natural source question consumes every retained body packet into a source-linked answer artifact.",
+    "bounded_rules": "Candidate body requests must match a rank from the retained observation. Existing packets retain their original mode and authority history; no new read grant is inferred. Exact duplicate packets are deduplicated, while separately observed timestamps remain distinct packet artifacts. A case retains at most 16 candidate-body packets.",
+    "observed_consumer": "The ordinary Japanese/English source question consumed two committed same-case FIXTURE packets in order. Each answer candidate retained its packet reference and ID, FIXTURE mode, source URI, raw/extracted hash and original UTF-8 byte span. The answer remained HYPOTHESIS.",
+    "live_boundary": "No LIVE multi-candidate fetch was run. The existing single-candidate LIVE Wikipedia route remains separate evidence; this batch does not establish that two live candidate fetch actions complete consecutively."
+  },
+  "focused_validation": {
+    "search_component_tests": "11 passed, 0 failed: candidate-lineage preservation, integrity stop, 16-packet boundary, and existing search-provider parsing/identity cases",
+    "source_question_normal_cli_tests": "3 passed, 0 failed: one-body fixture consumer, two-body ordered fixture consumer, and missing-body/no-match typed stops",
+    "format_all_check": "PASS",
+    "minidora_cli_all_targets_check_locked": "PASS",
+    "git_diff_check": "PASS",
+    "full_workspace_tests": "NOT_RUN",
+    "clippy": "NOT_RUN",
+    "live_multi_candidate_fetch": "NOT_RUN"
+  },
+  "commands": [
+    {
+      "command": "~/.cargo/bin/cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "~/.cargo/bin/cargo test -p minidora-engine --lib search::tests --locked",
+      "outcome": "11 passed, 0 failed"
+    },
+    {
+      "command": "~/.cargo/bin/cargo test -p minidora-cli --test normal_route natural_source_question --locked",
+      "outcome": "3 passed, 0 failed"
+    },
+    {
+      "command": "~/.cargo/bin/cargo check -p minidora-cli --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "not_run": [
+    "Repeated live search-candidate body fetches in one case",
+    "Live provider retrieval during the multi-body question replay",
+    "Full workspace runtime suite and Clippy",
+    "Semantic cross-source support/contradiction synthesis",
+    "Full C01-C13, all 93 requirements and overall successor acceptance"
+  ],
+  "outcome": "PASS",
+  "acceptance_boundary": "The code now preserves validated search-list and body evidence across consecutive candidate-fetch results, and the normal source-question consumer is observed over two synthetic FIXTURE packets. Live repeated-fetch execution, semantic multi-source synthesis, broader provider behavior and full requirement acceptance remain unverified."
+}
