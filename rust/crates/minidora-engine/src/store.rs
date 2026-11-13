@@ -838,6 +838,22 @@ impl Store {
             "SELECT sequence,record_sha256,event_hash FROM action_history WHERE case_id=?1 AND action_id=?2 ORDER BY sequence DESC LIMIT 1",
             params![action.case_id, action.action_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
         ).optional())?;
+        let idempotency_owner: Option<String> = sql(transaction
+            .query_row(
+                "SELECT action_id FROM action_identity WHERE case_id=?1 AND idempotency_key=?2",
+                params![action.case_id, action.idempotency_key],
+                |row| row.get(0),
+            )
+            .optional())?;
+        if idempotency_owner
+            .as_deref()
+            .is_some_and(|owner| owner != action.action_id)
+        {
+            return Err(failure(
+                "ACTION_IDENTITY_COLLISION",
+                "idempotency key already belongs to a different action",
+            ));
+        }
         let mut sequence = 0;
         if let Some((number, prior_sha, _)) = &old {
             let prior: ActionRecord = self.read_blob(prior_sha)?;
@@ -889,10 +905,12 @@ impl Store {
             &parent_hash,
             &sha,
         ))?;
-        sql(transaction.execute(
-            "INSERT OR IGNORE INTO action_identity(case_id,action_id,idempotency_key) VALUES(?1,?2,?3)",
-            params![action.case_id,action.action_id,action.idempotency_key],
-        ))?;
+        if old.is_none() {
+            sql(transaction.execute(
+                "INSERT INTO action_identity(case_id,action_id,idempotency_key) VALUES(?1,?2,?3)",
+                params![action.case_id, action.action_id, action.idempotency_key],
+            ))?;
+        }
         sql(transaction.execute(
             "INSERT INTO action_history(case_id,action_id,sequence,record_sha256,parent_hash,event_hash) VALUES(?1,?2,?3,?4,?5,?6)",
             params![action.case_id,action.action_id,sequence,sha,parent_hash,event_hash],
@@ -1241,6 +1259,20 @@ impl Store {
                     "action body differs from journal identity",
                 ));
             }
+            let identity_key: Option<String> = sql(self
+                .connection
+                .query_row(
+                    "SELECT idempotency_key FROM action_identity WHERE case_id=?1 AND action_id=?2",
+                    params![case, action_id],
+                    |row| row.get(0),
+                )
+                .optional())?;
+            if identity_key.as_deref() != Some(action.idempotency_key.as_str()) {
+                return Err(failure(
+                    "INTEGRITY_FAILURE",
+                    "action idempotency key differs from its immutable identity",
+                ));
+            }
             previous = Some((action_id, number, event_hash));
         }
         Ok(())
@@ -1286,6 +1318,8 @@ CREATE TRIGGER IF NOT EXISTS action_history_no_delete BEFORE DELETE ON action_hi
 CREATE TRIGGER IF NOT EXISTS memory_revision_no_update BEFORE UPDATE ON memory_revision BEGIN SELECT RAISE(ABORT,'immutable memory revision'); END;
 CREATE TRIGGER IF NOT EXISTS memory_revision_no_delete BEFORE DELETE ON memory_revision BEGIN SELECT RAISE(ABORT,'immutable memory revision'); END;
 CREATE TRIGGER IF NOT EXISTS case_owner_no_update BEFORE UPDATE ON case_registry BEGIN SELECT RAISE(ABORT,'immutable case owner'); END;
+CREATE TRIGGER IF NOT EXISTS action_identity_no_update BEFORE UPDATE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;
+CREATE TRIGGER IF NOT EXISTS action_identity_no_delete BEFORE DELETE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;
 CREATE TRIGGER IF NOT EXISTS input_identity_no_rebind BEFORE UPDATE OF fingerprint,request_sha256 ON input_identity BEGIN SELECT RAISE(ABORT,'immutable input identity'); END;
 CREATE TRIGGER IF NOT EXISTS input_identity_no_delete BEFORE DELETE ON input_identity BEGIN SELECT RAISE(ABORT,'durable input tombstone'); END;
 CREATE TRIGGER IF NOT EXISTS artifact_no_update BEFORE UPDATE ON artifact_ref BEGIN SELECT RAISE(ABORT,'immutable artifact'); END;
@@ -1634,6 +1668,59 @@ mod tests {
     }
 
     #[test]
+    fn separate_processes_save_identical_action_once() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        register(&store, &request);
+        let action = action(&store, &request);
+        drop(store);
+
+        let action_bytes = serde_json::to_vec(&action).unwrap();
+        let outcomes = run_store_workers(
+            &directory.0,
+            "save-action",
+            [action_bytes.clone(), action_bytes],
+        );
+        assert_eq!(outcomes, ["OK", "OK"]);
+        assert_eq!(
+            Store::open(&directory.0)
+                .unwrap()
+                .actions("alice", "case-a")
+                .unwrap(),
+            vec![action]
+        );
+    }
+
+    #[test]
+    fn separate_processes_reject_action_idempotency_collision() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        register(&store, &request);
+        let first = action(&store, &request);
+        let mut second = first.clone();
+        second.action_id = "write-b".into();
+        drop(store);
+
+        let outcomes = run_store_workers(
+            &directory.0,
+            "save-action-collision",
+            [
+                serde_json::to_vec(&first).unwrap(),
+                serde_json::to_vec(&second).unwrap(),
+            ],
+        );
+        assert_eq!(outcomes, ["ERR:ACTION_IDENTITY_COLLISION", "OK"]);
+        let stored = Store::open(&directory.0)
+            .unwrap()
+            .actions("alice", "case-a")
+            .unwrap();
+        assert_eq!(stored.len(), 1);
+        assert!(stored[0] == first || stored[0] == second);
+    }
+
+    #[test]
     fn multi_process_writer_worker() {
         let Ok(directory) = std::env::var("MINIDORA_STORE_MP_DIR") else {
             return;
@@ -1672,6 +1759,14 @@ mod tests {
                 ) {
                     Ok(true) => "NEW".to_owned(),
                     Ok(false) => "REPLAY".to_owned(),
+                    Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
+                    Err(error) => format!("ERR:{error}"),
+                }
+            }
+            "save-action" | "save-action-collision" => {
+                let action: ActionRecord = serde_json::from_slice(&record).unwrap();
+                match store.save_action(&action.actor_id, &action) {
+                    Ok(()) => "OK".to_owned(),
                     Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
                     Err(error) => format!("ERR:{error}"),
                 }
@@ -1924,6 +2019,74 @@ mod tests {
         recovered.idempotency_key = "fresh-unsafe-token".into();
         assert!(store.save_action("alice", &recovered).is_err());
     }
+
+    #[test]
+    fn idempotency_key_cannot_be_reassigned_to_a_different_action() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        register(&store, &request);
+        let original = action(&store, &request);
+        store.save_action("alice", &original).unwrap();
+
+        let mut duplicate_key = original.clone();
+        duplicate_key.action_id = "write-b".into();
+        let error = store.save_action("alice", &duplicate_key).unwrap_err();
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. }
+                if code == "ACTION_IDENTITY_COLLISION"
+        ));
+        assert_eq!(
+            store.actions("alice", "case-a").unwrap(),
+            vec![original.clone()]
+        );
+        drop(store);
+        assert_eq!(
+            Store::open(&directory.0)
+                .unwrap()
+                .actions("alice", "case-a")
+                .unwrap(),
+            vec![original]
+        );
+    }
+
+    #[test]
+    fn action_idempotency_mapping_is_immutable_and_verified_on_open() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        register(&store, &request);
+        store
+            .save_action("alice", &action(&store, &request))
+            .unwrap();
+        drop(store);
+
+        let connection = Connection::open(directory.0.join("state.sqlite3")).unwrap();
+        assert!(connection
+            .execute(
+                "UPDATE action_identity SET idempotency_key='tampered' WHERE case_id='case-a' AND action_id='write-a'",
+                [],
+            )
+            .is_err());
+        connection
+            .execute_batch(
+                "DROP TRIGGER action_identity_no_update;
+                 UPDATE action_identity SET idempotency_key='tampered' WHERE case_id='case-a' AND action_id='write-a';",
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = match Store::open(&directory.0) {
+            Ok(_) => panic!("tampered action identity must fail closed"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. } if code == "INTEGRITY_FAILURE"
+        ));
+    }
+
     #[test]
     fn confirmation_requires_matching_receipt() {
         let directory = Directory::new();

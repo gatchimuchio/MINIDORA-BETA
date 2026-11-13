@@ -1,7 +1,7 @@
 {
   "work_item": "BB-RECOVER / QC2-01 durable-store concurrency and stale stage-name follow-up",
   "stage": "BODY-2_EXECUTION",
-  "recorded_at": "2026-11-13T10:27:51Z",
+  "recorded_at": "2026-11-13T10:35:32Z",
   "base_commit": "bde5c88b9e310760ad0136518e146a9916b8e23f",
   "changed_paths": [
     "rust/crates/minidora-engine/src/store.rs",
@@ -19,11 +19,12 @@
     "platform": "Linux 6.18.57 x86_64"
   },
   "source_snapshot_sha256": {
-    "rust/crates/minidora-engine/src/store.rs": "979aa9e72b30d42e78d0df05b0b670c2f96d6fac6e7586903e83b3358a806a0d"
+    "rust/crates/minidora-engine/src/store.rs": "b1c305294b3b12535491a9dd1a6e72a497afb49a1d11baf536390843b2712122"
   },
-  "test_binary_sha256": "8c4793854a1f5e793ef815212820def1a7dc0d83c8d08de8016945af52c5e5f3",
+  "test_binary_sha256": "93effe0c84f902d3888f7442bc01f037e3e4efaa5668239a477be646e0345132",
   "observed_gap": "Blob stage identities were process ID plus a process-local serial that restarts at zero. An orphan from abrupt termination could collide after process ID reuse; create_new prevented overwrite but returned an error instead of choosing another name.",
-  "change": "Exclusive blob stage creation now advances the checked serial on AlreadyExists, preserves the pre-existing orphan, and reports serial exhaustion as STORE_TEMP_SERIAL_EXHAUSTED. A two-process SQLite writer test races the same case revision and verifies one commit plus one REVISION_CONFLICT.",
+  "effect_idempotency_gap": "save_action used INSERT OR IGNORE for action_identity. A different action ID reusing a saved idempotency key did not return ACTION_IDENTITY_COLLISION; the focused regression initially failed its expected typed-error assertion.",
+  "change": "Exclusive blob stage creation now advances the checked serial on AlreadyExists, preserves the pre-existing orphan, and reports serial exhaustion as STORE_TEMP_SERIAL_EXHAUSTED. Action identity is checked under the SQLite immediate transaction before insertion; new identities use a strict insert, exact replay remains idempotent, and a reused key owned by another action ID returns ACTION_IDENTITY_COLLISION. Startup verifies each journal action against its identity mapping, and SQLite triggers make the mapping immutable.",
   "observations": {
     "stale_stage_name": {
       "setup": "Seeded .stage-4242-41 with orphan bytes, then requested a stage using serials 41 and 42.",
@@ -69,6 +70,33 @@
       ],
       "one_actor_owns_case_after_reopen": true
     },
+    "multi_process_action_replay": {
+      "processes": 2,
+      "same_action_id_and_idempotency_key": true,
+      "outcomes": [
+        "OK",
+        "OK"
+      ],
+      "saved_action_records_after_reopen": 1
+    },
+    "multi_process_action_key_collision": {
+      "processes": 2,
+      "different_action_ids_same_idempotency_key": true,
+      "outcomes": [
+        "ERR:ACTION_IDENTITY_COLLISION",
+        "OK"
+      ],
+      "saved_action_records_after_reopen": 1
+    },
+    "single_process_action_key_collision": {
+      "outcome": "ACTION_IDENTITY_COLLISION",
+      "original_action_history_unchanged_after_reopen": true
+    },
+    "action_identity_integrity": {
+      "normal_update_blocked_by_trigger": true,
+      "after_test_only_trigger_removal_and_mapping_tamper": "INTEGRITY_FAILURE on Store::open",
+      "action_history": "unchanged"
+    },
     "existing_recovery_regressions_in_engine_suite": [
       "orphan blob before database commit leaves no case revision",
       "missing or corrupt referenced blob blocks restart",
@@ -90,15 +118,27 @@
       "exit_code": 0
     },
     {
+      "command": "cargo test -p minidora-engine idempotency -- --nocapture",
+      "exit_code": 0,
+      "passed": 2,
+      "failed": 0
+    },
+    {
       "command": "cargo test -p minidora-engine store::tests::separate_processes_ -- --nocapture",
       "exit_code": 0,
-      "passed": 4,
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine idempotency -- --nocapture",
+      "exit_code": 0,
+      "passed": 3,
       "failed": 0
     },
     {
       "command": "cargo test -p minidora-engine --lib --locked",
       "exit_code": 0,
-      "passed": 214,
+      "passed": 218,
       "failed": 0
     },
     {
