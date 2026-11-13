@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v61-three-clause-relation-question";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v62-constrained-source-summary";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -78,8 +78,10 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             "no actual committed previous search result is available for body retrieval".into(),
         );
     }
-    if matches!(intent, Intent::SummarizePreviousSource)
-        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    if matches!(
+        intent,
+        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+    ) && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
     {
         unresolved.push(
             "no actual committed previous result is available for source summarization".into(),
@@ -1374,6 +1376,9 @@ fn interpret(text: &str) -> Result<Intent> {
     ) {
         return Ok(Intent::Cancel);
     }
+    if let Some(intent) = constrained_previous_source_summary_intent(body)? {
+        return Ok(intent);
+    }
     if regex(r"(?i)^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))(?:を)?要約(?:してください|して|せよ)$|^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document)$")?.is_match(body) {
         return Ok(Intent::SummarizePreviousSource);
     }
@@ -1595,6 +1600,42 @@ fn interpret(text: &str) -> Result<Intent> {
         );
     }
     Ok(Intent::Unknown { reason: "no unambiguous interpretation in the supported arithmetic, copular relation, context, source or JSON grammar".into() })
+}
+
+fn constrained_previous_source_summary_intent(text: &str) -> Result<Option<Intent>> {
+    let japanese = regex(
+        r"^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))を(?:([1-8])点以内(?:[、,]([1-9][0-9]{0,5})(?:字|文字)以内)?|([1-9][0-9]{0,5})(?:字|文字)以内(?:[、,]([1-8])点以内)?)(?:で)?要約(?:してください|して|せよ)$",
+    )?;
+    let english = regex(
+        r"(?i)^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document) in (?:up to ([1-8]) bullets?(?:,? and up to ([1-9][0-9]{0,5}) characters?)?|up to ([1-9][0-9]{0,5}) characters?(?:,? and up to ([1-8]) bullets?)?)$",
+    )?;
+    let (max_sentences, max_chars) = if let Some(captures) = japanese.captures(text) {
+        let parse = |index: usize| {
+            captures
+                .get(index)
+                .and_then(|value| value.as_str().parse().ok())
+        };
+        (parse(1).or_else(|| parse(4)), parse(2).or_else(|| parse(3)))
+    } else if let Some(captures) = english.captures(text) {
+        let parse = |index: usize| {
+            captures
+                .get(index)
+                .and_then(|value| value.as_str().parse().ok())
+        };
+        (parse(1).or_else(|| parse(4)), parse(2).or_else(|| parse(3)))
+    } else {
+        return Ok(None);
+    };
+    if (max_sentences.is_none() && max_chars.is_none())
+        || max_sentences.is_some_and(|count| !(1..=8).contains(&count))
+        || max_chars.is_some_and(|count| !(1..=100_000).contains(&count))
+    {
+        return Ok(None);
+    }
+    Ok(Some(Intent::SummarizePreviousSourceConstrained {
+        max_sentences,
+        max_chars,
+    }))
 }
 
 fn meaning_comparison_intent(text: &str) -> Result<Option<Intent>> {
@@ -2996,6 +3037,58 @@ mod tests {
             interpret("要約して").unwrap(),
             Intent::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn constrained_previous_source_summary_retains_only_supported_limits() {
+        for (text, max_sentences, max_chars) in [
+            ("前回の資料を3点以内、80字以内で要約して", Some(3), Some(80)),
+            (
+                "取得した本文を80文字以内、2点以内で要約してください",
+                Some(2),
+                Some(80),
+            ),
+            ("その出典を2点以内で要約して", Some(2), None),
+            ("前回の本文を100000字以内で要約して", None, Some(100_000)),
+            (
+                "Summarize the previous source in up to 3 bullets and up to 80 characters",
+                Some(3),
+                Some(80),
+            ),
+            (
+                "SUMMARISE retrieved document in up to 80 characters and up to 2 bullets",
+                Some(2),
+                Some(80),
+            ),
+            ("Summarize previous body in up to 4 bullets", Some(4), None),
+            (
+                "Summarize previous source in up to 100000 characters",
+                None,
+                Some(100_000),
+            ),
+        ] {
+            assert_eq!(
+                interpret(text).unwrap(),
+                Intent::SummarizePreviousSourceConstrained {
+                    max_sentences,
+                    max_chars,
+                },
+                "{text}"
+            );
+        }
+
+        for text in [
+            "前回の資料を9点以内で要約して",
+            "前回の資料を100001字以内で要約して",
+            "前回の資料を3点以内で要約して真偽も検証して",
+            "Summarize previous source in up to 3 bullets and up to 100001 characters",
+            "Summarize previous source in under 80 characters",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 
     #[test]

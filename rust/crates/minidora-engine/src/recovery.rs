@@ -324,9 +324,13 @@ fn verify_source_summary_context(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<Option<SourceSummaryExpectation>> {
-    if !matches!(goal.intent, Intent::SummarizePreviousSource) {
+    if !matches!(
+        goal.intent,
+        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+    ) {
         return Ok(None);
     }
+    let summary_limits = crate::text_summary::constrained_source_summary_limits(&goal.intent);
     let bundle = state
         .bundle
         .as_ref()
@@ -365,6 +369,12 @@ fn verify_source_summary_context(
             "the prior result lacks fetched bodies or the derived result added undeclared evidence",
         ));
     }
+    if summary_limits.is_some() && source_packets.len() != 1 {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
+            "the constrained source summary requires exactly one fetched body",
+        ));
+    }
     let mut dependencies = vec![prior.id.clone()];
     let mut packet_refs = Vec::new();
     let mut summary_refs = Vec::new();
@@ -380,7 +390,18 @@ fn verify_source_summary_context(
                 "the original source packet blob differs from its retained record",
             ));
         }
-        let report = crate::text_summary::summarize_fetched_source(&prior.id, packet, &packet_ref)?;
+        let report = match summary_limits {
+            Some((max_sentences, max_chars)) => {
+                crate::text_summary::summarize_fetched_source_with_limits(
+                    &prior.id,
+                    packet,
+                    &packet_ref,
+                    max_sentences,
+                    max_chars,
+                )?
+            }
+            None => crate::text_summary::summarize_fetched_source(&prior.id, packet, &packet_ref)?,
+        };
         let encoded = canonical(&report)?;
         report_bytes = report_bytes.saturating_add(encoded.len());
         if report_bytes > goal.budget.max_evidence_bytes {
@@ -619,7 +640,9 @@ fn inspect(
         || (plan.guarantee == Guarantee::Hypothesis
             && !matches!(
                 goal.intent,
-                Intent::SummarizePreviousSource | Intent::AskPreviousSourceQuestion { .. }
+                Intent::SummarizePreviousSource
+                    | Intent::SummarizePreviousSourceConstrained { .. }
+                    | Intent::AskPreviousSourceQuestion { .. }
             ))
         || !validate_render(plan, render)
     {

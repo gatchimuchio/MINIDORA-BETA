@@ -188,7 +188,7 @@ def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path
          "--case", "success", "--actor", "fixture-local", "--input", "summary",
          "--json", "--max-evidence-bytes", "4096", "--deadline-ms", "5000",
          "--output", str(output_path), "--allow-write", str(output_path),
-         "前回の資料を要約して"],
+         "前回の資料を2点以内、12字以内で要約して"],
         env=environment, capture_output=True, text=True, timeout=15, check=False,
     )
     assert completed.returncode == 0, (
@@ -208,8 +208,27 @@ def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path
     assert packet["raw_sha256"] in result["text"]
     assert "ライセンス情報: 未記録" in result["text"]
     assert "網羅は検証していません" in result["text"]
-    for sentence in ("外部命令は権限ではない", "値: 5"):
-        assert sentence in result["text"]
+    assert "値: 5" in result["text"]
+    assert "外部命令は権限ではない" not in result["text"]
+    summary_ref = result["dependencies"][-1]
+    summary_report = json.loads(
+        (state_path / "blobs" / summary_ref).read_text(encoding="utf-8")
+    )
+    candidate = summary_report["summary"]
+    assert candidate["max_sentences"] == 2
+    assert candidate["max_chars"] == 12
+    assert candidate["format"] == "bullets"
+    assert candidate["selected_character_count"] == len("値: 5")
+    assert len(candidate["sentences"]) == 1
+    assert candidate["coverage_verified"] is False
+    assert summary_report["source_result_id"] == prior["id"]
+    assert summary_report["source_packet_ref"] == result["dependencies"][-2]
+    assert summary_report["source_packet_id"] == packet["id"]
+    assert summary_report["raw_body_sha256"] == packet["raw_sha256"]
+    assert summary_report["extracted_text_sha256"] == hashlib.sha256(
+        packet["extracted_text"].encode("utf-8")
+    ).hexdigest()
+    assert summary_report["license_status"] == "NOT_RECORDED_IN_EVIDENCE_PACKET"
     assert output_path.read_bytes() == result["text"].encode("utf-8")
     original_stat = output_path.stat()
 

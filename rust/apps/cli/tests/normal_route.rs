@@ -5191,6 +5191,160 @@ fn natural_source_question_suspends_without_prior_body_or_topic_match() {
 }
 
 #[test]
+fn constrained_previous_source_summary_binds_one_actual_packet_and_stops_on_ambiguity() {
+    let no_prior = Scratch::new();
+    let result = stopped(
+        &execute(
+            &no_prior.0,
+            "owner",
+            &[
+                "--input",
+                "source-summary",
+                "前回の資料を2点以内、10字以内で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_ACTUAL_RESULT")
+    );
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+
+    let no_body = Scratch::new();
+    record(&execute(&no_body.0, "owner", &["--input", "prior", "2+3"]));
+    let result = stopped(
+        &execute(
+            &no_body.0,
+            "owner",
+            &[
+                "--input",
+                "source-summary",
+                "前回の資料を2点以内、10字以内で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SOURCE_BODY_UNAVAILABLE")
+    );
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+
+    let scratch = Scratch::new();
+    let source_text = "First source sentence. Short.";
+    let (prior_id, packet_refs, texts) = seed_fetched_source_case_with_sources(
+        &scratch.0,
+        "owner",
+        &[("https://example.test/one", source_text)],
+    );
+    let result = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "source-summary",
+            "前回の資料を2点以内、10字以内で要約して",
+        ],
+    ));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "HYPOTHESIS");
+    assert!(result["text"].as_str().unwrap().contains("Short."));
+    assert!(
+        !result["text"]
+            .as_str()
+            .unwrap()
+            .contains("First source sentence.")
+    );
+    assert_eq!(result["dependencies"].as_array().unwrap().len(), 3);
+    assert_eq!(result["dependencies"][0], prior_id);
+    assert_eq!(result["dependencies"][1], packet_refs[0]);
+
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "SUMMARIZE_PREVIOUS_SOURCE_CONSTRAINED"
+    );
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["max_sentences"], 2);
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["max_chars"], 10);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let report = sequence_artifact(&store, &result["dependencies"][2]);
+    assert_eq!(report["source_result_id"], prior_id);
+    assert_eq!(report["source_packet_ref"], packet_refs[0]);
+    assert_eq!(report["summary"]["source_text"], texts[0]);
+    assert_eq!(report["summary"]["max_sentences"], 2);
+    assert_eq!(report["summary"]["max_chars"], 10);
+    assert_eq!(
+        report["summary"]["selected_sentence_indices"],
+        serde_json::json!([1])
+    );
+    assert_eq!(report["summary"]["selected_character_count"], 6);
+    assert_eq!(report["summary"]["coverage_verified"], false);
+
+    let ambiguous = Scratch::new();
+    seed_fetched_source_case_with_sources(
+        &ambiguous.0,
+        "owner",
+        &[
+            ("https://example.test/one", "First source sentence."),
+            ("https://example.test/two", "Second source sentence."),
+        ],
+    );
+    let result = stopped(
+        &execute(
+            &ambiguous.0,
+            "owner",
+            &[
+                "--input",
+                "source-summary",
+                "前回の資料を2点以内、10字以内で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .contains("AMBIGUOUS_SOURCE_CONTEXT")
+    );
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+
+    let legacy = Scratch::new();
+    seed_fetched_source_case_with_sources(
+        &legacy.0,
+        "owner",
+        &[(
+            "https://example.test/legacy",
+            "First sentence. Second sentence.",
+        )],
+    );
+    let result = record(&execute(
+        &legacy.0,
+        "owner",
+        &["--input", "source-summary", "前回の資料を要約して"],
+    ));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    let saved = inspect_normal_case(&legacy.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "SUMMARIZE_PREVIOUS_SOURCE"
+    );
+    let store = minidora_engine::store::Store::open(&legacy.0).unwrap();
+    let report = sequence_artifact(&store, &result["dependencies"][2]);
+    assert_eq!(report["summary"]["max_sentences"], 3);
+    assert_eq!(report["summary"]["max_chars"], 100_000);
+    assert_eq!(report["summary"]["sentence_count"], 2);
+}
+
+#[test]
 fn json_table_group_statistics_mixed_values_suspend_with_a_durable_typed_error() {
     let scratch = Scratch::new();
     let document = r#"{"columns":["region","sales"],"rows":[["north","1 m"],["north","2"]]}"#;

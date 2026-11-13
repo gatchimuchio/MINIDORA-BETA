@@ -254,27 +254,29 @@ impl Engine {
         self.advance(&mut state, Lifecycle::Sealed, None)?;
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
-        let source_followup_indices =
-            if matches!(bundle.meaning.intent, Intent::SummarizePreviousSource) {
-                previous
-                    .filter(|prior| prior.lifecycle == Lifecycle::Commit)
-                    .map(|prior| {
-                        prior
-                            .evidence
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, packet)| {
-                                packet.packet_kind == "FETCHED_BODY"
-                                    && packet.failure.is_none()
-                                    && packet.extracted_text.is_some()
-                            })
-                            .map(|(index, _)| index)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+        let source_followup_indices = if matches!(
+            bundle.meaning.intent,
+            Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+        ) {
+            previous
+                .filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                .map(|prior| {
+                    prior
+                        .evidence
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, packet)| {
+                            packet.packet_kind == "FETCHED_BODY"
+                                && packet.failure.is_none()
+                                && packet.extracted_text.is_some()
+                        })
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let previous_csv_statistics_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -1682,7 +1684,7 @@ impl Engine {
                 units.extend(crate::document::json_group_mean_answer_lines(answer));
                 result.guarantee = Guarantee::Computed;
             }
-            Intent::SummarizePreviousSource => {
+            Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
                 let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
                 else {
                     return self.stop(
@@ -1698,6 +1700,16 @@ impl Engine {
                         Lifecycle::Suspend,
                         "SOURCE_BODY_UNAVAILABLE",
                         "前回結果に要約できる取得本文がありません。検索一覧や題名だけから本文を補いません。",
+                    );
+                }
+                let summary_limits =
+                    crate::text_summary::constrained_source_summary_limits(&bundle.meaning.intent);
+                if summary_limits.is_some() && source_followup_indices.len() != 1 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "AMBIGUOUS_SOURCE_CONTEXT",
+                        "複数の取得本文があるため、文字数・箇条書き数の制約を適用する対象を一つに決められません。",
                     );
                 }
                 result.dependencies.push(prior.id.clone());
@@ -1736,11 +1748,22 @@ impl Engine {
                     }
                     let node_id = format!("followup-source-{source_index}");
                     graph.observe(&node_id, &packet_ref, &BTreeMap::new())?;
-                    let source_report = match crate::text_summary::summarize_fetched_source(
-                        &prior.id,
-                        packet,
-                        &packet_ref,
-                    ) {
+                    let summary_result = if let Some((max_sentences, max_chars)) = summary_limits {
+                        crate::text_summary::summarize_fetched_source_with_limits(
+                            &prior.id,
+                            packet,
+                            &packet_ref,
+                            max_sentences,
+                            max_chars,
+                        )
+                    } else {
+                        crate::text_summary::summarize_fetched_source(
+                            &prior.id,
+                            packet,
+                            &packet_ref,
+                        )
+                    };
+                    let source_report = match summary_result {
                         Ok(report) => report,
                         Err(error) => {
                             let code = match &error {

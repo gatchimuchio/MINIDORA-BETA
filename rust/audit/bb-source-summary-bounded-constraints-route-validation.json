@@ -1,0 +1,189 @@
+{
+  "work_item": "BODY-1 bounded BB-SOURCE / BB-CONTEXT / BB-CONTENT source-summary constraints",
+  "recorded_at": "2026-11-13T05:45:40Z",
+  "base_commit": "af5f35dbec84e73fb82c37e0d07a10be31220ed8",
+  "subject": "MINIDORA Rust successor engine",
+  "purpose": "Carry a caller-stated bullet count and copied-sentence character limit through a normal Japanese/English previous-source request, Core, retained source-summary artifact, output and recovery.",
+  "construction_set": "rust/audit/construction/MB-BUILD-20261113",
+  "construction_requirement": "Connect an actual committed fetched-body packet to an observable bounded next consumer without implying semantic summary quality or full requirement acceptance.",
+  "normative_basis": {
+    "document": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "8.3",
+      "8.4",
+      "14"
+    ]
+  },
+  "build_input": {
+    "archive": "MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+    "archive_sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+    "specification_sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474",
+    "schedule_sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8",
+    "instructions_sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d"
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v62-constrained-source-summary",
+  "platform": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rust_toolchain": "1.99.1"
+  },
+  "version_boundary": "Adds the tagged SummarizePreviousSourceConstrained intent and parser v62. No database schema, dependency or lockfile change. The legacy SummarizePreviousSource intent retains its unconstrained multi-packet route.",
+  "backup_rotation": {
+    "performed_before_source_edits": true,
+    "local_before": {
+      "codex/backup-main": "54c6b7779f8cc13933735d8b48b0494ef769e63b",
+      "codex/backup-main-prev": "bc810f39c882a6039a05354be39e5cc0f94cdbe1"
+    },
+    "remote_before": {
+      "codex/backup-main": "54c6b7779f8cc13933735d8b48b0494ef769e63b",
+      "codex/backup-main-prev": "bc810f39c882a6039a05354be39e5cc0f94cdbe1"
+    },
+    "local_after": {
+      "codex/backup-main": "af5f35dbec84e73fb82c37e0d07a10be31220ed8",
+      "codex/backup-main-prev": "54c6b7779f8cc13933735d8b48b0494ef769e63b"
+    },
+    "remote_after": {
+      "codex/backup-main": "af5f35dbec84e73fb82c37e0d07a10be31220ed8",
+      "codex/backup-main-prev": "54c6b7779f8cc13933735d8b48b0494ef769e63b"
+    },
+    "updates": "Local refs were updated atomically with expected-old SHA checks; both remote tags were updated atomically with per-ref force-with-lease after exact ls-remote verification."
+  },
+  "request_contract": {
+    "japanese_examples": [
+      "前回の資料を3点以内、80字以内で要約して",
+      "取得した本文を80文字以内、2点以内で要約してください"
+    ],
+    "english_examples": [
+      "Summarize the previous source in up to 3 bullets and up to 80 characters",
+      "SUMMARISE retrieved document in up to 80 characters and up to 2 bullets"
+    ],
+    "limits": {
+      "max_sentences_or_bullets": "1..=8 when supplied; defaults to 3 for a character-only request",
+      "max_chars": "1..=100000 Unicode scalar values when supplied; defaults to 100000 in the candidate artifact when omitted",
+      "counted_content": "Selected source sentence characters; excludes the candidate disclosure, bullet markers, separators and source metadata",
+      "selection": "Complete copied sentences only; no sentence truncation"
+    },
+    "source_gate": "Exactly one successful FETCHED_BODY packet in the committed prior result for the same case and actor; Core verifies exact retained packet bytes before summarization.",
+    "typed_stops": {
+      "no_prior_result": "MISSING_ACTUAL_RESULT",
+      "committed_prior_without_body": "SOURCE_BODY_UNAVAILABLE",
+      "multiple_eligible_bodies": "AMBIGUOUS_SOURCE_CONTEXT; no summary artifact adopted",
+      "unsupported_or_out_of_range_phrase": "UNKNOWN intent; unsupported constraints are not dropped"
+    },
+    "output_boundary": "The result remains HYPOTHESIS. Semantic relevance, purpose, truth, completeness and coverage are unverified. EvidencePacket has no license field, so license status remains NOT_RECORDED_IN_EVIDENCE_PACKET."
+  },
+  "changed_source_paths": {
+    "crates/minidora-domain/src/lib.rs": "fe1e662e706bd1efe05265d38f258bc8995aa9f7acee501769dacda4f3cfaeda",
+    "crates/minidora-engine/src/input.rs": "cd353fb219efefa711a69a68c41080323ce80bf52ddd7966121baa53c55388de",
+    "crates/minidora-engine/src/core.rs": "53f901efd1ae96928b5ba89cb0161f2c60a4c8a0fa6c435ec72918b4c4406b2a",
+    "crates/minidora-engine/src/recovery.rs": "b28016be86055ea011b3256c6ca582089e5f9696df61dfa5556f7e56ad9de3d8",
+    "crates/minidora-engine/src/text_summary.rs": "2006e8abfc82e9387ef0d2be7d38598c4c18d9727f20b3478894a97371591964"
+  },
+  "changed_test_paths": {
+    "apps/cli/tests/normal_route.rs": "d2fe3a9d4844639c16f9cf58b231a7f92678dc95d88552033349c8017e669f9e",
+    "tools/local_tls_observer_test.py": "420af0d034d24bbde0809b2ac2bc81651ec6f6fdbc0f09df75ceff9455fd570a"
+  },
+  "changed_record_paths": {
+    "README.md": "b5a94c99da47f9f403562f840d0f4aa9d494dd42683224bd88d1c945ec559b69",
+    "audit/IMPLEMENTATION_STATUS.md": "24118ebf435db8ca3ebe52cab67455a1c8ab215b6b7fde5190f7fbcbdd7c59ef",
+    "audit/requirements.tsv": "bb58a03f0952e5add386823b781cd8401e37623558ee29c6057d5888e1ba3446",
+    "audit/rust-requirement-observations.json": "049efb9073d826319cd44d3d81f94e1871f6cacb1d2d36030507d8b7619e121c"
+  },
+  "observed_local_tls_fixture": {
+    "evaluation_mode": "LOCAL_TLS_FIXTURE",
+    "external_forwarding": false,
+    "tls_verification_disabled": false,
+    "transport_cases_passed": 8,
+    "source_uri": "https://fixture.minidora.test/ok",
+    "packet_id": "eb1cb0a20acb43b79030a8161d9d20a451a0654108737f3b9c3b5b32a5bd8d87",
+    "raw_body_sha256": "d0b67622040315997199202e15cf8e8a1d1f71bb107ebc666c9a9b34d8f1cdff",
+    "followup_input_in_fresh_process": "前回の資料を2点以内、12字以内で要約して",
+    "followup_lifecycle": "COMMIT",
+    "guarantee": "HYPOTHESIS",
+    "displayed_candidate": "- 値: 5",
+    "stored_limits": {
+      "max_sentences": 2,
+      "max_chars": 12,
+      "selected_character_count": 4,
+      "coverage_verified": false
+    },
+    "stored_summary_artifact_sha256": "e6465ea62f03a5f5a78335eded0ff50e26a4f8241de41dafb72c3278415e8f72",
+    "source_packet_identity_and_hash_retained": true,
+    "license_status": "NOT_RECORDED_IN_EVIDENCE_PACKET",
+    "output_file_receipt": "CONFIRMED",
+    "recovery": "COMMIT; LOCAL_FILE_RECONCILED_NO_RESEND; output inode, mtime and size unchanged"
+  },
+  "tests": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine previous_source_summary --locked",
+      "passed": 2,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": [
+        "legacy explicit Japanese/English source request",
+        "bounded Japanese/English grammar",
+        "out-of-range and unsupported constraints remain unresolved"
+      ]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine fetched_source_followup_retains_packet_identity_and_unobserved_license --locked",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": [
+        "legacy defaults",
+        "constrained limits stored on extractive artifact",
+        "packet reference and raw-body hash",
+        "complete sentence retention",
+        "coverage and license boundaries"
+      ]
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-cli --test normal_route constrained_previous_source_summary_binds_one_actual_packet_and_stops_on_ambiguity --locked",
+      "passed": 1,
+      "failed": 0,
+      "outcome": "PASS",
+      "covers": [
+        "missing prior result",
+        "committed prior without body",
+        "one-body limit enforcement and artifact lineage",
+        "multiple-body typed stop without dependency",
+        "legacy unconstrained regression"
+      ]
+    },
+    {
+      "command": "python3 rust/tools/local_tls_observer_test.py --binary rust/target/debug/minidora-rust --evidence-output /workspace/.minidora-cloud/source-summary-constrained-fixture.json",
+      "transport_cases_passed": 8,
+      "source_followup": "PASS; actual local TLS fetch, new-process constrained summary, stored artifact, exact temporary-file receipt, and no-resend recovery",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo fmt --all --manifest-path rust/Cargo.toml --check && git diff --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo build --manifest-path rust/Cargo.toml --workspace --locked",
+      "outcome": "PASS"
+    }
+  ],
+  "not_run": [
+    "full workspace runtime test suite",
+    "full B08 twelve-task writing population",
+    "full BB-SOURCE/B05 and 93-obligation successor acceptance",
+    "LIVE provider quality, external source truth, license verification, semantic summary quality or claim coverage",
+    "Windows/macOS and physical 8 GB acceptance"
+  ],
+  "disposition": "The additive constrained source-follow-up route and local fixture delivery/recovery passed. It does not establish semantic summary quality or full B08, BB-SOURCE, B05 or successor acceptance."
+}

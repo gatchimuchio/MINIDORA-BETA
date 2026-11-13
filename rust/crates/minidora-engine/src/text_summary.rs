@@ -1,7 +1,7 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
-use minidora_domain::{EvidencePacket, Result, canonical, digest, failure};
+use minidora_domain::{EvidencePacket, Intent, Result, canonical, digest, failure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -1191,6 +1191,26 @@ pub fn summarize_fetched_source(
     packet: &EvidencePacket,
     source_packet_ref: &str,
 ) -> Result<SourceExtractiveSummaryCandidates> {
+    summarize_fetched_source_with_limits(source_result_id, packet, source_packet_ref, 3, None)
+}
+
+pub(crate) fn constrained_source_summary_limits(intent: &Intent) -> Option<(usize, Option<usize>)> {
+    match intent {
+        Intent::SummarizePreviousSourceConstrained {
+            max_sentences,
+            max_chars,
+        } => Some((max_sentences.unwrap_or(3), *max_chars)),
+        _ => None,
+    }
+}
+
+pub(crate) fn summarize_fetched_source_with_limits(
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+    max_sentences: usize,
+    max_chars: Option<usize>,
+) -> Result<SourceExtractiveSummaryCandidates> {
     let text = packet.extracted_text.as_deref().unwrap_or_default();
     if !sha256_id(source_result_id)
         || !sha256_id(&packet.id)
@@ -1207,11 +1227,19 @@ pub fn summarize_fetched_source(
             "a verified fetched-body packet with its exact source identities is required",
         ));
     }
-    let document = serde_json::to_string(&serde_json::json!({
-        "text": text,
-        "max_sentences": 3,
-        "format": "bullets"
-    }))?;
+    let document = match max_chars {
+        Some(max_chars) => serde_json::to_string(&serde_json::json!({
+            "text": text,
+            "max_sentences": max_sentences,
+            "max_chars": max_chars,
+            "format": "bullets"
+        }))?,
+        None => serde_json::to_string(&serde_json::json!({
+            "text": text,
+            "max_sentences": max_sentences,
+            "format": "bullets"
+        }))?,
+    };
     let summary = extractive_summary_candidates(&document)?;
     if summary.source_text_sha256 != digest(text.as_bytes()) {
         return Err(failure(
@@ -1472,6 +1500,22 @@ mod tests {
                 .get(sentence.source_start..sentence.source_end)
                 == Some(sentence.text.as_str())
         }));
+
+        let constrained = summarize_fetched_source_with_limits(
+            &"a".repeat(64),
+            &packet,
+            &"c".repeat(64),
+            1,
+            Some(24),
+        )
+        .unwrap();
+        assert_eq!(constrained.summary.max_sentences, 1);
+        assert_eq!(constrained.summary.max_chars, 24);
+        assert_eq!(constrained.summary.format, "bullets");
+        assert_eq!(constrained.summary.sentences.len(), 1);
+        assert!(constrained.summary.selected_character_count <= 24);
+        assert_eq!(constrained.source_packet_id, packet.id);
+        assert_eq!(constrained.raw_body_sha256, packet.raw_sha256);
     }
 
     #[test]

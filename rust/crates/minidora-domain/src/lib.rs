@@ -179,6 +179,10 @@ pub enum Intent {
         query: String,
     },
     SummarizePreviousSource,
+    SummarizePreviousSourceConstrained {
+        max_sentences: Option<usize>,
+        max_chars: Option<usize>,
+    },
     GenerateCode {
         document: String,
     },
