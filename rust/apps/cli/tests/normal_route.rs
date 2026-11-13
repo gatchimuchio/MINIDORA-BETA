@@ -1991,7 +1991,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v52-search-candidate-body"
+        "declarative-ja-en-v55-natural-premise-question"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -2041,6 +2041,99 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
                 "--input",
                 "unknown-subject-listing",
                 "ミケについて何が分かっていますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+}
+
+#[test]
+fn natural_definition_questions_retrieve_only_the_exact_stored_premise() {
+    let scratch = Scratch::new();
+    let japanese_premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-definition-premise", "ココは鳥"],
+    ));
+    let english_premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-definition-premise-en", "Coco is a mammal"],
+    ));
+
+    let japanese = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-definition-query", "ココとは何ですか"],
+    ));
+    assert_eq!(japanese["lifecycle"], "COMMIT");
+    assert_eq!(japanese["guarantee"], "USER_PREMISE");
+    assert!(
+        japanese["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは鳥である")
+    );
+    assert!(
+        japanese["text"]
+            .as_str()
+            .unwrap()
+            .contains("現実世界の真偽は確認していません")
+    );
+    assert!(
+        japanese["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&japanese_premise["dependencies"][0])
+    );
+    assert!(
+        !japanese["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&english_premise["dependencies"][0])
+    );
+
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-definition-query-en", "What is Coco?"],
+    ));
+    assert_eq!(english["lifecycle"], "COMMIT");
+    assert_eq!(english["guarantee"], "USER_PREMISE");
+    assert!(
+        english["text"]
+            .as_str()
+            .unwrap()
+            .contains("Cocoはmammalである")
+    );
+    assert!(
+        english["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&english_premise["dependencies"][0])
+    );
+    assert!(
+        !english["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&japanese_premise["dependencies"][0])
+    );
+
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "coco-definition-missing",
+                "What is an unknown animal?",
             ],
         ),
         2,
@@ -2114,7 +2207,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v52-search-candidate-body"
+        "declarative-ja-en-v55-natural-premise-question"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -7545,7 +7638,7 @@ fn generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v52-search-candidate-body"
+        "declarative-ja-en-v55-natural-premise-question"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -7633,7 +7726,7 @@ fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() 
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v52-search-candidate-body"
+        "declarative-ja-en-v55-natural-premise-question"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],

@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v54-source-question-followup";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v55-natural-premise-question";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -871,11 +871,11 @@ fn calculation_correction_intent(text: &str) -> Result<Option<Intent>> {
 }
 
 fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
-    let patterns = [
+    let recorded_patterns = [
         r"(?i)^what (?:facts|premises) (?:have been|are) (?:provided|recorded|stated) about (.+)$",
         r"^(.+?)(?:について|に関して)[、， ]*(?:(?:何|どんなこと)(?:が|を))?(?:分かって|わかって|知って)(?:いる|います)(?:こと)?(?:(?:を)?(?:教えて|説明して)(?:ください)?|ですか|でしょうか|か)?$",
     ];
-    for pattern in patterns {
+    for pattern in recorded_patterns {
         if let Some(capture) = regex(pattern)?.captures(text) {
             let subject = capture[1].trim();
             if !subject.is_empty()
@@ -889,6 +889,43 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
             return Ok(Some(Intent::Unknown {
                 reason: "premise inspection needs one nonempty subject without a clause list"
                     .into(),
+            }));
+        }
+    }
+
+    // These ordinary definitional forms query actor-scoped declared memory.
+    // They do not authorize an open-world answer or a definition from a
+    // retrieved source. Keep arithmetic expressions and unresolved pronouns
+    // out of this route so a question is not silently reinterpreted as a
+    // memory lookup for an unrelated subject.
+    let natural_patterns = [
+        r"(?i)^what (?:is|are) (.+)$",
+        r"^(.+?)(?:とは|って)(?:何|なに)(?:ですか|でしょうか|です|なの|か)?$",
+    ];
+    for pattern in natural_patterns {
+        if let Some(capture) = regex(pattern)?.captures(text) {
+            let subject = capture[1].trim();
+            let lower = subject.to_ascii_lowercase();
+            let only_numeric_expression_chars = subject
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ". +-*/%^()=".contains(ch));
+            let unresolved_pronoun =
+                matches!(
+                    lower.as_str(),
+                    "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
+                ) || matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら");
+            if subject.is_empty()
+                || subject.len() > 512
+                || subject.contains([
+                    '\n', '\r', '、', '，', ',', ';', '；', '+', '*', '/', '^', '%', '=',
+                ])
+                || only_numeric_expression_chars
+                || unresolved_pronoun
+            {
+                return Ok(None);
+            }
+            return Ok(Some(Intent::InspectPremises {
+                subject: subject.to_string(),
             }));
         }
     }
@@ -1954,13 +1991,22 @@ mod tests {
             ("ココについて、何が分かっていますか", "ココ"),
             ("ココについてわかっていることを教えてください", "ココ"),
             ("ココに関して知っていることを説明して", "ココ"),
+            ("ココとは何ですか", "ココ"),
+            ("ココって何?", "ココ"),
             ("What facts have been recorded about Coco?", "Coco"),
+            ("What is Coco?", "Coco"),
         ] {
             assert!(
                 matches!(
                     interpret(text).unwrap(),
                     Intent::InspectPremises { subject } if subject == expected
                 ),
+                "{text}"
+            );
+        }
+        for text in ["What is 2+3?", "What is it?", "2+3とは何ですか"] {
+            assert!(
+                !matches!(interpret(text).unwrap(), Intent::InspectPremises { .. }),
                 "{text}"
             );
         }

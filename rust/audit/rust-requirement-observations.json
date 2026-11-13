@@ -103,9 +103,11 @@
         "tools/json_group_mean_query_route_test.py",
         "crates/minidora-engine/src/text_summary.rs",
         "tools/source_question_route_recovery_test.py",
-        "crates/minidora-engine/src/search.rs"
+        "crates/minidora-engine/src/search.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/premise_inspection_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay and crash-injected no-resend reconciliation were tested; full acceptance was not run. The crash-injected recovery script replays the existing exact-grant local file receipt as LOCAL_FILE_RECONCILED_NO_RESEND with unchanged inode/mtime/size; the consumer fixture is synthetic and live acquisition remains separate evidence.; BODY-1 BB_SOURCE_MULTI_CANDIDATE_CONTINUATION records the current Core path that carries the validated SEARCH_LIST and prior successful FETCHED_BODY packets across candidate-fetch results, then lets the same-case source-question consumer inspect every retained body. The ordinary CLI test uses two explicit FIXTURE packets and verifies packet IDs/references, source URIs, raw/extracted hashes and UTF-8 spans. Eleven search unit tests and three source-question normal-CLI tests passed; LIVE repeated candidate fetch and full requirement acceptance were NOT_RUN. The cited evidence does not establish semantic cross-source inference.; BODY-1 BB_SOURCE_EXACT_URI_BODY_VERSION_CONTINUITY: ordinary CLI source question -> committed same-case FETCHED_BODY packets -> Core selects the uniquely latest observed raw/extracted/parser version per exact final_uri -> answer V2 retains active and superseded packet refs -> rendered source spans and exact local-file receipt; ties with conflicting latest versions and mixed LIVE/FIXTURE modes suspend. Recovery dispatches by retained V1/V2 operation identifier. Focused engine and normal-route fixture tests passed; LIVE repeated multi-candidate retrieval and full A07 acceptance were NOT_RUN. See bb-source-body-version-invalidation-route-validation.json.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay and crash-injected no-resend reconciliation were tested; full acceptance was not run. The crash-injected recovery script replays the existing exact-grant local file receipt as LOCAL_FILE_RECONCILED_NO_RESEND with unchanged inode/mtime/size; the consumer fixture is synthetic and live acquisition remains separate evidence.; BODY-1 BB_SOURCE_MULTI_CANDIDATE_CONTINUATION records the current Core path that carries the validated SEARCH_LIST and prior successful FETCHED_BODY packets across candidate-fetch results, then lets the same-case source-question consumer inspect every retained body. The ordinary CLI test uses two explicit FIXTURE packets and verifies packet IDs/references, source URIs, raw/extracted hashes and UTF-8 spans. Eleven search unit tests and three source-question normal-CLI tests passed; LIVE repeated candidate fetch and full requirement acceptance were NOT_RUN. The cited evidence does not establish semantic cross-source inference.; BODY-1 BB_SOURCE_EXACT_URI_BODY_VERSION_CONTINUITY: ordinary CLI source question -> committed same-case FETCHED_BODY packets -> Core selects the uniquely latest observed raw/extracted/parser version per exact final_uri -> answer V2 retains active and superseded packet refs -> rendered source spans and exact local-file receipt; ties with conflicting latest versions and mixed LIVE/FIXTURE modes suspend. Recovery dispatches by retained V1/V2 operation identifier. Focused engine and normal-route fixture tests passed; LIVE repeated multi-candidate retrieval and full A07 acceptance were NOT_RUN. See bb-source-body-version-invalidation-route-validation.json.; BODY-1 BB_LANG_NATURAL_PREMISE_QUERY: ordinary Japanese/English named-subject question -> sealed v55 input -> Core returns only exact-subject active direct USER_PREMISE facts, preserves dependency IDs and disclosure, and suspends with MISSING_PREMISES when absent; numeric expressions/anaphoric pronouns are not reinterpreted as subjects. Fresh-process CLI route and exact local-file no-resend recovery passed. See bb-lang-known-premise-natural-question-route-validation.json.",
       "full_acceptance_gap": "`2+3` → `Explain that in detail` explains **the actual 5 and procedure**, not unjustified suspension",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -117,9 +119,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/core.rs"
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs",
+        "tools/premise_inspection_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB_LANG_NATURAL_PREMISE_QUERY: ordinary Japanese/English named-subject question -> sealed v55 input -> Core returns only exact-subject active direct USER_PREMISE facts, preserves dependency IDs and disclosure, and suspends with MISSING_PREMISES when absent; numeric expressions/anaphoric pronouns are not reinterpreted as subjects. Fresh-process CLI route and exact local-file no-resend recovery passed. See bb-lang-known-premise-natural-question-route-validation.json.",
       "full_acceptance_gap": "Multi-turn corrections, topic switches and return-to-topic obey latest authorized request",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -169,9 +176,14 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/input.rs"
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs",
+        "tools/premise_inspection_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB_LANG_NATURAL_PREMISE_QUERY: ordinary Japanese/English named-subject question -> sealed v55 input -> Core returns only exact-subject active direct USER_PREMISE facts, preserves dependency IDs and disclosure, and suspends with MISSING_PREMISES when absent; numeric expressions/anaphoric pronouns are not reinterpreted as subjects. Fresh-process CLI route and exact local-file no-resend recovery passed. See bb-lang-known-premise-natural-question-route-validation.json.",
       "full_acceptance_gap": "Insufficient claims return typed residuals; enough evidence yields a substantive answer",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -180,7 +192,7 @@
       "capability_id": "A13",
       "requirement": "Natural, useful answers to unseen what/why/how/compare questions",
       "required_observable": "Novel independent chat-quality matrix, not greeting/keyword-only matches",
-      "implementation_disposition": "UNVERIFIED",
+      "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
         "crates/minidora-domain/src/lib.rs",
@@ -194,9 +206,11 @@
         "apps/cli/tests/normal_route.rs",
         "tools/json_group_mean_query_route_test.py",
         "crates/minidora-engine/src/text_summary.rs",
-        "tools/source_question_route_recovery_test.py"
+        "tools/source_question_route_recovery_test.py",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/premise_inspection_route_test.py"
       ],
-      "evidence": "bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay and crash-injected no-resend reconciliation were tested; full acceptance was not run. The crash-injected recovery script replays the existing exact-grant local file receipt as LOCAL_FILE_RECONCILED_NO_RESEND with unchanged inode/mtime/size; the consumer fixture is synthetic and live acquisition remains separate evidence.",
+      "evidence": "bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay and crash-injected no-resend reconciliation were tested; full acceptance was not run. The crash-injected recovery script replays the existing exact-grant local file receipt as LOCAL_FILE_RECONCILED_NO_RESEND with unchanged inode/mtime/size; the consumer fixture is synthetic and live acquisition remains separate evidence.; BODY-1 BB_LANG_NATURAL_PREMISE_QUERY: ordinary Japanese/English named-subject question -> sealed v55 input -> Core returns only exact-subject active direct USER_PREMISE facts, preserves dependency IDs and disclosure, and suspends with MISSING_PREMISES when absent; numeric expressions/anaphoric pronouns are not reinterpreted as subjects. Fresh-process CLI route and exact local-file no-resend recovery passed. See bb-lang-known-premise-natural-question-route-validation.json.",
       "full_acceptance_gap": "Novel independent chat-quality matrix, not greeting/keyword-only matches",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

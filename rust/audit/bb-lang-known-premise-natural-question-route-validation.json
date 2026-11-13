@@ -1,0 +1,241 @@
+{
+  "work_item": "BODY-1 BB-LANG/BB-CONTEXT natural premise questions",
+  "parser_version": "declarative-ja-en-v55-natural-premise-question",
+  "requirement_ids": [
+    "A07",
+    "A08",
+    "A12",
+    "A13"
+  ],
+  "execution_mode": "fresh CLI process for each request; one durable actor/case store",
+  "producer_consumer": "ordinary Japanese/English natural question -> sealed v55 InspectPremises intent -> Core actor memory -> exact-subject active direct premises -> content plan/render/result dependency ledger",
+  "scope": "Lists only valid, directly supplied USER_PREMISE facts for the named subject. Preserves polarity, scope and premise IDs; excludes derived conclusions and does not claim external-world verification. Numeric expressions and unresolved pronouns do not enter this memory lookup; absent premises suspend.",
+  "observations": [
+    {
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-gray",
+      "request": "[scope=story]ココは灰色",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは灰色である。\n前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62"
+      ]
+    },
+    {
+      "input_id": "coco-negative",
+      "request": "ココは哺乳類ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類ではない。\n前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843"
+      ]
+    },
+    {
+      "input_id": "bird-rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01"
+      ]
+    },
+    {
+      "input_id": "coco-listing",
+      "request": "ココとは何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類ではない（範囲: default; 提示前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843）\n・ココは灰色である（範囲: story; 提示前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62）\n・ココは鳥である（範囲: default; 提示前提ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515）",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843",
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62",
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-mammal-en",
+      "request": "Coco is a mammal",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはmammalである。\n前提ID: fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37"
+      ]
+    },
+    {
+      "input_id": "coco-listing-en",
+      "request": "What is Coco?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「Coco」の提示前提です。現実世界の真偽は確認していません。\n・Cocoはmammalである（範囲: default; 提示前提ID: fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37）",
+      "reason": null,
+      "dependencies": [
+        "fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37"
+      ]
+    },
+    {
+      "input_id": "invalidate-coco-bird",
+      "request": "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515を無効化して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-listing-after",
+      "request": "ココとは何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」の提示前提です。現実世界の真偽は確認していません。\n・ココは哺乳類ではない（範囲: default; 提示前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843）\n・ココは灰色である（範囲: story; 提示前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62）",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843",
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62"
+      ]
+    },
+    {
+      "input_id": "unknown-subject-listing",
+      "request": "What is a unicorn?",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この対象について有効な提示前提は保存されていません。",
+      "reason": "MISSING_PREMISES: この対象について有効な提示前提は保存されていません。",
+      "dependencies": []
+    }
+  ],
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "USER_PREMISE",
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true
+  },
+  "outcome": "PASS scoped BODY-1 natural stored-premise question route",
+  "acceptance_boundary": "This is a bounded actor-memory question route over declared premises. It does not provide open-world definitions or general what/why/how answers. Broader A07/A08/A12/A13 and BB-LANG acceptance remain BUILD_GAP/UNVERIFIED.",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T02:46:52+00:00",
+  "base_commit": "694136a6c108e67188c0dc9ae18f990485787a29",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "94bbb9de42d551565bcb96ed71f7203fe2bba6b528b774fe961c076cca1fb8f6",
+    "rust/crates/minidora-engine/src/core.rs": "4cca2d368add52206832f055bcbe914ac7aac4e00a57ec034b0d11bbfdc963c6",
+    "rust/crates/minidora-engine/src/relations.rs": "b2a06ff0c80cbf27f469964b7d333648803c5f586c62c4d9062b88992a802459",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "eb3cba844c1a5f82cfa979972473fed0b3d05e78539aa8daf38bdefda612cb3a",
+    "rust/tools/premise_inspection_route_test.py": "3c5b122e77cd69290bc55e52a613aadfb66b71ee583fb71fe6404443f5adcb26"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "c64f10938e2f8c464893bf987a09b161ac142455a072fc532747034d9a908547",
+    "rust/audit/README.md": "78f889ae8ad423b8b4f821308f7779a4c87ec007f6cef833677668bd4f1f4888",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "e05e90db398069790c9fd1c6ef1c64c898a81fd1f659fbd2de9818bf5025aa75",
+    "rust/audit/requirements.tsv": "ae04d817f9326a2ac4c744f9825b6f16f81e56b8dba279324233998da1c2bed0",
+    "rust/audit/rust-requirement-observations.json": "202f97aa6f820393ffe5389a7ba1e8019212def07d56f7816815f3acc42c372d"
+  },
+  "focused_validation": {
+    "natural_question_parser_cases": "1 focused engine unit test passed; Japanese and English stored-premise questions accepted; arithmetic and unresolved pronouns excluded",
+    "ordinary_cli_natural_definition_route": "1 focused normal-route CLI test passed; exact-subject premises, provenance, scope disclosure, and missing-premise stop checked",
+    "compatibility_routes": "4 focused normal-route regression tests passed; premise listing, prior relation explanation, generated Python explanation, and finite generated-code verification",
+    "fresh_process_evidence_helper": "PASS; 10 observations; Japanese and English route results, invalidation, MISSING_PREMISES, and confirmed local-file no-resend recovery with unchanged file identity",
+    "format_all_check": "PASS",
+    "minidora_cli_all_targets_check_locked": "PASS",
+    "minidora_cli_clippy_all_targets_warnings_denied_locked": "PASS",
+    "minidora_cli_build_locked": "PASS",
+    "git_diff_check": "PASS (rechecked after ledger edits)"
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib premise_inspection_questions_keep_the_named_subject --locked",
+      "outcome": "1 passed, 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route natural_definition_questions_retrieve_only_the_exact_stored_premise --locked",
+      "outcome": "1 passed, 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route ordinary_question_lists_active_direct_premises_with_provenance_after_restart --locked",
+      "outcome": "1 passed, 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route relation_answer_follow_up_explains_the_same_current_proof_after_restart --locked",
+      "outcome": "1 passed, 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage --locked",
+      "outcome": "1 passed, 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage --locked",
+      "outcome": "1 passed, 0 failed"
+    },
+    {
+      "command": "cargo check -p minidora-cli --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo clippy -p minidora-cli --all-targets --locked -- -D warnings",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo build -p minidora-cli --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "python3 tools/premise_inspection_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-known-premise-natural-question-route-validation.json",
+      "outcome": "PASS; fresh-process route and local-file recovery evidence recorded"
+    },
+    {
+      "command": "git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "not_run": [
+    "Full workspace runtime suite",
+    "Open-world factual definitions or general unseen what/why/how/compare questions",
+    "Full A07, A08, A12, A13, all-93, or overall successor acceptance",
+    "Live external-source retrieval for this stored-premise question route",
+    "Windows storage-manager/OneDrive acceptance"
+  ]
+}

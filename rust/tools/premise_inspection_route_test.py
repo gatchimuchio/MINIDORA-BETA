@@ -9,6 +9,8 @@ import sqlite3
 import subprocess
 import tempfile
 
+PARSER_VERSION = "declarative-ja-en-v55-natural-premise-question"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -57,7 +59,7 @@ def main() -> None:
         gray = run("coco-gray", "[scope=story]ココは灰色")
         negative = run("coco-negative", "ココは哺乳類ではない")
         rule = run("bird-rule", "もしXは鳥ならXは動物")
-        listed = run("coco-listing", "ココについて、何が分かっていますか")
+        listed = run("coco-listing", "ココとは何ですか")
         assert listed["lifecycle"] == "COMMIT"
         assert listed["guarantee"] == "USER_PREMISE"
         assert "現実世界の真偽は確認していません" in listed["text"]
@@ -70,11 +72,23 @@ def main() -> None:
             assert source["dependencies"][0] in listed["dependencies"]
         assert rule["dependencies"][0] not in listed["dependencies"]
 
+        english_premise = run("coco-mammal-en", "Coco is a mammal")
+        english_listing = run("coco-listing-en", "What is Coco?")
+        assert english_listing["lifecycle"] == "COMMIT"
+        assert english_listing["guarantee"] == "USER_PREMISE"
+        assert "Cocoはmammalである" in english_listing["text"]
+        assert "現実世界の真偽は確認していません" in english_listing["text"]
+        assert english_premise["dependencies"][0] in english_listing["dependencies"]
+        assert all(
+            source["dependencies"][0] not in english_listing["dependencies"]
+            for source in (bird, gray, negative)
+        )
+
         bird_id = bird["dependencies"][0]
         invalidated = run("invalidate-coco-bird", f"{bird_id}を無効化して")
         assert bird_id in invalidated["dependencies"]
         after_invalidation = run(
-            "coco-listing-after", "ココについて、何が分かっていますか"
+            "coco-listing-after", "ココとは何ですか"
         )
         assert after_invalidation["lifecycle"] == "COMMIT"
         assert after_invalidation["guarantee"] == "USER_PREMISE"
@@ -84,7 +98,7 @@ def main() -> None:
 
         missing = run(
             "unknown-subject-listing",
-            "ミケについて何が分かっていますか",
+            "What is a unicorn?",
             expected_exit=2,
         )
         assert missing["lifecycle"] == "SUSPEND"
@@ -97,7 +111,7 @@ def main() -> None:
                 str(arguments.binary), "--db", str(database), "--case", recovery_case,
                 "--actor", actor, "--input", "recovery-listing-file", "--json",
                 "--output", str(output_path), "--allow-write", str(output_path),
-                "ココについて、何が分かっていますか",
+                "ココとは何ですか",
             ],
             capture_output=True,
             text=True,
@@ -190,17 +204,19 @@ def main() -> None:
         )
 
         report = {
-            "work_item": "BODY-1 bounded BB-LANG natural-language premise inspection",
-            "parser_version": "declarative-ja-en-v47-premise-inspection",
+            "work_item": "BODY-1 BB-LANG/BB-CONTEXT natural premise questions",
+            "parser_version": PARSER_VERSION,
+            "requirement_ids": ["A07", "A08", "A12", "A13"],
             "execution_mode": "fresh CLI process for each request; one durable actor/case store",
             "producer_consumer": (
-                "ordinary natural-language request -> sealed intent -> Core actor memory -> "
-                "active direct premises -> content plan/render/result dependency ledger"
+                "ordinary Japanese/English natural question -> sealed v55 InspectPremises intent -> "
+                "Core actor memory -> exact-subject active direct premises -> content plan/render/result dependency ledger"
             ),
             "scope": (
                 "Lists only valid, directly supplied USER_PREMISE facts for the named subject. "
                 "Preserves polarity, scope and premise IDs; excludes derived conclusions and "
-                "does not claim external-world verification."
+                "does not claim external-world verification. Numeric expressions and unresolved "
+                "pronouns do not enter this memory lookup; absent premises suspend."
             ),
             "observations": observations,
             "adopted_file_recovery": {
@@ -213,8 +229,9 @@ def main() -> None:
             },
             "outcome": "PASS",
             "acceptance_boundary": (
-                "One bounded evidence-retrieval route is BUILD_COVERED. General what/why/how, "
-                "unrestricted Japanese understanding and BB-LANG acceptance remain BUILD_GAP/UNVERIFIED."
+                "This is a bounded actor-memory question route over declared premises. It does not "
+                "provide open-world definitions or general what/why/how answers. Broader A07/A08/A12/A13 "
+                "and BB-LANG acceptance remain BUILD_GAP/UNVERIFIED."
             ),
         }
         if arguments.evidence_output:
