@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v65-transitive-yes-no-questions";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v66-contextual-why-followup";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1104,6 +1104,8 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
         Some(value)
     } else if let Some(value) = text.strip_prefix("どうして") {
         Some(value)
+    } else if text.eq_ignore_ascii_case("why") {
+        Some("")
     } else {
         regex(r"(?i)^why\s+(.+)$")?
             .captures(text)
@@ -1125,6 +1127,9 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
             statement = value.trim_end();
             break;
         }
+    }
+    if statement.is_empty() {
+        return Ok(Some(Intent::ExplainPrevious));
     }
     if let Some(proposition) = parse_proposition(statement, false)? {
         if singular_previous_subject(&proposition.subject) {
@@ -2513,6 +2518,26 @@ mod tests {
         assert!(matches!(
             interpret("どうしてココは動物なのですか、そして送信して").unwrap(),
             Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn elliptical_why_questions_consume_the_actual_previous_result() {
+        for text in ["なぜですか", "どうして？", "Why?"] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::ExplainPrevious),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("なぜそれはノートを使いますか").unwrap(),
+            Intent::AskPreviousRelation {
+                proposition,
+                explain: true,
+                explicit_scope: None,
+            } if proposition.subject == "それ"
+                && proposition.object == "ノート"
+                && proposition.predicate == "use"
         ));
     }
 

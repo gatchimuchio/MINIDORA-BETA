@@ -1,0 +1,264 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT/BB-LANG elliptical why follow-up over actual prior results",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T07:07:14+00:00",
+  "base_commit": "6ec033b315469017c8acc06a11b228f30596aac2",
+  "requirement_ids": [
+    "A04",
+    "A07",
+    "A08",
+    "A12",
+    "A13",
+    "A14",
+    "A15",
+    "B01"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v66-contextual-why-followup",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "implementation_change": "Exact elliptical Japanese/English why forms now enter the existing ExplainPrevious consumer. It checks the immediate committed same-case result, revalidates relation proofs against current actor memory or explains the saved computation, and stops when no actual prior result exists.",
+  "binary_sha256": "4fea4402809691d7278d3e52c4b150fc9ae136379a7e692e13e1222ebc79a94b",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "991ee79118de8d98d47df68901210317961aa08836365b9bcbafee6a5b0f97aa",
+    "rust/crates/minidora-engine/src/core.rs": "ccc10b31a6f11566b1408860696194aba4c126beab37b88964132e906edb5e68",
+    "rust/crates/minidora-engine/src/input.rs": "07a44eb4b32f9dd58359279eb8d0b64e634e97c4f382793136463ca2a64028da"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "07a44eb4b32f9dd58359279eb8d0b64e634e97c4f382793136463ca2a64028da",
+    "rust/apps/cli/tests/normal_route.rs": "c0ee54d25a1ba0d90e6c98ce9ca55ce8bb5f36c3234a4421433be65416cad973",
+    "rust/tools/contextual_why_followup_route_test.py": "b35f8eaed5f04d17d564f055600a5abe461720c66abb7ca826685eb36c6137c6"
+  },
+  "documentation_snapshot_sha256": {
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "rust/README.md": "a73081fde25fb665284f50b9b1b58ba1d961d7a3b1680010971b474c7c5af635"
+  },
+  "execution_mode": "fresh CLI process for every request; one temporary SQLite store; ordinary inputs; no test-only result injection or file/network effects",
+  "scope": "Immediate-result why follow-up over a supported relation answer, including derived and refuted-query answers, plus an exact prior calculation result.",
+  "observations": [
+    {
+      "actor": "contextual-why-direct",
+      "case": "contextual-why-direct-case",
+      "input_id": "robot-notebook",
+      "request": "ロボットはノートを使う",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ロボットはノートを使う。\n前提ID: fact:d51f13cffbc889c094d86bb8fb8ffe324520a3c36649259bcc80c77d6302e469\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:d51f13cffbc889c094d86bb8fb8ffe324520a3c36649259bcc80c77d6302e469"
+      ]
+    },
+    {
+      "actor": "contextual-why-direct",
+      "case": "contextual-why-direct-case",
+      "input_id": "robot-notebook-question",
+      "request": "ロボットはノートを使いますか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ロボットはノートを使う。",
+      "reason": null,
+      "dependencies": [
+        "fact:d51f13cffbc889c094d86bb8fb8ffe324520a3c36649259bcc80c77d6302e469"
+      ]
+    },
+    {
+      "actor": "contextual-why-direct",
+      "case": "contextual-why-direct-case",
+      "input_id": "why-direct-answer",
+      "request": "なぜですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前回の結論: ロボットはノートを使う。\n直接提示された前提: ロボットはノートを使う（根拠ID: fact:d51f13cffbc889c094d86bb8fb8ffe324520a3c36649259bcc80c77d6302e469）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "678ddb2918b3a92ac34c7ca8ba272bb5921d36bbb10bee2efd245f58522012da",
+        "fact:d51f13cffbc889c094d86bb8fb8ffe324520a3c36649259bcc80c77d6302e469"
+      ]
+    },
+    {
+      "actor": "contextual-why-derived",
+      "case": "contextual-why-derived-case",
+      "input_id": "robot-tool-rule",
+      "request": "もしXはノートを使うならXは道具を使う",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはノートを使う ならば $xは道具を使う。\n規則ID: rule:c4ac71c5188a784949de1df184e9dacf40f6f95b08d5268327c3f0cddb8dd885\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:c4ac71c5188a784949de1df184e9dacf40f6f95b08d5268327c3f0cddb8dd885"
+      ]
+    },
+    {
+      "actor": "contextual-why-derived",
+      "case": "contextual-why-derived-case",
+      "input_id": "robot-notebook",
+      "request": "ロボットはノートを使う",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ロボットはノートを使う。\n前提ID: fact:21ceb064503fcf52ec52077ac7206e740bfdbb71fbbfb1429495c731a71f9703\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:21ceb064503fcf52ec52077ac7206e740bfdbb71fbbfb1429495c731a71f9703"
+      ]
+    },
+    {
+      "actor": "contextual-why-derived",
+      "case": "contextual-why-derived-case",
+      "input_id": "robot-tool-question",
+      "request": "ロボットは道具を使いますか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ロボットは道具を使う。",
+      "reason": null,
+      "dependencies": [
+        "fact:06f50699b5bb3ee6addf037902b53a760efa0703a309972e0e7f82f374727e08",
+        "fact:21ceb064503fcf52ec52077ac7206e740bfdbb71fbbfb1429495c731a71f9703",
+        "rule:c4ac71c5188a784949de1df184e9dacf40f6f95b08d5268327c3f0cddb8dd885"
+      ]
+    },
+    {
+      "actor": "contextual-why-derived",
+      "case": "contextual-why-derived-case",
+      "input_id": "why-derived-answer",
+      "request": "どうして？",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "前回の結論: ロボットは道具を使う。\n直接提示された前提: ロボットはノートを使う（根拠ID: fact:21ceb064503fcf52ec52077ac7206e740bfdbb71fbbfb1429495c731a71f9703）\n導出された事実: ロボットは道具を使う（導出ID: fact:06f50699b5bb3ee6addf037902b53a760efa0703a309972e0e7f82f374727e08; 依存ID: fact:21ceb064503fcf52ec52077ac7206e740bfdbb71fbbfb1429495c731a71f9703, rule:c4ac71c5188a784949de1df184e9dacf40f6f95b08d5268327c3f0cddb8dd885）\n適用規則: $xはノートを使う ならば $xは道具を使う（規則ID: rule:c4ac71c5188a784949de1df184e9dacf40f6f95b08d5268327c3f0cddb8dd885）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "e55b443dff8a328d288b70d16185156d4eac4fce7b43a673a558393ae73ade13",
+        "fact:06f50699b5bb3ee6addf037902b53a760efa0703a309972e0e7f82f374727e08",
+        "fact:21ceb064503fcf52ec52077ac7206e740bfdbb71fbbfb1429495c731a71f9703",
+        "rule:c4ac71c5188a784949de1df184e9dacf40f6f95b08d5268327c3f0cddb8dd885"
+      ]
+    },
+    {
+      "actor": "contextual-why-refuted",
+      "case": "contextual-why-refuted-case",
+      "input_id": "robot-not-poison",
+      "request": "ロボットは毒を使わない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ロボットは毒を使わない。\n前提ID: fact:41c1f01df4a6114704b1b33c81a492523da4dc2f765ad04df56baa73d481d666\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:41c1f01df4a6114704b1b33c81a492523da4dc2f765ad04df56baa73d481d666"
+      ]
+    },
+    {
+      "actor": "contextual-why-refuted",
+      "case": "contextual-why-refuted-case",
+      "input_id": "robot-poison-question",
+      "request": "ロボットは毒を使いますか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ロボットは毒を使わない。",
+      "reason": null,
+      "dependencies": [
+        "fact:41c1f01df4a6114704b1b33c81a492523da4dc2f765ad04df56baa73d481d666"
+      ]
+    },
+    {
+      "actor": "contextual-why-refuted",
+      "case": "contextual-why-refuted-case",
+      "input_id": "why-refuted-answer",
+      "request": "Why?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前回の結論: ロボットは毒を使わない。\n直接提示された前提: ロボットは毒を使わない（根拠ID: fact:41c1f01df4a6114704b1b33c81a492523da4dc2f765ad04df56baa73d481d666）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "56bf1e667947cc4a93d481d9cdd310a7212f4fe49582c3ed12da5055c6e5fea8",
+        "fact:41c1f01df4a6114704b1b33c81a492523da4dc2f765ad04df56baa73d481d666"
+      ]
+    },
+    {
+      "actor": "contextual-why-calculation",
+      "case": "contextual-why-calculation-case",
+      "input_id": "sum",
+      "request": "2+3",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "2+3 = 5",
+      "reason": null,
+      "dependencies": []
+    },
+    {
+      "actor": "contextual-why-calculation",
+      "case": "contextual-why-calculation-case",
+      "input_id": "why-sum",
+      "request": "Why?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "「2+3」の計算過程を示します。\n2 + 3 = 5\n計算結果は5です。",
+      "reason": null,
+      "dependencies": [
+        "4c6ddc065e96f27da91e11b546d49ee0bc353d4e5aee6bf061d7dc5966762cd8"
+      ]
+    },
+    {
+      "actor": "contextual-why-direct",
+      "case": "contextual-why-no-prior-case",
+      "input_id": "why-without-prior",
+      "request": "なぜですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "説明対象となる実際の採用済み成果がありません。",
+      "reason": "MISSING_ACTUAL_RESULT: 説明対象となる実際の採用済み成果がありません。",
+      "dependencies": []
+    },
+    {
+      "actor": "contextual-why-other-actor",
+      "case": "contextual-why-direct-case",
+      "input_id": "why-other-actor",
+      "request": "なぜですか",
+      "exit_code": 3,
+      "lifecycle": "REJECT",
+      "guarantee": "UNKNOWN",
+      "text": "ACCESS_DENIED: actor does not own this case",
+      "reason": "CASE_ACCESS_DENIED: ACCESS_DENIED: actor does not own this case",
+      "dependencies": []
+    }
+  ],
+  "summary": {
+    "total_requests": 14,
+    "lifecycle_counts": {
+      "COMMIT": 12,
+      "REJECT": 1,
+      "SUSPEND": 1
+    }
+  },
+  "targeted_checks": {
+    "direct_relation_followup_and_prior_result_dependency": "PASS",
+    "derived_relation_followup_and_fact_rule_lineage": "PASS",
+    "refuted_question_explains_supported_opposite": "PASS",
+    "calculation_followup_uses_exact_previous_result": "PASS",
+    "missing_prior_result_typed_stop": "PASS",
+    "actor_and_case_context_isolation": "PASS"
+  },
+  "requirements_status": "This bounded context route does not establish broad conversation/reference quality or A04/A07/A08/A12/A13/A14/A15/B01 acceptance; those remain UNVERIFIED.",
+  "limitations": [
+    "Only an immediate committed result in the same actor/case is eligible as context.",
+    "Relation explanations revalidate saved proof dependencies against current memory; they do not claim outside-world truth or general causality.",
+    "Non-relation result types are handled only by existing ExplainPrevious capabilities; unsupported result types remain subject to their typed stop behavior.",
+    "Full workspace runtime suite, full context QA, broad language QA, and the independent user-study population were not run."
+  ]
+}

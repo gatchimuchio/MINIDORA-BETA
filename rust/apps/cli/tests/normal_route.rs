@@ -3906,6 +3906,247 @@ fn natural_why_question_explains_only_current_relation_proofs() {
 }
 
 #[test]
+fn elliptical_why_questions_explain_the_previous_committed_result() {
+    let scratch = Scratch::new();
+
+    let direct_actor = "elliptical-why-direct";
+    let direct_case = "elliptical-why-direct-case";
+    let direct = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "robot-notebook", "ロボットはノートを使う"],
+    ));
+    let direct_answer = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &[
+            "--input",
+            "robot-notebook-question",
+            "ロボットはノートを使いますか",
+        ],
+    ));
+    assert_eq!(direct_answer["lifecycle"], "COMMIT");
+    assert!(
+        direct_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&direct["dependencies"][0])
+    );
+    let direct_why = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "why-direct-answer", "なぜですか"],
+    ));
+    assert_eq!(direct_why["lifecycle"], "COMMIT");
+    assert_eq!(direct_why["guarantee"], "USER_PREMISE");
+    assert!(
+        direct_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("前回の結論: ロボットはノートを使う")
+    );
+    assert!(
+        direct_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("直接提示された前提: ロボットはノートを使う")
+    );
+    assert!(
+        direct_why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&direct_answer["id"])
+    );
+
+    let derived_actor = "elliptical-why-derived";
+    let derived_case = "elliptical-why-derived-case";
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &[
+            "--input",
+            "robot-tool-rule",
+            "もしXはノートを使うならXは道具を使う",
+        ],
+    ));
+    let notebook = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &[
+            "--input",
+            "robot-notebook-premise",
+            "ロボットはノートを使う",
+        ],
+    ));
+    let derived_answer = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &[
+            "--input",
+            "robot-tool-question",
+            "ロボットは道具を使いますか",
+        ],
+    ));
+    assert_eq!(derived_answer["guarantee"], "DERIVED");
+    let derived_why = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &["--input", "why-derived-answer", "どうして？"],
+    ));
+    assert_eq!(derived_why["lifecycle"], "COMMIT");
+    assert_eq!(derived_why["guarantee"], "DERIVED");
+    assert!(
+        derived_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("前回の結論: ロボットは道具を使う")
+    );
+    assert!(
+        derived_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("直接提示された前提: ロボットはノートを使う")
+    );
+    assert!(derived_why["text"].as_str().unwrap().contains("適用規則:"));
+    assert!(
+        derived_why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&derived_answer["id"])
+    );
+    assert!(
+        derived_why["text"]
+            .as_str()
+            .unwrap()
+            .contains(rule["dependencies"][0].as_str().unwrap())
+    );
+    assert!(
+        derived_why["text"]
+            .as_str()
+            .unwrap()
+            .contains(notebook["dependencies"][0].as_str().unwrap())
+    );
+
+    let refuted_actor = "elliptical-why-refuted";
+    let refuted_case = "elliptical-why-refuted-case";
+    let negative = record(&execute_in_case(
+        &scratch.0,
+        refuted_actor,
+        refuted_case,
+        &["--input", "robot-not-poison", "ロボットは毒を使わない"],
+    ));
+    let refuted_answer = record(&execute_in_case(
+        &scratch.0,
+        refuted_actor,
+        refuted_case,
+        &[
+            "--input",
+            "robot-poison-question",
+            "ロボットは毒を使いますか",
+        ],
+    ));
+    assert!(
+        refuted_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ロボットは毒を使わない")
+    );
+    let refuted_why = record(&execute_in_case(
+        &scratch.0,
+        refuted_actor,
+        refuted_case,
+        &["--input", "why-refuted-answer", "Why?"],
+    ));
+    assert_eq!(refuted_why["lifecycle"], "COMMIT");
+    assert!(
+        refuted_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("直接提示された前提: ロボットは毒を使わない")
+    );
+    assert!(
+        refuted_why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&refuted_answer["id"])
+    );
+    assert!(
+        refuted_why["text"]
+            .as_str()
+            .unwrap()
+            .contains(negative["dependencies"][0].as_str().unwrap())
+    );
+
+    let calculation_actor = "elliptical-why-calculation";
+    let calculation_case = "elliptical-why-calculation-case";
+    let calculation = record(&execute_in_case(
+        &scratch.0,
+        calculation_actor,
+        calculation_case,
+        &["--input", "sum", "2+3"],
+    ));
+    let calculation_why = record(&execute_in_case(
+        &scratch.0,
+        calculation_actor,
+        calculation_case,
+        &["--input", "why-sum", "Why?"],
+    ));
+    assert_eq!(calculation_why["lifecycle"], "COMMIT");
+    assert!(
+        calculation_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("2 + 3 = 5")
+    );
+    assert!(
+        calculation_why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&calculation["id"])
+    );
+
+    let missing = stopped(
+        &execute_in_case(
+            &scratch.0,
+            direct_actor,
+            "elliptical-why-no-prior-case",
+            &["--input", "why-without-prior", "なぜですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_ACTUAL_RESULT")
+    );
+    let other_actor = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "elliptical-why-other-actor",
+            direct_case,
+            &["--input", "why-other-actor", "なぜですか"],
+        ),
+        3,
+        "REJECT",
+    );
+    assert!(
+        other_actor["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CASE_ACCESS_DENIED")
+    );
+}
+
+#[test]
 fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
     let scratch = Scratch::new();
     let rule = record(&execute(
