@@ -948,6 +948,27 @@ fn inspect(
         } else {
             None
         };
+    let previous_csv_table_comparison_explanation =
+        if matches!(goal.intent, Intent::ExplainPrevious) {
+            bundle
+                .meaning
+                .context_result_ref
+                .as_ref()
+                .and_then(|id| state.prior_results.get(id))
+                .map(|previous| {
+                    crate::document::previous_csv_table_comparison_explanation(
+                        store,
+                        actor,
+                        case,
+                        previous,
+                        goal.budget.max_evidence_bytes,
+                    )
+                })
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
     let previous_json_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
         bundle
             .meaning
@@ -1257,6 +1278,34 @@ fn inspect(
             ));
         }
     }
+    if let Some((bundle_ref, report_ref, expected_units)) =
+        &previous_csv_table_comparison_explanation
+    {
+        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+            failure(
+                "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
+                "the prior CSV comparison result reference is missing",
+            )
+        })?;
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
+                "the prior CSV comparison result is no longer retained",
+            )
+        })?;
+        let expected_dependencies =
+            vec![previous.id.clone(), bundle_ref.clone(), report_ref.clone()];
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != expected_dependencies
+            || plan.required_units != *expected_units
+            || result.guarantee != previous.guarantee
+        {
+            return Err(failure(
+                "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
+                "the sealed CSV input, exact comparison report or source-span explanation changed",
+            ));
+        }
+    }
     if let Some((previous_id, source_ref, report_ref, answer_ref, answer_bytes, expected_units)) =
         &previous_json_group_mean_answer
     {
@@ -1553,6 +1602,21 @@ fn inspect(
         });
         sources.push(report_id);
     }
+    if previous_csv_table_comparison_explanation.is_some() {
+        let input_id = "previous-csv-table-comparison-input".to_string();
+        let report_id = "previous-csv-table-comparison-report".to_string();
+        expected_nodes.push(GoalNode {
+            id: input_id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        expected_nodes.push(GoalNode {
+            id: report_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![input_id],
+        });
+        sources.push(report_id);
+    }
     if previous_json_group_mean_answer.is_some() {
         let source_id = "previous-json-group-statistics-source".to_string();
         let report_id = "previous-json-group-statistics-report".to_string();
@@ -1730,6 +1794,17 @@ fn inspect(
     if let Some((bundle_ref, report_ref, _)) = &previous_json_table_operation_explanation {
         let input_id = "previous-json-table-transform-input".to_string();
         let report_id = "previous-json-table-transform-report".to_string();
+        graph.observe(&input_id, bundle_ref, &BTreeMap::new())?;
+        graph.observe(
+            &report_id,
+            report_ref,
+            &BTreeMap::from([(input_id, bundle_ref.clone())]),
+        )?;
+        source_refs.insert(report_id, report_ref.clone());
+    }
+    if let Some((bundle_ref, report_ref, _)) = &previous_csv_table_comparison_explanation {
+        let input_id = "previous-csv-table-comparison-input".to_string();
+        let report_id = "previous-csv-table-comparison-report".to_string();
         graph.observe(&input_id, bundle_ref, &BTreeMap::new())?;
         graph.observe(
             &report_id,
@@ -2579,7 +2654,7 @@ mod tests {
         }
     }
 
-    fn attempted_json_table_context_explanation_prefix(operation: &str) -> Fixture {
+    fn attempted_table_context_explanation_prefix(operation: &str) -> Fixture {
         let directory = std::env::temp_dir().join(format!(
             "minidora-recovery-json-table-context-{}-{}",
             std::process::id(),
@@ -2611,6 +2686,13 @@ mod tests {
                     r#"{"columns":["record_id","group"],"rows":[["north","A"],["south","B"]]}"#;
                 let source = format!(r#"{{"left":{left},"right":{right}}}"#);
                 format!("JSON表を「id」と「record_id」で内部結合して:\n{source}")
+            }
+            "csv_comparison" => {
+                let left = "id,name\r\nnorth,猫\r\nremoved,犬";
+                let right = "id,name\r\nnorth,狐\r\nadded,鳥";
+                format!(
+                    "CSVを列「id」で2つの表を比較して:\n--- MINIDORA LEFT CSV ---\n{left}\r\n--- MINIDORA RIGHT CSV ---\n{right}"
+                )
             }
             _ => panic!("unsupported JSON table context fixture: {operation}"),
         };
@@ -2760,13 +2842,14 @@ mod tests {
     }
 
     #[test]
-    fn json_table_operation_explanation_reconciles_without_resending() {
+    fn structured_table_operation_explanation_reconciles_without_resending() {
         for (operation, expected_marker) in [
             ("filter", "前回のJSON表フィルター"),
             ("inner_join", "前回のJSON表内部結合"),
             ("comparison", "前回のJSON表比較"),
+            ("csv_comparison", "前回のCSV表比較"),
         ] {
-            let fixture = attempted_json_table_context_explanation_prefix(operation);
+            let fixture = attempted_table_context_explanation_prefix(operation);
             let original = fs::read(&fixture.target).unwrap();
             let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
             let store = Store::open(&fixture.state).unwrap();

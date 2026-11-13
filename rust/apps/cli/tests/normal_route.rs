@@ -11330,6 +11330,124 @@ fn json_table_comparison_explanation_replays_two_sided_cells_and_changed_rows() 
 }
 
 #[test]
+fn csv_table_comparison_explanation_replays_two_sided_cells_and_changed_rows() {
+    let source = comparison_csv(COMPARE_LEFT_CSV, COMPARE_RIGHT_CSV);
+    let request = format!("CSVを列「id」で2つの表を比較して:\n{source}");
+    let scratch = Scratch::new();
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "csv-compare-explain", &request],
+    ));
+    let artifact = normal_document_artifact(
+        &scratch.0,
+        "owner",
+        &first,
+        &request,
+        &source,
+        "CSV_TABLE_COMPARE",
+    );
+    assert_csv_comparison(&artifact, &source, true, false);
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(&artifact).unwrap());
+    let original_revision = inspect_normal_case(&scratch.0, "owner");
+    let input_bundle_ref =
+        minidora_domain::digest(&minidora_domain::canonical(&original_revision["bundle"]).unwrap());
+
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    let text = explanation["text"].as_str().unwrap();
+    for expected in [
+        "前回のCSV表比較",
+        "比較キー: \"id\"; 結果: 差分あり (デコード後文字列の完全一致)",
+        "差分: 4件 (セル変更: 2; 左側のみの行: 1; 右側のみの行: 1)",
+        "セル変更 キー \"2\" / 列 \"名前\"",
+        "セル変更 キー \"2\" / 列 \"値\"",
+        "左側のみの行 元行2 キー \"gone\"",
+        "右側のみの行 元行3 キー \"new\"",
+        "値の意味、数値としての同一性、現実の真偽は判定していません。",
+        "キー見出し:",
+        "封印済みInputBundle SHA-256",
+        "report artifact SHA-256",
+        "byte[",
+        "sha256=",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    for span in artifact["spans"].as_array().unwrap().iter().filter(|span| {
+        matches!(
+            span["kind"].as_str(),
+            Some(
+                "CSV_COMPARE_LEFT_CELL"
+                    | "CSV_COMPARE_RIGHT_CELL"
+                    | "CSV_COMPARE_REMOVED_CELL"
+                    | "CSV_COMPARE_ADDED_CELL"
+            )
+        )
+    }) {
+        let start = span["source_start"].as_u64().unwrap() as usize;
+        let end = span["source_end"].as_u64().unwrap() as usize;
+        let raw = &source[start..end];
+        assert!(text.contains(&format!("byte[{start}..{end})")));
+        assert!(text.contains(&format!(
+            "sha256={}",
+            minidora_domain::digest(raw.as_bytes())
+        )));
+    }
+    assert_eq!(
+        explanation["dependencies"].as_array().unwrap(),
+        &vec![
+            first["id"].clone(),
+            Value::String(input_bundle_ref.clone()),
+            Value::String(report_ref.clone()),
+        ]
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let graph = sequence_artifact(&store, &explanation["execution_graph_ref"]);
+    let input_id = "previous-csv-table-comparison-input";
+    let report_id = "previous-csv-table-comparison-report";
+    let nodes = graph[0].as_array().unwrap();
+    assert!(nodes.iter().any(|node| node["id"] == input_id));
+    assert!(nodes.iter().any(|node| {
+        node["id"] == report_id
+            && node["kind"] == "COMPUTED_VALUE"
+            && node["requires"] == serde_json::json!([input_id])
+    }));
+    assert_eq!(graph[1][input_id], input_bundle_ref);
+    assert_eq!(graph[1][report_id], report_ref);
+    assert_eq!(
+        graph[5][report_id],
+        serde_json::json!({input_id:input_bundle_ref})
+    );
+    assert_eq!(
+        explanation["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let revision = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        revision["bundle"]["meaning"]["context_result_ref"],
+        first["id"]
+    );
+    assert_eq!(revision["result"], explanation);
+
+    let equal_source = comparison_csv(COMPARE_LEFT_CSV, COMPARE_EQUAL_CSV);
+    let equal_request = format!("csv-compare-by \"id\":\n{equal_source}");
+    let equal_scratch = Scratch::new();
+    let equal_first = record(&execute(
+        &equal_scratch.0,
+        "owner",
+        &["--input", "csv-equal-compare-explain", &equal_request],
+    ));
+    assert_eq!(equal_first["lifecycle"], "COMMIT");
+    let equal_result = record(&execute(&equal_scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(equal_result["lifecycle"], "COMMIT");
+    let equal_text = equal_result["text"].as_str().unwrap();
+    assert!(equal_text.contains("比較キー: \"id\"; 結果: 一致"));
+    assert!(equal_text.contains("差分: 0件 (セル変更: 0; 左側のみの行: 0; 右側のみの行: 0)"));
+    assert_eq!(equal_result["dependencies"][0], equal_first["id"]);
+    assert_eq!(equal_result["dependencies"].as_array().unwrap().len(), 3);
+}
+
+#[test]
 fn table_row_missing_columns_and_unsupported_operators_stop_durably() {
     for (header, document, code) in [
         (

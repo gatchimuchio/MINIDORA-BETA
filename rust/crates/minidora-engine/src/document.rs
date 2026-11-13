@@ -171,6 +171,450 @@ pub(crate) fn previous_csv_statistics_explanation(
     Ok(found)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CsvTableComparisonText {
+    key_column: String,
+    changes: Vec<CsvTableComparisonChange>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+enum CsvTableComparisonChange {
+    #[serde(rename = "CELL_CHANGED")]
+    CellChanged {
+        key: String,
+        column: String,
+        left: String,
+        right: String,
+    },
+    #[serde(rename = "ROW_REMOVED")]
+    RowRemoved { key: String, row: Vec<String> },
+    #[serde(rename = "ROW_ADDED")]
+    RowAdded { key: String, row: Vec<String> },
+}
+
+/// Recompute a prior keyed CSV comparison from its immutable sealed input,
+/// then explain the exact retained changes and their two-sided source ranges.
+pub(crate) fn previous_csv_table_comparison_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    max_evidence_bytes: usize,
+) -> Result<Option<(String, String, Vec<String>)>> {
+    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+
+    let (bundle_ref, bundle) =
+        match store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)? {
+            Some(value) => value,
+            None => {
+                let looks_like_report = serde_json::from_str::<serde_json::Value>(&previous.text)
+                    .ok()
+                    .and_then(|value| {
+                        value.as_object().and_then(|object| {
+                            (object.len() == 2
+                                && object
+                                    .get("key_column")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some()
+                                && object
+                                    .get("changes")
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some())
+                            .then_some(())
+                        })
+                    })
+                    .is_some();
+                if looks_like_report {
+                    return Err(failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "the prior CSV comparison has no retained sealed input bundle",
+                    ));
+                }
+                return Ok(None);
+            }
+        };
+    let (document, key_column) = match &bundle.meaning.intent {
+        Intent::CsvCompare {
+            document,
+            key_column,
+        } => (document.as_str(), key_column.as_str()),
+        _ => return Ok(None),
+    };
+    if bundle_ref != digest(&canonical(&bundle)?) {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the sealed CSV comparison input bundle hash changed",
+        ));
+    }
+
+    let recomputed = csv_compare_by(document, key_column)?;
+    let report_bytes = canonical(&recomputed)?;
+    let report_ref = digest(&report_bytes);
+    let stored_report = store
+        .get_bytes_if_present(actor, case, &report_ref)?
+        .ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "the prior CSV comparison report artifact is missing",
+            )
+        })?;
+    if previous.dependencies != [report_ref.clone()]
+        || stored_report != report_bytes
+        || previous.text != recomputed.text
+        || recomputed.operation != "CSV_TABLE_COMPARE"
+        || recomputed.source_document != document
+        || recomputed.parameters.get("key_column").map(String::as_str) != Some(key_column)
+        || recomputed.source_sha256 != digest(document.as_bytes())
+        || recomputed.output_sha256 != digest(recomputed.text.as_bytes())
+    {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the prior CSV comparison input, report artifact or result text no longer revalidates",
+        ));
+    }
+
+    let typed: CsvTableComparisonText = serde_json::from_str(&recomputed.text).map_err(|_| {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed CSV comparison text has an unsupported shape",
+        )
+    })?;
+    if typed.key_column != key_column {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed CSV comparison key differs from the sealed request",
+        ));
+    }
+    for span in &recomputed.spans {
+        csv_table_comparison_span(&recomputed, span)?;
+    }
+    let key_header = csv_table_comparison_find_span(
+        &recomputed,
+        "CSV_COMPARE_KEY_HEADER",
+        Some(0),
+        None,
+        Some(key_column),
+    )?;
+
+    let mut cell_changes = 0usize;
+    let mut removed_rows = 0usize;
+    let mut added_rows = 0usize;
+    for change in &typed.changes {
+        match change {
+            CsvTableComparisonChange::CellChanged { .. } => cell_changes += 1,
+            CsvTableComparisonChange::RowRemoved { .. } => removed_rows += 1,
+            CsvTableComparisonChange::RowAdded { .. } => added_rows += 1,
+        }
+    }
+    let mut lines = vec![
+        "前回のCSV表比較を、封印済みの元入力から再計算しました。".into(),
+        format!(
+            "比較キー: {:?}; 結果: {} (デコード後文字列の完全一致)",
+            typed.key_column,
+            if typed.changes.is_empty() {
+                "一致"
+            } else {
+                "差分あり"
+            }
+        ),
+        format!(
+            "差分: {}件 (セル変更: {}; 左側のみの行: {}; 右側のみの行: {})",
+            typed.changes.len(),
+            cell_changes,
+            removed_rows,
+            added_rows
+        ),
+        "値の意味、数値としての同一性、現実の真偽は判定していません。".into(),
+        format!("元資料 SHA-256: {}", recomputed.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!(
+            "キー見出し: {}",
+            csv_table_comparison_span(&recomputed, key_header)?
+        ),
+    ];
+    for change in typed.changes.iter().take(8) {
+        match change {
+            CsvTableComparisonChange::CellChanged {
+                key,
+                column,
+                left,
+                right,
+            } => {
+                let left_key = csv_table_comparison_find_span(
+                    &recomputed,
+                    "CSV_COMPARE_CHANGED_KEY",
+                    None,
+                    None,
+                    Some(key),
+                )?;
+                let right_key = csv_table_comparison_find_span(
+                    &recomputed,
+                    "CSV_COMPARE_MATCHED_KEY",
+                    None,
+                    None,
+                    Some(key),
+                )?;
+                let column_span = csv_table_comparison_find_span(
+                    &recomputed,
+                    "CSV_COMPARE_COLUMN",
+                    Some(0),
+                    None,
+                    Some(column),
+                )?;
+                let column_index = column_span.column.ok_or_else(|| {
+                    failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "a changed comparison column has no original column index",
+                    )
+                })?;
+                let left_span = csv_table_comparison_find_span(
+                    &recomputed,
+                    "CSV_COMPARE_LEFT_CELL",
+                    left_key.row,
+                    Some(column_index),
+                    Some(left),
+                )?;
+                let right_span = csv_table_comparison_find_span(
+                    &recomputed,
+                    "CSV_COMPARE_RIGHT_CELL",
+                    right_key.row,
+                    Some(column_index),
+                    Some(right),
+                )?;
+                lines.push(format!(
+                    "セル変更 キー {:?} / 列 {:?}: 左 元行{} 値 {:?} {}; 右 元行{} 値 {:?} {}; キー位置 左 {}; 右 {}",
+                    preview(key),
+                    preview(column),
+                    left_key.row.unwrap_or(0),
+                    preview(left),
+                    csv_table_comparison_span(&recomputed, left_span)?,
+                    right_key.row.unwrap_or(0),
+                    preview(right),
+                    csv_table_comparison_span(&recomputed, right_span)?,
+                    csv_table_comparison_span(&recomputed, left_key)?,
+                    csv_table_comparison_span(&recomputed, right_key)?
+                ));
+            }
+            CsvTableComparisonChange::RowRemoved { key, row } => {
+                lines.push(csv_table_comparison_row_line(
+                    &recomputed,
+                    "CSV_COMPARE_REMOVED_KEY",
+                    "CSV_COMPARE_REMOVED_CELL",
+                    "左側のみの行",
+                    key,
+                    row,
+                )?);
+            }
+            CsvTableComparisonChange::RowAdded { key, row } => {
+                lines.push(csv_table_comparison_row_line(
+                    &recomputed,
+                    "CSV_COMPARE_ADDED_KEY",
+                    "CSV_COMPARE_ADDED_CELL",
+                    "右側のみの行",
+                    key,
+                    row,
+                )?);
+            }
+        }
+    }
+    if typed.changes.len() > 8 {
+        lines.push(format!(
+            "残りの差分 {}件はreport artifactに保持されています。",
+            typed.changes.len() - 8
+        ));
+    }
+
+    let (Some(prior_plan), Some(prior_render)) =
+        (previous.content_plan.as_ref(), previous.render.as_ref())
+    else {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the prior CSV comparison has no retained content plan or render observation",
+        ));
+    };
+    let mut unsigned_plan = prior_plan.clone();
+    unsigned_plan.id.clear();
+    if prior_plan.id != minidora_domain::identity(&unsigned_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || !prior_plan.dependencies.contains(&report_ref)
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the prior CSV comparison content plan or rendered output is invalid",
+        ));
+    }
+    let prior_plan_bytes = canonical(prior_plan)?;
+    let prior_render_bytes = canonical(prior_render)?;
+    for (artifact_ref, artifact_bytes, label) in [
+        (digest(&prior_plan_bytes), prior_plan_bytes, "content plan"),
+        (
+            digest(&prior_render_bytes),
+            prior_render_bytes,
+            "render observation",
+        ),
+    ] {
+        match store.get_bytes_if_present(actor, case, &artifact_ref)? {
+            Some(stored) if stored == artifact_bytes => {}
+            Some(_) => {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    format!("the prior CSV comparison {label} artifact changed"),
+                ));
+            }
+            None => {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    format!("the prior CSV comparison {label} artifact is missing"),
+                ));
+            }
+        }
+    }
+    if lines.join("\n").len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the exact CSV table comparison explanation exceeds the request evidence budget",
+        ));
+    }
+    Ok(Some((bundle_ref, report_ref, lines)))
+}
+
+fn csv_table_comparison_find_span<'a>(
+    report: &'a DocumentResult,
+    kind: &str,
+    row: Option<usize>,
+    column: Option<usize>,
+    decoded_value: Option<&str>,
+) -> Result<&'a DocumentSpan> {
+    report
+        .spans
+        .iter()
+        .find(|span| {
+            span.kind == kind
+                && row.is_none_or(|value| span.row == Some(value))
+                && column.is_none_or(|value| span.column == Some(value))
+                && decoded_value.is_none_or(|value| span.decoded_value.as_deref() == Some(value))
+        })
+        .ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                format!("a required {kind} source span is missing"),
+            )
+        })
+}
+
+fn csv_table_comparison_span(report: &DocumentResult, span: &DocumentSpan) -> Result<String> {
+    let raw = report
+        .source_document
+        .get(span.source_start..span.source_end)
+        .ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "a retained CSV comparison source range is outside the sealed input",
+            )
+        })?;
+    if raw != span.source_text {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "a retained CSV comparison source range differs from its original bytes",
+        ));
+    }
+    let decoded = span.decoded_value.as_deref().ok_or_else(|| {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "a retained CSV comparison cell has no decoded value",
+        )
+    })?;
+    match (span.output_start, span.output_end) {
+        (Some(start), Some(end)) => {
+            let token = report.text.get(start..end).ok_or_else(|| {
+                failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "a retained CSV comparison output range is outside the report",
+                )
+            })?;
+            if serde_json::from_str::<String>(token).ok().as_deref() != Some(decoded) {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "a retained CSV comparison output token differs from its decoded source cell",
+                ));
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return Err(failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "a retained CSV comparison output range is incomplete",
+            ));
+        }
+    }
+    Ok(format!(
+        "byte[{}..{}) sha256={} 原文={:?}",
+        span.source_start,
+        span.source_end,
+        digest(raw.as_bytes()),
+        preview(raw)
+    ))
+}
+
+fn csv_table_comparison_row_line(
+    report: &DocumentResult,
+    key_kind: &str,
+    cell_kind: &str,
+    label: &str,
+    key: &str,
+    row: &[String],
+) -> Result<String> {
+    let key_span = csv_table_comparison_find_span(report, key_kind, None, None, Some(key))?;
+    let row_index = key_span.row.ok_or_else(|| {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "an added or removed comparison key has no source row",
+        )
+    })?;
+    if row.is_empty() {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "an added or removed comparison row has no cells",
+        ));
+    }
+    let mut cells = Vec::new();
+    for (column, value) in row.iter().enumerate().take(8) {
+        let span = csv_table_comparison_find_span(
+            report,
+            cell_kind,
+            Some(row_index),
+            Some(column),
+            Some(value),
+        )?;
+        cells.push(format!(
+            "列{} {:?} {}",
+            column + 1,
+            preview(value),
+            csv_table_comparison_span(report, span)?
+        ));
+    }
+    if row.len() > 8 {
+        cells.push(format!(
+            "残り{}列はreport artifactに保持されています",
+            row.len() - 8
+        ));
+    }
+    Ok(format!(
+        "{label} 元行{} キー {:?}: [{}]; キー位置 {}",
+        row_index,
+        preview(key),
+        cells.join("; "),
+        csv_table_comparison_span(report, key_span)?
+    ))
+}
+
 /// Revalidate a prior JSON string-table grouped-statistics report against its
 /// exact source document and explain bounded group results with original cell
 /// ranges. The source and typed report are separate immutable artifacts.
