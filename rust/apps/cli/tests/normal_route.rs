@@ -2146,6 +2146,269 @@ fn declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage() {
 }
 
 #[test]
+fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
+    let scratch = Scratch::new();
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "rule-origin",
+        &[
+            "--input",
+            "conjunctive-rule",
+            "If [scope=biology]X is a bird and X is feathered then [scope=biology]X is warm-blooded",
+        ],
+    ));
+    let rule_id = rule["dependencies"][0].as_str().unwrap();
+    assert_eq!(rule["guarantee"], "USER_PREMISE");
+    assert!(
+        rule["text"]
+            .as_str()
+            .unwrap()
+            .contains("二つの条件付き前提")
+    );
+
+    let bird = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &["--input", "mira-bird", "[scope=biology]Mira is a bird"],
+    ));
+    let missing = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "new-subject",
+            &[
+                "--input",
+                "mira-incomplete-question",
+                "[scope=biology]Mira is warm-blooded?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    let feathered = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &[
+            "--input",
+            "mira-feathered",
+            "[scope=biology]Mira is feathered",
+        ],
+    ));
+    let answer = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &[
+            "--input",
+            "mira-warm-blooded",
+            "[scope=biology]Mira is warm-blooded?",
+        ],
+    ));
+    assert_eq!(answer["guarantee"], "DERIVED");
+    for id in [
+        rule_id,
+        bird["dependencies"][0].as_str().unwrap(),
+        feathered["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            answer["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(id.into())),
+            "proof lineage is missing {id}"
+        );
+    }
+
+    let why = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &[
+            "--input",
+            "mira-warm-blooded-why",
+            "なぜ[scope=biology]Miraはwarm-bloodedですか",
+        ],
+    ));
+    let explanation = why["text"].as_str().unwrap();
+    assert!(explanation.contains("Miraはbirdである"));
+    assert!(explanation.contains("Miraはfeatheredである"));
+    assert!(explanation.contains("適用規則: $xはbirdである かつ $xはfeatheredである"));
+    assert_eq!(why["dependencies"], answer["dependencies"]);
+
+    let feather_id = feathered["dependencies"][0].as_str().unwrap();
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "new-subject",
+        &[
+            "--input",
+            "invalidate-feathered-premise",
+            &format!("{feather_id}を無効化して"),
+        ],
+    ));
+    stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "new-subject",
+            &[
+                "--input",
+                "mira-after-invalidation",
+                "[scope=biology]Mira is warm-blooded?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert_eq!(
+        record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            "new-subject",
+            &[
+                "--input",
+                "mira-warm-blooded",
+                "[scope=biology]Mira is warm-blooded?",
+            ],
+        )),
+        answer,
+        "the earlier committed proof record must remain immutable"
+    );
+
+    let english_rule = record(&execute_in_case(
+        &scratch.0,
+        "english-owner",
+        "english-rule-origin",
+        &[
+            "--input",
+            "english-conjunctive-rule",
+            "If X is a bird and X is feathered then X is warm-blooded",
+        ],
+    ));
+    let english_bird = record(&execute_in_case(
+        &scratch.0,
+        "english-owner",
+        "english-new-subject",
+        &["--input", "robin-bird", "Robin is a bird"],
+    ));
+    let english_feathered = record(&execute_in_case(
+        &scratch.0,
+        "english-owner",
+        "english-new-subject",
+        &["--input", "robin-feathered", "Robin is feathered"],
+    ));
+    let english_answer = record(&execute_in_case(
+        &scratch.0,
+        "english-owner",
+        "english-new-subject",
+        &["--input", "robin-question", "Is Robin warm-blooded?"],
+    ));
+    assert_eq!(english_answer["guarantee"], "DERIVED");
+    for id in [
+        english_rule["dependencies"][0].as_str().unwrap(),
+        english_bird["dependencies"][0].as_str().unwrap(),
+        english_feathered["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            english_answer["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(id.into())),
+            "English proof lineage is missing {id}"
+        );
+    }
+    let english_why = record(&execute_in_case(
+        &scratch.0,
+        "english-owner",
+        "english-new-subject",
+        &["--input", "robin-why", "Why is Robin warm-blooded?"],
+    ));
+    assert!(
+        english_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("Robinはbirdである")
+    );
+    assert!(
+        english_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("Robinはfeatheredである")
+    );
+
+    let shared_variable_rule = record(&execute_in_case(
+        &scratch.0,
+        "shared-variable-owner",
+        "relation-rule-origin",
+        &[
+            "--input",
+            "shared-variable-rule",
+            "If X is a bird and X is Y then Y is an animal",
+        ],
+    ));
+    let joined_subject_bird = record(&execute_in_case(
+        &scratch.0,
+        "shared-variable-owner",
+        "relation-rule-consumer",
+        &["--input", "osprey-bird", "Osprey is a bird"],
+    ));
+    let bound_relation = record(&execute_in_case(
+        &scratch.0,
+        "shared-variable-owner",
+        "relation-rule-consumer",
+        &["--input", "osprey-robin", "Osprey is Robin"],
+    ));
+    let bound_subject_answer = record(&execute_in_case(
+        &scratch.0,
+        "shared-variable-owner",
+        "relation-rule-consumer",
+        &["--input", "robin-animal", "Is Robin an animal?"],
+    ));
+    assert_eq!(bound_subject_answer["guarantee"], "DERIVED");
+    for id in [
+        shared_variable_rule["dependencies"][0].as_str().unwrap(),
+        joined_subject_bird["dependencies"][0].as_str().unwrap(),
+        bound_relation["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            bound_subject_answer["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(id.into())),
+            "shared-variable proof lineage is missing {id}"
+        );
+    }
+    let bound_subject_why = record(&execute_in_case(
+        &scratch.0,
+        "shared-variable-owner",
+        "relation-rule-consumer",
+        &["--input", "robin-why-animal", "Why is Robin an animal?"],
+    ));
+    assert!(
+        bound_subject_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("Ospreyはbirdである")
+    );
+    assert!(
+        bound_subject_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("OspreyはRobinである")
+    );
+}
+
+#[test]
 fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart() {
     let scratch = Scratch::new();
     let bird = record(&execute(
@@ -2218,7 +2481,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v57-contextual-premise-correction"
+        minidora_engine::input::PARSER_VERSION
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -2930,7 +3193,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v57-contextual-premise-correction"
+        minidora_engine::input::PARSER_VERSION
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -8813,7 +9076,7 @@ fn generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v57-contextual-premise-correction"
+        minidora_engine::input::PARSER_VERSION
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -8901,7 +9164,7 @@ fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() 
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v57-contextual-premise-correction"
+        minidora_engine::input::PARSER_VERSION
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],

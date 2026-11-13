@@ -136,6 +136,10 @@ pub struct Proposition {
 pub struct RelationRule {
     pub id: String,
     pub premise: Proposition,
+    /// Additional conjunctive premises. Empty preserves the original
+    /// single-premise representation and its durable identities.
+    #[serde(default)]
+    pub additional_premises: Vec<Proposition>,
     pub conclusion: Proposition,
     pub source_input: String,
     pub dependencies: Vec<String>,
@@ -355,6 +359,10 @@ pub enum Intent {
     },
     AddRule {
         premise: Proposition,
+        conclusion: Proposition,
+    },
+    AddConjunctiveRule {
+        premises: Vec<Proposition>,
         conclusion: Proposition,
     },
     Ask {

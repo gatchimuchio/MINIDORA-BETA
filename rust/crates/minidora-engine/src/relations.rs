@@ -1,6 +1,5 @@
 //! Scoped proof-preserving relations. Source premises are never world facts.
-//! This version supports one-premise rules; unrepresented conjunctions and
-//! quantifiers must be refused by the input grammar rather than dropped.
+//! Rules support one premise or exactly two explicitly joined premises.
 use minidora_domain::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -122,21 +121,63 @@ pub fn add_rule(
     conclusion: Proposition,
     source_input: &str,
 ) -> Result<RelationRule> {
-    validate(&premise)?;
+    add_rule_with_premises(memory, vec![premise], conclusion, source_input)
+}
+
+pub fn add_rule_with_premises(
+    memory: &mut MemoryState,
+    premises: Vec<Proposition>,
+    conclusion: Proposition,
+    source_input: &str,
+) -> Result<RelationRule> {
+    if !(1..=2).contains(&premises.len()) {
+        return Err(failure(
+            "UNSUPPORTED_RULE_PREMISE_COUNT",
+            "a relation rule requires one or two explicit premises",
+        ));
+    }
+    for premise in &premises {
+        validate(premise)?;
+    }
     validate(&conclusion)?;
-    if premise.scope != conclusion.scope {
+    let premise = &premises[0];
+    let additional_premises = premises[1..].to_vec();
+    if premises
+        .iter()
+        .any(|antecedent| antecedent.scope != premise.scope)
+        || premise.scope != conclusion.scope
+    {
         return Err(failure(
             "SCOPE_MISMATCH",
             "a rule may not silently change scope",
         ));
     }
-    if !variables(&conclusion).is_subset(&variables(&premise)) {
+    if premises
+        .iter()
+        .enumerate()
+        .any(|(index, antecedent)| premises[index + 1..].contains(antecedent))
+    {
         return Err(failure(
-            "UNBOUND_VARIABLE",
-            "conclusion contains a variable not bound by its premise",
+            "DUPLICATE_RULE_PREMISE",
+            "a conjunctive rule may not repeat the same premise",
         ));
     }
-    if premise == conclusion {
+    if additional_premises.len() == 1
+        && variables(premise).is_disjoint(&variables(&additional_premises[0]))
+    {
+        return Err(failure(
+            "UNBOUND_VARIABLE",
+            "two-premise relation rules require a shared variable to join their evidence",
+        ));
+    }
+    let bound_variables: BTreeSet<_> = premises.iter().flat_map(variables).collect();
+    if !variables(&conclusion).is_subset(&bound_variables) {
+        return Err(failure(
+            "UNBOUND_VARIABLE",
+            "conclusion contains a variable not bound by its premises",
+        ));
+    }
+    if additional_premises.is_empty() && premise == &conclusion {
         return Err(failure("CYCLIC_RULE", "a self-rule adds no consequence"));
     }
     if source_input.is_empty() {
@@ -145,16 +186,29 @@ pub fn add_rule(
             "a rule needs original input provenance",
         ));
     }
-    let id = format!(
-        "rule:{}",
-        identity(&("declared-rule-v1", &premise, &conclusion, source_input))?
-    );
+    let id = if additional_premises.is_empty() {
+        format!(
+            "rule:{}",
+            identity(&("declared-rule-v1", premise, &conclusion, source_input))?
+        )
+    } else {
+        format!(
+            "rule:{}",
+            identity(&(
+                "declared-conjunctive-rule-v1",
+                &premises,
+                &conclusion,
+                source_input
+            ))?
+        )
+    };
     if let Some(old) = memory.rules.iter().find(|rule| rule.id == id) {
         return Ok(old.clone());
     }
     let rule = RelationRule {
         id,
-        premise,
+        premise: premise.clone(),
+        additional_premises,
         conclusion,
         source_input: source_input.into(),
         dependencies: Vec::new(),
@@ -178,6 +232,7 @@ pub fn add_rule(
             if let Some(composed) = compose(left, right)?
                 && !memory.rules.iter().any(|old| {
                     old.premise == composed.premise
+                        && old.additional_premises == composed.additional_premises
                         && old.conclusion == composed.conclusion
                         && old.valid
                 })
@@ -258,6 +313,11 @@ fn canonical_variables(premise: &mut Proposition, conclusion: &mut Proposition) 
     }
 }
 fn compose(left: &RelationRule, right: &RelationRule) -> Result<Option<RelationRule>> {
+    // A shortcut must retain every antecedent. Leave multi-premise rules for
+    // the ordinary query closure until composition can preserve full joins.
+    if !left.additional_premises.is_empty() || !right.additional_premises.is_empty() {
+        return Ok(None);
+    }
     let left_premise = renamed(&left.premise, "left");
     let left_conclusion = renamed(&left.conclusion, "left");
     let right_premise = renamed(&right.premise, "right");
@@ -291,6 +351,7 @@ fn compose(left: &RelationRule, right: &RelationRule) -> Result<Option<RelationR
     Ok(Some(RelationRule {
         id,
         premise,
+        additional_premises: Vec::new(),
         conclusion,
         source_input: "derived:proof-composition-v1".into(),
         dependencies,
@@ -315,10 +376,17 @@ fn permitted_rule<'a>(
     valid
 }
 fn matches(pattern: &Proposition, actual: &Proposition) -> Option<BTreeMap<String, String>> {
+    matches_with_bindings(pattern, actual, &BTreeMap::new())
+}
+fn matches_with_bindings(
+    pattern: &Proposition,
+    actual: &Proposition,
+    existing: &BTreeMap<String, String>,
+) -> Option<BTreeMap<String, String>> {
     if !same_shape(pattern, actual) {
         return None;
     }
-    let mut bindings = BTreeMap::new();
+    let mut bindings = existing.clone();
     if !unify_term(&pattern.subject, &actual.subject, &mut bindings)
         || !unify_term(&pattern.object, &actual.object, &mut bindings)
     {
@@ -358,7 +426,10 @@ pub fn query(
     let rules: Vec<_> = memory
         .rules
         .iter()
-        .filter(|rule| permitted_rule(rule, &rule_map, &mut BTreeSet::new()))
+        .filter(|rule| {
+            rule.additional_premises.len() <= 1
+                && permitted_rule(rule, &rule_map, &mut BTreeSet::new())
+        })
         .collect();
     let mut known = BTreeMap::<Proposition, Fact>::new();
     for fact in &memory.facts {
@@ -377,7 +448,8 @@ pub fn query(
         }
     }
     let mut steps = 0u32;
-    let mut applied = BTreeSet::new();
+    let mut applied_single = BTreeSet::new();
+    let mut applied_conjunctive = BTreeSet::new();
     loop {
         let before = known.len();
         let current: Vec<_> = known.values().cloned().collect();
@@ -387,51 +459,46 @@ pub fn query(
                 continue;
             }
             for rule in &rules {
-                let Some(bindings) = matches(&rule.premise, &fact.proposition) else {
+                if rule.additional_premises.is_empty() {
+                    let Some(bindings) = matches(&rule.premise, &fact.proposition) else {
+                        continue;
+                    };
+                    if !applied_single.insert((rule.id.clone(), fact.id.clone())) {
+                        continue;
+                    }
+                    charge_step(&mut steps, max_steps)?;
+                    derive(&mut known, rule, std::slice::from_ref(&fact), &bindings)?;
+                    continue;
+                }
+
+                let Some(first_bindings) = matches(&rule.premise, &fact.proposition) else {
                     continue;
                 };
-                if !applied.insert((rule.id.clone(), fact.id.clone())) {
-                    continue;
+                let joined_premise = &rule.additional_premises[0];
+                let candidates: Vec<_> = known.values().cloned().collect();
+                for second_fact in candidates {
+                    if known.contains_key(&opposition(&second_fact.proposition))
+                        || !same_shape(joined_premise, &second_fact.proposition)
+                    {
+                        continue;
+                    }
+                    let application = (rule.id.clone(), fact.id.clone(), second_fact.id.clone());
+                    if applied_conjunctive.contains(&application) {
+                        continue;
+                    }
+                    let Some(bindings) = matches_with_bindings(
+                        joined_premise,
+                        &second_fact.proposition,
+                        &first_bindings,
+                    ) else {
+                        continue;
+                    };
+                    charge_step(&mut steps, max_steps)?;
+                    if !applied_conjunctive.insert(application) {
+                        continue;
+                    }
+                    derive(&mut known, rule, &[fact.clone(), second_fact], &bindings)?;
                 }
-                steps = steps
-                    .checked_add(1)
-                    .ok_or_else(|| failure("RELATION_BUDGET", "relation step overflow"))?;
-                if steps > max_steps {
-                    return Err(failure(
-                        "RELATION_BUDGET",
-                        "proof expansion exceeded the task relation budget",
-                    ));
-                }
-                let conclusion = substitute(&rule.conclusion, &bindings);
-                if !variables(&conclusion).is_empty() {
-                    return Err(failure(
-                        "UNBOUND_VARIABLE",
-                        "derived conclusion remains unbound",
-                    ));
-                }
-                if known.contains_key(&conclusion) {
-                    continue;
-                }
-                let mut dependencies: BTreeSet<_> = fact.dependencies.iter().cloned().collect();
-                dependencies.insert(fact.id.clone());
-                dependencies.insert(rule.id.clone());
-                dependencies.extend(rule.dependencies.iter().cloned());
-                let dependencies: Vec<_> = dependencies.into_iter().collect();
-                let id = format!(
-                    "fact:{}",
-                    identity(&("derived-v1", &conclusion, &dependencies))?
-                );
-                known.insert(
-                    conclusion.clone(),
-                    Fact {
-                        id,
-                        proposition: conclusion,
-                        guarantee: Guarantee::Derived,
-                        source_input: fact.source_input.clone(),
-                        dependencies,
-                        valid: true,
-                    },
-                );
             }
         }
         if known.len() == before {
@@ -483,6 +550,67 @@ pub fn query(
         used_rules: used_rules.into_iter().collect(),
         steps,
     })
+}
+
+fn charge_step(steps: &mut u32, max_steps: u32) -> Result<()> {
+    *steps = steps
+        .checked_add(1)
+        .ok_or_else(|| failure("RELATION_BUDGET", "relation step overflow"))?;
+    if *steps > max_steps {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "proof expansion exceeded the task relation budget",
+        ));
+    }
+    Ok(())
+}
+
+fn derive(
+    known: &mut BTreeMap<Proposition, Fact>,
+    rule: &RelationRule,
+    premises: &[Fact],
+    bindings: &BTreeMap<String, String>,
+) -> Result<()> {
+    let conclusion = substitute(&rule.conclusion, bindings);
+    if !variables(&conclusion).is_empty() {
+        return Err(failure(
+            "UNBOUND_VARIABLE",
+            "derived conclusion remains unbound",
+        ));
+    }
+    if known.contains_key(&conclusion) {
+        return Ok(());
+    }
+    let mut dependencies: BTreeSet<_> = premises
+        .iter()
+        .flat_map(|fact| {
+            fact.dependencies
+                .iter()
+                .cloned()
+                .chain(std::iter::once(fact.id.clone()))
+        })
+        .collect();
+    dependencies.insert(rule.id.clone());
+    dependencies.extend(rule.dependencies.iter().cloned());
+    let dependencies: Vec<_> = dependencies.into_iter().collect();
+    let id = format!(
+        "fact:{}",
+        identity(&("derived-v1", &conclusion, &dependencies))?
+    );
+    known.insert(
+        conclusion.clone(),
+        Fact {
+            id,
+            proposition: conclusion,
+            guarantee: Guarantee::Derived,
+            source_input: premises
+                .first()
+                .map_or_else(String::new, |fact| fact.source_input.clone()),
+            dependencies,
+            valid: true,
+        },
+    );
+    Ok(())
 }
 
 /// Retain the queried fact and every transitive premise/rule identity used by
@@ -727,5 +855,124 @@ mod contrary_evidence_tests {
         assert!(result.facts[0].proposition.negative);
         assert!(result.facts[0].dependencies.contains(&source.id));
         assert!(result.used_rules.contains(&rule.id));
+    }
+}
+
+#[cfg(test)]
+mod conjunctive_rule_tests {
+    use super::*;
+
+    fn p(subject: &str, object: &str) -> Proposition {
+        Proposition {
+            subject: subject.into(),
+            predicate: "is".into(),
+            object: object.into(),
+            negative: false,
+            scope: "biology".into(),
+        }
+    }
+
+    #[test]
+    fn single_premise_rule_identity_stays_compatible() {
+        let premise = p("$x", "bird");
+        let conclusion = p("$x", "animal");
+        let expected = format!(
+            "rule:{}",
+            identity(&("declared-rule-v1", &premise, &conclusion, "original-input")).unwrap()
+        );
+        let rule = add_rule(
+            &mut MemoryState::default(),
+            premise,
+            conclusion,
+            "original-input",
+        )
+        .unwrap();
+        assert_eq!(rule.id, expected);
+    }
+
+    #[test]
+    fn shared_variable_join_binds_a_new_conclusion_subject() {
+        let mut memory = MemoryState::default();
+        let rule = add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "bird"), p("$x", "$y")],
+            p("$y", "animal"),
+            "shared-variable-rule-input",
+        )
+        .unwrap();
+        let bird = assert_fact(&mut memory, p("osprey", "bird"), "bird-input").unwrap();
+        let relation = assert_fact(&mut memory, p("osprey", "Robin"), "relation-input").unwrap();
+        let answer = query(&memory, &p("Robin", "animal"), 32).unwrap();
+        assert_eq!(answer.status, "SUPPORTED");
+        let dependencies = answer_dependencies(&answer);
+        assert!(dependencies.contains(&bird.id));
+        assert!(dependencies.contains(&relation.id));
+        assert!(dependencies.contains(&rule.id));
+    }
+
+    #[test]
+    fn two_premise_join_transfers_to_a_new_subject_and_keeps_every_dependency() {
+        let mut memory = MemoryState::default();
+        let conjunction = add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "bird"), p("$x", "feathered")],
+            p("$x", "warm-blooded"),
+            "conjunctive-rule-input",
+        )
+        .unwrap();
+        let follow_up = add_rule(
+            &mut memory,
+            p("$x", "warm-blooded"),
+            p("$x", "animal"),
+            "single-rule-input",
+        )
+        .unwrap();
+        assert_eq!(
+            memory.rules.len(),
+            2,
+            "multi-premise rules must not be flattened into a shortcut"
+        );
+
+        let bird = assert_fact(&mut memory, p("osprey", "bird"), "new-bird-input").unwrap();
+        assert_eq!(
+            query(&memory, &p("osprey", "animal"), 32).unwrap().status,
+            "UNKNOWN",
+            "one antecedent must not satisfy the join"
+        );
+        let feathers =
+            assert_fact(&mut memory, p("osprey", "feathered"), "new-feather-input").unwrap();
+        let answer = query(&memory, &p("osprey", "animal"), 32).unwrap();
+        assert_eq!(answer.status, "SUPPORTED");
+        assert_eq!(
+            answer.steps, 2,
+            "each joined rule and follow-up is charged once"
+        );
+        assert_eq!(answer_guarantee(&answer), Guarantee::Derived);
+        let dependencies = answer_dependencies(&answer);
+        assert!(dependencies.contains(&bird.id));
+        assert!(dependencies.contains(&feathers.id));
+        assert!(dependencies.contains(&conjunction.id));
+        assert!(dependencies.contains(&follow_up.id));
+
+        invalidate(&mut memory, &feathers.id).unwrap();
+        assert_eq!(
+            query(&memory, &p("osprey", "animal"), 32).unwrap().status,
+            "UNKNOWN",
+            "invalidating either antecedent must remove the joined proof"
+        );
+    }
+
+    #[test]
+    fn older_serialized_relation_rules_default_to_single_premise() {
+        let old_record = serde_json::json!({
+            "id": "rule:legacy",
+            "premise": p("$x", "bird"),
+            "conclusion": p("$x", "animal"),
+            "source_input": "legacy-input",
+            "dependencies": [],
+            "valid": true
+        });
+        let rule: RelationRule = serde_json::from_value(old_record).unwrap();
+        assert!(rule.additional_premises.is_empty());
     }
 }

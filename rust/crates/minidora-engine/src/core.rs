@@ -2034,6 +2034,41 @@ impl Engine {
                 result.dependencies.push(rule.id);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::AddConjunctiveRule {
+                premises,
+                conclusion,
+            } => {
+                if premises.len() != 2
+                    || premises.iter().any(|premise| {
+                        premise.subject != premises[0].subject || premise.scope != premises[0].scope
+                    })
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Reject,
+                        "INVALID_CONJUNCTIVE_RULE",
+                        "二前提規則には同じ主語とscopeの関係節が必要です。",
+                    );
+                }
+                let mut memory = self.store.load_memory(actor)?;
+                let rule = relations::add_rule_with_premises(
+                    &mut memory,
+                    premises.clone(),
+                    conclusion.clone(),
+                    &fingerprint,
+                )?;
+                self.store.save_memory(actor, &memory)?;
+                units.push(format!(
+                    "二つの条件付き前提を保存しました: {} かつ {} ならば {}。",
+                    describe(&premises[0]),
+                    describe(&premises[1]),
+                    describe(conclusion)
+                ));
+                units.push(format!("規則ID: {}", rule.id));
+                units.push("保証範囲: 提示された二条件の組み合わせの中でのみ利用します。普遍的事実として学習しません。".into());
+                result.dependencies.push(rule.id);
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::AskConjunction { propositions } => {
                 if propositions.len() != 2 {
                     return self.stop(
@@ -3402,9 +3437,14 @@ fn relation_explanation_lines(
     }
     for id in &answer.used_rules {
         if let Some(rule) = memory.rules.iter().find(|rule| &rule.id == id) {
+            let premises = std::iter::once(&rule.premise)
+                .chain(rule.additional_premises.iter())
+                .map(describe)
+                .collect::<Vec<_>>()
+                .join(" かつ ");
             lines.push(format!(
                 "適用規則: {} ならば {}（規則ID: {}）",
-                describe(&rule.premise),
+                premises,
                 describe(&rule.conclusion),
                 rule.id
             ));

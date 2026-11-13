@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v59-conjunctive-relation-question";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v60-conjunctive-relation-rule";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1237,6 +1237,69 @@ fn conjunctive_relation_question_intent(text: &str) -> Result<Option<Intent>> {
     }))
 }
 
+/// Parse a rule antecedent containing exactly two explicitly joined copular
+/// clauses. The bounded grammar requires one repeated subject and one scope;
+/// a shorthand second Japanese/English clause inherits the first clause's
+/// subject and scope.
+fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
+    let mut connectors: Vec<(usize, usize, bool)> = regex(r"(?i)\band\b")?
+        .find_iter(text)
+        .map(|found| (found.start(), found.end(), true))
+        .collect();
+    connectors.extend(
+        text.match_indices("かつ")
+            .map(|(start, token)| (start, start + token.len(), false)),
+    );
+    connectors.extend(
+        text.match_indices("且つ")
+            .map(|(start, token)| (start, start + token.len(), false)),
+    );
+    if connectors.is_empty() {
+        return Ok(None);
+    }
+    if connectors.len() != 1 {
+        return Ok(Some(Vec::new()));
+    }
+    let (start, end, english) = connectors[0];
+    let left = text[..start].trim();
+    let right = text[end..].trim();
+    let Some(first) = parse_proposition(left, true)? else {
+        return Ok(Some(Vec::new()));
+    };
+    let right_scope = explicit_scope_prefix(right)?;
+    let right_body = regex(r"^\[scope=[^\]]+\]\s*(.*)$")?
+        .captures(right)
+        .map_or(right, |capture| {
+            capture.get(1).expect("matched body").as_str()
+        })
+        .trim();
+    let mut second = if let Some(proposition) = parse_proposition(right, true)? {
+        proposition
+    } else {
+        let expanded = if english {
+            format!("{} is {}", first.subject, right_body)
+        } else {
+            format!("{}は{}", first.subject, right_body)
+        };
+        let expanded = if let Some(scope) = right_scope.as_deref() {
+            format!("[scope={scope}] {expanded}")
+        } else {
+            expanded
+        };
+        let Some(proposition) = parse_proposition(&expanded, true)? else {
+            return Ok(Some(Vec::new()));
+        };
+        proposition
+    };
+    if right_scope.is_none() {
+        second.scope = first.scope.clone();
+    }
+    if first.subject != second.subject || first.scope != second.scope {
+        return Ok(Some(Vec::new()));
+    }
+    Ok(Some(vec![first, second]))
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     let header = text
         .split_once('\n')
@@ -1358,6 +1421,19 @@ fn interpret(text: &str) -> Result<Intent> {
 
         let left = capture[1].trim();
         let right = capture[2].trim();
+        if let Some(premises) = conjunctive_rule_premises(left)? {
+            if premises.len() == 2
+                && let Some(conclusion) = parse_proposition(right, true)?
+            {
+                return Ok(Intent::AddConjunctiveRule {
+                    premises,
+                    conclusion,
+                });
+            }
+            return Ok(Intent::Unknown {
+                reason: "conjunctive rule requires exactly two same-subject, same-scope copular premises".into(),
+            });
+        }
         if let (Some(premise), Some(conclusion)) = (
             parse_proposition(left, true)?,
             parse_proposition(right, true)?,
@@ -1379,6 +1455,19 @@ fn interpret(text: &str) -> Result<Intent> {
             return Ok(Intent::Unknown { reason: "a conditional question requires a supported proof-query interpretation; it is not a rule assertion".into() });
         }
 
+        if let Some(premises) = conjunctive_rule_premises(&capture[1])? {
+            if premises.len() == 2
+                && let Some(conclusion) = parse_proposition(&capture[2], true)?
+            {
+                return Ok(Intent::AddConjunctiveRule {
+                    premises,
+                    conclusion,
+                });
+            }
+            return Ok(Intent::Unknown {
+                reason: "conjunctive rule requires exactly two same-subject, same-scope copular premises".into(),
+            });
+        }
         if let (Some(premise), Some(conclusion)) = (
             parse_proposition(&capture[1], true)?,
             parse_proposition(&capture[2], true)?,
@@ -2230,6 +2319,75 @@ mod tests {
             interpret("どうしてココは動物なのですか、そして送信して").unwrap(),
             Intent::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn conjunctive_relation_rules_keep_both_explicit_premises() {
+        for (text, first_object, second_object, conclusion_object) in [
+            (
+                "もし[scope=biology]Xは鳥かつXは羽毛持ちなら[scope=biology]Xは温血動物",
+                "鳥",
+                "羽毛持ち",
+                "温血動物",
+            ),
+            (
+                "もし[scope=biology]Xは鳥かつ[scope=biology]哺乳類なら[scope=biology]Xは温血動物",
+                "鳥",
+                "哺乳類",
+                "温血動物",
+            ),
+            (
+                "If [scope=biology]X is a bird and X is feathered then [scope=biology]X is warm-blooded",
+                "bird",
+                "feathered",
+                "warm-blooded",
+            ),
+            (
+                "If X is a bird and a mammal then X is warm-blooded",
+                "bird",
+                "mammal",
+                "warm-blooded",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::AddConjunctiveRule { premises, conclusion }
+                        if premises.len() == 2
+                            && premises[0].subject == "$x"
+                            && premises[1].subject == "$x"
+                            && premises[0].object == first_object
+                            && premises[1].object == second_object
+                            && premises[0].scope == premises[1].scope
+                            && conclusion.subject == "$x"
+                            && conclusion.object == conclusion_object
+                ),
+                "{text}"
+            );
+        }
+
+        assert!(matches!(
+            interpret("If X is a bird and X is Y then Y is an animal").unwrap(),
+            Intent::AddConjunctiveRule { premises, conclusion }
+                if premises.len() == 2
+                    && premises[0].subject == "$x"
+                    && premises[1].subject == "$x"
+                    && premises[1].object == "$y"
+                    && conclusion.subject == "$y"
+                    && conclusion.object == "animal"
+        ));
+
+        for text in [
+            "If X is a bird and Y is a mammal then X is warm-blooded",
+            "If X is a bird and X is a mammal and X is a reptile then X is warm-blooded",
+            "もしXは鳥または哺乳類ならXは温血動物",
+            "もし[scope=biology]Xは鳥かつ[scope=ecology]Xは哺乳類なら[scope=biology]Xは温血動物",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 
     #[test]
