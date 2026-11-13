@@ -1,5 +1,6 @@
 //! Scoped proof-preserving relations. Source premises are never world facts.
-//! Rules support one premise or exactly two explicitly joined premises.
+//! Declared rules support one or two premises; internal shortcuts are bounded
+//! to three antecedents and retain their parent proof DAG.
 use minidora_domain::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -312,12 +313,9 @@ fn canonical_rule_variables(premises: &mut [Proposition], conclusion: &mut Propo
     }
 }
 fn compose(left: &RelationRule, right: &RelationRule) -> Result<Vec<RelationRule>> {
-    let left_multi = !left.additional_premises.is_empty();
-    let right_multi = !right.additional_premises.is_empty();
-    // Two two-premise rules can require three antecedents after composition.
-    // Keep that path in ordinary query closure until a bounded three-premise
-    // record exists; never flatten either rule to its first premise.
-    if left_multi && right_multi {
+    // Declared parent rules have one or two premises. Never recursively
+    // flatten a previously composed shortcut into another shortcut.
+    if left.additional_premises.len() > 1 || right.additional_premises.len() > 1 {
         return Ok(Vec::new());
     }
     let left_conclusion = renamed(&left.conclusion, "left");
@@ -359,7 +357,7 @@ fn compose(left: &RelationRule, right: &RelationRule) -> Result<Vec<RelationRule
                 .filter(|(index, _)| *index != matched_index)
                 .map(|(_, premise)| substitute(premise, &bindings)),
         );
-        if !(1..=2).contains(&premises.len())
+        if !(1..=3).contains(&premises.len())
             || premises
                 .iter()
                 .enumerate()
@@ -387,11 +385,21 @@ fn compose(left: &RelationRule, right: &RelationRule) -> Result<Vec<RelationRule
                     &dependencies
                 ))?
             )
-        } else {
+        } else if premises.len() == 2 {
             format!(
                 "rule:{}",
                 identity(&(
                     "proof-composition-conjunctive-v1",
+                    &premises,
+                    &conclusion,
+                    &dependencies
+                ))?
+            )
+        } else {
+            format!(
+                "rule:{}",
+                identity(&(
+                    "proof-composition-ternary-v1",
                     &premises,
                     &conclusion,
                     &dependencies
@@ -482,7 +490,7 @@ pub fn query(
         .rules
         .iter()
         .filter(|rule| {
-            rule.additional_premises.len() <= 1
+            rule.additional_premises.len() <= 2
                 && permitted_rule(rule, &rule_map, &mut BTreeSet::new())
         })
         .collect();
@@ -504,7 +512,7 @@ pub fn query(
     }
     let mut steps = 0u32;
     let mut applied_single = BTreeSet::new();
-    let mut applied_conjunctive = BTreeSet::new();
+    let mut joined_conjunctive = BTreeSet::<(String, Vec<String>)>::new();
     loop {
         let before = known.len();
         let current: Vec<_> = known.values().cloned().collect();
@@ -529,30 +537,44 @@ pub fn query(
                 let Some(first_bindings) = matches(&rule.premise, &fact.proposition) else {
                     continue;
                 };
-                let joined_premise = &rule.additional_premises[0];
-                let candidates: Vec<_> = known.values().cloned().collect();
-                for second_fact in candidates {
-                    if known.contains_key(&opposition(&second_fact.proposition))
-                        || !same_shape(joined_premise, &second_fact.proposition)
-                    {
-                        continue;
+                let mut partials = vec![(first_bindings, vec![fact.clone()])];
+                for joined_premise in &rule.additional_premises {
+                    let candidates: Vec<_> = known.values().cloned().collect();
+                    let mut next_partials = Vec::new();
+                    for (bindings, matched_facts) in partials {
+                        for candidate in &candidates {
+                            if known.contains_key(&opposition(&candidate.proposition)) {
+                                continue;
+                            }
+                            let Some(joined_bindings) = matches_with_bindings(
+                                joined_premise,
+                                &candidate.proposition,
+                                &bindings,
+                            ) else {
+                                continue;
+                            };
+                            let mut joined_facts = matched_facts.clone();
+                            joined_facts.push(candidate.clone());
+                            let application = (
+                                rule.id.clone(),
+                                joined_facts
+                                    .iter()
+                                    .map(|premise| premise.id.clone())
+                                    .collect(),
+                            );
+                            if joined_conjunctive.insert(application) {
+                                charge_step(&mut steps, max_steps)?;
+                            }
+                            next_partials.push((joined_bindings, joined_facts));
+                        }
                     }
-                    let application = (rule.id.clone(), fact.id.clone(), second_fact.id.clone());
-                    if applied_conjunctive.contains(&application) {
-                        continue;
+                    partials = next_partials;
+                    if partials.is_empty() {
+                        break;
                     }
-                    let Some(bindings) = matches_with_bindings(
-                        joined_premise,
-                        &second_fact.proposition,
-                        &first_bindings,
-                    ) else {
-                        continue;
-                    };
-                    charge_step(&mut steps, max_steps)?;
-                    if !applied_conjunctive.insert(application) {
-                        continue;
-                    }
-                    derive(&mut known, rule, &[fact.clone(), second_fact], &bindings)?;
+                }
+                for (bindings, matched_facts) in partials {
+                    derive(&mut known, rule, &matched_facts, &bindings)?;
                 }
             }
         }
@@ -1103,6 +1125,103 @@ mod conjunctive_rule_tests {
         assert!(dependencies.contains(&first.id));
         assert!(dependencies.contains(&second.id));
         assert!(dependencies.contains(&composed.id));
+    }
+
+    #[test]
+    fn two_two_premise_rules_compose_to_a_bounded_three_antecedent_shortcut() {
+        let mut memory = MemoryState::default();
+        let first = add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "bird"), p("$x", "feathered")],
+            p("$x", "warm-blooded"),
+            "bird-and-feathered-rule",
+        )
+        .unwrap();
+        let second = add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "warm-blooded"), p("$x", "mammal")],
+            p("$x", "animal"),
+            "warm-blooded-and-mammal-rule",
+        )
+        .unwrap();
+        let shortcut = memory
+            .rules
+            .iter()
+            .find(|candidate| {
+                candidate.dependencies.len() == 2
+                    && candidate.additional_premises.len() == 2
+                    && candidate.conclusion == p("$v0", "animal")
+            })
+            .cloned()
+            .expect("two conjunctive parent rules should create a three-premise shortcut");
+        assert_eq!(shortcut.premise, p("$v0", "bird"));
+        assert_eq!(
+            shortcut.additional_premises,
+            vec![p("$v0", "feathered"), p("$v0", "mammal")]
+        );
+        assert!(shortcut.dependencies.contains(&first.id));
+        assert!(shortcut.dependencies.contains(&second.id));
+        assert!(shortcut.id.starts_with("rule:"));
+
+        let bird = assert_fact(&mut memory, p("osprey", "bird"), "osprey-bird").unwrap();
+        let feathered =
+            assert_fact(&mut memory, p("osprey", "feathered"), "osprey-feathered").unwrap();
+        let mammal = assert_fact(&mut memory, p("osprey", "mammal"), "osprey-mammal").unwrap();
+        let answer = query(&memory, &p("osprey", "animal"), 64).unwrap();
+        assert_eq!(answer.status, "SUPPORTED");
+        assert_eq!(answer_guarantee(&answer), Guarantee::Derived);
+        let dependencies = answer_dependencies(&answer);
+        for identity in [
+            &bird.id,
+            &feathered.id,
+            &mammal.id,
+            &first.id,
+            &second.id,
+            &shortcut.id,
+        ] {
+            assert!(dependencies.contains(identity), "missing {identity}");
+        }
+        assert!(
+            answer.steps <= 64,
+            "multi-stage joins must remain within the query budget"
+        );
+        assert!(matches!(
+            query(&memory, &p("osprey", "animal"), 1),
+            Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+        ));
+
+        let mut invalidated_rule_memory = memory.clone();
+        invalidate(&mut invalidated_rule_memory, &first.id).unwrap();
+        assert_eq!(
+            query(&invalidated_rule_memory, &p("osprey", "animal"), 64)
+                .unwrap()
+                .status,
+            "UNKNOWN",
+            "invalidating a parent rule must invalidate the composed shortcut"
+        );
+
+        invalidate(&mut memory, &mammal.id).unwrap();
+        assert_eq!(
+            query(&memory, &p("osprey", "animal"), 64).unwrap().status,
+            "UNKNOWN",
+            "invalidating one of the three direct antecedents removes the shortcut proof"
+        );
+    }
+
+    #[test]
+    fn declared_relation_rules_remain_limited_to_two_explicit_premises() {
+        let mut memory = MemoryState::default();
+        let result = add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "bird"), p("$x", "feathered"), p("$x", "mammal")],
+            p("$x", "animal"),
+            "three-premise-user-rule",
+        );
+        assert!(matches!(
+            result,
+            Err(Error::Contract { code, .. }) if code == "UNSUPPORTED_RULE_PREMISE_COUNT"
+        ));
+        assert!(memory.rules.is_empty());
     }
 
     #[test]

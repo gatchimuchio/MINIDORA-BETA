@@ -1,0 +1,227 @@
+{
+  "work_item": "BODY-1 BB-LANG two two-premise rules to a three-antecedent shortcut",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T05:09:17+00:00",
+  "base_commit": "79d611abd8bcfa9b147c776891e65979db45efa9",
+  "requirement_ids": [
+    "A02",
+    "A04",
+    "A05",
+    "A09",
+    "B01",
+    "A15"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v60-conjunctive-relation-rule",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "pre_change_probe": {
+    "binary_sha256": "NOT_CAPTURED_BEFORE_SOURCE_EDIT",
+    "reason": "No pre-edit executable hash or route observation was captured."
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "3e0d01739a2e2b1bd6c5c3afff21b651aeec34f3ec2c5eb5790bc058cead6d44",
+    "rust/crates/minidora-engine/src/input.rs": "a28d8bf2affb2668e02f7c4c6bb58b49e2128951326c7c9892efeab8de9af811",
+    "rust/crates/minidora-engine/src/core.rs": "fbbbb50c1f2619d9b658861dd65db701391731e5d4a0c6710ca51b3777d477ec",
+    "rust/crates/minidora-engine/src/relations.rs": "5b1b8d7cd10c4347e6fc84b77bd393150653d14c2529f140acff2a59cf7af84d"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/relations.rs": "5b1b8d7cd10c4347e6fc84b77bd393150653d14c2529f140acff2a59cf7af84d",
+    "rust/apps/cli/tests/normal_route.rs": "b461488d073fce557a3c088144f828d91a12515c1420367e3d5dacc2f3563f77",
+    "rust/tools/conjunctive_relation_ternary_composition_route_test.py": "2c95e7d55c20acaec5493563e7403f437ca4d7442d7d07d56b568dc36fafa12b"
+  },
+  "documentation_snapshot_sha256": {
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "execution_mode": "fresh CLI process for every request; one temporary SQLite state; Japanese normal route",
+  "scope": "Declared rules and natural-language parsing stay limited to one or two explicit premises. Internal composition of two two-premise root rules may create a three-antecedent shortcut. Each successful join prefix consumes the bounded relation-step budget.",
+  "producer_consumer": "two explicitly conjunctive scoped rules -> three-premise shortcut with both parent rule IDs -> three independent facts for a new subject -> ordinary CLI answer and AskWhy preserve all antecedents and the composed proof DAG; premise invalidation stops later queries while the prior committed result remains immutable",
+  "parent_rule_ids": [
+    "rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa",
+    "rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2"
+  ],
+  "shortcut_rule_ids_observed": [
+    "rule:42b51a74ead2bb8e0d1891a8b7d8b4971e0e14d412d3eb38503dd0d3c6524038"
+  ],
+  "observations": [
+    {
+      "case_id": "japanese-rule-origin",
+      "actor_id": "japanese-owner",
+      "input_id": "bird-feathered-to-warm-blooded",
+      "request": "もし[scope=biology]Xは鳥かつXは羽毛持ちなら[scope=biology]Xは温血動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "二つの条件付き前提を保存しました: $xは鳥である かつ $xは羽毛持ちである ならば $xは温血動物である。\n規則ID: rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa\n保証範囲: 提示された二条件の組み合わせの中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa"
+      ]
+    },
+    {
+      "case_id": "japanese-rule-origin",
+      "actor_id": "japanese-owner",
+      "input_id": "warm-blooded-mammal-to-animal",
+      "request": "もし[scope=biology]Xは温血動物かつXは哺乳類なら[scope=biology]Xは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "二つの条件付き前提を保存しました: $xは温血動物である かつ $xは哺乳類である ならば $xは動物である。\n規則ID: rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2\n保証範囲: 提示された二条件の組み合わせの中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-bird",
+      "request": "[scope=biology]ミサゴは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミサゴは鳥である。\n前提ID: fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-feathered",
+      "request": "[scope=biology]ミサゴは羽毛持ち",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミサゴは羽毛持ちである。\n前提ID: fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-mammal",
+      "request": "[scope=biology]ミサゴは哺乳類",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミサゴは哺乳類である。\n前提ID: fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-animal",
+      "request": "[scope=biology]ミサゴは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ミサゴは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0",
+        "fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049",
+        "fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d",
+        "fact:fbf66807bec5157d1c05a74428ea68042189b9f3fd5717797937328f0bcd7860",
+        "rule:42b51a74ead2bb8e0d1891a8b7d8b4971e0e14d412d3eb38503dd0d3c6524038",
+        "rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa",
+        "rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-animal-why",
+      "request": "どうして[scope=biology]ミサゴは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された証拠が支える結論: ミサゴは動物である。\n直接提示された前提: ミサゴは羽毛持ちである（根拠ID: fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0）\n直接提示された前提: ミサゴは哺乳類である（根拠ID: fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049）\n直接提示された前提: ミサゴは鳥である（根拠ID: fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d）\n導出された事実: ミサゴは動物である（導出ID: fact:fbf66807bec5157d1c05a74428ea68042189b9f3fd5717797937328f0bcd7860; 依存ID: fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0, fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049, fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d, rule:42b51a74ead2bb8e0d1891a8b7d8b4971e0e14d412d3eb38503dd0d3c6524038, rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa, rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2）\n適用規則: $v0は鳥である かつ $v0は羽毛持ちである かつ $v0は哺乳類である ならば $v0は動物である（規則ID: rule:42b51a74ead2bb8e0d1891a8b7d8b4971e0e14d412d3eb38503dd0d3c6524038）\n適用規則: $xは鳥である かつ $xは羽毛持ちである ならば $xは温血動物である（規則ID: rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa）\n適用規則: $xは温血動物である かつ $xは哺乳類である ならば $xは動物である（規則ID: rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0",
+        "fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049",
+        "fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d",
+        "fact:fbf66807bec5157d1c05a74428ea68042189b9f3fd5717797937328f0bcd7860",
+        "rule:42b51a74ead2bb8e0d1891a8b7d8b4971e0e14d412d3eb38503dd0d3c6524038",
+        "rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa",
+        "rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "invalidate-osprey-mammal",
+      "request": "fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049を無効化して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049"
+      ]
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-animal-after-mammal-invalidation",
+      "request": "[scope=biology]ミサゴは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この問いに必要な有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: この問いに必要な有効な前提または導出経路がありません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "japanese-new-subject",
+      "actor_id": "japanese-owner",
+      "input_id": "osprey-animal",
+      "request": "[scope=biology]ミサゴは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ミサゴは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:016a4c678a7a24ed4816df0c3630af330533108262eaeac147784b44a0f50ef0",
+        "fact:048b222895ecc7a0091a3875be1bf0d0daec5518514ce973cc692c5d42970049",
+        "fact:e15a161f8bd45eabe4bc613725e4ed64c00ee5cd2717902afb10e6c82f9e823d",
+        "fact:fbf66807bec5157d1c05a74428ea68042189b9f3fd5717797937328f0bcd7860",
+        "rule:42b51a74ead2bb8e0d1891a8b7d8b4971e0e14d412d3eb38503dd0d3c6524038",
+        "rule:92eebb64939594290b2b0f6888847bdaf16233f95d80cc886e75e76af74a9caa",
+        "rule:a0906532ba0d5b45900c4711700fbecd149a792c40fa2d3cec12826d118aa0e2"
+      ]
+    }
+  ],
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo test -p minidora-engine relations:: --locked",
+    "cargo test -p minidora-engine input::tests:: --locked",
+    "cargo test -p minidora-cli --test normal_route conjunctive_rule_joins_two_new_subject_premises_and_explains_both --locked",
+    "cargo test -p minidora-cli --test normal_route conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract --locked",
+    "cargo check --workspace --all-targets --locked",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo build --workspace --locked",
+    "python3 tools/conjunctive_relation_ternary_composition_route_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output audit/bb-lang-conjunctive-relation-ternary-composition-v62-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite",
+    "normal CLI registration of a three-explicit-premise rule",
+    "open-domain Q&A, general writing and full A02/A04/A05/A09/B01/A15 acceptance"
+  ],
+  "acceptance_boundary": "The observed path covers a bounded internal three-antecedent shortcut produced from two explicit two-premise rules. Explicit user input remains capped at two premises. Full requirement acceptance and the workspace runtime suite remain NOT_RUN / UNVERIFIED.",
+  "next_consumer": "Continue the ordinary natural-language producer-to-consumer path; general open-domain Q&A and writing remain BUILD_GAP."
+}
