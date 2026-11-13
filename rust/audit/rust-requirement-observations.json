@@ -770,9 +770,11 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/relations.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/learned_rule_cross_case_transfer_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance BODY-1 BB_LEARN_CROSS_CASE_RULE_TRANSFER: explicit scoped rule consumed for a genuinely new subject in a separate case through fresh ordinary CLI processes; AskWhy consumes the derived proof with new-fact, derived-fact and rule lineage, excluding the original-subject premise. Scope and actor isolation, typed counterexample conflict, explicit invalidation, later new-subject stop, and original case result replay passed. See bb-learn-cross-case-rule-transfer-v58-route-validation.json. Full CAP-D acceptance and full BB-LEARN remain UNVERIFIED.",
       "full_acceptance_gap": "Pre/post difference on a genuinely new task, via normal public route",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -784,9 +786,11 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/relations.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/learned_rule_cross_case_transfer_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance BODY-1 BB_LEARN_CROSS_CASE_RULE_TRANSFER: explicit scoped rule consumed for a genuinely new subject in a separate case through fresh ordinary CLI processes; AskWhy consumes the derived proof with new-fact, derived-fact and rule lineage, excluding the original-subject premise. Scope and actor isolation, typed counterexample conflict, explicit invalidation, later new-subject stop, and original case result replay passed. See bb-learn-cross-case-rule-transfer-v58-route-validation.json. Full CAP-D acceptance and full BB-LEARN remain UNVERIFIED.",
       "full_acceptance_gap": "New relation applies to new subjects without over-generalized rule adoption",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -798,16 +802,17 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/relations.rs",
-        "crates/minidora-domain/src/lib.rs",
-        "crates/minidora-engine/src/input.rs",
-        "crates/minidora-engine/src/core.rs",
-        "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/natural_premise_correction_route_test.py",
-        "tools/contextual_premise_correction_route_test.py"
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "crates/minidora-engine/src/store.rs",
+        "tools/contextual_premise_correction_route_test.py",
+        "tools/learned_rule_cross_case_transfer_test.py",
+        "tools/natural_premise_correction_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB_CONTEXT_NATURAL_PREMISE_CORRECTION: ordinary Japanese/English “X is B, not A” correction -> sealed input v56 -> exact actor/scope-scoped active direct USER_PREMISE match -> old premise invalidated with history retained -> negative A and positive B stored in one Core memory revision -> fresh-process natural query/listing consumes corrected memory; missing target or scope match suspends without mutation. Prior result history remains immutable; the query-time derived answer is not reproduced after its support is removed. See bb-context-natural-premise-correction-route-validation.json. BODY-1 BB_CONTEXT_PRIOR_RESULT_CORRECTION: ordinary Japanese/English singular-pronoun correction -> sealed v57 CorrectPreviousPremise -> selected same-case committed ResultRecord dependency IDs -> Core resolves exactly one active direct USER_PREMISE and scope -> single actor-memory revision invalidates old and records negative/replacement claims -> later natural listing consumes corrected memory; missing case context, ambiguous scopes, or derived-only targets suspend without mutation. See bb-context-prior-result-correction-route-validation.json. Observed routes: CONTEXT_PREMISE_CORRECTION_PARSER_1_PASS, CONTEXT_PREMISE_CORRECTION_NORMAL_CLI_PASS, FRESH_PROCESS_CONTEXT_CORRECTION_ROUTE_21_OBSERVATIONS_PASS, PRIOR_RESULT_DEPENDENCY_ANCHOR_PASS, CROSS_CASE_CONTEXT_STOP_PASS, AMBIGUOUS_SCOPE_STOP_PASS, EXPLICIT_SCOPE_CONTEXT_CORRECTION_PASS, DERIVED_ONLY_TARGET_STOP_PASS, OLD_RESULT_HISTORY_RETAINED_PASS, MEMORY_STATE_REVISION_CHECK_PASS, FULL_ACCEPTANCE_NOT_RUN. Current scoped gates passed: formatting check, locked CLI all-target check, CLI Clippy with warnings denied, and locked CLI build. Full acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB_CONTEXT_NATURAL_PREMISE_CORRECTION: ordinary Japanese/English “X is B, not A” correction -> sealed input v56 -> exact actor/scope-scoped active direct USER_PREMISE match -> old premise invalidated with history retained -> negative A and positive B stored in one Core memory revision -> fresh-process natural query/listing consumes corrected memory; missing target or scope match suspends without mutation. Prior result history remains immutable; the query-time derived answer is not reproduced after its support is removed. See bb-context-natural-premise-correction-route-validation.json. BODY-1 BB_CONTEXT_PRIOR_RESULT_CORRECTION: ordinary Japanese/English singular-pronoun correction -> sealed v57 CorrectPreviousPremise -> selected same-case committed ResultRecord dependency IDs -> Core resolves exactly one active direct USER_PREMISE and scope -> single actor-memory revision invalidates old and records negative/replacement claims -> later natural listing consumes corrected memory; missing case context, ambiguous scopes, or derived-only targets suspend without mutation. See bb-context-prior-result-correction-route-validation.json. Observed routes: CONTEXT_PREMISE_CORRECTION_PARSER_1_PASS, CONTEXT_PREMISE_CORRECTION_NORMAL_CLI_PASS, FRESH_PROCESS_CONTEXT_CORRECTION_ROUTE_21_OBSERVATIONS_PASS, PRIOR_RESULT_DEPENDENCY_ANCHOR_PASS, CROSS_CASE_CONTEXT_STOP_PASS, AMBIGUOUS_SCOPE_STOP_PASS, EXPLICIT_SCOPE_CONTEXT_CORRECTION_PASS, DERIVED_ONLY_TARGET_STOP_PASS, OLD_RESULT_HISTORY_RETAINED_PASS, MEMORY_STATE_REVISION_CHECK_PASS, FULL_ACCEPTANCE_NOT_RUN. Current scoped gates passed: formatting check, locked CLI all-target check, CLI Clippy with warnings denied, and locked CLI build. Full acceptance remains UNVERIFIED. BODY-1 BB_LEARN_CROSS_CASE_RULE_TRANSFER: explicit scoped rule consumed for a genuinely new subject in a separate case through fresh ordinary CLI processes; AskWhy consumes the derived proof with new-fact, derived-fact and rule lineage, excluding the original-subject premise. Scope and actor isolation, typed counterexample conflict, explicit invalidation, later new-subject stop, and original case result replay passed. See bb-learn-cross-case-rule-transfer-v58-route-validation.json. Full CAP-D acceptance and full BB-LEARN remain UNVERIFIED.",
       "full_acceptance_gap": "False rule revoked/limited; downstream dependent conclusions invalidated",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -878,9 +883,11 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/relations.rs"
+        "apps/cli/tests/normal_route.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "tools/learned_rule_cross_case_transfer_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance BODY-1 BB_LEARN_CROSS_CASE_RULE_TRANSFER: explicit scoped rule consumed for a genuinely new subject in a separate case through fresh ordinary CLI processes; AskWhy consumes the derived proof with new-fact, derived-fact and rule lineage, excluding the original-subject premise. Scope and actor isolation, typed counterexample conflict, explicit invalidation, later new-subject stop, and original case result replay passed. See bb-learn-cross-case-rule-transfer-v58-route-validation.json. Full CAP-D acceptance and full BB-LEARN remain UNVERIFIED.",
       "full_acceptance_gap": "No external module self-commits new rules or creates another success authority",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -892,16 +899,17 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/relations.rs",
-        "crates/minidora-domain/src/lib.rs",
-        "crates/minidora-engine/src/input.rs",
-        "crates/minidora-engine/src/core.rs",
-        "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/natural_premise_correction_route_test.py",
-        "tools/contextual_premise_correction_route_test.py"
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "crates/minidora-engine/src/store.rs",
+        "tools/contextual_premise_correction_route_test.py",
+        "tools/learned_rule_cross_case_transfer_test.py",
+        "tools/natural_premise_correction_route_test.py"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB_CONTEXT_NATURAL_PREMISE_CORRECTION: ordinary Japanese/English “X is B, not A” correction -> sealed input v56 -> exact actor/scope-scoped active direct USER_PREMISE match -> old premise invalidated with history retained -> negative A and positive B stored in one Core memory revision -> fresh-process natural query/listing consumes corrected memory; missing target or scope match suspends without mutation. Prior result history remains immutable; the query-time derived answer is not reproduced after its support is removed. See bb-context-natural-premise-correction-route-validation.json. BODY-1 BB_CONTEXT_PRIOR_RESULT_CORRECTION: ordinary Japanese/English singular-pronoun correction -> sealed v57 CorrectPreviousPremise -> selected same-case committed ResultRecord dependency IDs -> Core resolves exactly one active direct USER_PREMISE and scope -> single actor-memory revision invalidates old and records negative/replacement claims -> later natural listing consumes corrected memory; missing case context, ambiguous scopes, or derived-only targets suspend without mutation. See bb-context-prior-result-correction-route-validation.json. Observed routes: CONTEXT_PREMISE_CORRECTION_PARSER_1_PASS, CONTEXT_PREMISE_CORRECTION_NORMAL_CLI_PASS, FRESH_PROCESS_CONTEXT_CORRECTION_ROUTE_21_OBSERVATIONS_PASS, PRIOR_RESULT_DEPENDENCY_ANCHOR_PASS, CROSS_CASE_CONTEXT_STOP_PASS, AMBIGUOUS_SCOPE_STOP_PASS, EXPLICIT_SCOPE_CONTEXT_CORRECTION_PASS, DERIVED_ONLY_TARGET_STOP_PASS, OLD_RESULT_HISTORY_RETAINED_PASS, MEMORY_STATE_REVISION_CHECK_PASS, FULL_ACCEPTANCE_NOT_RUN. Current scoped gates passed: formatting check, locked CLI all-target check, CLI Clippy with warnings denied, and locked CLI build. Full acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; BODY-1 BB_CONTEXT_NATURAL_PREMISE_CORRECTION: ordinary Japanese/English “X is B, not A” correction -> sealed input v56 -> exact actor/scope-scoped active direct USER_PREMISE match -> old premise invalidated with history retained -> negative A and positive B stored in one Core memory revision -> fresh-process natural query/listing consumes corrected memory; missing target or scope match suspends without mutation. Prior result history remains immutable; the query-time derived answer is not reproduced after its support is removed. See bb-context-natural-premise-correction-route-validation.json. BODY-1 BB_CONTEXT_PRIOR_RESULT_CORRECTION: ordinary Japanese/English singular-pronoun correction -> sealed v57 CorrectPreviousPremise -> selected same-case committed ResultRecord dependency IDs -> Core resolves exactly one active direct USER_PREMISE and scope -> single actor-memory revision invalidates old and records negative/replacement claims -> later natural listing consumes corrected memory; missing case context, ambiguous scopes, or derived-only targets suspend without mutation. See bb-context-prior-result-correction-route-validation.json. Observed routes: CONTEXT_PREMISE_CORRECTION_PARSER_1_PASS, CONTEXT_PREMISE_CORRECTION_NORMAL_CLI_PASS, FRESH_PROCESS_CONTEXT_CORRECTION_ROUTE_21_OBSERVATIONS_PASS, PRIOR_RESULT_DEPENDENCY_ANCHOR_PASS, CROSS_CASE_CONTEXT_STOP_PASS, AMBIGUOUS_SCOPE_STOP_PASS, EXPLICIT_SCOPE_CONTEXT_CORRECTION_PASS, DERIVED_ONLY_TARGET_STOP_PASS, OLD_RESULT_HISTORY_RETAINED_PASS, MEMORY_STATE_REVISION_CHECK_PASS, FULL_ACCEPTANCE_NOT_RUN. Current scoped gates passed: formatting check, locked CLI all-target check, CLI Clippy with warnings denied, and locked CLI build. Full acceptance remains UNVERIFIED. BODY-1 BB_LEARN_CROSS_CASE_RULE_TRANSFER: explicit scoped rule consumed for a genuinely new subject in a separate case through fresh ordinary CLI processes; AskWhy consumes the derived proof with new-fact, derived-fact and rule lineage, excluding the original-subject premise. Scope and actor isolation, typed counterexample conflict, explicit invalidation, later new-subject stop, and original case result replay passed. See bb-learn-cross-case-rule-transfer-v58-route-validation.json. Full CAP-D acceptance and full BB-LEARN remain UNVERIFIED.",
       "full_acceptance_gap": "Counterexample changes active conclusion while preserving lineage",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

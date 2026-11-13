@@ -1919,6 +1919,233 @@ fn conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract()
 }
 
 #[test]
+fn declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage() {
+    let scratch = Scratch::new();
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-origin",
+        &[
+            "--input",
+            "cross-case-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let rule_id = rule["dependencies"][0].as_str().unwrap();
+    assert_eq!(rule["guarantee"], "USER_PREMISE");
+
+    let original_bird = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-origin",
+        &[
+            "--input",
+            "original-subject-bird",
+            "[scope=biology]ココは鳥",
+        ],
+    ));
+    let original_answer = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-origin",
+        &[
+            "--input",
+            "original-subject-answer",
+            "[scope=biology]ココは動物ですか",
+        ],
+    ));
+    assert_eq!(original_answer["guarantee"], "DERIVED");
+
+    // A genuinely new case and subject consume the actor's retained rule.
+    let new_bird = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-transfer",
+        &["--input", "new-subject-bird", "[scope=biology]ミサゴは鳥"],
+    ));
+    let new_bird_id = new_bird["dependencies"][0].as_str().unwrap();
+    let new_answer = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-transfer",
+        &[
+            "--input",
+            "new-subject-answer",
+            "[scope=biology]ミサゴは動物ですか",
+        ],
+    ));
+    assert_eq!(new_answer["guarantee"], "DERIVED");
+    let new_dependencies = new_answer["dependencies"].as_array().unwrap();
+    assert!(new_dependencies.contains(&Value::String(rule_id.into())));
+    assert!(new_dependencies.contains(&Value::String(new_bird_id.into())));
+    assert!(
+        !new_dependencies.contains(&original_bird["dependencies"][0]),
+        "the new-subject proof must not depend on the original subject"
+    );
+
+    let why = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-transfer",
+        &[
+            "--input",
+            "new-subject-why",
+            "どうして[scope=biology]ミサゴは動物なのですか",
+        ],
+    ));
+    assert_eq!(why["guarantee"], "DERIVED");
+    let why_text = why["text"].as_str().unwrap();
+    assert!(why_text.contains("直接提示された前提: ミサゴは鳥である"));
+    assert!(why_text.contains("適用規則: $xは鳥である ならば $xは動物である"));
+    assert_eq!(why["dependencies"], new_answer["dependencies"]);
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-transfer",
+        &[
+            "--input",
+            "new-subject-counterexample",
+            "[scope=biology]ミサゴは動物ではない",
+        ],
+    ));
+    stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "learning-transfer",
+            &[
+                "--input",
+                "contested-new-subject-question",
+                "[scope=biology]ミサゴは動物ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-transfer",
+        &[
+            "--input",
+            "invalidate-transferred-rule",
+            &format!("{rule_id}を無効化して"),
+        ],
+    ));
+    let answer_after_invalidation = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "learning-transfer",
+        &[
+            "--input",
+            "answer-after-rule-invalidation",
+            "[scope=biology]ミサゴは動物ですか",
+        ],
+    ));
+    assert_eq!(answer_after_invalidation["guarantee"], "USER_PREMISE");
+    assert_eq!(
+        answer_after_invalidation["dependencies"],
+        record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            "learning-transfer",
+            &[
+                "--input",
+                "new-subject-counterexample",
+                "[scope=biology]ミサゴは動物ではない"
+            ],
+        ))["dependencies"]
+    );
+
+    // A later case with another subject cannot use the invalidated rule.
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "after-invalidation-new-task",
+        &["--input", "later-subject-bird", "[scope=biology]ノスリは鳥"],
+    ));
+    stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "after-invalidation-new-task",
+            &[
+                "--input",
+                "later-subject-question",
+                "[scope=biology]ノスリは動物ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+
+    // The rule is scoped; a same-actor premise in a different scope is not enough.
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "scope-isolation",
+        &["--input", "other-scope-bird", "[scope=ecology]ペンギンは鳥"],
+    ));
+    stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "scope-isolation",
+            &[
+                "--input",
+                "other-scope-question",
+                "[scope=ecology]ペンギンは動物ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+
+    // Actor memories remain isolated even when the case and scope are explicit.
+    record(&execute_in_case(
+        &scratch.0,
+        "separate-actor",
+        "actor-isolation",
+        &[
+            "--input",
+            "isolated-actor-bird",
+            "[scope=biology]カモメは鳥",
+        ],
+    ));
+    stopped(
+        &execute_in_case(
+            &scratch.0,
+            "separate-actor",
+            "actor-isolation",
+            &[
+                "--input",
+                "isolated-actor-question",
+                "[scope=biology]カモメは動物ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+
+    // The original case result is still the committed result for its input.
+    assert_eq!(
+        record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            "learning-origin",
+            &[
+                "--input",
+                "original-subject-answer",
+                "[scope=biology]ココは動物ですか"
+            ],
+        )),
+        original_answer
+    );
+}
+
+#[test]
 fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart() {
     let scratch = Scratch::new();
     let bird = record(&execute(
