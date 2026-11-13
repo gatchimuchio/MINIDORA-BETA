@@ -1550,8 +1550,8 @@ pub(crate) fn previous_math_report_explanation(
         lines.push(format!("検証情報: {}", report.verification));
         return Ok(Some(lines));
     }
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&previous.text) {
-        if value.as_object().is_some_and(|object| {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&previous.text)
+        && value.as_object().is_some_and(|object| {
             [
                 "input_values",
                 "normalized_values",
@@ -1579,12 +1579,12 @@ pub(crate) fn previous_math_report_explanation(
                 || ["coefficients", "variable", "operations", "verification"]
                     .iter()
                     .all(|field| object.contains_key(*field))
-        }) {
-            return Err(failure(
-                "MATH_CONTEXT_INVALID",
-                "the previous mathematical report has an unexpected or incomplete field set",
-            ));
-        }
+        })
+    {
+        return Err(failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous mathematical report has an unexpected or incomplete field set",
+        ));
     }
     Ok(None)
 }

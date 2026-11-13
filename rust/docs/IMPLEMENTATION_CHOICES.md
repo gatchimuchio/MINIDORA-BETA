@@ -88,6 +88,12 @@ Edits specify exact original byte ranges, expected old text, replacement text an
 
 The unique-literal location route uses the same bounded replay and actor/case-scoped reader. The caller supplies a nonempty exact search string and replacement; the route accepts only one match, checking overlapping occurrences too. It rejects protected ranges and returns a source-linked proposal with the actual parent artifact digest, byte range and JSON source token spans. It does not change the document. The proposed request can then be submitted to the existing atomic editor, which rechecks its base digest, exact original range, protection and limits. This preserves the inspected `編集箇所を特定` boundary without inventing correction discovery. Missing/repeated terms and natural-language editing intent remain outside this operation.
 
+## Exact-URI source version selection instead of naive aggregation
+
+The same-case source-question consumer groups fetched bodies by their exact recorded `final_uri` and uses the uniquely latest `observed_at_unix_ms` body/parser identity for lexical candidate extraction. A newer observation with different bytes supersedes that URI's older body for the current answer; the older packet references and hashes remain in the source-version artifact and result dependency graph. Repeated observations of the same body/parser identity remain linked as one active source version, not as additional independent sources. Different content/parser identities tied at the latest observed time suspend rather than selecting by packet order. A result that mixes `LIVE` and `FIXTURE` bodies also suspends.
+
+Exact URI equality is a conservative identity boundary, not a claim that two different URLs are independent publishers or that identical content proves agreement. The bounded Japanese-substring/English-token matcher still returns extractive `HYPOTHESIS` candidates; this choice does not establish semantic relevance, source independence, contradiction analysis or factual truth. Existing V1 source-question artifacts remain replayable during local-file recovery; new artifacts use a separate V2 operation identifier.
+
 ## Effects and frontend authority
 
 The local file writer receives a persisted authorized `ATTEMPTED` record binding exact target/bytes/action identity. It reports actual observations. Core alone validates content/render/write outcomes and changes the goal state. Existing different files are not overwritten; uncertain physical outcomes remain unknown rather than generating a fresh action identity.

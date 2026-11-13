@@ -188,6 +188,44 @@ struct SourceQuestionExpectation {
     answer_ref: String,
 }
 
+type JsonGroupMeanRecovery = (String, String, String, String, Vec<u8>, Vec<String>);
+
+fn recompute_source_question_artifact(
+    operation: &str,
+    source_result_id: &str,
+    query: &str,
+    packets: &[(usize, &EvidencePacket, String)],
+) -> Result<(Vec<u8>, Vec<String>)> {
+    match operation {
+        "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1" => {
+            let answer = crate::text_summary::answer_fetched_source_question_v1(
+                source_result_id,
+                query,
+                packets,
+            )?;
+            Ok((
+                canonical(&answer)?,
+                crate::text_summary::source_question_answer_lines_v1(&answer),
+            ))
+        }
+        "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2" => {
+            let answer = crate::text_summary::answer_fetched_source_question_v2(
+                source_result_id,
+                query,
+                packets,
+            )?;
+            Ok((
+                canonical(&answer)?,
+                crate::text_summary::source_question_answer_lines_v2(&answer),
+            ))
+        }
+        _ => Err(failure(
+            "RECOVERY_SOURCE_QUESTION_VERSION",
+            "the retained source-question artifact uses an unsupported derivation version",
+        )),
+    }
+}
+
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
@@ -437,14 +475,40 @@ fn verify_source_question_context(
         source_packet_refs.push((index, packet_ref.clone()));
         dependencies.push(packet_ref);
     }
-    let answer = crate::text_summary::answer_fetched_source_question(&prior.id, query, &packets)?;
-    let encoded = canonical(&answer)?;
-    let answer_ref = digest(&encoded);
-    let expected_units = crate::text_summary::source_question_answer_lines(&answer);
+    let answer_ref = result.dependencies.last().ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the committed source question has no answer artifact reference",
+        )
+    })?;
+    let stored_answer = store.get_bytes(actor, case, answer_ref)?;
+    if digest(&stored_answer) != *answer_ref {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the retained source-question answer artifact digest is invalid",
+        ));
+    }
+    let answer_record: serde_json::Value = serde_json::from_slice(&stored_answer)?;
+    let operation = answer_record
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_SOURCE_QUESTION_VERSION",
+                "the retained source-question artifact has no derivation version",
+            )
+        })?;
+    let (encoded, expected_units) =
+        recompute_source_question_artifact(operation, &prior.id, query, &packets)?;
+    if digest(&encoded) != *answer_ref || stored_answer != encoded {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the retained answer artifact differs from its versioned source-derived reconstruction",
+        ));
+    }
     let output_bytes = expected_units.join("\n").len();
     if encoded.len() > goal.budget.max_evidence_bytes
         || output_bytes > goal.budget.max_evidence_bytes
-        || store.get_bytes(actor, case, &answer_ref)? != encoded
     {
         return Err(failure(
             "RECOVERY_SOURCE_QUESTION_MISMATCH",
@@ -464,7 +528,7 @@ fn verify_source_question_context(
     }
     Ok(Some(SourceQuestionExpectation {
         source_packet_refs,
-        answer_ref,
+        answer_ref: answer_ref.clone(),
     }))
 }
 
@@ -574,11 +638,11 @@ fn inspect(
         ));
     }
     let source_summary =
-        verify_source_summary_context(store, actor, case, state, &result, plan, &goal)?;
+        verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     let source_question =
-        verify_source_question_context(store, actor, case, state, &result, plan, &goal)?;
+        verify_source_question_context(store, actor, case, state, result, plan, &goal)?;
     let search_candidate_rank =
-        verify_search_candidate_context(store, actor, case, state, &result, plan, &goal)?;
+        verify_search_candidate_context(store, actor, case, state, result, plan, &goal)?;
     let previous_csv_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         match bundle
             .meaning
@@ -619,7 +683,7 @@ fn inspect(
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .filter(|previous| previous.lifecycle == Lifecycle::Commit)
-            .map(|previous| -> Result<Option<(String, String, String, String, Vec<u8>, Vec<String>)>> {
+            .map(|previous| -> Result<Option<JsonGroupMeanRecovery>> {
                 let Some((source_ref, report_ref, answer)) =
                     crate::document::previous_json_table_highest_group_mean(
                         store, actor, case, previous,
@@ -1481,7 +1545,7 @@ mod tests {
             .register_input("alice", &request, &fingerprint)
             .unwrap();
         let packet_ref = store.put_artifact("alice", "case", &packet).unwrap();
-        let answer = crate::text_summary::answer_fetched_source_question(
+        let answer = crate::text_summary::answer_fetched_source_question_v2(
             &prior.id,
             "photosynthesis",
             &[(0, &packet, packet_ref.clone())],
@@ -1489,7 +1553,7 @@ mod tests {
         .unwrap();
         let answer_bytes = canonical(&answer).unwrap();
         let answer_ref = store.put_bytes("alice", "case", &answer_bytes).unwrap();
-        let expected_units = crate::text_summary::source_question_answer_lines(&answer);
+        let expected_units = crate::text_summary::source_question_answer_lines_v2(&answer);
         let dependencies = vec![prior.id.clone(), packet_ref.clone(), answer_ref.clone()];
         let plan = ContentPlan {
             id: "plan-fixture".into(),
@@ -1561,6 +1625,107 @@ mod tests {
                 &goal,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn source_question_recovery_dispatches_versioned_and_legacy_artifacts() {
+        use minidora_domain::{EvidencePacket, canonical, digest};
+
+        let source_text = "Photosynthesis stores light energy.";
+        let raw_body = source_text.as_bytes().to_vec();
+        let packet = EvidencePacket {
+            id: "b".repeat(64),
+            mode: "FIXTURE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: "https://example.test/article".into(),
+            final_uri: "https://example.test/article".into(),
+            redirect_chain: Vec::new(),
+            observed_at_unix_ms: 1,
+            provider_id: "recovery-test-fixture".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            raw_body,
+            extracted_text: Some(source_text.into()),
+            parser_version: "fixture-exact-text-v1".into(),
+            independence_group: "https://example.test/article".into(),
+            failure: None,
+        };
+        let packet_ref = digest(&canonical(&packet).unwrap());
+        let packets = [(0, &packet, packet_ref)];
+        for operation in [
+            "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1",
+            "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2",
+        ] {
+            let (bytes, lines) = recompute_source_question_artifact(
+                operation,
+                &"a".repeat(64),
+                "photosynthesis",
+                &packets,
+            )
+            .unwrap();
+            let artifact: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(artifact["operation"], operation);
+            assert!(
+                lines
+                    .join("\n")
+                    .contains("Photosynthesis stores light energy.")
+            );
+        }
+    }
+
+    #[test]
+    fn source_question_recovery_keeps_the_legacy_v1_derivation_readable() {
+        use minidora_domain::{EvidencePacket, canonical, digest};
+
+        let source_text = "Photosynthesis stores light energy.";
+        let raw_body = source_text.as_bytes().to_vec();
+        let packet = EvidencePacket {
+            id: "b".repeat(64),
+            mode: "FIXTURE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: "https://example.test/article".into(),
+            final_uri: "https://example.test/article".into(),
+            redirect_chain: Vec::new(),
+            observed_at_unix_ms: 1,
+            provider_id: "recovery-test-fixture".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            raw_body,
+            extracted_text: Some(source_text.into()),
+            parser_version: "fixture-exact-text-v1".into(),
+            independence_group: "https://example.test/article".into(),
+            failure: None,
+        };
+        let packet_ref = digest(&canonical(&packet).unwrap());
+        let packets = [(0, &packet, packet_ref)];
+        let answer = crate::text_summary::answer_fetched_source_question_v1(
+            &"a".repeat(64),
+            "photosynthesis",
+            &packets,
+        )
+        .unwrap();
+        let expected_bytes = canonical(&answer).unwrap();
+        let expected_lines = crate::text_summary::source_question_answer_lines_v1(&answer);
+        let (replayed_bytes, replayed_lines) = recompute_source_question_artifact(
+            "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1",
+            &"a".repeat(64),
+            "photosynthesis",
+            &packets,
+        )
+        .unwrap();
+        assert_eq!(replayed_bytes, expected_bytes);
+        assert_eq!(replayed_lines, expected_lines);
+        assert!(
+            recompute_source_question_artifact(
+                "SOURCE_QUESTION_UNKNOWN_V9",
+                &"a".repeat(64),
+                "photosynthesis",
+                &packets,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("RECOVERY_SOURCE_QUESTION_VERSION")
         );
     }
 

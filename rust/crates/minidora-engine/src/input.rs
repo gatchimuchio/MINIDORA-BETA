@@ -935,10 +935,10 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
         Some(value)
     } else if let Some(value) = text.strip_prefix("どうして") {
         Some(value)
-    } else if let Some(capture) = regex(r"(?i)^why\s+(.+)$")?.captures(text) {
-        Some(capture.get(1).expect("matched group").as_str())
     } else {
-        None
+        regex(r"(?i)^why\s+(.+)$")?
+            .captures(text)
+            .map(|capture| capture.get(1).expect("matched group").as_str())
     };
     let Some(mut statement) = statement.map(str::trim) else {
         return Ok(None);

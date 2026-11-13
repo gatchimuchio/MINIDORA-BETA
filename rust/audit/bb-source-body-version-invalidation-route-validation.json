@@ -1,0 +1,105 @@
+{
+  "work_item": "BODY-1 BB-SOURCE exact-URI body-version continuity",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T02:29:41+00:00",
+  "base_commit": "9137c716af8fd9e884941d26ec7e4a5351430675",
+  "requirement_ids": [
+    "A07",
+    "C03",
+    "C04",
+    "C05",
+    "C10",
+    "C11",
+    "C13",
+    "E09"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "toolchain": {
+    "rustc": "Usage: rustc [OPTIONS] INPUT\n\nOptions:\n    -h, --help          Display this message\n        --cfg <SPEC>    Configure the compilation environment.\n                        SPEC supports the syntax `<NAME>[=\"<VALUE>\"]`.\n        --check-cfg <SPEC>\n                        Provide list of expected cfgs for checking\n    -L [<KIND>=]<PATH>  Add a directory to the library search path. The\n                        optional KIND can be one of\n                        <dependency|crate|native|framework|all> (default:\n                        all).\n    -l [<KIND>[:<MODIFIERS>]=]<NAME>[:<RENAME>]\n                        Link the generated crate(s) to the specified native\n                        library NAME. The optional KIND can be one of\n                        <static|framework|dylib> (default: dylib).\n                        Optional comma separated MODIFIERS\n                        <bundle|verbatim|whole-archive|as-needed>\n                        may be specified each with a prefix of either '+' to\n                        enable or '-' to disable.\n        --crate-type <bin|lib|rlib|dylib|cdylib|staticlib|proc-macro>\n                        Comma separated list of types of crates\n                        for the compiler to emit\n        --crate-name <NAME>\n                        Specify the name of the crate being built\n        --edition <2015|2018|2021|2024|future>\n                        Specify which edition of the compiler to use when\n                        compiling code. The default is 2015 and the latest\n                        stable edition is 2024.\n        --emit <TYPE>[=<FILE>]\n                        Comma separated list of types of output for the\n                        compiler to emit.\n                        Each TYPE has the default FILE name:\n                        * asm - CRATE_NAME.s\n                        * llvm-bc - CRATE_NAME.bc\n                        * dep-info - CRATE_NAME.d\n                        * link - (platform and crate-type dependent)\n                        * llvm-ir - CRATE_NAME.ll\n                        * metadata - libCRATE_NAME.rmeta\n                        * mir - CRATE_NAME.mir\n                        * obj - CRATE_NAME.o\n                        * thin-link-bitcode - CRATE_NAME.indexing.o\n        --print <INFO>[=<FILE>]\n                        Compiler information to print on stdout (or to a file)\n                        INFO may be one of\n                        <all-target-specs-json|backend-has-mnemonic|backend-has-zstd|calling-conventions|cfg|check-cfg|code-models|crate-name|crate-root-lint-levels|deployment-target|file-names|host-tuple|link-args|native-static-libs|relocation-models|split-debuginfo|stack-protector-strategies|supported-crate-types|sysroot|target-cpus|target-features|target-libdir|target-list|target-spec-json|target-spec-json-schema|tls-models>.\n    -g                  Equivalent to -C debuginfo=2\n    -O                  Equivalent to -C opt-level=3\n    -o <FILENAME>       Write output to FILENAME\n        --out-dir <DIR> Write output to compiler-chosen filename in DIR\n        --explain <OPT> Provide a detailed explanation of an error message\n        --test          Build a test harness\n        --target <TARGET>\n                        Target tuple for which the code is compiled\n    -A, --allow <LINT>  Set lint allowed\n    -W, --warn <LINT>   Set lint warnings\n        --force-warn <LINT>\n                        Set lint force-warn\n    -D, --deny <LINT>   Set lint denied\n    -F, --forbid <LINT> Set lint forbidden\n        --cap-lints <LEVEL>\n                        Set the most restrictive lint level. More restrictive\n                        lints are capped at this level\n    -C, --codegen <OPT>[=<VALUE>]\n                        Set a codegen option\n    -V, --version       Print version info and exit\n    -v, --verbose       Use verbose output\n\nAdditional help:\n    -C help             Print codegen options\n    -W help             Print 'lint' options and default settings\n    --help -v           Print the full set of options rustc accepts",
+    "cargo": "Rust's package manager\n\nUsage: cargo [+toolchain] [OPTIONS] [COMMAND]\n       cargo [+toolchain] [OPTIONS] -Zscript <MANIFEST_RS> [ARGS]...\n\nOptions:\n  -V, --version                  Print version info and exit\n      --list                     List installed commands\n      --explain <CODE>           Provide a detailed explanation of a rustc error message\n  -v, --verbose...               Use verbose output (-vv very verbose/build.rs output)\n  -q, --quiet                    Do not print cargo log messages\n      --color <WHEN>             Coloring [possible values: auto, always, never]\n  -C <DIRECTORY>                 Change to DIRECTORY before doing anything (nightly-only)\n      --locked                   Assert that `Cargo.lock` will remain unchanged\n      --offline                  Run without accessing the network\n      --frozen                   Equivalent to specifying both --locked and --offline\n      --config <KEY=VALUE|PATH>  Override a configuration value\n  -Z <FLAG>                      Unstable (nightly-only) flags to Cargo, see 'cargo -Z help' for\n                                 details\n  -h, --help                     Print help\n\nCommands:\n    build, b    Compile the current package\n    check, c    Analyze the current package and report errors, but don't build object files\n    clean       Remove the target directory\n    doc, d      Build this package's and its dependencies' documentation\n    new         Create a new cargo package\n    init        Create a new cargo package in an existing directory\n    add         Add dependencies to a manifest file\n    remove      Remove dependencies from a manifest file\n    run, r      Run a binary or example of the local package\n    test, t     Run the tests\n    bench       Run the benchmarks\n    update      Update dependencies listed in Cargo.lock\n    search      Search registry for crates\n    publish     Package and upload this package to the registry\n    install     Install a Rust binary\n    uninstall   Uninstall a Rust binary\n    ...         See all commands with --list\n\nSee 'cargo help <command>' for more information on a specific command.",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/core.rs": "4cca2d368add52206832f055bcbe914ac7aac4e00a57ec034b0d11bbfdc963c6",
+    "rust/crates/minidora-engine/src/recovery.rs": "74bc22c556c52312c903d0ec575349ffe35faee1530653e9095b7b10909e26fa",
+    "rust/crates/minidora-engine/src/text_summary.rs": "ae6d0333d4b20906ba47fcdddc639eb52bb5961d7781e79295cb0e912b9d9b76",
+    "rust/crates/minidora-engine/src/document.rs": "d5a6e108438922b9cd4582ee67c5a9e0189c70f9689c8510c6bbfc54cf668c29",
+    "rust/crates/minidora-engine/src/input.rs": "109ea7d8d455beff9b5aa7f8debf13d22466c771596c430217bb5c6680535fb6",
+    "rust/crates/minidora-engine/src/math.rs": "a292409bae6fdc4b4e8c683300d38171e7e6639a684139b0a6c2e830246fa76c"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "7da3b44ec20cadd43f5f58637f5d2e5cbf8542f23c236a56319e44e4bdbf2f62",
+    "rust/tools/source_question_route_recovery_test.py": "979a4d1f32540c7c16360f627f22a2d96a3181d41d76a8d3a73b01abc668402a"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "2574588f13f3b2071a8a59fcf523d120a4840b22d316a453f589c355580317a9",
+    "rust/docs/IMPLEMENTATION_CHOICES.md": "dceb1f4ccdc820d72c502b796814e1ce86bdf85129fbeef85281059bea57606d",
+    "rust/audit/README.md": "74613fe0f3bd672f3d3404e23267e1158c2b6d4fa8c4d8b99d6524528ad46532",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "7bf57d91db5309eaf00a07f52bf1592b021186a29edd5d9969409ca2ade2691c",
+    "rust/audit/requirements.tsv": "a508f11fcd326fb2ab1f8760aacd6a1e87315a29bd0cf659e2eae276d479ab2f",
+    "rust/audit/rust-requirement-observations.json": "ba763dca9be612988bf5c5d529adcfb8cfe9401ff3e44e5e36a6fcf62d50a2c7"
+  },
+  "execution_mode": "Offline Linux focused implementation checks. Normal-route body packets in the new same-URI version test are explicitly FIXTURE; this batch did not invoke a LIVE fetch.",
+  "producer_consumer": {
+    "preexisting_gap": "A committed source-question consumer could treat two observations of the same exact final URI as current source candidates, allowing a superseded body sentence to remain visible without an explicit version boundary.",
+    "implemented_route": "Ordinary source question -> committed same-case FETCHED_BODY packets -> Core validates packet blobs and groups by exact final_uri -> chooses the uniquely latest observed raw-body/extracted-text/parser identity -> extracts candidates only from that identity -> records active and superseded packet refs in the answer artifact and dependency graph -> renders source spans and an exact-grant local-file receipt.",
+    "version_rules": "Distinct versions are identified by raw body SHA-256, extracted text SHA-256 and parser version. Same-identity observations remain linked as one current version. Older distinct versions stay in history and dependencies but do not participate in lexical matching. Different identities tied at the latest observed timestamp suspend with SOURCE_VERSION_AMBIGUOUS. Mixed LIVE/FIXTURE packets suspend with SOURCE_QUESTION_MODE_MIXED.",
+    "recovery": "Recovery dispatches on the retained V1/V2 operation identifier and recomputes the matching artifact before confirming an existing write without resending it. V1 artifacts remain readable."
+  },
+  "focused_validation": {
+    "engine_source_question_tests": "9 passed, 0 failed",
+    "normal_cli_source_question_tests": "4 passed, 0 failed; includes two same-exact-URI body versions, latest-only candidate selection, retained old packet/hash, dependency graph and local write receipt",
+    "cli_build_locked": "PASS",
+    "cli_all_targets_check_locked": "PASS",
+    "format_all_check": "PASS",
+    "clippy_warnings_denied": "PASS",
+    "git_diff_check": "PASS",
+    "fresh_process_recovery_helper": "PASS; CONFIRMED / LOCAL_FILE_RECONCILED_NO_RESEND; file inode, mtime and size unchanged",
+    "full_workspace_tests": "NOT_RUN",
+    "live_repeated_multi_candidate_fetch": "NOT_RUN"
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib source_question --locked",
+      "outcome": "9 passed, 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route natural_source_question --locked",
+      "outcome": "4 passed, 0 failed"
+    },
+    {
+      "command": "cargo build -p minidora-cli --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "python3 tools/source_question_route_recovery_test.py --binary target/debug/minidora-rust",
+      "outcome": "PASS; CONFIRMED / LOCAL_FILE_RECONCILED_NO_RESEND; file identity unchanged"
+    },
+    {
+      "command": "cargo check -p minidora-cli --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo clippy -p minidora-cli --all-targets --locked -- -D warnings",
+      "outcome": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "outcome": "PASS"
+    }
+  ],
+  "not_run": [
+    "Repeated LIVE multi-candidate body retrieval and LIVE version changes",
+    "Full workspace runtime suite",
+    "Full C03/C04/C05/C10/C11/C13, all-93 and overall successor acceptance",
+    "Semantic source synthesis, factual support/contradiction analysis, source independence and completeness",
+    "Windows storage-manager/OneDrive acceptance"
+  ],
+  "outcome": "PASS scoped BODY-1 implementation and fixture route",
+  "acceptance_boundary": "The tested ordinary route now selects the uniquely latest body/parser identity for each exact final URI, preserves superseded identities and rejects tied conflicting latest versions. It remains a lexical HYPOTHESIS candidate route. LIVE repeated retrieval, semantic synthesis, broader requirements and full successor acceptance remain UNVERIFIED."
+}

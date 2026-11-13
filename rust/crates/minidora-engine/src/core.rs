@@ -376,7 +376,7 @@ impl Engine {
                                 "前回の採用結果に再検証できる取得本文がありません。",
                             );
                         }
-                        match crate::text_summary::answer_fetched_source_question(
+                        match crate::text_summary::answer_fetched_source_question_v2(
                             &prior.id,
                             query,
                             &source_packets,
@@ -1809,7 +1809,7 @@ impl Engine {
                     );
                 }
                 let answer_bytes = canonical(answer)?;
-                let output_units = crate::text_summary::source_question_answer_lines(answer);
+                let output_units = crate::text_summary::source_question_answer_lines_v2(answer);
                 let output_bytes = output_units.join("\n").len();
                 if answer_bytes.len() > request.budget.max_evidence_bytes
                     || output_bytes > request.budget.max_evidence_bytes

@@ -3071,9 +3071,15 @@ fn natural_source_question_consumes_the_actual_prior_fetched_body() {
         .unwrap();
     assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
     let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(
+        typed["operation"],
+        "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2"
+    );
     assert_eq!(typed["source_result_id"], source_result_id);
     assert_eq!(typed["query_terms"], serde_json::json!(["photosynthesis"]));
+    assert_eq!(typed["active_source_count"], 1);
     assert_eq!(typed["matched_sentence_count"], 2);
+    assert_eq!(typed["source_versions"][0]["active_packet_ref"], packet_ref);
     assert_eq!(typed["candidates"][0]["source_packet_ref"], packet_ref);
     assert_eq!(typed["candidates"][0]["source_mode"], "FIXTURE");
     let span_start = typed["candidates"][0]["source_start"].as_u64().unwrap() as usize;
@@ -3149,6 +3155,13 @@ fn natural_source_question_consumes_every_retained_candidate_body_in_order() {
         .unwrap();
     assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
     let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(
+        typed["operation"],
+        "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2"
+    );
+    assert_eq!(typed["source_packet_count"], 2);
+    assert_eq!(typed["active_source_count"], 2);
+    assert_eq!(typed["superseded_version_count"], 0);
     assert_eq!(typed["matched_sentence_count"], 2);
     assert_eq!(typed["candidates"].as_array().unwrap().len(), 2);
     let expected_sentences = [
@@ -3204,6 +3217,109 @@ fn natural_source_question_consumes_every_retained_candidate_body_in_order() {
     for packet_ref in &packet_refs {
         assert!(graph.to_string().contains(packet_ref));
     }
+}
+
+#[test]
+fn natural_source_question_uses_latest_body_version_for_the_same_final_uri() {
+    let scratch = Scratch::new();
+    let sources = [
+        (
+            "https://example.test/article",
+            "Photosynthesis was thought to store light energy.",
+        ),
+        (
+            "https://example.test/article",
+            "Photosynthesis stores chemical energy from light.",
+        ),
+    ];
+    let (source_result_id, packet_refs, texts) =
+        seed_fetched_source_case_with_sources(&scratch.0, "owner", &sources);
+    let output_path = scratch.0.join("versioned-source-answer.txt");
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "source-question-versioned",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--allow-write",
+            output_path.to_str().unwrap(),
+            "What does the source say about photosynthesis?",
+        ],
+    ));
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "HYPOTHESIS");
+    let dependencies = answer["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies[0], source_result_id);
+    assert_eq!(dependencies[1], packet_refs[0]);
+    assert_eq!(dependencies[2], packet_refs[1]);
+
+    let answer_ref = dependencies[3].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let answer_bytes = store
+        .get_bytes("owner", "normal-route", answer_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
+    let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(
+        typed["operation"],
+        "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2"
+    );
+    assert_eq!(typed["source_packet_count"], 2);
+    assert_eq!(typed["active_source_count"], 1);
+    assert_eq!(typed["superseded_version_count"], 1);
+    assert_eq!(typed["matched_sentence_count"], 1);
+    assert_eq!(typed["candidates"].as_array().unwrap().len(), 1);
+
+    let source_version = &typed["source_versions"][0];
+    assert_eq!(source_version["source_final_uri"], sources[0].0);
+    assert_eq!(source_version["active_packet_ref"], packet_refs[1]);
+    assert_eq!(source_version["active_observed_at_unix_ms"], 2);
+    assert_eq!(
+        source_version["active_raw_body_sha256"],
+        minidora_domain::digest(texts[1].as_bytes())
+    );
+    assert_eq!(
+        source_version["active_version_packet_refs"],
+        serde_json::json!([packet_refs[1]])
+    );
+    assert_eq!(
+        source_version["superseded_versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        source_version["superseded_versions"][0]["raw_body_sha256"],
+        minidora_domain::digest(texts[0].as_bytes())
+    );
+    assert_eq!(
+        source_version["superseded_versions"][0]["packet_refs"],
+        serde_json::json!([packet_refs[0]])
+    );
+    assert_eq!(typed["candidates"][0]["source_packet_ref"], packet_refs[1]);
+    assert_eq!(typed["candidates"][0]["text"], texts[1]);
+    let output_text = answer["text"].as_str().unwrap();
+    assert!(output_text.contains(texts[1].as_str()));
+    assert!(!output_text.contains(texts[0].as_str()));
+    assert!(output_text.contains("旧本文版は履歴に保持"));
+    assert_eq!(std::fs::read(&output_path).unwrap(), output_text.as_bytes());
+    assert_eq!(answer["receipts"][0]["phase"], "CONFIRMED");
+
+    let graph: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                "owner",
+                "normal-route",
+                answer["execution_graph_ref"].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(graph.to_string().contains(&packet_refs[0]));
+    assert!(graph.to_string().contains(&packet_refs[1]));
 }
 
 #[test]

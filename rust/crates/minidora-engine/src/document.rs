@@ -304,7 +304,7 @@ pub(crate) fn previous_json_table_group_statistics_explanation(
             statistics
                 .sample_variance
                 .as_deref()
-                .map_or_else(|| "未定義".into(), &preview),
+                .map_or_else(|| "未定義".into(), preview),
         ));
         if let Some(unit) = &statistics.unit {
             lines.push(format!("  単位: {}", preview(unit)));
