@@ -68,6 +68,22 @@ pub struct ExtractiveSummaryCandidates {
     pub guarantee: String,
 }
 
+pub(crate) const PREVIOUS_RESULT_SUMMARY_KIND: &str = "minidora.previous-result-summary.v1";
+pub(crate) const PREVIOUS_RESULT_SUMMARY_HEADER: &str = "前回結果からの抽出候補";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PreviousResultSummaryArtifact {
+    pub kind: String,
+    pub summary_result_id: String,
+    pub source_result_id: String,
+    pub source_content_plan_id: String,
+    pub source_render_sha256: String,
+    pub source_text_sha256: String,
+    pub summary_unit_sha256: String,
+    pub summary: ExtractiveSummaryCandidates,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceExtractiveSummaryCandidates {
@@ -1181,6 +1197,70 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         ));
     }
     Ok(report)
+}
+
+pub(crate) fn summarize_previous_result_with_limits(
+    summary_result_id: &str,
+    source_result_id: &str,
+    source_content_plan_id: &str,
+    source_render_sha256: &str,
+    source_text: &str,
+    max_sentences: usize,
+    max_chars: Option<usize>,
+) -> Result<PreviousResultSummaryArtifact> {
+    if !sha256_id(summary_result_id)
+        || !sha256_id(source_result_id)
+        || !sha256_id(source_content_plan_id)
+        || !sha256_id(source_render_sha256)
+    {
+        return Err(failure(
+            "RESULT_SUMMARY_SOURCE_INVALID",
+            "summary inputs require exact result, content-plan and render identities",
+        ));
+    }
+    let document = match max_chars {
+        Some(max_chars) => serde_json::to_string(&serde_json::json!({
+            "text": source_text,
+            "max_sentences": max_sentences,
+            "max_chars": max_chars,
+            "format": "bullets"
+        }))?,
+        None => serde_json::to_string(&serde_json::json!({
+            "text": source_text,
+            "max_sentences": max_sentences,
+            "format": "bullets"
+        }))?,
+    };
+    let summary = extractive_summary_candidates(&document)?;
+    if summary.source_text != source_text
+        || summary.source_text_sha256 != digest(source_text.as_bytes())
+    {
+        return Err(failure(
+            "RESULT_SUMMARY_SOURCE_MISMATCH",
+            "summary source differs from the exact prior result text",
+        ));
+    }
+    let summary_unit = previous_result_summary_unit(source_result_id, &summary);
+    Ok(PreviousResultSummaryArtifact {
+        kind: PREVIOUS_RESULT_SUMMARY_KIND.into(),
+        summary_result_id: summary_result_id.into(),
+        source_result_id: source_result_id.into(),
+        source_content_plan_id: source_content_plan_id.into(),
+        source_render_sha256: source_render_sha256.into(),
+        source_text_sha256: summary.source_text_sha256.clone(),
+        summary_unit_sha256: digest(summary_unit.as_bytes()),
+        summary,
+    })
+}
+
+pub(crate) fn previous_result_summary_unit(
+    source_result_id: &str,
+    summary: &ExtractiveSummaryCandidates,
+) -> String {
+    format!(
+        "{PREVIOUS_RESULT_SUMMARY_HEADER}（結果ID: {source_result_id}）。\n{}",
+        summary.text
+    )
 }
 
 /// Build a source-linked extractive candidate set from an already retained

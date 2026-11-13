@@ -183,6 +183,12 @@ struct SourceSummaryExpectation {
     source_packet_refs: Vec<(usize, String)>,
 }
 
+struct PreviousResultSummaryExpectation {
+    content_ref: String,
+    render_ref: String,
+    summary_ref: String,
+}
+
 struct SourceQuestionExpectation {
     source_packet_refs: Vec<(usize, String)>,
     answer_ref: String,
@@ -446,6 +452,133 @@ fn verify_source_summary_context(
         ));
     }
     Ok(Some(SourceSummaryExpectation { source_packet_refs }))
+}
+
+fn verify_previous_result_summary_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<PreviousResultSummaryExpectation>> {
+    let Intent::SummarizePreviousResult {
+        max_sentences,
+        max_chars,
+    } = &goal.intent
+    else {
+        return Ok(None);
+    };
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    let source_result_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+                "summary has no sealed prior-result reference",
+            )
+        })?;
+    let source = state.prior_results.get(source_result_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+            "exact source result is not retained",
+        )
+    })?;
+    if source.id != source_result_id || source.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+            "summary source is not the same committed prior result",
+        ));
+    }
+    let (Some(source_plan), Some(source_render)) = (&source.content_plan, &source.render) else {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_SOURCE_UNAVAILABLE",
+            "source result has no retained content plan or render",
+        ));
+    };
+    let mut unsigned_plan = source_plan.clone();
+    unsigned_plan.id.clear();
+    if source_plan.id != identity(&unsigned_plan)?
+        || source.text != source_plan.text
+        || !crate::core::validate_render(source_plan, source_render)
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY",
+            "the retained source result does not match its content plan and render",
+        ));
+    }
+    let content_bytes = canonical(source_plan)?;
+    let content_ref = digest(&content_bytes);
+    let render_bytes = canonical(source_render)?;
+    let render_ref = digest(&render_bytes);
+    if store.get_bytes(actor, case, &content_ref)? != content_bytes
+        || store.get_bytes(actor, case, &render_ref)? != render_bytes
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY",
+            "the source content or render artifact differs from the retained result",
+        ));
+    }
+    let artifact = crate::text_summary::summarize_previous_result_with_limits(
+        &result.id,
+        &source.id,
+        &source_plan.id,
+        &source_render.actual_sha256,
+        &source.text,
+        max_sentences.unwrap_or(3),
+        *max_chars,
+    )?;
+    if artifact.summary.sentence_count > goal.budget.max_actions as usize {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_LIMIT",
+            "the source sentence scan exceeds the original action budget",
+        ));
+    }
+    let output_unit =
+        crate::text_summary::previous_result_summary_unit(&source.id, &artifact.summary);
+    let artifact_bytes = canonical(&artifact)?;
+    if artifact_bytes.len().saturating_add(output_unit.len()) > goal.budget.max_evidence_bytes {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_LIMIT",
+            "the retained summary exceeds the original evidence budget",
+        ));
+    }
+    let summary_ref = digest(&artifact_bytes);
+    if store.get_bytes(actor, case, &summary_ref)? != artifact_bytes {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the retained summary artifact differs from the original result text",
+        ));
+    }
+    let mut expected_dependencies = vec![
+        summary_ref.clone(),
+        source.id.clone(),
+        content_ref.clone(),
+        render_ref.clone(),
+    ];
+    expected_dependencies.extend(source.dependencies.iter().cloned());
+    if result.id != artifact.summary_result_id
+        || result.guarantee != Guarantee::Hypothesis
+        || !result.evidence.is_empty()
+        || result.dependencies != expected_dependencies
+        || plan.required_units != [output_unit]
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the summary result, source dependencies, or displayed unit differs from the recomputed report",
+        ));
+    }
+    Ok(Some(PreviousResultSummaryExpectation {
+        content_ref,
+        render_ref,
+        summary_ref,
+    }))
 }
 
 fn verify_source_question_context(
@@ -731,6 +864,7 @@ fn inspect(
                 goal.intent,
                 Intent::SummarizePreviousSource
                     | Intent::SummarizePreviousSourceConstrained { .. }
+                    | Intent::SummarizePreviousResult { .. }
                     | Intent::AskPreviousSourceQuestion { .. }
             ))
         || !validate_render(plan, render)
@@ -751,6 +885,8 @@ fn inspect(
     }
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
+    let previous_result_summary =
+        verify_previous_result_summary_context(store, actor, case, state, result, plan, &goal)?;
     let source_question =
         verify_source_question_context(store, actor, case, state, result, plan, &goal)?;
     let previous_text_edit =
@@ -1302,6 +1438,27 @@ fn inspect(
         });
         sources.push(edit_id);
     }
+    if previous_result_summary.is_some() {
+        let content_id = "previous-result-content".to_string();
+        let render_id = "previous-result-render".to_string();
+        let summary_id = "previous-result-summary".to_string();
+        expected_nodes.push(GoalNode {
+            id: content_id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        expected_nodes.push(GoalNode {
+            id: render_id.clone(),
+            kind: GoalNodeKind::RenderedArtifact,
+            requires: vec![content_id.clone()],
+        });
+        expected_nodes.push(GoalNode {
+            id: summary_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![content_id, render_id],
+        });
+        sources.push(summary_id);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -1347,6 +1504,36 @@ fn inspect(
             graph.observe(&id, reference, &BTreeMap::new())?;
             source_refs.insert(id, reference.clone());
         }
+    }
+    if let Some(summary) = &previous_result_summary {
+        graph.observe(
+            "previous-result-content",
+            &summary.content_ref,
+            &BTreeMap::new(),
+        )?;
+        graph.observe(
+            "previous-result-render",
+            &summary.render_ref,
+            &BTreeMap::from([(
+                "previous-result-content".into(),
+                summary.content_ref.clone(),
+            )]),
+        )?;
+        graph.observe(
+            "previous-result-summary",
+            &summary.summary_ref,
+            &BTreeMap::from([
+                (
+                    "previous-result-content".into(),
+                    summary.content_ref.clone(),
+                ),
+                ("previous-result-render".into(), summary.render_ref.clone()),
+            ]),
+        )?;
+        source_refs.insert(
+            "previous-result-summary".into(),
+            summary.summary_ref.clone(),
+        );
     }
     if let Some((report_ref, _)) = &previous_csv_statistics_explanation {
         let id = "previous-csv-statistics".to_string();
@@ -1854,6 +2041,91 @@ mod tests {
                     .contains("Photosynthesis stores light energy.")
             );
         }
+    }
+
+    #[test]
+    fn previous_result_summary_recovery_revalidates_source_and_candidate_artifact() {
+        use minidora_domain::{GoalContract, Guarantee};
+
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        for (input_id, input) in [
+            ("coco", "ココは鳥"),
+            ("mike", "ミケは鳥"),
+            ("common", "ココとミケの共通点は何ですか"),
+        ] {
+            assert_eq!(
+                engine
+                    .execute(
+                        "alice",
+                        RequestEnvelope::new("case", input_id, "alice", input)
+                    )
+                    .unwrap()
+                    .lifecycle,
+                Lifecycle::Commit
+            );
+        }
+        let summary = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "summary", "alice", "前回の比較を要約して"),
+            )
+            .unwrap();
+        assert_eq!(summary.lifecycle, Lifecycle::Commit);
+        assert_eq!(summary.guarantee, Guarantee::Hypothesis);
+
+        let state = engine.latest("alice", "case").unwrap().unwrap();
+        let goal_ref = state.goal_sha256.as_deref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let plan = summary.content_plan.as_ref().unwrap();
+        let expected = verify_previous_result_summary_context(
+            &engine.store,
+            "alice",
+            "case",
+            &state,
+            &summary,
+            plan,
+            &goal,
+        )
+        .unwrap()
+        .expect("the exact summary context should be replayable");
+        assert_eq!(summary.dependencies[0], expected.summary_ref);
+        assert!(summary.dependencies.contains(&expected.content_ref));
+        assert!(summary.dependencies.contains(&expected.render_ref));
+
+        let mut altered = state.clone();
+        let source_result_id = altered
+            .bundle
+            .as_ref()
+            .unwrap()
+            .meaning
+            .context_result_ref
+            .as_deref()
+            .unwrap();
+        altered
+            .prior_results
+            .get_mut(source_result_id)
+            .unwrap()
+            .text
+            .push(' ');
+        let changed = verify_previous_result_summary_context(
+            &engine.store,
+            "alice",
+            "case",
+            &altered,
+            &summary,
+            plan,
+            &goal,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            changed
+                .to_string()
+                .contains("RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY")
+        );
     }
 
     #[test]

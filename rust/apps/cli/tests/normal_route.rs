@@ -4564,6 +4564,153 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
 }
 
 #[test]
+fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans() {
+    let scratch = Scratch::new();
+    let actor = "previous-result-summary-owner";
+    let coco = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "summary-coco-bird", "ココは鳥"],
+    ));
+    let mike = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "summary-mike-bird", "ミケは鳥"],
+    ));
+    let comparison = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "summary-common", "ココとミケの共通点は何ですか"],
+    ));
+    let output_path = scratch.0.join("previous-result-summary.txt");
+    let summary = record(&execute(
+        &scratch.0,
+        actor,
+        &[
+            "--input",
+            "summary-previous-common",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--allow-write",
+            output_path.to_str().unwrap(),
+            "前回の比較を2文以内で要約して",
+        ],
+    ));
+    assert_eq!(summary["lifecycle"], "COMMIT");
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    assert_ne!(summary["text"], comparison["text"]);
+    let summary_text = summary["text"].as_str().unwrap();
+    assert!(summary_text.contains("前回結果からの抽出候補"));
+    assert!(summary_text.contains("目的・意味・条件・否定の網羅は検証していません"));
+    assert!(
+        summary_text
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count()
+            <= 2
+    );
+    assert_eq!(std::fs::read_to_string(&output_path).unwrap(), summary_text);
+    assert_eq!(summary["receipts"][0]["phase"], "CONFIRMED");
+    let summary_dependencies = summary["dependencies"].as_array().unwrap();
+    assert_eq!(summary_dependencies[0].as_str().unwrap().len(), 64);
+    for dependency in
+        std::iter::once(&comparison["id"]).chain(comparison["dependencies"].as_array().unwrap())
+    {
+        assert!(summary_dependencies.contains(dependency));
+    }
+    for premise in [&coco["dependencies"][0], &mike["dependencies"][0]] {
+        assert!(summary_dependencies.contains(premise));
+    }
+
+    let explanation = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "summary-explain", "詳しく説明して"],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    let explanation_text = explanation["text"].as_str().unwrap();
+    assert!(explanation_text.contains("前回結果の要約説明"));
+    assert!(explanation_text.contains(comparison["id"].as_str().unwrap()));
+    assert!(explanation_text.contains("選択文"));
+    assert!(explanation_text.contains("元結果byte"));
+    assert!(explanation_text.contains("要約の網羅性・意味・条件保持は未検証"));
+    for dependency in summary_dependencies {
+        assert!(
+            explanation["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency),
+            "summary explanation lost source dependency {dependency}"
+        );
+    }
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(
+        saved["prior_results"][comparison["id"].as_str().unwrap()],
+        comparison
+    );
+    assert_eq!(
+        saved["prior_results"][summary["id"].as_str().unwrap()],
+        summary
+    );
+
+    let missing = stopped(
+        &execute(
+            &Scratch::new().0,
+            "empty-summary-owner",
+            &["前回の結果を要約して"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING_ACTUAL_RESULT:")
+    );
+}
+
+#[test]
+fn previous_result_summary_stops_when_source_scan_exceeds_action_budget() {
+    let scratch = Scratch::new();
+    let source = serde_json::json!({
+        "text": "First source sentence. Second source sentence.",
+        "max_sentences": 2
+    })
+    .to_string();
+    let previous = record(&execute(
+        &scratch.0,
+        "summary-budget-owner",
+        &[&format!("text-summary:\n{source}")],
+    ));
+    assert_eq!(previous["lifecycle"], "COMMIT");
+
+    let limited = stopped(
+        &execute(
+            &scratch.0,
+            "summary-budget-owner",
+            &[
+                "--input",
+                "summary-over-budget",
+                "--max-actions",
+                "1",
+                "前回の結果を要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert!(limited["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
     let scratch = Scratch::new();
     let rule = record(&execute(

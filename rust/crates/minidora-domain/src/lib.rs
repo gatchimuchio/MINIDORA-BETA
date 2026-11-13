@@ -187,6 +187,10 @@ pub enum Intent {
         max_sentences: Option<usize>,
         max_chars: Option<usize>,
     },
+    SummarizePreviousResult {
+        max_sentences: Option<usize>,
+        max_chars: Option<usize>,
+    },
     GenerateCode {
         document: String,
     },

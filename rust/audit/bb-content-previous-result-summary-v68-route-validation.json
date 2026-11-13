@@ -1,0 +1,391 @@
+{
+  "work_item": "BODY-1 BB-CONTENT/BB-CONTEXT exact previous-result extractive summary and source-span follow-up",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T08:05:48+00:00",
+  "base_commit": "26b940a734b23dc97cb781e1eef25c936fbe45de",
+  "requirement_ids": [
+    "A07",
+    "A08",
+    "B08",
+    "E01",
+    "E02",
+    "F05"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v68-previous-result-summary",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "implementation_change": "Ordinary bounded Japanese and English previous-result summary requests now consume only the exact immediate same-case committed result, revalidate its ContentPlan and actual render, and run the existing deterministic sentence extractor over the prior displayed text. A typed report binds both result identities, source content/render, source-text hash, selected source byte spans and the exact output unit. The result remains HYPOTHESIS. The next 詳しく説明して rechecks the source and report, explains selected spans, and retains every dependency. File reconciliation recomputes the same context and observes the already written exact bytes without resending.",
+  "binary_sha256": "b04f1d7b82b08dbe7f50192c66c9a94b6b8a21e5fbb5afd8b72d5b9f26f8eb02",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "9663ce556a4b9e0c37aff0d701259f108f03e0daa474de04aec539bf7ff95437",
+    "rust/crates/minidora-engine/src/input.rs": "a8da9d09b0f3997222a4201f5b58dc1918de893655590fe1eb76e8115c2d3d9a",
+    "rust/crates/minidora-engine/src/core.rs": "f8217c2be7d8bbd7888012d40ebb3ffd5f77eac97cffe136b9efb8be8ab13bda",
+    "rust/crates/minidora-engine/src/text_summary.rs": "16cc492dc898f3afef8fa4c30a1c1ddff56eb1aa8349436c609bae5924639d21",
+    "rust/crates/minidora-engine/src/recovery.rs": "adc330f032c5635b240072f254b14281a82432380d3a51f0ef0bae70c9c57f74"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "efd2b9827890616d7a6728a406b0d01e02910c182b5fe2440381072b680acbbc",
+    "rust/crates/minidora-engine/src/recovery.rs": "adc330f032c5635b240072f254b14281a82432380d3a51f0ef0bae70c9c57f74",
+    "rust/tools/previous_result_summary_route_test.py": "1b9cbab19c4e455cd0b8d465a6cedac4d7fad20fec612fa1b33d2aed59df5990"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "a607dfda3e557abfa44cfc5443fa994375381db6f2831d64b30f641441b5031a",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "512cc942957f97dd875fb58980a36a35c342ea8cf4bc9bee812c97c5f1bfbbb3",
+    "rust/audit/requirements.tsv": "15ab76c560dabe089335055ebb03d82a76603ba65959778c213e655138e86f0e"
+  },
+  "execution_mode": "fresh CLI process per input with temporary actor/case-scoped SQLite and content-addressed blobs; no fixture injection into language/core routes; one controlled SQLite rollback models a crash after the actual summary-file attempt and before confirmation",
+  "scope": "Direct and derived common-relation results, one bounded Japanese request, same-case span explanation, exact local file receipt, no-resend reconciliation, history retention and cross-case stop. This is scoped implementation evidence only.",
+  "observations": [
+    {
+      "operation": "normal_input",
+      "actor": "summary-direct-owner",
+      "case": "summary-direct-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:3b56af41df2383825b59270a74331c8775038c745e042df833bbb43f366259f8\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:3b56af41df2383825b59270a74331c8775038c745e042df833bbb43f366259f8"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-direct-owner",
+      "case": "summary-direct-case",
+      "input_id": "mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:e409d722cf0876809288282ecac7e39a2d0a7414bea0f8f680cb65be23e9a007\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e409d722cf0876809288282ecac7e39a2d0a7414bea0f8f680cb65be23e9a007"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-direct-owner",
+      "case": "summary-direct-case",
+      "input_id": "common-direct",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:3b56af41df2383825b59270a74331c8775038c745e042df833bbb43f366259f8）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:e409d722cf0876809288282ecac7e39a2d0a7414bea0f8f680cb65be23e9a007）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "d57aff7ec2a0f05875d947dff50649d23c431d812600d75eaa3e66198c7c8bd2",
+        "fact:3b56af41df2383825b59270a74331c8775038c745e042df833bbb43f366259f8",
+        "fact:e409d722cf0876809288282ecac7e39a2d0a7414bea0f8f680cb65be23e9a007"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-direct-owner",
+      "case": "summary-direct-case",
+      "input_id": "summary-direct",
+      "request": "前回の比較を2文以内で要約して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果からの抽出候補（結果ID: babd7dffbc0dfe93b43322c85ded447b29b6c4afbde4613fb92a77d6b121bd47）。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\n- 現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "8d48833a197becedb502e20bae76701cc6710cf1f2e188227dbb43b5b1b97adf",
+        "babd7dffbc0dfe93b43322c85ded447b29b6c4afbde4613fb92a77d6b121bd47",
+        "7b735133772c94e4ccc85c6ed4992b9394bda270e4e27b691aca94acf303a19a",
+        "e8d7eb736786cd6e20565b6c390d55371e13ce0af0c4a26c800422a9abcd15a2",
+        "d57aff7ec2a0f05875d947dff50649d23c431d812600d75eaa3e66198c7c8bd2",
+        "fact:3b56af41df2383825b59270a74331c8775038c745e042df833bbb43f366259f8",
+        "fact:e409d722cf0876809288282ecac7e39a2d0a7414bea0f8f680cb65be23e9a007"
+      ]
+    },
+    {
+      "operation": "reconcile_existing_file_without_resend",
+      "actor": "summary-direct-owner",
+      "case": "summary-direct-case",
+      "input_id": "summary-direct",
+      "lifecycle": "COMMIT",
+      "reason": "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted",
+      "result_id_unchanged": true,
+      "file_inode_mtime_size_unchanged": true
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-direct-owner",
+      "case": "summary-direct-case",
+      "input_id": "explain-direct-summary",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果の要約説明（要約結果ID: 334c346ae461c86b677619069f92239a6e57c7a21f21a7cbac719abb7d9220ae; 元結果ID: babd7dffbc0dfe93b43322c85ded447b29b6c4afbde4613fb92a77d6b121bd47）。元結果は当時の採用本文です。この説明は現在の事実性を再判定するものではありません。\n選択文2（選択順位1、元結果byte 229..324）: 共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\n選択文10（選択順位2、元結果byte 874..928）: 現実世界での真偽確認ではありません。\n候補文11件のうち2件を抽出しました。残り9件は今回の選択に含まれていません。要約の網羅性・意味・条件保持は未検証です。",
+      "reason": null,
+      "dependencies": [
+        "334c346ae461c86b677619069f92239a6e57c7a21f21a7cbac719abb7d9220ae",
+        "8d48833a197becedb502e20bae76701cc6710cf1f2e188227dbb43b5b1b97adf",
+        "babd7dffbc0dfe93b43322c85ded447b29b6c4afbde4613fb92a77d6b121bd47",
+        "7b735133772c94e4ccc85c6ed4992b9394bda270e4e27b691aca94acf303a19a",
+        "e8d7eb736786cd6e20565b6c390d55371e13ce0af0c4a26c800422a9abcd15a2",
+        "d57aff7ec2a0f05875d947dff50649d23c431d812600d75eaa3e66198c7c8bd2",
+        "fact:3b56af41df2383825b59270a74331c8775038c745e042df833bbb43f366259f8",
+        "fact:e409d722cf0876809288282ecac7e39a2d0a7414bea0f8f680cb65be23e9a007"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-derived-owner",
+      "case": "summary-derived-case",
+      "input_id": "bird-animal-rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-derived-owner",
+      "case": "summary-derived-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-derived-owner",
+      "case": "summary-derived-case",
+      "input_id": "mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-derived-owner",
+      "case": "summary-derived-case",
+      "input_id": "common-derived",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは動物である（規則導出）／ミケは動物である（規則導出）\nココ側の根拠: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7）\n導出された事実: ココは動物である（導出ID: fact:4fad1f8bd50dc3de13b27f987b4d0e797e66f65007f43aabcfff33177288e921; 依存ID: fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7, rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは動物である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90）\n導出された事実: ミケは動物である（導出ID: fact:754180cdf649a7838f35d0c5c8122af23e5dd7da098545977a0d74f24b0ed9a6; 依存ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90, rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "cf19c75ffd0b6e861a107c99fc049bc763ff97390e343e6aea91293ac98692cd",
+        "fact:4fad1f8bd50dc3de13b27f987b4d0e797e66f65007f43aabcfff33177288e921",
+        "fact:754180cdf649a7838f35d0c5c8122af23e5dd7da098545977a0d74f24b0ed9a6",
+        "fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7",
+        "fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90",
+        "rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-derived-owner",
+      "case": "summary-derived-case",
+      "input_id": "summary-derived",
+      "request": "前回の比較を要約して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果からの抽出候補（結果ID: 7e5c20fc41fb2e819e89ab01a190459c164101249915456cc3bd06a937e8cabe）。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 直接提示された前提: ミケは鳥である（根拠ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90）\n- 直接提示された前提: ココは鳥である（根拠ID: fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7）\n- 直接提示された前提: ミケは鳥である（根拠ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90）",
+      "reason": null,
+      "dependencies": [
+        "c88c65d4e2d123b5b10a908f66e4d35d6ee131dca44ddd0b307936e99c7faebb",
+        "7e5c20fc41fb2e819e89ab01a190459c164101249915456cc3bd06a937e8cabe",
+        "8071f2d51ae08c9e18ce56f518fa58d8e652d3a75965166ce2c6839d12e483c1",
+        "08f1836622165b2b937ab72573d8f548959e792505dc6b790f8563d7ed5009ec",
+        "cf19c75ffd0b6e861a107c99fc049bc763ff97390e343e6aea91293ac98692cd",
+        "fact:4fad1f8bd50dc3de13b27f987b4d0e797e66f65007f43aabcfff33177288e921",
+        "fact:754180cdf649a7838f35d0c5c8122af23e5dd7da098545977a0d74f24b0ed9a6",
+        "fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7",
+        "fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90",
+        "rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-derived-owner",
+      "case": "summary-derived-case",
+      "input_id": "explain-derived-summary",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果の要約説明（要約結果ID: 69611e0349d17f10e37fbcd05359bcbb77a2a409602fbe889d80b77582bc37b1; 元結果ID: 7e5c20fc41fb2e819e89ab01a190459c164101249915456cc3bd06a937e8cabe）。元結果は当時の採用本文です。この説明は現在の事実性を再判定するものではありません。\n選択文10（選択順位3、元結果byte 1117..1252）: 直接提示された前提: ミケは鳥である（根拠ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90）\n選択文17（選択順位2、元結果byte 1948..2083）: 直接提示された前提: ココは鳥である（根拠ID: fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7）\n選択文21（選択順位1、元結果byte 2250..2385）: 直接提示された前提: ミケは鳥である（根拠ID: fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90）\n候補文24件のうち3件を抽出しました。残り21件は今回の選択に含まれていません。要約の網羅性・意味・条件保持は未検証です。",
+      "reason": null,
+      "dependencies": [
+        "69611e0349d17f10e37fbcd05359bcbb77a2a409602fbe889d80b77582bc37b1",
+        "c88c65d4e2d123b5b10a908f66e4d35d6ee131dca44ddd0b307936e99c7faebb",
+        "7e5c20fc41fb2e819e89ab01a190459c164101249915456cc3bd06a937e8cabe",
+        "8071f2d51ae08c9e18ce56f518fa58d8e652d3a75965166ce2c6839d12e483c1",
+        "08f1836622165b2b937ab72573d8f548959e792505dc6b790f8563d7ed5009ec",
+        "cf19c75ffd0b6e861a107c99fc049bc763ff97390e343e6aea91293ac98692cd",
+        "fact:4fad1f8bd50dc3de13b27f987b4d0e797e66f65007f43aabcfff33177288e921",
+        "fact:754180cdf649a7838f35d0c5c8122af23e5dd7da098545977a0d74f24b0ed9a6",
+        "fact:b33e0133a373d98261796ecee0fd52f802cc716482b4bdaaf82270acdd76b5b7",
+        "fact:b56b8189eadd8a19887f4fc95d664ea114dcef98c9d9eda3601a1a731e721e90",
+        "rule:c4ad868422b441b640b1ce2d92ef84b24f225857e8c94a089499ecf16752c9b2"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-english-owner",
+      "case": "summary-english-case",
+      "input_id": "calculation",
+      "request": "2+3",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "2+3 = 5",
+      "reason": null,
+      "dependencies": []
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-english-owner",
+      "case": "summary-english-case",
+      "input_id": "summary-english",
+      "request": "Summarize the previous result in up to 2 sentences",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果からの抽出候補（結果ID: 0ed82acc82612c39c41ae790c7d3449d5bde828f18bcef4566b9c63f32999135）。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 2+3 = 5",
+      "reason": null,
+      "dependencies": [
+        "b4c371f24faa05a222e4bc36cdbf4d576364e07f4730f319b5a2c3c04e6f5810",
+        "0ed82acc82612c39c41ae790c7d3449d5bde828f18bcef4566b9c63f32999135",
+        "2b5c682015afe58ba26c2dccc7708adb3432d5ed6d777b3d0b16992df71e6d07",
+        "c31a09011ee6d8417a7c1f94756630d6b828f330441697255d9c528f79f0ceb3"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-english-owner",
+      "case": "summary-english-case",
+      "input_id": "explain-english-summary",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果の要約説明（要約結果ID: 043e0a2952f8687395166e644a2e7568fc471e1cf009905fd98bfcb6387c7335; 元結果ID: 0ed82acc82612c39c41ae790c7d3449d5bde828f18bcef4566b9c63f32999135）。元結果は当時の採用本文です。この説明は現在の事実性を再判定するものではありません。\n選択文0（選択順位1、元結果byte 0..7）: 2+3 = 5\n候補文1件のうち1件を抽出しました。残り0件は今回の選択に含まれていません。要約の網羅性・意味・条件保持は未検証です。",
+      "reason": null,
+      "dependencies": [
+        "043e0a2952f8687395166e644a2e7568fc471e1cf009905fd98bfcb6387c7335",
+        "b4c371f24faa05a222e4bc36cdbf4d576364e07f4730f319b5a2c3c04e6f5810",
+        "0ed82acc82612c39c41ae790c7d3449d5bde828f18bcef4566b9c63f32999135",
+        "2b5c682015afe58ba26c2dccc7708adb3432d5ed6d777b3d0b16992df71e6d07",
+        "c31a09011ee6d8417a7c1f94756630d6b828f330441697255d9c528f79f0ceb3"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-budget-owner",
+      "case": "summary-budget-case",
+      "input_id": "source-candidates",
+      "request": "text-summary:\n{\"text\":\"First sentence. Second sentence.\",\"max_sentences\":2}",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- First sentence.\n- Second sentence.",
+      "reason": null,
+      "dependencies": [
+        "7b861067de0c0d4dbf230e39b920b5b827eddb5e20f32b3e997592d5ebf5b1c6"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-budget-owner",
+      "case": "summary-budget-case",
+      "input_id": "summary-over-budget",
+      "request": "前回の結果を要約して",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "前回結果の候補文数が今回の推論予算を超えています。",
+      "reason": "RESOURCE_LIMIT: 前回結果の候補文数が今回の推論予算を超えています。",
+      "dependencies": []
+    },
+    {
+      "operation": "normal_input",
+      "actor": "summary-direct-owner",
+      "case": "summary-empty-case",
+      "input_id": "cross-case-summary",
+      "request": "前回の結果を要約して",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "要約対象となる実際の直前結果がありません。",
+      "reason": "MISSING_ACTUAL_RESULT: 要約対象となる実際の直前結果がありません。",
+      "dependencies": []
+    }
+  ],
+  "summary": {
+    "total_fresh_cli_operations": 18,
+    "lifecycle_counts": {
+      "COMMIT": 16,
+      "SUSPEND": 2
+    },
+    "crash_recovery_retained_attempt_sequence": 3
+  },
+  "targeted_checks": {
+    "direct_report_result_content_render_and_source_text_hash_bound": "PASS",
+    "english_previous_result_summary_normal_route": "PASS",
+    "derived_comparison_preserves_rule_and_both_premises": "PASS",
+    "natural_previous_comparison_summary_is_separate_and_hypothesis": "PASS",
+    "selected_source_spans_explained_on_following_turn": "PASS",
+    "exact_local_file_receipt_and_crash_reconcile_without_resend": "PASS",
+    "file_inode_mtime_and_size_unchanged_during_reconcile": "PASS",
+    "previous_result_history_preserved_after_explanation": "PASS",
+    "cross_case_previous_result_rejected": "PASS",
+    "source_sentence_scan_budget_stop_without_artifact": "PASS"
+  },
+  "quality_gates": {
+    "previous_result_summary_input_test": "PASS",
+    "previous_result_summary_normal_cli_and_exact_file_receipt_test": "PASS",
+    "previous_result_summary_action_budget_stop_test": "PASS",
+    "previous_result_summary_recovery_context_test": "PASS",
+    "legacy_previous_source_summary_input_test": "PASS",
+    "legacy_constrained_previous_source_summary_cli_regression": "PASS",
+    "formatting": "PASS: cargo fmt --all -- --check",
+    "workspace_all_targets_check": "PASS: cargo check --workspace --all-targets --locked",
+    "warnings_denied_clippy": "PASS: cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "workspace_build": "PASS: cargo build --workspace --locked",
+    "full_workspace_runtime_suite": "NOT_RUN: scoped BUILD validation only"
+  },
+  "requirements_status": "The scoped route does not establish A07, A08, B08, E01, E02 or F05 acceptance. All remain UNVERIFIED.",
+  "limitations": [
+    "The route summarizes only the immediately previous committed result in the same actor and case; it does not search earlier history or other cases.",
+    "Sentence selection is deterministic and extractive. Purpose, meaning, conditions, negation and coverage remain unverified.",
+    "The selected byte spans refer to UTF-8 bytes in the exact prior displayed result text, not to a verified semantic model of its claims.",
+    "The follow-up covers selected source sentences and does not assert that omitted text is irrelevant or that the source result is true.",
+    "Full workspace runtime tests and broad A07/A08/B08/E01/E02/F05 acceptance were not run."
+  ]
+}

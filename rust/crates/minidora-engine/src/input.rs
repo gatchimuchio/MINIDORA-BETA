@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v67-common-relation-questions";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v68-previous-result-summary";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -91,6 +91,12 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         unresolved.push(
             "no actual committed previous result is available for source summarization".into(),
         );
+    }
+    if matches!(intent, Intent::SummarizePreviousResult { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved
+            .push("no actual committed previous result is available for summarization".into());
     }
     if matches!(intent, Intent::CorrectCalculation { .. })
         && previous.is_none_or(|result| {
@@ -1446,6 +1452,9 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = constrained_previous_source_summary_intent(body)? {
         return Ok(intent);
     }
+    if let Some(intent) = previous_result_summary_intent(body)? {
+        return Ok(intent);
+    }
     if regex(r"(?i)^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))(?:を)?要約(?:してください|して|せよ)$|^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document)$")?.is_match(body) {
         return Ok(Intent::SummarizePreviousSource);
     }
@@ -1713,6 +1722,41 @@ fn constrained_previous_source_summary_intent(text: &str) -> Result<Option<Inten
         return Ok(None);
     }
     Ok(Some(Intent::SummarizePreviousSourceConstrained {
+        max_sentences,
+        max_chars,
+    }))
+}
+
+fn previous_result_summary_intent(text: &str) -> Result<Option<Intent>> {
+    let japanese = regex(
+        r"^(?:(?:前回|前|直前)(?:の)?(?:結果|回答|比較|説明)|その(?:結果|回答|比較|説明))(?:を)?(?:(?:([1-8])(?:文|点)以内)(?:[、,]([1-9][0-9]{0,5})(?:字|文字)以内)?|([1-9][0-9]{0,5})(?:字|文字)以内(?:[、,]([1-8])(?:文|点)以内)?)?(?:で)?要約(?:してください|して|せよ)$",
+    )?;
+    let english = regex(
+        r"(?i)^summari[sz]e (?:the )?(?:previous|prior|last) (?:result|answer|comparison)(?: in up to ([1-8]) (?:sentences?|bullets?)(?:,? and up to ([1-9][0-9]{0,5}) characters?)?| up to ([1-9][0-9]{0,5}) characters?(?:,? and up to ([1-8]) (?:sentences?|bullets?))?)?$",
+    )?;
+    let (max_sentences, max_chars) = if let Some(captures) = japanese.captures(text) {
+        let parse = |index: usize| {
+            captures
+                .get(index)
+                .and_then(|value| value.as_str().parse().ok())
+        };
+        (parse(1).or_else(|| parse(4)), parse(2).or_else(|| parse(3)))
+    } else if let Some(captures) = english.captures(text) {
+        let parse = |index: usize| {
+            captures
+                .get(index)
+                .and_then(|value| value.as_str().parse().ok())
+        };
+        (parse(1).or_else(|| parse(4)), parse(2).or_else(|| parse(3)))
+    } else {
+        return Ok(None);
+    };
+    if max_sentences.is_some_and(|count| !(1..=8).contains(&count))
+        || max_chars.is_some_and(|count| !(1..=100_000).contains(&count))
+    {
+        return Ok(None);
+    }
+    Ok(Some(Intent::SummarizePreviousResult {
         max_sentences,
         max_chars,
     }))
@@ -3441,6 +3485,47 @@ mod tests {
         assert!(matches!(
             interpret("要約して").unwrap(),
             Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn previous_result_summary_keeps_its_result_context_and_explicit_limits() {
+        assert_eq!(
+            interpret("前回の比較を要約して").unwrap(),
+            Intent::SummarizePreviousResult {
+                max_sentences: None,
+                max_chars: None,
+            }
+        );
+        assert_eq!(
+            interpret("直前の回答を2文以内で要約してください").unwrap(),
+            Intent::SummarizePreviousResult {
+                max_sentences: Some(2),
+                max_chars: None,
+            }
+        );
+        assert_eq!(
+            interpret("その結果を90字以内で要約して").unwrap(),
+            Intent::SummarizePreviousResult {
+                max_sentences: None,
+                max_chars: Some(90),
+            }
+        );
+        assert_eq!(
+            interpret("Summarize the previous result in up to 3 bullets, and up to 120 characters")
+                .unwrap(),
+            Intent::SummarizePreviousResult {
+                max_sentences: Some(3),
+                max_chars: Some(120),
+            }
+        );
+        assert!(matches!(
+            interpret("前回の比較を9文以内で要約して").unwrap(),
+            Intent::Unknown { .. }
+        ));
+        assert!(matches!(
+            interpret("前回の比較を要約して").unwrap(),
+            Intent::SummarizePreviousResult { .. }
         ));
     }
 
