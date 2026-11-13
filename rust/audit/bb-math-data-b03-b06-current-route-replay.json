@@ -1,8 +1,8 @@
 {
   "work_item": "BB-MATH-DATA current route replay for bounded B03 mathematics and B06 multi-step calculation",
-  "recorded_at": "2026-11-13T00:09:48Z",
+  "recorded_at": "2026-11-13T00:27:04Z",
   "phase": "BODY-1",
-  "base_commit": "5593f1fe38114bd4f67e1bb0c085fd7203f53d5d",
+  "base_commit": "0a2ab27cadc7614a61441347ca9287b8b61731a8",
   "final_commit_at_observation": null,
   "software_version": "0.7.0-alpha.8",
   "schema_version": "minidora-rust/0.7.0-alpha.8",
@@ -18,19 +18,20 @@
   },
   "working_directory": "rust/",
   "source_and_artifact_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "ca62c50ae8ead26de3283a9455099945ad0633ea63926d4b695faab59f49ba0f",
-    "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
-    "rust/crates/minidora-engine/src/math.rs": "80c0b55a9e3eaffd4c159a31e679f6fda6ffdbe92643e368d462950fac7e4aa0",
-    "rust/crates/minidora-engine/src/core.rs": "cf63592d1569a9f53d7a7c8b3b064214b813a5843114603e43c800da8409ca2b",
     "rust/crates/minidora-engine/src/language.rs": "087aedd7ffda14e848c3893b91dc9a09423a09dea5e7f6480c023c4a6ba0120e",
     "rust/crates/minidora-engine/src/scheduler.rs": "8fa52123f47fdfca1d1be9d8d1482fd15e5bdead83e9050a90d5721535916543",
     "rust/crates/minidora-engine/src/output.rs": "cfd0fc6d5808239e67dc82ee4c5af03835b59b75022bbf143705590b97dc129e",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e",
+    "rust/apps/cli/tests/normal_route.rs": "537bd3793b8d731b22b3a808d5f91d8008921f4918f569a7064dc07cbae70b5b",
+    "rust/crates/minidora-engine/src/math.rs": "151265b20adbed441526d425163bddb18252d694d8bd6b19f28b39ebcc025d53",
+    "rust/crates/minidora-engine/src/core.rs": "0a0f4beaae8d76a44e8aa932597e4da4748c4cd04ade2e002c88fc58ac478493",
+    "rust/crates/minidora-engine/src/recovery.rs": "a0e48473303e7c3812966d2bf2613878b15caa6d784f95ba5f7a62a5851f633b",
+    "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
+    "rust/target/debug/minidora-rust": "78e87ea7dbb216d20ab68be1cf82d1208f1e3e46a33d5a9406f5c1d176c00299",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "af4d58be028ad5b1412fd6b0001633cb8f35c241aa0ffb5eb391a1852d7eb3b9",
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
-    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666",
-    "rust/target/debug/minidora-rust": "f6d80464d57c60a1721133dc08f64bbe77bf53a532acad5522faa2b79c43d74a",
-    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "aeae79bd9d03d3199aa8e831e1f2c36ee51a5e168db61e9f35b47576d41726be"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dc64a829f9c1c9efae65da3303539d6188bcf4433e66448780ad02a6b6bfb4e6",
+    "rust/audit/requirements.tsv": "51b4db0a9d494d5c32e23c67fc5a29f6e1c4d574ce9af6d12b5aee5678ec65b9"
   },
   "test_execution": {
     "route_method": "The normal_route integration tests start the actual minidora-rust executable in child processes with fresh temporary stores; no result or action is injected. Assertions inspect returned and stored route values.",
@@ -107,7 +108,8 @@
         "Japanese and English finite-event probability reports include membership and exact per-outcome mass; examples report 9/10 and 1/4.",
         "Japanese and English bounded polynomial evaluation reports each exact term contribution; examples report 3 and 17.",
         "Normal CLI linear/quadratic equation cases report exact rational solutions, identity and contradiction classes, and suspend on an unsupported degree; a supplied 2x2 linear system retains its original matrix and exact solution [2,1]."
-      ]
+      ],
+      "follow_up": "The additional same-case exact context consumer now recomputes Statistics, NormalizedProbabilityWeights, FiniteProbabilityStatistics, EventProbabilityResult and PolynomialEvaluationReport from saved operands. See bb-context-b03-math-reports-followup-v52-route-validation.json."
     },
     "B06": {
       "scope": "Bounded declared calculation sequences; not general natural-language multi-step planning.",
@@ -118,15 +120,19 @@
         "A fresh CLI process follow-up `詳しく説明して` references the saved result and exact calculation; explicit version 2 computes 14 while preserving the original result.",
         "Malformed references, unsupported quantity contexts, action/deadline/evidence limits and arithmetic errors preserve only actual step progress and do not create a final report or effect receipt.",
         "With an exact local write grant, emitted file bytes match rendered text and one CONFIRMED receipt records the target/hash/length; exact retry leaves bytes and modification time unchanged and retains one action receipt."
-      ]
+      ],
+      "regression_after_current_math_context_change": "All five calculation_sequence_route tests passed on this tree."
     }
   },
   "requirements_trace": {
     "updated": [
+      "A07",
+      "A14",
       "B03",
-      "B06"
+      "B06",
+      "F04"
     ],
-    "acceptance_status": "UNVERIFIED for both; no release or acceptance claim",
+    "acceptance_status": "UNVERIFIED for all mapped rows; no release or acceptance claim",
     "baseline_source_identity": "UNMAPPED remains as recorded; this replay maps only the current Rust route.",
     "full_successor_acceptance": "UNVERIFIED"
   },
@@ -136,8 +142,8 @@
   ],
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
-    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dc64a829f9c1c9efae65da3303539d6188bcf4433e66448780ad02a6b6bfb4e6",
+    "rust/audit/requirements.tsv": "51b4db0a9d494d5c32e23c67fc5a29f6e1c4d574ce9af6d12b5aee5678ec65b9"
   },
-  "working_tree_snapshot": "The source hashes in this record identify the exact working tree tested after the B03 statistics context change; the containing commit is recorded by Git."
+  "working_tree_snapshot": "Hashes bind the final source and documentation tree after the exact typed math-report context extension and incomplete-schema guard. The containing Git commit records this tested snapshot."
 }

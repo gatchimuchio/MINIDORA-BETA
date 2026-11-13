@@ -499,13 +499,13 @@ fn inspect(
     } else {
         None
     };
-    let previous_math_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
+    let previous_math_report_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         bundle
             .meaning
             .context_result_ref
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
-            .map(crate::math::previous_statistics_explanation)
+            .map(crate::math::previous_math_report_explanation)
             .transpose()?
             .flatten()
     } else {
@@ -635,17 +635,17 @@ fn inspect(
             ));
         }
     }
-    if let Some(expected_units) = &previous_math_statistics_explanation {
+    if let Some(expected_units) = &previous_math_report_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
                 "RECOVERY_MATH_CONTEXT_CHANGED",
-                "the prior statistics result reference is missing",
+                "the prior mathematical result reference is missing",
             )
         })?;
         let previous = state.prior_results.get(previous_id).ok_or_else(|| {
             failure(
                 "RECOVERY_MATH_CONTEXT_CHANGED",
-                "the prior statistics result is no longer retained",
+                "the prior mathematical result is no longer retained",
             )
         })?;
         if previous.lifecycle != Lifecycle::Commit
@@ -655,7 +655,7 @@ fn inspect(
         {
             return Err(failure(
                 "RECOVERY_MATH_CONTEXT_CHANGED",
-                "the exact statistics values or explanation no longer match the prior result",
+                "the exact mathematical report or explanation no longer matches the prior result",
             ));
         }
     }
@@ -1202,6 +1202,26 @@ mod tests {
     }
 
     fn attempted_statistics_explanation_prefix() -> Fixture {
+        attempted_math_report_explanation_prefix(
+            "statistics",
+            "統計 [0.1,0.2,0.3]",
+            "statistics-explanation.txt",
+        )
+    }
+
+    fn attempted_probability_explanation_prefix() -> Fixture {
+        attempted_math_report_explanation_prefix(
+            "weights",
+            "確率分布 [1,2,3] を正規化して",
+            "weights-explanation.txt",
+        )
+    }
+
+    fn attempted_math_report_explanation_prefix(
+        input_id: &str,
+        input_text: &str,
+        target_name: &str,
+    ) -> Fixture {
         let directory = std::env::temp_dir().join(format!(
             "minidora-recovery-math-context-{}-{}",
             std::process::id(),
@@ -1212,12 +1232,12 @@ mod tests {
         ));
         fs::create_dir(&directory).unwrap();
         let state = directory.join("state");
-        let target = directory.join("statistics-explanation.txt");
+        let target = directory.join(target_name);
         let mut engine = Engine::open(&state).unwrap();
         let statistics = engine
             .execute(
                 "alice",
-                RequestEnvelope::new("case", "statistics", "alice", "統計 [0.1,0.2,0.3]"),
+                RequestEnvelope::new("case", input_id, "alice", input_text),
             )
             .unwrap();
         assert_eq!(statistics.lifecycle, Lifecycle::Commit);
@@ -1347,6 +1367,33 @@ mod tests {
         let result = reconcile(&store, "alice", "case").unwrap();
         assert_eq!(result.lifecycle, Lifecycle::Commit);
         assert!(result.text.contains("前回の記述統計を元の値から再計算"));
+        assert_eq!(result.dependencies.len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+    }
+
+    #[test]
+    fn probability_explanation_reconciles_the_original_file_without_resending() {
+        let fixture = attempted_probability_explanation_prefix();
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+
+        let result = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit);
+        assert!(result.text.contains("前回の重み分布を元の入力から再計算"));
+        assert!(result.text.contains("正規化後の確率: [1/6, 1/3, 1/2]"));
         assert_eq!(result.dependencies.len(), 1);
         assert_eq!(fs::read(&fixture.target).unwrap(), original);
         assert_eq!(

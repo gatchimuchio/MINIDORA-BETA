@@ -3541,6 +3541,88 @@ fn statistics_followup_recomputes_the_previous_exact_b03_report() {
     );
 }
 
+#[test]
+fn probability_and_polynomial_followups_recompute_the_previous_b03_report() {
+    let scratch = Scratch::new();
+    let cases: [(&str, &str, &str, &[&str]); 4] = [
+        (
+            "weights",
+            "確率分布 [1,2,3] を正規化して",
+            "weights-explain",
+            &[
+                "重み合計: 6",
+                "正規化後の確率: [1/6, 1/3, 1/2]",
+                "確率合計: 1",
+            ],
+        ),
+        (
+            "expectation",
+            "期待値 [-1,3] 重み [1,3] を計算して",
+            "expectation-explain",
+            &[
+                "期待値の各寄与: [-1/4, 9/4]",
+                "期待値: 2",
+                "分散の各寄与: [9/4, 3/4]",
+                "分散: 3",
+            ],
+        ),
+        (
+            "event",
+            "事象確率 [0,1,1,2] 重み [1,2,3,4] 事象値 [1,2,2] を計算して",
+            "event-explain",
+            &[
+                "対象事象の値: [1, 2, 2]",
+                "結果ごとの事象所属: [false, true, true, true]",
+                "事象の確率: 9/10",
+            ],
+        ),
+        (
+            "polynomial",
+            "評価 2*x^2-3*x+1 代入 x=2",
+            "polynomial-explain",
+            &[
+                "式: 2*x^2-3*x+1",
+                "項1: powers={\"x\": 2}; 係数 2 × 単項式値 4 = 寄与 8",
+                "合計値: 3",
+            ],
+        ),
+    ];
+    for (case, request, followup, expected_lines) in cases {
+        let original = record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            case,
+            &["--input", "b03-original", request],
+        ));
+        assert_eq!(original["lifecycle"], "COMMIT", "{case}");
+        assert_eq!(original["guarantee"], "COMPUTED", "{case}");
+        assert_eq!(original["dependencies"], serde_json::json!([]), "{case}");
+
+        let explained = record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            case,
+            &["--input", followup, "詳しく説明して"],
+        ));
+        assert_eq!(explained["lifecycle"], "COMMIT", "{case}");
+        assert_eq!(explained["guarantee"], "COMPUTED", "{case}");
+        assert_eq!(
+            explained["dependencies"],
+            serde_json::json!([original["id"]]),
+            "{case}"
+        );
+        let text = explained["text"].as_str().unwrap();
+        assert!(
+            text.contains("再計算し、保存レポートと照合しました"),
+            "{case}: {text}"
+        );
+        for line in expected_lines {
+            assert!(text.contains(line), "{case}: missing {line:?} in {text}");
+        }
+        assert_ne!(text, original["text"].as_str().unwrap(), "{case}");
+    }
+}
+
 fn assert_basic_json_statistics(report: &Value, source: &str, pointer: &str, singleton: bool) {
     assert_eq!(report["pointer"], pointer);
     let array = if singleton {

@@ -15,6 +15,7 @@ const MAX_OBSERVATIONS: usize = 4096;
 const MAX_SCALAR_BYTES: usize = 1024;
 const MAX_RATIONAL_BITS: u64 = 4096;
 const MAX_OPERATIONS: usize = 100_000;
+const MAX_CONTEXT_EXPLANATION_ITEMS: usize = 16;
 
 type Matrix = Vec<Vec<BigRational>>;
 
@@ -868,80 +869,366 @@ pub fn summarize(values: &[String], units: Option<&[String]>) -> Result<Statisti
     })
 }
 
-/// Recompute an exact statistics report from its retained operands before a
-/// later turn explains the values. This remains descriptive of the supplied
-/// observations and does not infer population representativeness or causality.
-pub(crate) fn previous_statistics_explanation(
+fn verify_previous_math_report<T>(previous: &ResultRecord, report: &T, recomputed: &T) -> Result<()>
+where
+    T: PartialEq + Serialize,
+{
+    if !previous.dependencies.is_empty() || previous.calculation.is_some() {
+        return Err(failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous mathematical result has unexpected dependencies or calculation data",
+        ));
+    }
+    if report != recomputed || serde_json::to_string_pretty(recomputed)? != previous.text {
+        return Err(failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous mathematical report does not match exact recomputation from its retained operands",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_previous_math_report<T>(
+    previous: &ResultRecord,
+    marker: &str,
+    fields: &[&str],
+) -> Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&previous.text) else {
+        return Ok(None);
+    };
+    let Some(object) = value.as_object() else {
+        return Ok(None);
+    };
+    if !object.contains_key(marker) {
+        return Ok(None);
+    }
+    if object.len() != fields.len() || fields.iter().any(|field| !object.contains_key(*field)) {
+        return Ok(None);
+    }
+    serde_json::from_value(value).map(Some).map_err(|_| {
+        failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous mathematical report is not a valid retained report",
+        )
+    })
+}
+
+fn preview_strings(values: &[String]) -> String {
+    let mut preview = values
+        .iter()
+        .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if values.len() > MAX_CONTEXT_EXPLANATION_ITEMS {
+        preview.push_str(&format!(
+            ", … ({}件は保存レポートに保持)",
+            values.len() - MAX_CONTEXT_EXPLANATION_ITEMS
+        ));
+    }
+    preview
+}
+
+fn preview_bools(values: &[bool]) -> String {
+    let mut preview = values
+        .iter()
+        .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+        .map(bool::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if values.len() > MAX_CONTEXT_EXPLANATION_ITEMS {
+        preview.push_str(&format!(
+            ", … ({}件は保存レポートに保持)",
+            values.len() - MAX_CONTEXT_EXPLANATION_ITEMS
+        ));
+    }
+    preview
+}
+
+fn preview_text(value: &str, limit: usize) -> String {
+    let mut chars = value.chars();
+    let mut preview = chars.by_ref().take(limit).collect::<String>();
+    if chars.next().is_some() {
+        preview.push_str("…（続きは保存レポートに保持）");
+    }
+    preview
+}
+
+/// Recompute bounded native math reports from their retained operands before
+/// a later turn explains them. Large lists and expressions are abbreviated in
+/// the display; the complete exact report remains in the prior result.
+pub(crate) fn previous_math_report_explanation(
     previous: &ResultRecord,
 ) -> Result<Option<Vec<String>>> {
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let report = match serde_json::from_str::<Statistics>(&previous.text) {
-        Ok(report) => report,
-        Err(_) => return Ok(None),
-    };
-    if !previous.dependencies.is_empty() || previous.calculation.is_some() {
-        return Err(failure(
-            "MATH_CONTEXT_INVALID",
-            "the previous statistics result has unexpected dependencies or calculation data",
-        ));
+    if let Some(report) = parse_previous_math_report::<Statistics>(
+        previous,
+        "input_values",
+        &[
+            "input_values",
+            "input_units",
+            "normalized_values",
+            "count",
+            "unit",
+            "variance_unit",
+            "sum",
+            "mean",
+            "median",
+            "min",
+            "max",
+            "population_variance",
+            "sample_variance",
+            "sorted_values",
+            "scope",
+        ],
+    )? {
+        let recomputed = summarize(&report.input_values, report.input_units.as_deref())?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        let observations = report
+            .input_values
+            .iter()
+            .enumerate()
+            .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+            .map(|(index, value)| {
+                let unit = report
+                    .input_units
+                    .as_ref()
+                    .and_then(|units| units.get(index))
+                    .map_or_else(String::new, |unit| format!(" {unit}"));
+                format!("{value}{unit}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut observed = observations;
+        if report.count > MAX_CONTEXT_EXPLANATION_ITEMS {
+            observed.push_str(&format!(
+                ", … ({}件は保存レポートに保持)",
+                report.count - MAX_CONTEXT_EXPLANATION_ITEMS
+            ));
+        }
+        let normalized = preview_strings(&report.normalized_values);
+        let unit = report.unit.as_deref().unwrap_or("");
+        let suffix = if unit.is_empty() {
+            String::new()
+        } else {
+            format!(" {unit}")
+        };
+        let variance_suffix = report
+            .variance_unit
+            .as_deref()
+            .map_or_else(String::new, |unit| format!(" {unit}"));
+        let sample_variance = report.sample_variance.as_deref().map_or_else(
+            || "標本分散: 算出対象外（観測値が1件）".into(),
+            |value| format!("標本分散: {value}{variance_suffix}"),
+        );
+        return Ok(Some(vec![
+            "前回の記述統計を元の値から再計算し、保存レポートと照合しました。".into(),
+            format!("入力値 (n={}): [{observed}]", report.count),
+            format!("単位換算後の値: [{normalized}]{suffix}"),
+            format!(
+                "合計: {}{suffix}; 平均: {}{suffix}; 中央値: {}{suffix}",
+                report.sum, report.mean, report.median
+            ),
+            format!(
+                "最小値: {}{suffix}; 最大値: {}{suffix}",
+                report.min, report.max
+            ),
+            format!(
+                "母分散: {}{variance_suffix}; {sample_variance}",
+                report.population_variance
+            ),
+            format!("適用範囲: {}", report.scope),
+        ]));
     }
-    let recomputed = summarize(&report.input_values, report.input_units.as_deref())?;
-    if report != recomputed || serde_json::to_string_pretty(&recomputed)? != previous.text {
-        return Err(failure(
-            "MATH_CONTEXT_INVALID",
-            "the previous statistics report does not match exact recomputation from its retained values",
-        ));
+    if let Some(report) = parse_previous_math_report::<NormalizedProbabilityWeights>(
+        previous,
+        "input_weights",
+        &[
+            "input_weights",
+            "total_weight",
+            "normalized_probabilities",
+            "count",
+            "probability_sum",
+            "scope",
+        ],
+    )? {
+        let recomputed = normalize_probability_weights(&report.input_weights)?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        return Ok(Some(vec![
+            "前回の重み分布を元の入力から再計算し、保存レポートと照合しました。".into(),
+            format!(
+                "入力重み (n={}): [{}]",
+                report.count,
+                preview_strings(&report.input_weights)
+            ),
+            format!("重み合計: {}", report.total_weight),
+            format!(
+                "正規化後の確率: [{}]; 確率合計: {}",
+                preview_strings(&report.normalized_probabilities),
+                report.probability_sum
+            ),
+            format!("適用範囲: {}", report.scope),
+        ]));
     }
-
-    let observations = report
-        .input_values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            let unit = report
-                .input_units
-                .as_ref()
-                .and_then(|units| units.get(index))
-                .map_or_else(String::new, |unit| format!(" {unit}"));
-            format!("{value}{unit}")
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let normalized = report.normalized_values.join(", ");
-    let unit = report.unit.as_deref().unwrap_or("");
-    let suffix = if unit.is_empty() {
-        String::new()
-    } else {
-        format!(" {unit}")
-    };
-    let variance_suffix = report
-        .variance_unit
-        .as_deref()
-        .map_or_else(String::new, |unit| format!(" {unit}"));
-    let sample_variance = report.sample_variance.as_deref().map_or_else(
-        || "標本分散: 算出対象外（観測値が1件）".into(),
-        |value| format!("標本分散: {value}{variance_suffix}"),
-    );
-    Ok(Some(vec![
-        "前回の記述統計を元の値から再計算し、保存レポートと照合しました。".into(),
-        format!("入力値 (n={}): [{observations}]", report.count),
-        format!("単位換算後の値: [{normalized}]{suffix}"),
-        format!(
-            "合計: {}{suffix}; 平均: {}{suffix}; 中央値: {}{suffix}",
-            report.sum, report.mean, report.median
-        ),
-        format!(
-            "最小値: {}{suffix}; 最大値: {}{suffix}",
-            report.min, report.max
-        ),
-        format!(
-            "母分散: {}{variance_suffix}; {sample_variance}",
-            report.population_variance
-        ),
-        format!("適用範囲: {}", report.scope),
-    ]))
+    if let Some(report) = parse_previous_math_report::<FiniteProbabilityStatistics>(
+        previous,
+        "expected_value_contributions",
+        &[
+            "input_outcomes",
+            "input_weights",
+            "total_weight",
+            "normalized_probabilities",
+            "probability_sum",
+            "count",
+            "expected_value_contributions",
+            "expected_value",
+            "variance_contributions",
+            "variance",
+            "scope",
+        ],
+    )? {
+        let recomputed =
+            finite_probability_statistics(&report.input_outcomes, &report.input_weights)?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        return Ok(Some(vec![
+            "前回の有限分布の期待値・分散を元の結果と重みから再計算し、保存レポートと照合しました。".into(),
+            format!("結果 (n={}): [{}]", report.count, preview_strings(&report.input_outcomes)),
+            format!("重み: [{}]; 重み合計: {}", preview_strings(&report.input_weights), report.total_weight),
+            format!("正規化後の確率: [{}]", preview_strings(&report.normalized_probabilities)),
+            format!("期待値の各寄与: [{}]", preview_strings(&report.expected_value_contributions)),
+            format!("期待値: {}", report.expected_value),
+            format!("分散の各寄与: [{}]", preview_strings(&report.variance_contributions)),
+            format!("分散: {}", report.variance),
+            format!("適用範囲: {}", report.scope),
+        ]));
+    }
+    if let Some(report) = parse_previous_math_report::<EventProbabilityResult>(
+        previous,
+        "event_membership",
+        &[
+            "input_outcomes",
+            "input_weights",
+            "event_values",
+            "total_weight",
+            "normalized_probabilities",
+            "probability_sum",
+            "event_membership",
+            "event_probability_contributions",
+            "event_probability",
+            "count",
+            "scope",
+        ],
+    )? {
+        let recomputed = finite_event_probability(
+            &report.input_outcomes,
+            &report.input_weights,
+            &report.event_values,
+        )?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        return Ok(Some(vec![
+            "前回の有限事象確率を元の結果・重み・事象値から再計算し、保存レポートと照合しました。"
+                .into(),
+            format!(
+                "結果 (n={}): [{}]",
+                report.count,
+                preview_strings(&report.input_outcomes)
+            ),
+            format!(
+                "重み: [{}]; 重み合計: {}",
+                preview_strings(&report.input_weights),
+                report.total_weight
+            ),
+            format!("対象事象の値: [{}]", preview_strings(&report.event_values)),
+            format!(
+                "結果ごとの事象所属: [{}]",
+                preview_bools(&report.event_membership)
+            ),
+            format!(
+                "確率の各寄与: [{}]",
+                preview_strings(&report.event_probability_contributions)
+            ),
+            format!("事象の確率: {}", report.event_probability),
+            format!("適用範囲: {}", report.scope),
+        ]));
+    }
+    if let Some(report) = parse_previous_math_report::<PolynomialEvaluationReport>(
+        previous,
+        "original_expression",
+        &[
+            "original_expression",
+            "variables",
+            "bindings",
+            "terms",
+            "value",
+            "operations",
+            "verification",
+        ],
+    )? {
+        let recomputed = evaluate_polynomial_report(&report.original_expression, &report.bindings)?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        let mut lines = vec![
+            "前回の多項式評価を元の式と代入値から再計算し、保存レポートと照合しました。".into(),
+            format!("式: {}", preview_text(&report.original_expression, 512)),
+            format!("代入値: {}", serde_json::to_string(&report.bindings)?),
+        ];
+        for (index, term) in report
+            .terms
+            .iter()
+            .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+            .enumerate()
+        {
+            lines.push(format!(
+                "項{}: powers={:?}; 係数 {} × 単項式値 {} = 寄与 {}",
+                index + 1,
+                term.powers,
+                term.coefficient,
+                term.monomial_value,
+                term.contribution
+            ));
+        }
+        if report.terms.len() > MAX_CONTEXT_EXPLANATION_ITEMS {
+            lines.push(format!(
+                "残りの項 {}件は保存レポートに保持されています。",
+                report.terms.len() - MAX_CONTEXT_EXPLANATION_ITEMS
+            ));
+        }
+        lines.push(format!("合計値: {}", report.value));
+        lines.push(format!("検証情報: {}", report.verification));
+        return Ok(Some(lines));
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&previous.text) {
+        if value.as_object().is_some_and(|object| {
+            [
+                "input_values",
+                "normalized_values",
+                "sorted_values",
+                "input_weights",
+                "normalized_probabilities",
+                "input_outcomes",
+                "expected_value_contributions",
+                "variance_contributions",
+                "event_values",
+                "event_membership",
+                "original_expression",
+            ]
+            .iter()
+            .any(|field| object.contains_key(*field))
+                || ["bindings", "operations", "terms", "verification"]
+                    .iter()
+                    .all(|field| object.contains_key(*field))
+        }) {
+            return Err(failure(
+                "MATH_CONTEXT_INVALID",
+                "the previous mathematical report has an unexpected or incomplete field set",
+            ));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -1086,7 +1373,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_statistics_explanation_recomputes_the_saved_report() {
+    fn previous_math_report_explanation_recomputes_the_saved_report() {
         let report = summarize(&strings(&["0.1", "0.2", "0.3"]), None).unwrap();
         let mut previous = ResultRecord {
             id: "prior-statistics".into(),
@@ -1104,7 +1391,9 @@ mod tests {
             dependencies: Vec::new(),
             execution_graph_ref: None,
         };
-        let lines = previous_statistics_explanation(&previous).unwrap().unwrap();
+        let lines = previous_math_report_explanation(&previous)
+            .unwrap()
+            .unwrap();
         assert!(lines[0].contains("元の値から再計算"));
         assert!(lines.iter().any(|line| line.contains("平均: 1/5")));
         assert!(lines.iter().any(|line| line.contains("母分散: 1/150")));
@@ -1113,7 +1402,109 @@ mod tests {
         previous.text = previous
             .text
             .replace("\"mean\": \"1/5\"", "\"mean\": \"2/5\"");
-        assert!(previous_statistics_explanation(&previous).is_err());
+        assert!(previous_math_report_explanation(&previous).is_err());
+    }
+
+    #[test]
+    fn previous_probability_and_polynomial_reports_are_recomputed_and_bounded() {
+        let reports = vec![
+            serde_json::to_string_pretty(
+                &normalize_probability_weights(&strings(&["1", "2", "3"])).unwrap(),
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(
+                &finite_probability_statistics(&strings(&["-1", "3"]), &strings(&["1", "3"]))
+                    .unwrap(),
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(
+                &finite_event_probability(
+                    &strings(&["0", "1", "2"]),
+                    &strings(&["1", "2", "3"]),
+                    &strings(&["1", "2"]),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            serde_json::to_string_pretty(
+                &evaluate_polynomial_report(
+                    "2*x^2-3*x+1",
+                    &BTreeMap::from([("x".into(), "2".into())]),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        ];
+        for (index, text) in reports.iter().enumerate() {
+            let previous = ResultRecord {
+                id: format!("prior-math-{index}"),
+                input_id: "math".into(),
+                input_version: 1,
+                lifecycle: Lifecycle::Commit,
+                text: text.clone(),
+                reason: None,
+                guarantee: Guarantee::Computed,
+                calculation: None,
+                content_plan: None,
+                render: None,
+                receipts: Vec::new(),
+                evidence: Vec::new(),
+                dependencies: Vec::new(),
+                execution_graph_ref: None,
+            };
+            assert!(
+                previous_math_report_explanation(&previous)
+                    .unwrap_or_else(|error| panic!("report {index}: {error}"))
+                    .is_some(),
+                "valid report {index} was not explained"
+            );
+            let mut tampered = previous;
+            let mut tampered_report: serde_json::Value =
+                serde_json::from_str(&tampered.text).unwrap();
+            let fields = tampered_report.as_object_mut().unwrap();
+            if fields.contains_key("scope") {
+                fields.insert("scope".into(), serde_json::json!("tampered"));
+            } else {
+                fields.insert("value".into(), serde_json::json!("999"));
+            }
+            tampered.text = serde_json::to_string_pretty(&tampered_report).unwrap();
+            assert!(previous_math_report_explanation(&tampered).is_err());
+            if index == 3 {
+                let mut incomplete: serde_json::Value = serde_json::from_str(&text).unwrap();
+                incomplete
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("original_expression");
+                tampered.text = serde_json::to_string_pretty(&incomplete).unwrap();
+                assert!(previous_math_report_explanation(&tampered).is_err());
+            }
+        }
+
+        let long_report = normalize_probability_weights(&vec!["1".into(); 18]).unwrap();
+        let previous = ResultRecord {
+            id: "prior-long-math".into(),
+            input_id: "math".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: serde_json::to_string_pretty(&long_report).unwrap(),
+            reason: None,
+            guarantee: Guarantee::Computed,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: Vec::new(),
+            execution_graph_ref: None,
+        };
+        let lines = previous_math_report_explanation(&previous)
+            .unwrap()
+            .unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("2件は保存レポートに保持"))
+        );
     }
 
     #[test]

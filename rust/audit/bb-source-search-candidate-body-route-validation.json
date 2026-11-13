@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-SOURCE live search-list to selected body to summary",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-13T00:08:00+00:00",
-  "base_commit": "5593f1fe38114bd4f67e1bb0c085fd7203f53d5d",
+  "recorded_at": "2026-11-13T00:23:13+00:00",
+  "base_commit": "0a2ab27cadc7614a61441347ca9287b8b61731a8",
   "requirement_ids": [
     "A07",
     "A14",
@@ -30,20 +30,20 @@
     "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
     "rust/crates/minidora-engine/src/search.rs": "ee9be7007bb0611dfd7e67d602e73ac55afb3f071a8bbe4cbe79bc67faaf85b7",
     "rust/crates/minidora-engine/src/ports.rs": "afaae5b6446cc25f42b6a8bd240f4c761eeb1b58d846afef1f1bc882c6683c21",
-    "rust/crates/minidora-engine/src/core.rs": "cf63592d1569a9f53d7a7c8b3b064214b813a5843114603e43c800da8409ca2b",
-    "rust/crates/minidora-engine/src/recovery.rs": "94be3e4e1ab7c9b569a5e4e7acb96ffd2acfcb6101d5655d28ae2a2c7d9d8131",
+    "rust/crates/minidora-engine/src/core.rs": "0a0f4beaae8d76a44e8aa932597e4da4748c4cd04ade2e002c88fc58ac478493",
+    "rust/crates/minidora-engine/src/recovery.rs": "a0e48473303e7c3812966d2bf2613878b15caa6d784f95ba5f7a62a5851f633b",
     "rust/crates/minidora-engine/src/text_summary.rs": "b8002c9a2c43fe9fd3d9905ca734813bfa31712428df0b79ddb0fb725cd80815",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
   },
   "test_and_tool_snapshot_sha256": {
     "rust/apps/cli/src/main.rs": "5dc6cbbe589b3247f9e847bba158d57cfd06f5e276aae4cae178ff5fdf04eb57",
     "rust/tools/search_candidate_body_route_test.py": "53f40ca662558a504d6d4bd1046ab602965c521f7594da2f8a864ef38e2a35f1",
-    "rust/apps/cli/tests/normal_route.rs": "ca62c50ae8ead26de3283a9455099945ad0633ea63926d4b695faab59f49ba0f"
+    "rust/apps/cli/tests/normal_route.rs": "537bd3793b8d731b22b3a808d5f91d8008921f4918f569a7064dc07cbae70b5b"
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
-    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dc64a829f9c1c9efae65da3303539d6188bcf4433e66448780ad02a6b6bfb4e6",
+    "rust/audit/requirements.tsv": "51b4db0a9d494d5c32e23c67fc5a29f6e1c4d574ce9af6d12b5aee5678ec65b9"
   },
   "execution_mode": "fresh CLI process per request; LIVE public Wikipedia read; temporary actor/case state",
   "permissions": {
@@ -58,7 +58,7 @@
     "lifecycle": "COMMIT",
     "guarantee": "SOURCE_REPORT",
     "query": "石灰水",
-    "search_observation_ref": "c4ac9612c13d0b262a8b18f3f7c44faa3809d976af1b3b8cf4caf3dde774a9d6",
+    "search_observation_ref": "f7eaadd94e3b594e4a2c7dcf4be5cc654031d591c221eba45dc61aa7485e6573",
     "text": "検索一覧（本文は未取得。題名・URLは本文の事実根拠ではありません）:\n1: 水酸化カルシウム\nhttps://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0\n2: フレスコ\nhttps://ja.wikipedia.org/wiki/%E3%83%95%E3%83%AC%E3%82%B9%E3%82%B3\n3: マサ\nhttps://ja.wikipedia.org/wiki/%E3%83%9E%E3%82%B5\n4: カノムピアックプーン\nhttps://ja.wikipedia.org/wiki/%E3%82%AB%E3%83%8E%E3%83%A0%E3%83%94%E3%82%A2%E3%83%83%E3%82%AF%E3%83%97%E3%83%BC%E3%83%B3\n5: アステカ料理\nhttps://ja.wikipedia.org/wiki/%E3%82%A2%E3%82%B9%E3%83%86%E3%82%AB%E6%96%99%E7%90%86"
   },
   "selected_body_result": {
@@ -67,12 +67,12 @@
     "context_result_ref": "66a7486162edf991ce2210822bccb58f1438203c5a3dcafc8aa137e2bafeb152",
     "dependencies": [
       "66a7486162edf991ce2210822bccb58f1438203c5a3dcafc8aa137e2bafeb152",
-      "c4ac9612c13d0b262a8b18f3f7c44faa3809d976af1b3b8cf4caf3dde774a9d6",
-      "376b581d85c57773eb137ac6b4c915eac41f092c5dbe23429a069b98713796a5"
+      "f7eaadd94e3b594e4a2c7dcf4be5cc654031d591c221eba45dc61aa7485e6573",
+      "69b11dce0731dc07ad76380109dcac5b811f4c23c19b39ab2d8412983c969a80"
     ],
     "candidate_title": "1: 水酸化カルシウム",
     "candidate_uri": "https://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0?action=raw",
-    "body_packet_ref": "376b581d85c57773eb137ac6b4c915eac41f092c5dbe23429a069b98713796a5",
+    "body_packet_ref": "69b11dce0731dc07ad76380109dcac5b811f4c23c19b39ab2d8412983c969a80",
     "body_packet_id": "2ec4a8a54d4351e6359435225ee3ac266416dc29858209bdb4ac04c7aca22b71",
     "body_mode": "LIVE",
     "body_http_status": 200,
@@ -91,11 +91,11 @@
   "summary_consumer": {
     "lifecycle": "COMMIT",
     "guarantee": "HYPOTHESIS",
-    "context_result_ref": "7a739a48d847997e21716611acc78526fe6fe348be3af8b5e90f29c890ef4429",
+    "context_result_ref": "409feae5352ee63d9a1fd7e0d709ecab01eb8a68d4158f112440e5c0accffbbc",
     "dependencies": [
-      "7a739a48d847997e21716611acc78526fe6fe348be3af8b5e90f29c890ef4429",
-      "376b581d85c57773eb137ac6b4c915eac41f092c5dbe23429a069b98713796a5",
-      "b9626a6281019eea78080b79e981d39523680274a0176ca6969089fbae9f5dc7"
+      "409feae5352ee63d9a1fd7e0d709ecab01eb8a68d4158f112440e5c0accffbbc",
+      "69b11dce0731dc07ad76380109dcac5b811f4c23c19b39ab2d8412983c969a80",
+      "47c2e2901b1f4b166fc78fc2554d9b7eff1feb9ae7820c7dd9d9179bb50929e9"
     ],
     "text": "出典: https://ja.wikipedia.org/wiki/%E6%B0%B4%E9%85%B8%E5%8C%96%E3%82%AB%E3%83%AB%E3%82%B7%E3%82%A6%E3%83%A0?action=raw\n出典packet: 2ec4a8a54d4351e6359435225ee3ac266416dc29858209bdb4ac04c7aca22b71\n取得本文SHA-256: 82e6206cec80121c8a41feb1511898ab64451d86b76689138e798832669c8fe6\nライセンス情報: 未記録。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- [Ca+2]\n- 950P }}</ref>\n- <ref name=PGCH/>",
     "exact_body_sha_referenced": true

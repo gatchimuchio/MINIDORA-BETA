@@ -289,10 +289,10 @@ impl Engine {
             } else {
                 None
             };
-        let previous_math_statistics_explanation =
+        let previous_math_report_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => crate::math::previous_statistics_explanation(prior)?,
+                    Some(prior) => crate::math::previous_math_report_explanation(prior)?,
                     None => None,
                 }
             } else {
@@ -1329,7 +1329,7 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.push(report_ref.clone());
                     result.guarantee = prior.guarantee.clone();
-                } else if let Some(explanation) = &previous_math_statistics_explanation {
+                } else if let Some(explanation) = &previous_math_report_explanation {
                     units.extend(explanation.clone());
                     result.dependencies.push(prior.id.clone());
                     result.guarantee = prior.guarantee.clone();

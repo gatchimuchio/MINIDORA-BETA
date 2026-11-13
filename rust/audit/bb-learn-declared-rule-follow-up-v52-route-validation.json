@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-LEARN bounded declared-rule follow-up (v52 replay)",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-13T00:07:55+00:00",
-  "base_commit": "5593f1fe38114bd4f67e1bb0c085fd7203f53d5d",
+  "recorded_at": "2026-11-13T00:23:29+00:00",
+  "base_commit": "0a2ab27cadc7614a61441347ca9287b8b61731a8",
   "requirement_ids": [
     "A09",
     "A13",
@@ -24,19 +24,19 @@
   "source_snapshot_sha256": {
     "rust/crates/minidora-domain/src/lib.rs": "6e8973f9ad652c6e746ac0703a967d5ac4d60f646d537c902e5eba94c07ad46e",
     "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
-    "rust/crates/minidora-engine/src/core.rs": "cf63592d1569a9f53d7a7c8b3b064214b813a5843114603e43c800da8409ca2b",
+    "rust/crates/minidora-engine/src/core.rs": "0a0f4beaae8d76a44e8aa932597e4da4748c4cd04ade2e002c88fc58ac478493",
     "rust/crates/minidora-engine/src/relations.rs": "b2a06ff0c80cbf27f469964b7d333648803c5f586c62c4d9062b88992a802459",
-    "rust/crates/minidora-engine/src/recovery.rs": "94be3e4e1ab7c9b569a5e4e7acb96ffd2acfcb6101d5655d28ae2a2c7d9d8131",
+    "rust/crates/minidora-engine/src/recovery.rs": "a0e48473303e7c3812966d2bf2613878b15caa6d784f95ba5f7a62a5851f633b",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
   },
   "test_and_tool_snapshot_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "ca62c50ae8ead26de3283a9455099945ad0633ea63926d4b695faab59f49ba0f",
+    "rust/apps/cli/tests/normal_route.rs": "537bd3793b8d731b22b3a808d5f91d8008921f4918f569a7064dc07cbae70b5b",
     "rust/tools/learned_rule_followup_test.py": "e7ab646adc20cffdc17c766d541719ec9278db933beba57595c55ebfcc8ade5a"
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
-    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dc64a829f9c1c9efae65da3303539d6188bcf4433e66448780ad02a6b6bfb4e6",
+    "rust/audit/requirements.tsv": "51b4db0a9d494d5c32e23c67fc5a29f6e1c4d574ce9af6d12b5aee5678ec65b9"
   },
   "execution_mode": "fresh CLI process for each request; one durable actor/case store",
   "scope": "User-declared rules and premises only; no empirical rule induction or world-truth claim.",

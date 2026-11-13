@@ -1,0 +1,220 @@
+{
+  "work_item": "BODY-1 B03 retained exact math report context follow-up",
+  "recorded_at": "2026-11-13T00:27:04Z",
+  "phase": "BODY-1_EXECUTION",
+  "base_commit": "0a2ab27cadc7614a61441347ca9287b8b61731a8",
+  "final_commit_at_observation": null,
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v52-search-candidate-body",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "route_method": "The normal_route integration tests invoke the actual CLI executable in fresh child processes and same-case stores. Engine unit tests reconstruct the typed report and simulate file recovery at the adopted pre-confirmation journal edge.",
+  "source_and_artifact_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "537bd3793b8d731b22b3a808d5f91d8008921f4918f569a7064dc07cbae70b5b",
+    "rust/crates/minidora-engine/src/math.rs": "151265b20adbed441526d425163bddb18252d694d8bd6b19f28b39ebcc025d53",
+    "rust/crates/minidora-engine/src/core.rs": "0a0f4beaae8d76a44e8aa932597e4da4748c4cd04ade2e002c88fc58ac478493",
+    "rust/crates/minidora-engine/src/recovery.rs": "a0e48473303e7c3812966d2bf2613878b15caa6d784f95ba5f7a62a5851f633b",
+    "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
+    "rust/target/debug/minidora-rust": "78e87ea7dbb216d20ab68be1cf82d1208f1e3e46a33d5a9406f5c1d176c00299",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "af4d58be028ad5b1412fd6b0001633cb8f35c241aa0ffb5eb391a1852d7eb3b9",
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dc64a829f9c1c9efae65da3303539d6188bcf4433e66448780ad02a6b6bfb4e6",
+    "rust/audit/requirements.tsv": "51b4db0a9d494d5c32e23c67fc5a29f6e1c4d574ce9af6d12b5aee5678ec65b9"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dc64a829f9c1c9efae65da3303539d6188bcf4433e66448780ad02a6b6bfb4e6",
+    "rust/audit/requirements.tsv": "51b4db0a9d494d5c32e23c67fc5a29f6e1c4d574ce9af6d12b5aee5678ec65b9"
+  },
+  "report_types": {
+    "statistics": "Statistics is reconstructed from retained input_values and input_units; exact struct equality and canonical pretty JSON must match.",
+    "normalized_probability_weights": "NormalizedProbabilityWeights is reconstructed from retained input_weights.",
+    "finite_probability_statistics": "FiniteProbabilityStatistics is reconstructed from retained outcomes and weights.",
+    "event_probability": "EventProbabilityResult is reconstructed from retained outcomes, weights and event values.",
+    "polynomial_evaluation": "PolynomialEvaluationReport is reconstructed from retained source expression and bindings."
+  },
+  "producer_consumer": {
+    "producer": "A normal Japanese math request commits an exact typed report with its complete JSON text as the prior result.",
+    "consumer": "A following same-case 詳しく説明して request identifies the exact report schema, recomputes from the retained operands, checks the full typed report and serialized text, and emits exact intermediate values with a dependency on the prior result ID.",
+    "bounded_output": "At most 16 array items or polynomial terms are rendered. The polynomial source expression is capped at 512 Unicode scalar values. The full report remains available in prior history.",
+    "tampering": "Changes to recognized report values or field sets return MATH_CONTEXT_INVALID rather than explain a mismatched result."
+  },
+  "route_observations": [
+    {
+      "type": "NORMALIZED_PROBABILITY_WEIGHTS",
+      "input": "確率分布 [1,2,3] を正規化して",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "weight total 6",
+        "probabilities [1/6, 1/3, 1/2]",
+        "probability sum 1"
+      ]
+    },
+    {
+      "type": "FINITE_PROBABILITY_STATISTICS",
+      "input": "期待値 [-1,3] 重み [1,3] を計算して",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "expected-value contributions [-1/4, 9/4]",
+        "expected value 2",
+        "variance contributions [9/4, 3/4]",
+        "variance 3"
+      ]
+    },
+    {
+      "type": "EVENT_PROBABILITY",
+      "input": "事象確率 [0,1,1,2] 重み [1,2,3,4] 事象値 [1,2,2] を計算して",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "event membership [false, true, true, true]",
+        "duplicate event value retains set membership semantics",
+        "event probability 9/10"
+      ]
+    },
+    {
+      "type": "POLYNOMIAL_EVALUATION",
+      "input": "評価 2*x^2-3*x+1 代入 x=2",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "term contributions 8, -6, 1",
+        "value 3"
+      ]
+    },
+    {
+      "type": "DESCRIPTIVE_STATISTICS",
+      "input": "統計 [0.1,0.2,0.3]",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "exact report rederived",
+        "prior result ID retained as the explanation dependency"
+      ]
+    }
+  ],
+  "lineage_and_recovery": {
+    "normal_route": "Each math explanation keeps exactly the previous result ID dependency and its sealed context_result_ref.",
+    "statistics_file_recovery": "The recovery test verifies the retained statistics report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending.",
+    "probability_file_recovery": "The recovery test verifies a retained normalized-weight report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending."
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all; cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check -p minidora-cli --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build -p minidora-cli --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine previous_ --locked",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0,
+      "includes": [
+        "previous_math_report_explanation_recomputes_the_saved_report",
+        "previous_probability_and_polynomial_reports_are_recomputed_and_bounded"
+      ]
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route statistics_followup_recomputes_the_previous_exact_b03_report --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route probability_and_polynomial_followups_recompute_the_previous_b03_report --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine statistics_explanation_reconciles_the_original_file_without_resending --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine probability_explanation_reconciles_the_original_file_without_resending --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route csv_statistics_followup_explains_revalidated_source_cells --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route calculation_sequence_route --locked",
+      "exit_code": 0,
+      "passed": 5,
+      "failed": 0
+    },
+    {
+      "command": "Seven selected B03 producer route tests for statistics, normalization, finite moments, event probability, polynomial evaluation and equation/system examples",
+      "exit_code": 0,
+      "passed": 7,
+      "failed": 0
+    }
+  ],
+  "selected_test_total": 21,
+  "selected_tests_passed": 21,
+  "selected_tests_failed": 0,
+  "not_run": [
+    "full workspace runtime suite",
+    "Clippy",
+    "linear/quadratic equation context follow-up",
+    "independent math acceptance population",
+    "full B03/B06/B02/B04 acceptance",
+    "Windows/macOS/physical 8 GB QA",
+    "release or deployment"
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; selected exact report routes only",
+    "B06": "UNVERIFIED; five sequence regressions only",
+    "A07_A14_F04": "UNVERIFIED; bounded prior-report explanation route only",
+    "full_successor_acceptance": "UNVERIFIED"
+  },
+  "final_revalidation_after_incomplete-schema-guard": [
+    {
+      "command": "cargo test -p minidora-engine previous_ --locked",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route probability_and_polynomial_followups_recompute_the_previous_b03_report --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine probability_explanation_reconciles_the_original_file_without_resending --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    }
+  ]
+}
