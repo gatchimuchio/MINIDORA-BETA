@@ -51,6 +51,16 @@ pub struct DocumentResult {
     pub guarantee: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviousTextEditArtifact {
+    pub operation: String,
+    pub source_result_id: String,
+    pub source_content_plan_sha256: String,
+    pub source_render_sha256: String,
+    pub source_text_sha256: String,
+    pub edit: DocumentResult,
+}
+
 /// Revalidate an exact prior CSV-statistics report and explain where each
 /// observed value came from. This is deliberately bounded to the one existing
 /// exact-statistics producer; the original result remains the numeric answer.
@@ -2316,6 +2326,102 @@ pub fn replace_exact(
     )
 }
 
+/// Replace one exact original literal only when it occurs once, counting
+/// overlapping matches. This is for natural-language edits of a retained
+/// output; it never treats a partial match as an instruction to choose a span.
+pub fn replace_unique_exact(document: &str, old: &str, new: &str) -> Result<DocumentResult> {
+    if old.is_empty() {
+        return Err(failure(
+            "INVALID_REPLACEMENT",
+            "search text must be nonempty",
+        ));
+    }
+    let Some(start) = document.find(old) else {
+        return Err(failure(
+            "PREVIOUS_TEXT_NOT_FOUND",
+            "the exact literal does not occur in the retained previous output",
+        ));
+    };
+    let next_boundary = start
+        + document[start..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+    if document[next_boundary..].find(old).is_some() {
+        return Err(failure(
+            "PREVIOUS_TEXT_AMBIGUOUS",
+            "the exact literal occurs more than once, including overlapping occurrences",
+        ));
+    }
+    replace_exact(document, old, new, Some(1))
+}
+
+pub(crate) fn previous_text_replacement(
+    previous: &ResultRecord,
+    old: &str,
+    new: &str,
+) -> Result<(String, String, PreviousTextEditArtifact)> {
+    if previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "MISSING_ACTUAL_RESULT",
+            "the exact previous result is not committed",
+        ));
+    }
+    let plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "PREVIOUS_OUTPUT_UNAVAILABLE",
+            "the previous committed result has no retained content plan",
+        )
+    })?;
+    let render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "PREVIOUS_OUTPUT_UNAVAILABLE",
+            "the previous committed result has no actual rendered output",
+        )
+    })?;
+    let mut unsigned_plan = plan.clone();
+    unsigned_plan.id.clear();
+    if plan.id != minidora_domain::identity(&unsigned_plan)?
+        || plan.text != previous.text
+        || plan.guarantee != previous.guarantee
+        || render.status != "RENDERED"
+        || render.plan_id != plan.id
+        || render.bytes != plan.text.as_bytes()
+        || render.actual_sha256 != digest(&render.bytes)
+        || plan.required_units.is_empty()
+    {
+        return Err(failure(
+            "PREVIOUS_OUTPUT_INTEGRITY",
+            "the committed content plan and its actual rendered bytes do not agree",
+        ));
+    }
+    let source_content_plan_sha256 = digest(&canonical(plan)?);
+    let source_render_sha256 = digest(&canonical(render)?);
+    let source_text_sha256 = digest(plan.text.as_bytes());
+    let edit = replace_unique_exact(&plan.text, old, new)?;
+    Ok((
+        source_content_plan_sha256.clone(),
+        source_render_sha256.clone(),
+        PreviousTextEditArtifact {
+            operation: "PREVIOUS_OUTPUT_REPLACE_EXACT_V1".into(),
+            source_result_id: previous.id.clone(),
+            source_content_plan_sha256,
+            source_render_sha256,
+            source_text_sha256,
+            edit,
+        },
+    ))
+}
+
+pub(crate) fn previous_text_replacement_lines(artifact: &PreviousTextEditArtifact) -> Vec<String> {
+    vec![
+        "前回の回答で一致した文字列を1箇所置換しました。意味・事実の正確さは検証していません。"
+            .into(),
+        artifact.edit.text.clone(),
+    ]
+}
+
 /// An exact output segment from explicit text composition. Material offsets
 /// address the decoded JSON string in UTF-8 bytes; JSON offsets address the
 /// original request body. Formatting tokens point to their declaring unit.
@@ -3209,6 +3315,26 @@ mod tests {
         assert_eq!(
             replace_exact("aaaa", "aa", "x", Some(2)).unwrap().text,
             "xx"
+        );
+    }
+
+    #[test]
+    fn unique_exact_edit_rejects_missing_duplicate_and_overlapping_literals() {
+        let edited = replace_unique_exact("前の文章: 猫です。", "猫", "犬").unwrap();
+        assert_eq!(edited.text, "前の文章: 犬です。");
+        assert_eq!(edited.operation, "TEXT_REPLACE_EXACT");
+        assert_eq!(edited.parameters["actual_count"], "1");
+        assert!(
+            replace_unique_exact("aaaa", "aaa", "x")
+                .unwrap_err()
+                .to_string()
+                .contains("PREVIOUS_TEXT_AMBIGUOUS")
+        );
+        assert!(
+            replace_unique_exact("猫", "犬", "鳥")
+                .unwrap_err()
+                .to_string()
+                .contains("PREVIOUS_TEXT_NOT_FOUND")
         );
     }
     #[test]

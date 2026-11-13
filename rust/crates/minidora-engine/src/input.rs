@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v62-constrained-source-summary";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v63-previous-output-edit";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -45,6 +45,11 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     };
     if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
         unresolved.push("no actual adopted previous result is available".into());
+    }
+    if matches!(intent, Intent::ReplacePreviousText { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push("no actual committed previous output is available to edit".into());
     }
     if matches!(intent, Intent::AskPreviousGroupMean)
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -1060,6 +1065,20 @@ fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn previous_text_replacement_intent(text: &str) -> Result<Option<Intent>> {
+    let japanese = regex(
+        r#"^(?:前回|直前)の(?:回答|文章)の[「『"](.+?)[」』"]を[「『"](.+?)[」』"]に(?:置き換えて|置換して)(?:ください)?$"#,
+    )?;
+    let english = regex(
+        r#"(?i)^replace\s+["'](.+?)["']\s+with\s+["'](.+?)["']\s+in\s+(?:the\s+)?previous\s+(?:answer|response|text)$"#,
+    )?;
+    let captures = japanese.captures(text).or_else(|| english.captures(text));
+    Ok(captures.map(|captures| Intent::ReplacePreviousText {
+        old: captures[1].to_string(),
+        new: captures[2].to_string(),
+    }))
+}
+
 fn previous_source_question_intent(text: &str) -> Result<Option<Intent>> {
     let english = regex(r"(?i)^what does (?:the )?(?:source|article|page) say about\s+(.+)$")?;
     let japanese = regex(
@@ -1422,6 +1441,9 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     if let Some(intent) = inspect_premises_intent(body)? {
+        return Ok(intent);
+    }
+    if let Some(intent) = previous_text_replacement_intent(body)? {
         return Ok(intent);
     }
     if let Some(intent) = previous_group_mean_question_intent(body)? {
@@ -2732,6 +2754,35 @@ mod tests {
         }
         assert!(matches!(
             interpret("What does the source say?").unwrap(),
+            Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn previous_text_replacement_preserves_both_exact_literals() {
+        for (text, old, new) in [
+            (
+                "前回の回答の「2 + 3」を「4 + 1」に置き換えてください",
+                "2 + 3",
+                "4 + 1",
+            ),
+            (
+                "Replace \"the old phrase\" with \"the new phrase\" in the previous answer",
+                "the old phrase",
+                "the new phrase",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::ReplacePreviousText { old: actual_old, new: actual_new }
+                        if actual_old == old && actual_new == new
+                ),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("Replace the old phrase with the new phrase in the previous answer").unwrap(),
             Intent::Unknown { .. }
         ));
     }

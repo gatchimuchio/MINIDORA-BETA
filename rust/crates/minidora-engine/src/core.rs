@@ -410,6 +410,90 @@ impl Engine {
             } else {
                 None
             };
+        let previous_text_replacement = if let Intent::ReplacePreviousText { old, new } =
+            &bundle.meaning.intent
+        {
+            let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) else {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "MISSING_ACTUAL_RESULT",
+                    "置換対象となる直前の採用済み回答がありません。",
+                );
+            };
+            if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Fail,
+                    "PREVIOUS_TEXT_CONTEXT_MISMATCH",
+                    "解釈時に固定した前回結果と編集対象が一致しません。",
+                );
+            }
+            let (content_ref, render_ref, artifact) =
+                match crate::document::previous_text_replacement(prior, old, new) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "PREVIOUS_TEXT_REPLACEMENT_FAILED",
+                        };
+                        let lifecycle = if code == "PREVIOUS_OUTPUT_INTEGRITY" {
+                            Lifecycle::Fail
+                        } else {
+                            Lifecycle::Suspend
+                        };
+                        return self.stop(&mut state, lifecycle, code, &error.to_string());
+                    }
+                };
+            for (reference, expected) in [
+                (
+                    content_ref.as_str(),
+                    canonical(prior.content_plan.as_ref().expect("validated content plan"))?,
+                ),
+                (
+                    render_ref.as_str(),
+                    canonical(prior.render.as_ref().expect("validated render"))?,
+                ),
+            ] {
+                match self
+                    .store
+                    .get_bytes_if_present(actor, &request.case_id, reference)?
+                {
+                    Some(stored) if stored == expected => {}
+                    Some(_) => {
+                        return self.stop(
+                                &mut state,
+                                Lifecycle::Fail,
+                                "PREVIOUS_OUTPUT_INTEGRITY",
+                                "前回の保存ContentPlanまたはrender artifactが保持済み実体と一致しません。",
+                            );
+                    }
+                    None => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "PREVIOUS_OUTPUT_UNAVAILABLE",
+                            "前回の保存ContentPlanまたはrender artifactを取得できません。",
+                        );
+                    }
+                }
+            }
+            let artifact_bytes = canonical(&artifact)?;
+            let output_units = crate::document::previous_text_replacement_lines(&artifact);
+            if artifact_bytes.len() > request.budget.max_evidence_bytes
+                || output_units.join("\n").len() > request.budget.max_evidence_bytes
+            {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "RESOURCE_LIMIT",
+                    "前回回答の編集artifactまたは出力が要求の証拠予算を超えました。",
+                );
+            }
+            Some((prior.id.clone(), content_ref, render_ref, artifact))
+        } else {
+            None
+        };
         let previous_math_report_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -517,6 +601,30 @@ impl Engine {
                 requires: source_nodes,
             });
             compute_requires.push(answer_id);
+        }
+        if previous_text_replacement.is_some() {
+            let content_id = "previous-text-content".to_string();
+            let render_id = "previous-text-render".to_string();
+            let edit_id = "previous-text-replacement".to_string();
+            nodes.push(GoalNode {
+                id: content_id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            nodes.push(GoalNode {
+                id: render_id.clone(),
+                kind: GoalNodeKind::RenderedArtifact,
+                requires: vec![content_id],
+            });
+            nodes.push(GoalNode {
+                id: edit_id.clone(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: vec![
+                    "previous-text-content".into(),
+                    "previous-text-render".into(),
+                ],
+            });
+            compute_requires.push(edit_id);
         }
         if let Intent::CalculateSequence { steps } = &bundle.meaning.intent {
             for step in steps {
@@ -1155,6 +1263,42 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
+            }
+            Intent::ReplacePreviousText { .. } => {
+                let Some((prior_id, content_ref, render_ref, artifact)) =
+                    &previous_text_replacement
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "PREVIOUS_OUTPUT_UNAVAILABLE",
+                        "編集対象となる前回の回答artifactがありません。",
+                    );
+                };
+                let edit_bytes = canonical(artifact)?;
+                let edit_ref = self.store.put_bytes(actor, &request.case_id, &edit_bytes)?;
+                graph.observe("previous-text-content", content_ref, &BTreeMap::new())?;
+                graph.observe(
+                    "previous-text-render",
+                    render_ref,
+                    &BTreeMap::from([("previous-text-content".into(), content_ref.clone())]),
+                )?;
+                graph.observe(
+                    "previous-text-replacement",
+                    &edit_ref,
+                    &BTreeMap::from([
+                        ("previous-text-content".into(), content_ref.clone()),
+                        ("previous-text-render".into(), render_ref.clone()),
+                    ]),
+                )?;
+                result.dependencies.extend([
+                    prior_id.clone(),
+                    content_ref.clone(),
+                    render_ref.clone(),
+                    edit_ref,
+                ]);
+                units.extend(crate::document::previous_text_replacement_lines(artifact));
+                result.guarantee = Guarantee::UserPremise;
             }
             Intent::ComposeText { document } => {
                 let value = match crate::document::compose_explicit_text(document) {

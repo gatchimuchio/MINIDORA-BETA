@@ -815,7 +815,9 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        let path = if let Some(path) = std::env::var_os("MINIDORA_SOURCE_QUESTION_STATE_DIR") {
+        let path = if let Some(path) = std::env::var_os("MINIDORA_PREVIOUS_TEXT_EDIT_STATE_DIR") {
+            PathBuf::from(path)
+        } else if let Some(path) = std::env::var_os("MINIDORA_SOURCE_QUESTION_STATE_DIR") {
             PathBuf::from(path)
         } else {
             let epoch = SystemTime::now()
@@ -4905,6 +4907,182 @@ fn natural_source_question_consumes_the_actual_prior_fetched_body() {
             .contains("previous-source-question-answer")
     );
     assert!(graph.to_string().contains(&packet_ref));
+}
+
+#[test]
+fn natural_previous_answer_edit_consumes_and_chains_actual_rendered_output() {
+    let scratch = Scratch::new();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "prior-calc", "2+3"],
+    ));
+    assert_eq!(original["lifecycle"], "COMMIT");
+    let output_path = scratch.0.join("edited-answer.txt");
+    let edited = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "replace-ja",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--allow-write",
+            output_path.to_str().unwrap(),
+            "前回の回答の「2+3」を「4+1」に置き換えてください",
+        ],
+    ));
+    assert_eq!(edited["lifecycle"], "COMMIT");
+    assert_eq!(edited["guarantee"], "USER_PREMISE");
+    assert!(edited["text"].as_str().unwrap().contains("4+1 = 5"));
+    assert!(
+        edited["text"]
+            .as_str()
+            .unwrap()
+            .contains("正確さは検証していません")
+    );
+    assert_eq!(
+        std::fs::read(&output_path).unwrap(),
+        edited["text"].as_str().unwrap().as_bytes()
+    );
+    assert_eq!(edited["receipts"][0]["phase"], "CONFIRMED");
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let dependencies = edited["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 4);
+    assert_eq!(dependencies[0], original["id"]);
+    let content_ref =
+        minidora_domain::digest(&minidora_domain::canonical(&original["content_plan"]).unwrap());
+    let render_ref =
+        minidora_domain::digest(&minidora_domain::canonical(&original["render"]).unwrap());
+    assert_eq!(dependencies[1], content_ref);
+    assert_eq!(dependencies[2], render_ref);
+    let edit_ref = dependencies[3].as_str().unwrap();
+    let edit_bytes = store.get_bytes("owner", "normal-route", edit_ref).unwrap();
+    assert_eq!(minidora_domain::digest(&edit_bytes), edit_ref);
+    let artifact: Value = serde_json::from_slice(&edit_bytes).unwrap();
+    assert_eq!(artifact["operation"], "PREVIOUS_OUTPUT_REPLACE_EXACT_V1");
+    assert_eq!(artifact["source_result_id"], original["id"]);
+    assert_eq!(artifact["source_content_plan_sha256"], content_ref);
+    assert_eq!(artifact["source_render_sha256"], render_ref);
+    assert_eq!(artifact["edit"]["source_document"], original["text"]);
+    assert_eq!(artifact["edit"]["text"], "4+1 = 5");
+    assert_eq!(artifact["edit"]["spans"][0]["source_text"], "2+3");
+
+    let graph: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                "owner",
+                "normal-route",
+                edited["execution_graph_ref"].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let graph_text = graph.to_string();
+    for id in [
+        "previous-text-content",
+        "previous-text-render",
+        "previous-text-replacement",
+    ] {
+        assert!(graph_text.contains(id));
+    }
+    assert!(graph_text.contains(&content_ref));
+    assert!(graph_text.contains(&render_ref));
+    assert!(graph_text.contains(edit_ref));
+
+    let english = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "replace-en",
+            "Replace \"4+1\" with \"2+3\" in the previous answer",
+        ],
+    ));
+    assert_eq!(english["lifecycle"], "COMMIT");
+    assert_eq!(english["guarantee"], "USER_PREMISE");
+    assert!(english["text"].as_str().unwrap().contains("2+3 = 5"));
+    assert_eq!(english["dependencies"][0], edited["id"]);
+}
+
+#[test]
+fn natural_previous_answer_edit_suspends_for_missing_or_nonunique_literals() {
+    let missing = Scratch::new();
+    let no_prior = stopped(
+        &execute(
+            &missing.0,
+            "owner",
+            &[
+                "--input",
+                "replace-missing-context",
+                "前回の回答の「古い」を「新しい」に置き換えて",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        no_prior["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_ACTUAL_RESULT")
+    );
+    assert!(no_prior["dependencies"].as_array().unwrap().is_empty());
+
+    let absent = Scratch::new();
+    let _ = record(&execute(
+        &absent.0,
+        "owner",
+        &["--input", "prior-calc", "2+3"],
+    ));
+    let not_found = stopped(
+        &execute(
+            &absent.0,
+            "owner",
+            &[
+                "--input",
+                "replace-absent",
+                "前回の回答の「存在しない」を「追加」に置き換えて",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        not_found["reason"]
+            .as_str()
+            .unwrap()
+            .contains("PREVIOUS_TEXT_NOT_FOUND")
+    );
+    assert!(not_found["dependencies"].as_array().unwrap().is_empty());
+
+    let ambiguous = Scratch::new();
+    let _ = record(&execute(
+        &ambiguous.0,
+        "owner",
+        &["--input", "prior-calc", "2+2"],
+    ));
+    let multiple = stopped(
+        &execute(
+            &ambiguous.0,
+            "owner",
+            &[
+                "--input",
+                "replace-ambiguous",
+                "前回の回答の「2」を「3」に置き換えて",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        multiple["reason"]
+            .as_str()
+            .unwrap()
+            .contains("PREVIOUS_TEXT_AMBIGUOUS")
+    );
+    assert!(multiple["dependencies"].as_array().unwrap().is_empty());
 }
 
 #[test]

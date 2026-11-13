@@ -376,6 +376,10 @@ The result records changed and unchanged output ranges, actual base/ancestor art
 
 These operations locate or apply explicit corrections and preserve provenance. Discovering a correction from a natural-language request, preserving arbitrary rewritten meaning, and producing a summary that satisfies audience, style, purpose or semantic coverage remain open requirements. The [protected-editing audit](audit/b08-protected-text-editing-route-validation.json), [unique-location audit](audit/b08-unique-literal-edit-location-route-validation.json) and [extractive candidate audit](audit/b08-extractive-summary-candidate-route-validation.json) record scoped normal-route observations; full B08 acceptance remains `UNVERIFIED`.
 
+### Natural editing of the actual previous answer
+
+After a committed result, `前回の回答の「old」を「new」に置き換えて` or `Replace "old" with "new" in the previous answer` requests one exact literal edit of that same-case result. Core verifies the saved ContentPlan and rendered bytes, requires one unique match including overlapping occurrences, and stores a new edit artifact with the parent result, content-plan, render, source-text hashes and UTF-8 source/output spans. The earlier result remains unchanged. Missing output, no match, or repeated/overlapping matches suspend without an edit artifact. The result is `USER_PREMISE`: the replacement is literal and user-directed; meaning, factual accuracy, citation validity and format suitability are not rechecked. A bounded fresh-process file-receipt recovery verified all parent/edit artifacts and reconciled the observed file as `LOCAL_FILE_RECONCILED_NO_RESEND`. See the [previous-output edit audit](audit/bb-context-previous-output-literal-edit-v63-route-validation.json). F04/B08 and full acceptance remain `UNVERIFIED`.
+
 ## Exact-target file output
 
 ```bash

@@ -1,0 +1,234 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT / BB-CONTENT actual previous-output literal edit",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T06:08:32Z",
+  "base_commit": "88c7c976a1c07413175a92d716eb9600619fb13a",
+  "subject": "MINIDORA Rust successor engine",
+  "purpose": "Connect an ordinary Japanese/English instruction to edit the actual committed same-case previous output, preserve its lineage, render the new result, and reconcile an authorized local file receipt without resending.",
+  "requirement_ids": [
+    "A07",
+    "F04",
+    "B08"
+  ],
+  "construction_set": "rust/audit/construction/MB-BUILD-20261113",
+  "construction_requirement": "BODY-1 cross-lane ordinary input -> Core -> actual prior-output consumer -> inspectable edit artifact -> output and recovery; this bounded operation does not replace free-form writing, semantic editing quality, or the full acceptance population.",
+  "normative_basis": {
+    "document": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+    "revision": "R2",
+    "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "sections": [
+      "7",
+      "8.3",
+      "8.4",
+      "14"
+    ]
+  },
+  "build_input": {
+    "archive": "MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+    "archive_sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+    "specification_sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474",
+    "schedule_sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8",
+    "instructions_sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d"
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v63-previous-output-edit",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux 6.18.57 x86_64; workspace filesystem 63G total, 54G free"
+  },
+  "version_boundary": "Adds the ReplacePreviousText intent and parser v63, overlap-aware exact replacement, the PREVIOUS_OUTPUT_REPLACE_EXACT_V1 artifact, Core graph lineage, and recovery replay. No database schema, dependency, Cargo.lock, or Python beta change.",
+  "backup_rotation": {
+    "performed_before_source_edits": true,
+    "local_before": {
+      "backup_branches": {
+        "codex/backup-main": "af5f35dbec84e73fb82c37e0d07a10be31220ed8",
+        "codex/backup-main-prev": "54c6b7779f8cc13933735d8b48b0494ef769e63b"
+      },
+      "tags": {
+        "codex/backup-main": "bc810f39c882a6039a05354be39e5cc0f94cdbe1",
+        "codex/backup-main-prev": "8450296ed69505fa59ee3159cb2fb80d0f528b72"
+      }
+    },
+    "remote_before": {
+      "codex/backup-main": "af5f35dbec84e73fb82c37e0d07a10be31220ed8",
+      "codex/backup-main-prev": "54c6b7779f8cc13933735d8b48b0494ef769e63b"
+    },
+    "local_after": {
+      "codex/backup-main": "88c7c976a1c07413175a92d716eb9600619fb13a",
+      "codex/backup-main-prev": "af5f35dbec84e73fb82c37e0d07a10be31220ed8"
+    },
+    "remote_after": {
+      "codex/backup-main": "88c7c976a1c07413175a92d716eb9600619fb13a",
+      "codex/backup-main-prev": "af5f35dbec84e73fb82c37e0d07a10be31220ed8"
+    },
+    "updates": "Remote tags were updated atomically with per-ref force-with-lease after exact ls-remote checks. Local backup branches and local tags were updated atomically with expected-old SHA checks. The two older local-tag tips are ancestors of the base commit and remain in main history."
+  },
+  "request_contract": {
+    "japanese_example": "前回の回答の「2+3」を「4+1」に置き換えてください",
+    "english_example": "Replace \"4+1\" with \"2+3\" in the previous answer",
+    "source_gate": "Selected previous result must be committed in the same actor/case and its saved ContentPlan, RenderObservation and corresponding case-scoped artifacts must verify exactly.",
+    "matching": "One exact original literal only; absence, repeated matches or overlaps suspend. No surrounding text is reinterpreted and introduced text is not rescanned.",
+    "typed_stops": {
+      "missing_prior": "MISSING_ACTUAL_RESULT",
+      "prior_without_content_or_render": "PREVIOUS_OUTPUT_UNAVAILABLE",
+      "source_plan_or_render_integrity_failure": "PREVIOUS_OUTPUT_INTEGRITY / PREVIOUS_TEXT_CONTEXT_MISMATCH",
+      "literal_absent": "PREVIOUS_TEXT_NOT_FOUND",
+      "literal_repeated_or_overlapping": "PREVIOUS_TEXT_AMBIGUOUS",
+      "resource_exhaustion": "RESOURCE_LIMIT"
+    },
+    "artifact": "PREVIOUS_OUTPUT_REPLACE_EXACT_V1 binds the parent ResultRecord, ContentPlan, RenderObservation and exact source text hashes. Its DocumentResult retains exact UTF-8 source/output byte spans.",
+    "immutability": "The parent ResultRecord and its prior history remain unchanged. A new result depends on the parent result id, exact parent content-plan/render refs and the new edit-artifact ref.",
+    "guarantee": "USER_PREMISE: the literal edit is user-directed and deterministic; semantic equivalence, factual accuracy, citation validity and output-format suitability are not verified."
+  },
+  "producer_consumer": "committed calculation output -> ordinary Japanese literal-edit request -> actual same-case ContentPlan and verified render bytes -> unique literal edit artifact -> Core content/render/receipt -> following English literal-edit request consumes the newly committed edited answer",
+  "normal_route_observations": [
+    {
+      "producer": "2+3",
+      "producer_lifecycle": "COMMIT",
+      "consumer_request": "前回の回答の「2+3」を「4+1」に置き換えてください",
+      "consumer_lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "edited_text": "4+1 = 5",
+      "lineage": [
+        "prior result id",
+        "prior ContentPlan SHA-256",
+        "prior RenderObservation SHA-256",
+        "edit artifact SHA-256"
+      ],
+      "actual_file_receipt": "CONFIRMED",
+      "graph_nodes": [
+        "previous-text-content",
+        "previous-text-render",
+        "previous-text-replacement",
+        "compute",
+        "content",
+        "render"
+      ]
+    },
+    {
+      "producer": "committed Japanese edited answer",
+      "consumer_request": "Replace \"4+1\" with \"2+3\" in the previous answer",
+      "consumer_lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "edited_text": "2+3 = 5",
+      "lineage": "the immediately previous edit result id and its actual rendered output"
+    }
+  ],
+  "recovery_observation": {
+    "outcome": "PASS",
+    "fixture": "real normal-route prior calculation and exact edit; no external source",
+    "parent_content_render_and_edit_artifacts_revalidated": true,
+    "edit_dependencies_unchanged": true,
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "file_inode_mtime_size_unchanged": true,
+    "write_resent": false
+  },
+  "tests": [
+    {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-engine previous_text_replacement --lib",
+      "outcome": "PASS; 1 input parser test"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-engine unique_exact_edit_rejects_missing_duplicate_and_overlapping_literals --lib",
+      "outcome": "PASS; 1 component test"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route natural_previous_answer_edit -- --nocapture",
+      "outcome": "PASS; 2 Japanese/English chained route and typed-stop tests"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route natural_source_question_ -- --nocapture",
+      "outcome": "PASS; 4 source-question normal-route regressions"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-cli --test normal_route text_editing_route_ -- --nocapture",
+      "outcome": "PASS; 3 existing text-editing normal-route regressions"
+    },
+    {
+      "command": "python3 rust/tools/previous_text_edit_route_recovery_test.py --binary rust/target/debug/minidora-rust",
+      "outcome": "PASS; fresh-process local-file reconciliation without resending"
+    },
+    {
+      "command": "python3 rust/tools/source_question_route_recovery_test.py --binary rust/target/debug/minidora-rust",
+      "outcome": "PASS; source-question recovery regression under parser v63"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo check --workspace --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "outcome": "PASS"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo build --workspace --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "/home/agent/.cargo/bin/cargo test --locked -p minidora-engine --lib",
+      "outcome": "FAIL; 198 passed, 1 failed of 199; failing test: input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved on `もしXは鳥かつ青ならXは動物`; baseline status not independently established"
+    }
+  ],
+  "not_run": [
+    "full workspace runtime suite",
+    "full F04 or B08 acceptance",
+    "the complete twelve-task previously unseen B08 writing population",
+    "semantic edit equivalence, factual accuracy or citation validity",
+    "Windows/macOS or physical 8 GB acceptance"
+  ],
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "15d4920179542d00f9d4993b38f93fa4825911a2263ba8410733e45466db5cda",
+    "rust/crates/minidora-engine/src/input.rs": "211fe14686234e4dfcf15f2c4c8ad0876cb4a131d503ddb7b02be63704ae2316",
+    "rust/crates/minidora-engine/src/document.rs": "d9839a519b4b2276ea4b4c292f1cf913dfbbd0f78d8fe7355d61d58de7b98a52",
+    "rust/crates/minidora-engine/src/core.rs": "63369450101fa48c9365cd8e1e1b47369aab7b07493b09c716a496500dc59971",
+    "rust/crates/minidora-engine/src/recovery.rs": "10cbe9f6e348bd307d234a342fbf108891d49cc1bfd777db1abebe1cc16971f3"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "26a7703370592f85812ae2c54a616daf9edbb7ca069bda4ad393f7570e70c42d",
+    "rust/tools/previous_text_edit_route_recovery_test.py": "a06849e9fc8556d862662c3eed704976b010dd819b94d9c8ac2f436eabc0569d"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "73a487c8b9051775961fc0ea8877ae9f926ca135b7a23f54f0286ddcbfe6eb7a",
+    "rust/audit/README.md": "8a64b87486fca1928f036c12d0980cdc200176160bac019233825d872bd84e7b",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "b71264df54c6f2142adc525c3016de2b5ba65de228035a4491dacdafd5fafb84",
+    "rust/audit/requirements.tsv": "7a54890c0db1a530af6c39c19f81abc314ea6323831128b4974e5f20af061c31",
+    "rust/audit/rust-requirement-observations.json": "2e0e8041f7fe7cf7ee47b50d0e793ecf6934b2817f0a7e81999374f217e0b6ad",
+    "docs/redesign/03_REQUIREMENT_TRACE.tsv": "f1b2a5cee2d2ee731ccac7d89eb818150eb0d0988aef4551ef44ed0dfb9eacce"
+  },
+  "local_asset_disposition": {
+    "counting_rule": "Count task-authored repository files, user-supplied source assets, named evidence carryover and one active build directory. TemporaryDirectory scratch was deleted automatically and is not a retained local asset.",
+    "保留": {
+      "count": 0,
+      "items": []
+    },
+    "保管済み": {
+      "count": 5,
+      "items": [
+        "user BUILD archive and three extracted documents (4 files)",
+        "/workspace/.minidora-cloud/source-summary-constrained-fixture.json (1 prior evidence file)"
+      ]
+    },
+    "稼働中": {
+      "count": 1,
+      "items": [
+        "rust/target (2.2G; reused for this build and next Rust task)"
+      ]
+    },
+    "ゴミ箱移動済み": {
+      "count": 0,
+      "items": []
+    },
+    "total_count": 20,
+    "windows_storage_manager": "NOT_APPLICABLE; Linux environment"
+  },
+  "traceability_update": "A07, F04 and B08 route/evidence fields were expanded. Acceptance statuses remain UNVERIFIED and no requirement population was reduced.",
+  "scope_decision": "No scope reduction approved; full F04 and B08 acceptance remain required.",
+  "disposition": "The bounded previous-output literal-edit consumer and actual file recovery passed. The full engine library test command had one unresolved parser expectation failure. Full F04/B08 and successor acceptance remain UNVERIFIED."
+}

@@ -174,6 +174,10 @@ pub enum Intent {
         replacement: String,
     },
     ExplainPrevious,
+    ReplacePreviousText {
+        old: String,
+        new: String,
+    },
     AskPreviousGroupMean,
     AskPreviousSourceQuestion {
         query: String,

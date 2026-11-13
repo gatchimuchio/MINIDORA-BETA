@@ -188,6 +188,12 @@ struct SourceQuestionExpectation {
     answer_ref: String,
 }
 
+struct PreviousTextEditExpectation {
+    source_content_ref: String,
+    source_render_ref: String,
+    edit_ref: String,
+}
+
 type JsonGroupMeanRecovery = (String, String, String, String, Vec<u8>, Vec<String>);
 
 fn recompute_source_question_artifact(
@@ -553,6 +559,89 @@ fn verify_source_question_context(
     }))
 }
 
+fn verify_previous_text_edit_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<PreviousTextEditExpectation>> {
+    let Intent::ReplacePreviousText { old, new } = &goal.intent else {
+        return Ok(None);
+    };
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_PREVIOUS_TEXT_MISMATCH",
+            "the previous-output edit has no sealed prior-result reference",
+        )
+    })?;
+    let prior = state.prior_results.get(prior_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_PREVIOUS_TEXT_MISMATCH",
+            "the exact prior output is not retained in the case history",
+        )
+    })?;
+    if prior.id != *prior_id || prior.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_PREVIOUS_TEXT_MISMATCH",
+            "the referenced previous output is not the same committed result",
+        ));
+    }
+    let (source_content_ref, source_render_ref, artifact) =
+        crate::document::previous_text_replacement(prior, old, new)?;
+    let source_content = prior.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_PREVIOUS_TEXT_MISMATCH",
+            "the prior content plan is not retained",
+        )
+    })?;
+    let source_render = prior.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_PREVIOUS_TEXT_MISMATCH",
+            "the prior actual rendering is not retained",
+        )
+    })?;
+    let verified_content_ref = verified_artifact(store, actor, case, source_content)?;
+    let verified_render_ref = verified_artifact(store, actor, case, source_render)?;
+    let edit_bytes = canonical(&artifact)?;
+    let edit_ref = digest(&edit_bytes);
+    let stored_edit = store.get_bytes(actor, case, &edit_ref)?;
+    let expected_dependencies = vec![
+        prior.id.clone(),
+        source_content_ref.clone(),
+        source_render_ref.clone(),
+        edit_ref.clone(),
+    ];
+    let output_units = crate::document::previous_text_replacement_lines(&artifact);
+    if verified_content_ref != source_content_ref
+        || verified_render_ref != source_render_ref
+        || stored_edit != edit_bytes
+        || result.dependencies != expected_dependencies
+        || !result.evidence.is_empty()
+        || result.calculation.is_some()
+        || result.guarantee != Guarantee::UserPremise
+        || plan.required_units != output_units
+        || edit_bytes.len() > goal.budget.max_evidence_bytes
+        || output_units.join("\n").len() > goal.budget.max_evidence_bytes
+    {
+        return Err(failure(
+            "RECOVERY_PREVIOUS_TEXT_MISMATCH",
+            "the previous result, rendered bytes, edit report, dependencies or adopted output differ from the exact request",
+        ));
+    }
+    Ok(Some(PreviousTextEditExpectation {
+        source_content_ref,
+        source_render_ref,
+        edit_ref,
+    }))
+}
+
 fn inspect(
     store: &Store,
     actor: &str,
@@ -664,6 +753,8 @@ fn inspect(
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     let source_question =
         verify_source_question_context(store, actor, case, state, result, plan, &goal)?;
+    let previous_text_edit =
+        verify_previous_text_edit_context(store, actor, case, state, result, plan, &goal)?;
     let search_candidate_rank =
         verify_search_candidate_context(store, actor, case, state, result, plan, &goal)?;
     let previous_csv_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
@@ -760,6 +851,15 @@ fn inspect(
                 | "declarative-ja-en-v52-search-candidate-body"
                 | "declarative-ja-en-v53-group-mean-query"
                 | "declarative-ja-en-v54-source-question-followup"
+                | "declarative-ja-en-v55-natural-premise-question"
+                | "declarative-ja-en-v56-natural-premise-correction"
+                | "declarative-ja-en-v57-contextual-premise-correction"
+                | "declarative-ja-en-v58-prior-result-pronoun-query"
+                | "declarative-ja-en-v59-conjunctive-relation-question"
+                | "declarative-ja-en-v60-conjunctive-relation-rule"
+                | "declarative-ja-en-v61-three-clause-relation-question"
+                | "declarative-ja-en-v62-constrained-source-summary"
+                | "declarative-ja-en-v63-previous-output-edit"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -807,6 +907,15 @@ fn inspect(
             | "declarative-ja-en-v52-search-candidate-body"
             | "declarative-ja-en-v53-group-mean-query"
             | "declarative-ja-en-v54-source-question-followup"
+            | "declarative-ja-en-v55-natural-premise-question"
+            | "declarative-ja-en-v56-natural-premise-correction"
+            | "declarative-ja-en-v57-contextual-premise-correction"
+            | "declarative-ja-en-v58-prior-result-pronoun-query"
+            | "declarative-ja-en-v59-conjunctive-relation-question"
+            | "declarative-ja-en-v60-conjunctive-relation-rule"
+            | "declarative-ja-en-v61-three-clause-relation-question"
+            | "declarative-ja-en-v62-constrained-source-summary"
+            | "declarative-ja-en-v63-previous-output-edit"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -956,6 +1065,15 @@ fn inspect(
             | "declarative-ja-en-v52-search-candidate-body"
             | "declarative-ja-en-v53-group-mean-query"
             | "declarative-ja-en-v54-source-question-followup"
+            | "declarative-ja-en-v55-natural-premise-question"
+            | "declarative-ja-en-v56-natural-premise-correction"
+            | "declarative-ja-en-v57-contextual-premise-correction"
+            | "declarative-ja-en-v58-prior-result-pronoun-query"
+            | "declarative-ja-en-v59-conjunctive-relation-question"
+            | "declarative-ja-en-v60-conjunctive-relation-rule"
+            | "declarative-ja-en-v61-three-clause-relation-question"
+            | "declarative-ja-en-v62-constrained-source-summary"
+            | "declarative-ja-en-v63-previous-output-edit"
     ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
@@ -1163,6 +1281,27 @@ fn inspect(
         });
         sources.push(answer_id);
     }
+    if previous_text_edit.is_some() {
+        let content_id = "previous-text-content".to_string();
+        let render_id = "previous-text-render".to_string();
+        let edit_id = "previous-text-replacement".to_string();
+        expected_nodes.push(GoalNode {
+            id: content_id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        expected_nodes.push(GoalNode {
+            id: render_id.clone(),
+            kind: GoalNodeKind::RenderedArtifact,
+            requires: vec![content_id.clone()],
+        });
+        expected_nodes.push(GoalNode {
+            id: edit_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![content_id, render_id],
+        });
+        sources.push(edit_id);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -1252,6 +1391,26 @@ fn inspect(
         }
         graph.observe(&answer_id, &question.answer_ref, &answer_inputs)?;
         source_refs.insert(answer_id, question.answer_ref.clone());
+    }
+    if let Some(edit) = &previous_text_edit {
+        let content_id = "previous-text-content".to_string();
+        let render_id = "previous-text-render".to_string();
+        let edit_id = "previous-text-replacement".to_string();
+        graph.observe(&content_id, &edit.source_content_ref, &BTreeMap::new())?;
+        graph.observe(
+            &render_id,
+            &edit.source_render_ref,
+            &BTreeMap::from([(content_id.clone(), edit.source_content_ref.clone())]),
+        )?;
+        graph.observe(
+            &edit_id,
+            &edit.edit_ref,
+            &BTreeMap::from([
+                (content_id, edit.source_content_ref.clone()),
+                (render_id, edit.source_render_ref.clone()),
+            ]),
+        )?;
+        source_refs.insert(edit_id, edit.edit_ref.clone());
     }
     let compute = (
         &result.calculation,
