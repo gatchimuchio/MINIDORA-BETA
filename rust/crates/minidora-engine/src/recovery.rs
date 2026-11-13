@@ -2579,7 +2579,7 @@ mod tests {
         }
     }
 
-    fn attempted_json_table_transform_explanation_prefix() -> Fixture {
+    fn attempted_json_table_context_explanation_prefix(operation: &str) -> Fixture {
         let directory = std::env::temp_dir().join(format!(
             "minidora-recovery-json-table-context-{}-{}",
             std::process::id(),
@@ -2592,8 +2592,20 @@ mod tests {
         let state = directory.join("state");
         let target = directory.join("json-table-explanation.txt");
         let mut engine = Engine::open(&state).unwrap();
-        let source = r#"{"columns":["state","name"],"rows":[["open","Mina"],["closed","Nia"],["open","Kai"]]}"#;
-        let request = format!("JSON表の列「state」が値「open」の行を選択して:\n{source}");
+        let request = match operation {
+            "filter" => {
+                let source = r#"{"columns":["state","name"],"rows":[["open","Mina"],["closed","Nia"],["open","Kai"]]}"#;
+                format!("JSON表の列「state」が値「open」の行を選択して:\n{source}")
+            }
+            "inner_join" => {
+                let left = r#"{"columns":["name","id"],"rows":[["Mina","north"],["Nia","west"]]}"#;
+                let right =
+                    r#"{"columns":["record_id","group"],"rows":[["north","A"],["south","B"]]}"#;
+                let source = format!(r#"{{"left":{left},"right":{right}}}"#);
+                format!("JSON表を「id」と「record_id」で内部結合して:\n{source}")
+            }
+            _ => panic!("unsupported JSON table context fixture: {operation}"),
+        };
         let first = engine
             .execute(
                 "alice",
@@ -2740,32 +2752,37 @@ mod tests {
     }
 
     #[test]
-    fn json_table_transform_explanation_reconciles_without_resending() {
-        let fixture = attempted_json_table_transform_explanation_prefix();
-        let original = fs::read(&fixture.target).unwrap();
-        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
-        let store = Store::open(&fixture.state).unwrap();
-        let actions = store.actions("alice", "case").unwrap();
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].idempotency_key, fixture.token);
-        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+    fn json_table_operation_explanation_reconciles_without_resending() {
+        for (operation, expected_marker) in [
+            ("filter", "前回のJSON表フィルター"),
+            ("inner_join", "前回のJSON表内部結合"),
+        ] {
+            let fixture = attempted_json_table_context_explanation_prefix(operation);
+            let original = fs::read(&fixture.target).unwrap();
+            let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+            let store = Store::open(&fixture.state).unwrap();
+            let actions = store.actions("alice", "case").unwrap();
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0].idempotency_key, fixture.token);
+            assert_eq!(actions[0].phase, EffectPhase::Unknown);
 
-        let result = reconcile(&store, "alice", "case").unwrap();
-        assert_eq!(result.lifecycle, Lifecycle::Commit);
-        assert!(result.text.contains("前回のJSON表フィルター"));
-        assert!(result.text.contains("封印済みInputBundle SHA-256"));
-        assert!(result.text.contains("report artifact SHA-256"));
-        assert!(result.text.contains("byte["));
-        assert_eq!(result.dependencies.len(), 3);
-        assert_eq!(fs::read(&fixture.target).unwrap(), original);
-        assert_eq!(
-            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
-            modified
-        );
-        let actions = store.actions("alice", "case").unwrap();
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
-        assert_eq!(actions[0].idempotency_key, fixture.token);
+            let result = reconcile(&store, "alice", "case").unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit);
+            assert!(result.text.contains(expected_marker));
+            assert!(result.text.contains("封印済みInputBundle SHA-256"));
+            assert!(result.text.contains("report artifact SHA-256"));
+            assert!(result.text.contains("byte["));
+            assert_eq!(result.dependencies.len(), 3);
+            assert_eq!(fs::read(&fixture.target).unwrap(), original);
+            assert_eq!(
+                fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+                modified
+            );
+            let actions = store.actions("alice", "case").unwrap();
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+            assert_eq!(actions[0].idempotency_key, fixture.token);
+        }
     }
 
     #[test]

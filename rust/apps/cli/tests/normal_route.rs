@@ -11096,6 +11096,92 @@ fn json_table_transform_explanations_replay_the_sealed_input_and_report() {
 }
 
 #[test]
+fn json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys() {
+    let left = r#"{"columns":["名前","id"],"rows":[["犬","北"],["猫","南"],["狐","西"]]}"#;
+    let right = r#"{"columns":["record_id","分類"],"rows":[["南","猫科"],["東","鳥類"],["\u5317","イヌ科"]]}"#;
+    let source = format!(r#"{{"left":{left},"right":{right}}}"#);
+    let request = format!("JSON表を「id」と「record_id」で内部結合して:\n{source}");
+    let scratch = Scratch::new();
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "join-explain", &request],
+    ));
+    assert_eq!(first["lifecycle"], "COMMIT");
+    assert_eq!(first["guarantee"], "SOURCE_REPORT");
+    assert_eq!(first["content_plan"]["text"], first["text"]);
+    assert_eq!(first["render"]["status"], "RENDERED");
+    assert_eq!(
+        first["render"]["actual_sha256"],
+        minidora_domain::digest(first["text"].as_str().unwrap().as_bytes())
+    );
+    let report: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    assert_eq!(report["rows"].as_array().unwrap().len(), 2);
+    assert_eq!(report["unmatched_left"].as_array().unwrap().len(), 1);
+    assert_eq!(report["unmatched_right"].as_array().unwrap().len(), 1);
+
+    let original_revision = inspect_normal_case(&scratch.0, "owner");
+    let input_bundle_ref =
+        minidora_domain::digest(&minidora_domain::canonical(&original_revision["bundle"]).unwrap());
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(&report).unwrap());
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    let text = explanation["text"].as_str().unwrap();
+    for expected in [
+        "前回のJSON表内部結合",
+        "一致行: 2; 左の未一致行: 1; 右の未一致行: 1",
+        "出力行1 ← 左元行1 + 右元行3",
+        "左の未一致: 元行3 キー",
+        "右の未一致: 元行2 キー",
+        "封印済みInputBundle SHA-256",
+        "report artifact SHA-256",
+        "byte[",
+        "sha256=",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    assert_eq!(
+        explanation["dependencies"].as_array().unwrap(),
+        &vec![
+            first["id"].clone(),
+            Value::String(input_bundle_ref.clone()),
+            Value::String(report_ref.clone()),
+        ]
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let graph = sequence_artifact(&store, &explanation["execution_graph_ref"]);
+    let input_id = "previous-json-table-transform-input";
+    let report_id = "previous-json-table-transform-report";
+    let nodes = graph[0].as_array().unwrap();
+    assert!(nodes.iter().any(|node| node["id"] == input_id));
+    assert!(nodes.iter().any(|node| {
+        node["id"] == report_id
+            && node["kind"] == "COMPUTED_VALUE"
+            && node["requires"] == serde_json::json!([input_id])
+    }));
+    assert_eq!(graph[1][input_id], input_bundle_ref);
+    assert_eq!(graph[1][report_id], report_ref);
+    assert_eq!(
+        graph[5][report_id],
+        serde_json::json!({input_id:input_bundle_ref})
+    );
+    assert_eq!(
+        explanation["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let revision = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        revision["bundle"]["meaning"]["context_result_ref"],
+        first["id"]
+    );
+    assert_eq!(revision["result"], explanation);
+}
+
+#[test]
 fn table_row_missing_columns_and_unsupported_operators_stop_durably() {
     for (header, document, code) in [
         (

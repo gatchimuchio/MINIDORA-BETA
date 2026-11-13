@@ -1,0 +1,160 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT JSON table inner-join explanation consumer and no-resend recovery",
+  "recorded_at": "2026-11-13T12:57:24Z",
+  "base_commit": "386ae29a608ed63c75e56cff0c0a6932aecc29dd",
+  "subject": "MINIDORA language, meaning, judgment, execution and memory engine",
+  "purpose": "An actual strict JSON-table inner join -> ordinary same-case ExplainPrevious -> exact sealed-input/report recomputation -> bounded two-sided source-span explanation -> local-file receipt recovery without resend",
+  "build_contract": {
+    "phase": "BODY-1",
+    "archive_path": "rust/audit/construction/MB-BUILD-20261113/MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+    "archive_sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf",
+    "normative_spec": {
+      "path": "docs/redesign/01_SYSTEM_SPECIFICATION.md",
+      "revision": "R2",
+      "sha256": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+    }
+  },
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v70-generic-transitive-verbs",
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "work_type": "BODY-1_BOUNDED_PRODUCER_CONSUMER_ROUTE",
+  "product_source_changed": true,
+  "new_dependencies": [],
+  "changed_source_paths": {
+    "rust/crates/minidora-engine/src/document.rs": "c5e5042acd994f59efada68b892ca26d0181134c2a597040743fa1330d8560b2",
+    "rust/crates/minidora-engine/src/recovery.rs": "a1f0ff63cafc8c27af5ce56c49d687f6279d799345b7a59e9aa0b7abbddf1799",
+    "rust/apps/cli/tests/normal_route.rs": "d4685b5b1ed7ef8d1394e1b0e89a4174f55a8152ea5af03edc9f3f91dcf83fcd"
+  },
+  "changed_audit_paths": [
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/README.md",
+    "rust/audit/requirements.tsv",
+    "rust/audit/bb-context-json-table-join-explanation-v73-route-validation.json"
+  ],
+  "changed_test_paths": [
+    "rust/apps/cli/tests/normal_route.rs::json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys",
+    "rust/crates/minidora-engine/src/recovery.rs::json_table_operation_explanation_reconciles_without_resending"
+  ],
+  "implementation": {
+    "consumer": "Recognizes the exact JSON inner-join report shape, admits SOURCE_REPORT only for the sealed JsonTableInnerJoin intent, loads that prior input bundle by actor/case/input/version, recomputes the typed join, and requires the canonical report bytes, sole prior report dependency, stored artifact and prior result text to match. It also revalidates the prior ContentPlan identity/text/guarantee, RenderObservation, their stored artifact bytes and the actual render hash. Matched rows are bounded to six; unmatched keys are bounded to four per side; every displayed source span is sliced from the sealed source and checked against its SHA-256.",
+    "core_route": "The existing Core ExplainPrevious graph links the prior join result -> exact sealed InputBundle -> recomputed join report. Result dependencies are [prior result ID, input-bundle SHA-256, report-artifact SHA-256].",
+    "recovery_route": "The existing local-file recovery verifier reconstructs the same explanation and dependency order before confirming the original authorized write. Recovery observations cover both the existing filter explanation and the new join explanation; bytes and modification times remain unchanged and the write is not resent.",
+    "stops": [
+      "Duplicate keys remain a typed stop in the producer before a committed report is created.",
+      "Missing or mismatched sealed input, operation, canonical report, stored artifact, report text, ContentPlan, RenderObservation, source span, or dependency lineage suspends the explanation.",
+      "The bounded explanation returns RESOURCE_LIMIT when it exceeds the request evidence budget."
+    ]
+  },
+  "producer_consumer": "Ordinary Japanese JSON-table inner-join request -> sealed JsonTableInnerJoin -> Core's unique-key exact string join -> committed SOURCE_REPORT artifact and rendered JSON -> ordinary same-case 詳しく説明して -> exact sealed-input and report revalidation -> paired source-row/cell and unmatched-key explanation -> Core content/render/history -> authorized local-file write -> recovery confirms the original bytes without resend.",
+  "normal_cli_route": {
+    "test": "json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys",
+    "result": "PASS",
+    "observed": "One actual Japanese CLI producer committed SOURCE_REPORT with two matches, one unmatched left row and one unmatched right row. ExplainPrevious committed a distinct rendered answer, mapped an output row to left source row 1 and right source row 3, showed both unmatched source rows and original byte ranges/hashes, and retained the exact dependency order [prior result, sealed input bundle, join report]. The execution graph records the sealed input as the report node's required evidence and the same input/report hashes as Core computation sources.",
+    "regressions": "cargo test -p minidora-cli --test normal_route json_table_ --locked passed 6/6 scoped routes, including the new consumer, join source-range producer, filter/sort/select/project explanations, and JSON grouped-statistics routes. The duplicate-key stop regression passed separately."
+  },
+  "recovery_route": {
+    "test": "recovery::tests::json_table_operation_explanation_reconciles_without_resending",
+    "result": "PASS",
+    "observed": "Fresh store reconciliation covered filter and join explanations. Both returned COMMIT/CONFIRMED with the original idempotency key; original target bytes and modification times were unchanged; each action had one write and was not resent."
+  },
+  "command_results": [
+    {
+      "command": "cargo test -p minidora-cli --test normal_route json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys --locked",
+      "exit_code": 101,
+      "result": "Initial attempt exposed the old Computed-only explanation admission check; no feature change was accepted by that run. The check was corrected to admit SourceReport only for the exact sealed inner-join operation, then the command was rerun successfully."
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine json_table_operation_explanation_reconciles_without_resending --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route json_table_ --locked",
+      "exit_code": 0,
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route inner_joins_duplicate_keys_suspend_without_result_dependencies --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "result": "Initial lint found a large enum variant after the join report was added. Boxing the report resolved the warning; the same command was rerun successfully."
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "build_artifact": {
+    "path": "rust/target/debug/minidora-rust",
+    "sha256": "74d92288f2c780442e8ea83caed54b119bb31422e3c9b6aa77a99c03c4e7806e"
+  },
+  "asset_closure": {
+    "source_and_route_evidence": "KEPT in the repository",
+    "rust_target": "IN_USE and retained (2.6 GiB build/test cache)",
+    "test_temporary_directories": "No matching json-table recovery fixture directories remained under /tmp after the tests.",
+    "downloaded_or_user_data": "No new external source data or user data was downloaded or sent to providers."
+  },
+  "full_workspace_runtime_tests": "NOT_RUN; scoped normal CLI and recovery routes plus workspace format/check/Clippy/build gates were executed.",
+  "acceptance_status": "UNVERIFIED",
+  "requirements": {
+    "B04": "UNVERIFIED; this adds one JSON table join producer-consumer route only.",
+    "A07": "UNVERIFIED; this is same-case prior-result lineage for one JSON table operation only.",
+    "A14": "UNVERIFIED; this is one bounded explanation format, not general explanation/depth/format acceptance.",
+    "E08": "UNVERIFIED; this validates one local-file recovery edge, not the full causal-trace or fault matrix."
+  },
+  "privacy_and_publication_audit": {
+    "test_data": "Synthetic table names and values only; no personal data or secrets added.",
+    "egress": "No external provider request or data upload occurred.",
+    "scope": "Repository source and evidence preservation only; no release, deployment, tag update or external communication."
+  },
+  "rollback": {
+    "revert_to_base": "386ae29a608ed63c75e56cff0c0a6932aecc29dd",
+    "backup_refs_not_rotated": true,
+    "observed_local_backup_main_branch_and_tag": "7210fc6efd5206aabd3c5ce783dc6e31454184bb",
+    "observed_local_backup_main_prev_branch_and_tag": "33a5b067dc5edc225dbfd0e9d84262eabc1584ca",
+    "observed_remote_backup_main_tag": "33a5b067dc5edc225dbfd0e9d84262eabc1584ca",
+    "observed_remote_backup_main_prev_tag": "62053b76ec6a8ed4ef8c4f8c26028e5905996cb9"
+  },
+  "limitations": [
+    "Only strict JSON string-table inner joins use this new explanation path; CSV joins, table comparisons and other JSON operations remain separate consumers.",
+    "Explanation row/key counts are bounded and are not an exhaustive user-facing table rendering for oversized cases; the complete typed report remains retained as an artifact.",
+    "The route does not establish general language quality, semantic document interpretation, complete B04, A07, A14 or E08 acceptance, or overall MINIDORA successor completion."
+  ]
+}

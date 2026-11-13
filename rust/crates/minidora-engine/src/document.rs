@@ -353,10 +353,10 @@ pub(crate) fn previous_json_table_group_statistics_explanation(
     Ok(Some((source_ref, report_ref, lines)))
 }
 
-/// Recompute a prior JSON string-table filter/sort/select/project directly
-/// from its immutable sealed input, then explain the exact retained report and
-/// original byte ranges. The source input bundle and the report are returned
-/// separately so Core and local-file recovery can bind the same lineage.
+/// Recompute a prior JSON string-table operation from its immutable sealed
+/// input, then explain the exact retained report and original byte ranges. The
+/// source input bundle and the report are returned separately so Core and
+/// local-file recovery can bind the same lineage.
 pub(crate) fn previous_json_table_transform_explanation(
     store: &crate::store::Store,
     actor: &str,
@@ -364,14 +364,24 @@ pub(crate) fn previous_json_table_transform_explanation(
     previous: &ResultRecord,
     max_evidence_bytes: usize,
 ) -> Result<Option<(String, String, Vec<String>)>> {
-    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+    if previous.lifecycle != Lifecycle::Commit
+        || !matches!(
+            &previous.guarantee,
+            Guarantee::Computed | Guarantee::SourceReport
+        )
+    {
         return Ok(None);
     }
     let value: serde_json::Value = match serde_json::from_str(&previous.text) {
         Ok(value) => value,
         Err(_) => return Ok(None),
     };
-    let operation = if value.get("filter_column").is_some() {
+    let operation = if value.get("left_key_column").is_some()
+        && value.get("right_key_column").is_some()
+        && value.get("left_source_row_indices").is_some()
+    {
+        "inner_join"
+    } else if value.get("filter_column").is_some() {
         "filter"
     } else if value.get("sort_column").is_some() {
         "sort"
@@ -382,6 +392,11 @@ pub(crate) fn previous_json_table_transform_explanation(
     } else {
         return Ok(None);
     };
+    if (operation == "inner_join" && previous.guarantee != Guarantee::SourceReport)
+        || (operation != "inner_join" && previous.guarantee != Guarantee::Computed)
+    {
+        return Ok(None);
+    }
     let (bundle_ref, bundle) = store
         .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
         .ok_or_else(|| {
@@ -396,9 +411,22 @@ pub(crate) fn previous_json_table_transform_explanation(
         Sort(crate::ports::JsonTableSortReport),
         Select(crate::ports::JsonTableSelectReport),
         Project(crate::ports::JsonTableProjectReport),
+        Join(Box<crate::ports::JsonTableInnerJoinReport>),
     }
 
     let report = match (operation, &bundle.meaning.intent) {
+        (
+            "inner_join",
+            Intent::JsonTableInnerJoin {
+                document,
+                left_key_column,
+                right_key_column,
+            },
+        ) => Report::Join(Box::new(crate::ports::json_table_inner_join(
+            document,
+            left_key_column,
+            right_key_column,
+        )?)),
         (
             "filter",
             Intent::JsonTableFilter {
@@ -434,6 +462,98 @@ pub(crate) fn previous_json_table_transform_explanation(
     };
 
     let (report_bytes, report_text, source_document, mut lines) = match report {
+        Report::Join(report) => {
+            let bytes = canonical(&report)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            let document = match &bundle.meaning.intent {
+                Intent::JsonTableInnerJoin { document, .. } => document.as_str(),
+                _ => unreachable!("operation and sealed intent were checked"),
+            };
+            let mut lines = vec![
+                "前回のJSON表内部結合を、保存済みの元入力から再計算しました。".into(),
+                format!(
+                    "結合条件: 左列 {:?} = 右列 {:?}。一意な文字列キーの完全一致です。",
+                    report.left_key_column, report.right_key_column
+                ),
+                format!(
+                    "一致行: {}; 左の未一致行: {}; 右の未一致行: {}",
+                    report.rows.len(),
+                    report.unmatched_left.len(),
+                    report.unmatched_right.len()
+                ),
+            ];
+            for (index, row) in report.rows.iter().take(6).enumerate() {
+                let left_spans = &report.left_cell_source_spans[index];
+                let right_spans = &report.right_cell_source_spans[index];
+                let left_values = row
+                    .iter()
+                    .take(left_spans.len())
+                    .zip(left_spans)
+                    .map(|(value, span)| {
+                        Ok(format!(
+                            "{:?} {}",
+                            preview(value),
+                            table_span(document, span)?
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let right_values = row
+                    .iter()
+                    .skip(left_spans.len())
+                    .zip(right_spans)
+                    .map(|(value, span)| {
+                        Ok(format!(
+                            "{:?} {}",
+                            preview(value),
+                            table_span(document, span)?
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                lines.push(format!(
+                    "出力行{} ← 左元行{} + 右元行{}: 左 [{}]; 右 [{}]",
+                    index + 1,
+                    report.left_source_row_indices[index] + 1,
+                    report.right_source_row_indices[index] + 1,
+                    left_values.join("; "),
+                    right_values.join("; ")
+                ));
+            }
+            if report.rows.len() > 6 {
+                lines.push(format!(
+                    "残りの一致行 {}件はreport artifactに保持されています。",
+                    report.rows.len() - 6
+                ));
+            }
+            for unmatched in report.unmatched_left.iter().take(4) {
+                lines.push(format!(
+                    "左の未一致: 元行{} キー {:?}; {}",
+                    unmatched.source_row_index + 1,
+                    preview(&unmatched.key),
+                    table_span(document, &unmatched.key_source)?
+                ));
+            }
+            if report.unmatched_left.len() > 4 {
+                lines.push(format!(
+                    "残りの左未一致キー {}件はreport artifactに保持されています。",
+                    report.unmatched_left.len() - 4
+                ));
+            }
+            for unmatched in report.unmatched_right.iter().take(4) {
+                lines.push(format!(
+                    "右の未一致: 元行{} キー {:?}; {}",
+                    unmatched.source_row_index + 1,
+                    preview(&unmatched.key),
+                    table_span(document, &unmatched.key_source)?
+                ));
+            }
+            if report.unmatched_right.len() > 4 {
+                lines.push(format!(
+                    "残りの右未一致キー {}件はreport artifactに保持されています。",
+                    report.unmatched_right.len() - 4
+                ));
+            }
+            (bytes, text, document, lines)
+        }
         Report::Filter(report) => {
             let bytes = canonical(&report)?;
             let text = serde_json::to_string_pretty(&report)?;
@@ -631,8 +751,55 @@ pub(crate) fn previous_json_table_transform_explanation(
     {
         return Err(failure(
             "JSON_TABLE_CONTEXT_INVALID",
-            "the prior JSON table input, report artifact or rendered report no longer matches",
+            "the prior JSON table input, report artifact or prior result text no longer matches",
         ));
+    }
+    let (Some(prior_plan), Some(prior_render)) =
+        (previous.content_plan.as_ref(), previous.render.as_ref())
+    else {
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the prior JSON table result has no retained content plan or render observation",
+        ));
+    };
+    let mut unsigned_plan = prior_plan.clone();
+    unsigned_plan.id.clear();
+    if prior_plan.id != minidora_domain::identity(&unsigned_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || !prior_plan.dependencies.contains(&report_ref)
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the prior JSON table content plan or actual rendered output is invalid",
+        ));
+    }
+    let prior_plan_bytes = canonical(prior_plan)?;
+    let prior_render_bytes = canonical(prior_render)?;
+    for (reference, expected, label) in [
+        (digest(&prior_plan_bytes), prior_plan_bytes, "content plan"),
+        (
+            digest(&prior_render_bytes),
+            prior_render_bytes,
+            "render observation",
+        ),
+    ] {
+        match store.get_bytes_if_present(actor, case, &reference)? {
+            Some(stored) if stored == expected => {}
+            Some(_) => {
+                return Err(failure(
+                    "JSON_TABLE_CONTEXT_INVALID",
+                    format!("the prior JSON table {label} artifact changed"),
+                ));
+            }
+            None => {
+                return Err(failure(
+                    "JSON_TABLE_CONTEXT_INVALID",
+                    format!("the prior JSON table {label} artifact is missing"),
+                ));
+            }
+        }
     }
     lines.splice(
         1..1,
