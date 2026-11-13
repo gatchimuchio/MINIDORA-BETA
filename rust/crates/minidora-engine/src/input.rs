@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v57-contextual-premise-correction";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v58-prior-result-pronoun-query";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -51,6 +51,14 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     {
         unresolved
             .push("no actual committed previous grouped-statistics result is available".into());
+    }
+    if matches!(intent, Intent::AskPreviousRelation { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push(
+            "no actual committed same-case result is available to resolve the relation subject"
+                .into(),
+        );
     }
     if matches!(intent, Intent::AskPreviousSourceQuestion { .. })
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -935,8 +943,7 @@ fn premise_correction_intent(text: &str) -> Result<Option<Intent>> {
         }));
     };
     let lower_subject = superseded.subject.to_ascii_lowercase();
-    let previous_subject = matches!(lower_subject.as_str(), "it" | "this" | "that")
-        || matches!(superseded.subject.as_str(), "これ" | "それ" | "あれ");
+    let previous_subject = singular_previous_subject(&superseded.subject);
     let unresolved_pronoun = matches!(
         lower_subject.as_str(),
         "these" | "those" | "they" | "he" | "she"
@@ -1099,6 +1106,13 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
         }
     }
     if let Some(proposition) = parse_proposition(statement, false)? {
+        if singular_previous_subject(&proposition.subject) {
+            return Ok(Some(Intent::AskPreviousRelation {
+                proposition,
+                explain: true,
+                explicit_scope: explicit_scope_prefix(statement)?,
+            }));
+        }
         Ok(Some(Intent::AskWhy { proposition }))
     } else {
         Ok(Some(Intent::Unknown {
@@ -1106,6 +1120,19 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
                 .into(),
         }))
     }
+}
+
+fn singular_previous_subject(subject: &str) -> bool {
+    matches!(
+        subject.to_ascii_lowercase().as_str(),
+        "it" | "this" | "that"
+    ) || matches!(subject, "これ" | "それ" | "あれ")
+}
+
+fn explicit_scope_prefix(text: &str) -> Result<Option<String>> {
+    Ok(regex(r"^\[scope=([^\]]+)\]")?
+        .captures(text)
+        .map(|capture| capture[1].trim().to_string()))
 }
 
 fn interpret(text: &str) -> Result<Intent> {
@@ -1343,11 +1370,19 @@ fn interpret(text: &str) -> Result<Intent> {
         .or_else(|| body.strip_suffix("なのか"))
         .unwrap_or(body);
     if let Some(proposition) = parse_proposition(query_body, false)? {
-        return Ok(if question {
-            Intent::Ask { proposition }
-        } else {
-            Intent::Assert { proposition }
-        });
+        return Ok(
+            if question && singular_previous_subject(&proposition.subject) {
+                Intent::AskPreviousRelation {
+                    proposition,
+                    explain: false,
+                    explicit_scope: explicit_scope_prefix(query_body)?,
+                }
+            } else if question {
+                Intent::Ask { proposition }
+            } else {
+                Intent::Assert { proposition }
+            },
+        );
     }
     Ok(Intent::Unknown { reason: "no unambiguous interpretation in the supported arithmetic, copular relation, context, source or JSON grammar".into() })
 }
@@ -2089,6 +2124,51 @@ mod tests {
         assert!(matches!(
             interpret("どうしてココは動物なのですか、そして送信して").unwrap(),
             Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn singular_pronoun_relation_questions_retain_context_and_scope_requirements() {
+        assert!(matches!(
+            interpret("それは動物ですか").unwrap(),
+            Intent::AskPreviousRelation {
+                proposition,
+                explain: false,
+                explicit_scope: None,
+            } if proposition.subject == "それ" && proposition.object == "動物"
+        ));
+        assert!(matches!(
+            interpret("[scope=biology]it is an animal?").unwrap(),
+            Intent::AskPreviousRelation {
+                proposition,
+                explain: false,
+                explicit_scope: Some(scope),
+            } if proposition.subject.eq_ignore_ascii_case("it")
+                && proposition.object == "animal"
+                && scope == "biology"
+        ));
+        assert!(matches!(
+            interpret("なぜ[scope=biology]それは動物ですか").unwrap(),
+            Intent::AskPreviousRelation {
+                proposition,
+                explain: true,
+                explicit_scope: Some(scope),
+            } if proposition.subject == "それ"
+                && proposition.object == "動物"
+                && scope == "biology"
+        ));
+        assert!(matches!(
+            interpret("Why is it an animal?").unwrap(),
+            Intent::AskPreviousRelation {
+                proposition,
+                explain: true,
+                explicit_scope: None,
+            } if proposition.subject.eq_ignore_ascii_case("it")
+                && proposition.object == "animal"
+        ));
+        assert!(matches!(
+            interpret("それらは動物ですか").unwrap(),
+            Intent::Ask { proposition } if proposition.subject == "それら"
         ));
     }
 

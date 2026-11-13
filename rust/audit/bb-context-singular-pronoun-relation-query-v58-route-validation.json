@@ -1,0 +1,396 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT bounded singular-pronoun Ask/AskWhy consumer",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T03:57:00+00:00",
+  "base_commit": "07c3950cf398a3775489fdb70d12578d988e241a",
+  "requirement_ids": [
+    "A04",
+    "A07",
+    "A08",
+    "CAP-D04",
+    "CAP-D11"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v58-prior-result-pronoun-query",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "pre_change_probe": {
+    "base_commit": "07c3950cf398a3775489fdb70d12578d988e241a",
+    "binary_sha256": "NOT_CAPTURED_BEFORE_SOURCE_EDIT",
+    "observations": [
+      {
+        "case": "ask-before",
+        "prior_same_case_results": [
+          "explicit rule COMMIT",
+          "Coco bird premise COMMIT"
+        ],
+        "request": "それは動物ですか",
+        "lifecycle": "SUSPEND",
+        "reason_code": "MISSING_PREMISES"
+      },
+      {
+        "case": "why-before",
+        "prior_same_case_results": [
+          "explicit rule COMMIT",
+          "Coco bird premise COMMIT"
+        ],
+        "request": "なぜそれは動物ですか",
+        "lifecycle": "SUSPEND",
+        "reason_code": "MISSING_PREMISES"
+      }
+    ]
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "62ada17db261737e27840eea7e05407c92afc3e4785c7bfa9d9c7003277d4706",
+    "rust/crates/minidora-engine/src/input.rs": "024d986a8004e1fac386cce65ce895c65be1a760a4cb4b1b1d65c2f48d155bd4",
+    "rust/crates/minidora-engine/src/core.rs": "aff128dcf3e4614992b670a27667c2d54f65288e049ae754183ee8dbee311b79",
+    "rust/crates/minidora-engine/src/relations.rs": "b2a06ff0c80cbf27f469964b7d333648803c5f586c62c4d9062b88992a802459",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e",
+    "rust/crates/minidora-engine/src/math.rs": "6da0bc7bcff3497f4f0824094b42aa223aed909c1caa0a7fad4e550d87d625e4"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "024d986a8004e1fac386cce65ce895c65be1a760a4cb4b1b1d65c2f48d155bd4",
+    "rust/apps/cli/tests/normal_route.rs": "d7624663a0b78b4b3cc114a836c90ed38e505ecd1887c1c737751180a4f01088",
+    "rust/tools/contextual_relation_pronoun_test.py": "7b4910b8d8224d17ef2a7494f5bc5ca1a5ff0c774fa4619674d3cf4ac69e89a1"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "3359b1243c7994b78d7070c0bbf334a97dc22d6a4d6b629c31b332ee682a00ab",
+    "rust/audit/README.md": "1c535678511b3556f7e6d3eaa594c062a1b4ea2a9017281e81021ce3de41c0ed",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "4c0062f1bf0b7a96cf7a503d86734e084b82aa7cb3e19cb31d1113e062cdc806",
+    "rust/audit/requirements.tsv": "692294411b0de670ce94017754b6afa53b2b642e0eeeb288a2b8bfea7b1a1dcc",
+    "rust/audit/rust-requirement-observations.json": "a97f5152c088c8a98ef30a5f53e2d9f019b81d430eafe2dfeb731ec21bd105a9"
+  },
+  "execution_mode": "fresh CLI process per request; same-case, different-case, different-actor and English/Japanese contexts",
+  "scope": "Only singular it/this/that and これ/それ/あれ subject references; direct active premise IDs named by the selected prior committed result.",
+  "producer_consumer": "same-case committed direct premise result -> new singular-pronoun relation question -> Core resolves its exact direct premise and inherited scope -> existing actor-memory proof query -> answer or AskWhy with the same proof lineage",
+  "rule_id": "rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354",
+  "direct_premise_id": "fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae",
+  "new_case_subject_premise_id": "fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03",
+  "observations": [
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "biology-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "coco-bird",
+      "request": "[scope=biology]ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "pronoun-question",
+      "request": "それは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ココは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:56f95c5eef7e0e11c604542559023b817685f69b44529f449e872fb2a94dd91e",
+        "fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae",
+        "rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "pronoun-why",
+      "request": "なぜそれは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された証拠が支える結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae）\n導出された事実: ココは動物である（導出ID: fact:56f95c5eef7e0e11c604542559023b817685f69b44529f449e872fb2a94dd91e; 依存ID: fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae, rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:56f95c5eef7e0e11c604542559023b817685f69b44529f449e872fb2a94dd91e",
+        "fact:e8f5143ce8daf61837c1d1ee7320574e50b1b4e9fa5448f8fed2e2c381d26eae",
+        "rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "wrong-scope-question",
+      "request": "[scope=ecology]それは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
+      "reason": "MISSING_RELATION_CONTEXT: 直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "topic-change-calculation",
+      "request": "2+3",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "2+3 = 5",
+      "reason": null,
+      "dependencies": []
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "after-topic-change",
+      "request": "それは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
+      "reason": "MISSING_RELATION_CONTEXT: 直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "no-prior-case-result",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "no-context-question",
+      "request": "それは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+      "reason": "MISSING_RELATION_CONTEXT: 代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "no-prior-why-result",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "no-context-why",
+      "request": "なぜそれは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+      "reason": "MISSING_RELATION_CONTEXT: 代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "other-actor-no-context",
+      "actor_id": "separate-actor",
+      "input_id": "other-actor-question",
+      "request": "それは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+      "reason": "MISSING_RELATION_CONTEXT: 代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "ambiguous-biology-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:da5553b8f04a7122bcab9c9c9e5f125acf447f95e347e62bea05d4eb97c844f3\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:da5553b8f04a7122bcab9c9c9e5f125acf447f95e347e62bea05d4eb97c844f3"
+      ]
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "swallow-biology-premise",
+      "request": "[scope=biology]ツバメは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ツバメは鳥である。\n前提ID: fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03"
+      ]
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "swallow-ecology-premise",
+      "request": "[scope=ecology]ツバメは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ツバメは鳥である。\n前提ID: fact:feafc3afd3919e0ddf9ce021d7fd9c311e671b6e3cf21e7c0ad3679891cab76e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:feafc3afd3919e0ddf9ce021d7fd9c311e671b6e3cf21e7c0ad3679891cab76e"
+      ]
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "list-context-premises",
+      "request": "ツバメとは何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ツバメ」の提示前提です。現実世界の真偽は確認していません。\n・ツバメは鳥である（範囲: biology; 提示前提ID: fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03）\n・ツバメは鳥である（範囲: ecology; 提示前提ID: fact:feafc3afd3919e0ddf9ce021d7fd9c311e671b6e3cf21e7c0ad3679891cab76e）",
+      "reason": null,
+      "dependencies": [
+        "fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03",
+        "fact:feafc3afd3919e0ddf9ce021d7fd9c311e671b6e3cf21e7c0ad3679891cab76e"
+      ]
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "ambiguous-pronoun-question",
+      "request": "それは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "直前の回答は複数の直接前提を参照しています。代名詞の対象を一意に決められません。",
+      "reason": "AMBIGUOUS_RELATION_CONTEXT: 直前の回答は複数の直接前提を参照しています。代名詞の対象を一意に決められません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "relist-context-premises",
+      "request": "ツバメとは何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ツバメ」の提示前提です。現実世界の真偽は確認していません。\n・ツバメは鳥である（範囲: biology; 提示前提ID: fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03）\n・ツバメは鳥である（範囲: ecology; 提示前提ID: fact:feafc3afd3919e0ddf9ce021d7fd9c311e671b6e3cf21e7c0ad3679891cab76e）",
+      "reason": null,
+      "dependencies": [
+        "fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03",
+        "fact:feafc3afd3919e0ddf9ce021d7fd9c311e671b6e3cf21e7c0ad3679891cab76e"
+      ]
+    },
+    {
+      "case_id": "ambiguous-scope-context",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "scoped-pronoun-question",
+      "request": "[scope=biology]それは動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ツバメは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:01209c130cf7eba36d431ff0499f865b6dc4590adcfd5a1cc4846bbac9551d06",
+        "fact:edf0d35d14d56ffe58cb60df0209ceabea14da5f6eadfc7add2e0a1efc202f03",
+        "rule:64650e5936e3f9f11b26e15712c9d83ed6a4f2ca3ac4d43efa35ed9923ce8354"
+      ]
+    },
+    {
+      "case_id": "english-same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "english-rule",
+      "request": "If X is a bird then X is an animal",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはbirdである ならば $xはanimalである。\n規則ID: rule:cdc9f9e78379b75fcc5291ff684f8973a4e364dffec90b58e559919c9e16c577\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:cdc9f9e78379b75fcc5291ff684f8973a4e364dffec90b58e559919c9e16c577"
+      ]
+    },
+    {
+      "case_id": "english-same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "english-bird",
+      "request": "Coco is a bird",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはbirdである。\n前提ID: fact:42a923dd245de610c48f0693216e345a7f8b541869d434947794ff20f4bbf40d\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:42a923dd245de610c48f0693216e345a7f8b541869d434947794ff20f4bbf40d"
+      ]
+    },
+    {
+      "case_id": "english-same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "english-pronoun-question",
+      "request": "Is it an animal?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、Cocoはanimalである。",
+      "reason": null,
+      "dependencies": [
+        "fact:42a923dd245de610c48f0693216e345a7f8b541869d434947794ff20f4bbf40d",
+        "fact:e52d4449b019a4dff7763562b02681b53a46d849ddfff9626fb704da68a70660",
+        "rule:cdc9f9e78379b75fcc5291ff684f8973a4e364dffec90b58e559919c9e16c577"
+      ]
+    },
+    {
+      "case_id": "english-same-case",
+      "actor_id": "fixture-pronoun-owner",
+      "input_id": "english-pronoun-why",
+      "request": "Why is it an animal?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された証拠が支える結論: Cocoはanimalである。\n直接提示された前提: Cocoはbirdである（根拠ID: fact:42a923dd245de610c48f0693216e345a7f8b541869d434947794ff20f4bbf40d）\n導出された事実: Cocoはanimalである（導出ID: fact:e52d4449b019a4dff7763562b02681b53a46d849ddfff9626fb704da68a70660; 依存ID: fact:42a923dd245de610c48f0693216e345a7f8b541869d434947794ff20f4bbf40d, rule:cdc9f9e78379b75fcc5291ff684f8973a4e364dffec90b58e559919c9e16c577）\n適用規則: $xはbirdである ならば $xはanimalである（規則ID: rule:cdc9f9e78379b75fcc5291ff684f8973a4e364dffec90b58e559919c9e16c577）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:42a923dd245de610c48f0693216e345a7f8b541869d434947794ff20f4bbf40d",
+        "fact:e52d4449b019a4dff7763562b02681b53a46d849ddfff9626fb704da68a70660",
+        "rule:cdc9f9e78379b75fcc5291ff684f8973a4e364dffec90b58e559919c9e16c577"
+      ]
+    }
+  ],
+  "observed_gate_correction": {
+    "initial_command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "initial_exit_code": 101,
+    "initial_findings": [
+      "pre-existing math.rs unit-test needless borrow in serde_json::from_str",
+      "pre-existing fixed-size math.rs unit-test Vec allocation"
+    ],
+    "correction": "removed the redundant borrow and changed fixed test data from Vec to array; no runtime behavior changed",
+    "focused_regression": "cargo test -p minidora-engine previous_probability_and_polynomial_reports_are_recomputed_and_bounded --locked: PASS",
+    "workspace_clippy_rerun": "cargo clippy --workspace --all-targets --locked -- -D warnings: PASS"
+  },
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo test -p minidora-engine singular_pronoun_relation_questions_retain_context_and_scope_requirements --locked",
+    "cargo test -p minidora-cli --test normal_route singular_pronoun_relation_questions_use_only_unique_same_case_proof_context --locked",
+    "cargo check --workspace --all-targets --locked",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo build --workspace --locked",
+    "cargo test -p minidora-engine previous_probability_and_polynomial_reports_are_recomputed_and_bounded --locked",
+    "python3 tools/contextual_relation_pronoun_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-context-singular-pronoun-relation-query-v58-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite",
+    "plural, multi-clause and cross-topic pronoun resolution",
+    "general Japanese/English co-reference and full A04/A07/A08/CAP-D04/CAP-D11 acceptance"
+  ],
+  "acceptance_boundary": "This route establishes only a bounded same-case singular-pronoun relation Ask/AskWhy consumer with exact direct-premise lineage, scope inheritance/selection, and fail-closed missing/ambiguous/cross-case/cross-actor/topic-change cases. It does not establish plural or general co-reference, broad conversation continuity, or full BB-CONTEXT acceptance.",
+  "next_consumer": "Plural and multi-clause co-reference across topic changes remain later BB-CONTEXT gaps."
+}

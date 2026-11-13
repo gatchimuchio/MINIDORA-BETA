@@ -3133,6 +3133,252 @@ fn natural_why_question_explains_only_current_relation_proofs() {
 }
 
 #[test]
+fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context() {
+    let scratch = Scratch::new();
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "context-biology-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let bird = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "context-coco-bird", "[scope=biology]ココは鳥"],
+    ));
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "context-pronoun-question", "それは動物ですか"],
+    ));
+    assert_eq!(answer["guarantee"], "DERIVED");
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは動物である")
+    );
+    assert!(
+        answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule["dependencies"][0])
+    );
+    assert!(
+        answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&bird["dependencies"][0])
+    );
+
+    let why = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "context-pronoun-why", "なぜそれは動物ですか"],
+    ));
+    assert_eq!(why["guarantee"], "DERIVED");
+    assert!(
+        why["text"]
+            .as_str()
+            .unwrap()
+            .contains("直接提示された前提: ココは鳥である")
+    );
+    assert_eq!(why["dependencies"], answer["dependencies"]);
+
+    let wrong_scope = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "context-wrong-scope",
+                "[scope=ecology]それは動物ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrong_scope["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_RELATION_CONTEXT")
+    );
+
+    record(&execute(&scratch.0, "owner", &["2+3"]));
+    let after_topic_change = stopped(
+        &execute(&scratch.0, "owner", &["それは動物ですか"]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        after_topic_change["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_RELATION_CONTEXT")
+    );
+
+    let no_case_context = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "pronoun-without-case-context",
+            &["--input", "pronoun-question", "それは動物ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        no_case_context["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_RELATION_CONTEXT")
+    );
+
+    let other_actor = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "other-actor",
+            "pronoun-without-actor-context",
+            &["--input", "pronoun-question", "それは動物ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        other_actor["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_RELATION_CONTEXT")
+    );
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "pronoun-ambiguous-context",
+        &[
+            "--input",
+            "ambiguous-context-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let biology_bird = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "pronoun-ambiguous-context",
+        &[
+            "--input",
+            "ambiguous-biology-premise",
+            "[scope=biology]ツバメは鳥",
+        ],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "pronoun-ambiguous-context",
+        &[
+            "--input",
+            "ambiguous-ecology-premise",
+            "[scope=ecology]ツバメは鳥",
+        ],
+    ));
+    let listed = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "pronoun-ambiguous-context",
+        &["--input", "list-pronoun-context", "ツバメとは何ですか"],
+    ));
+    assert_eq!(listed["dependencies"].as_array().unwrap().len(), 2);
+    let ambiguous = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "pronoun-ambiguous-context",
+            &["--input", "ambiguous-pronoun-question", "それは動物ですか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        ambiguous["reason"]
+            .as_str()
+            .unwrap()
+            .contains("AMBIGUOUS_RELATION_CONTEXT")
+    );
+    let relisted = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "pronoun-ambiguous-context",
+        &["--input", "relist-pronoun-context", "ツバメとは何ですか"],
+    ));
+    assert_eq!(relisted["dependencies"], listed["dependencies"]);
+    let disambiguated = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "pronoun-ambiguous-context",
+        &[
+            "--input",
+            "scoped-pronoun-question",
+            "[scope=biology]それは動物ですか",
+        ],
+    ));
+    assert_eq!(disambiguated["guarantee"], "DERIVED");
+    assert!(
+        disambiguated["text"]
+            .as_str()
+            .unwrap()
+            .contains("ツバメは動物である")
+    );
+    assert!(
+        disambiguated["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&biology_bird["dependencies"][0])
+    );
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-pronoun-context",
+        &[
+            "--input",
+            "english-context-rule",
+            "If X is a bird then X is an animal",
+        ],
+    ));
+    let english_bird = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-pronoun-context",
+        &["--input", "english-context-bird", "Coco is a bird"],
+    ));
+    let english_answer = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-pronoun-context",
+        &["--input", "english-pronoun-question", "Is it an animal?"],
+    ));
+    assert_eq!(english_answer["guarantee"], "DERIVED");
+    assert!(
+        english_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&english_bird["dependencies"][0])
+    );
+    let english_why = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-pronoun-context",
+        &["--input", "english-pronoun-why", "Why is it an animal?"],
+    ));
+    assert_eq!(english_why["guarantee"], "DERIVED");
+    assert_eq!(english_why["dependencies"], english_answer["dependencies"]);
+}
+
+#[test]
 fn agreeing_examples_do_not_promote_a_universal_empirical_rule() {
     let scratch = Scratch::new();
     for premise in ["甲は鳥", "甲は青色", "乙は鳥", "乙は青色", "丙は鳥"] {

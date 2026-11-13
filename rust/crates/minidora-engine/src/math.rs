@@ -1775,7 +1775,7 @@ mod tests {
 
     #[test]
     fn previous_probability_and_polynomial_reports_are_recomputed_and_bounded() {
-        let reports = vec![
+        let reports = [
             serde_json::to_string_pretty(
                 &normalize_probability_weights(&strings(&["1", "2", "3"])).unwrap(),
             )
@@ -1838,7 +1838,7 @@ mod tests {
             tampered.text = serde_json::to_string_pretty(&tampered_report).unwrap();
             assert!(previous_math_report_explanation(&tampered).is_err());
             if index == 3 {
-                let mut incomplete: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let mut incomplete: serde_json::Value = serde_json::from_str(text).unwrap();
                 incomplete
                     .as_object_mut()
                     .unwrap()

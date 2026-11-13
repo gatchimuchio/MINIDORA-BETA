@@ -360,6 +360,11 @@ pub enum Intent {
     Ask {
         proposition: Proposition,
     },
+    AskPreviousRelation {
+        proposition: Proposition,
+        explain: bool,
+        explicit_scope: Option<String>,
+    },
     AskWhy {
         proposition: Proposition,
     },

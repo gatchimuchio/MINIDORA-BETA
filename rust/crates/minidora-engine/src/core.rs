@@ -2034,6 +2034,143 @@ impl Engine {
                 result.dependencies.push(rule.id);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::AskPreviousRelation {
+                proposition,
+                explain,
+                explicit_scope,
+            } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_RELATION_CONTEXT",
+                        "代名詞の対象を解決できる直前の同一ケース確定回答がありません。actor記憶から対象を推測しません。",
+                    );
+                };
+                if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_RELATION_CONTEXT",
+                        "関係質問の文脈参照が直前の同一ケース確定回答と一致しません。",
+                    );
+                }
+
+                let memory = self.store.load_memory(actor)?;
+                let prior_dependencies: std::collections::BTreeSet<_> =
+                    prior.dependencies.iter().map(String::as_str).collect();
+                let candidates: Vec<_> = memory
+                    .facts
+                    .iter()
+                    .filter(|fact| {
+                        fact.valid
+                            && fact.guarantee == Guarantee::UserPremise
+                            && fact.dependencies.is_empty()
+                            && !fact.source_input.is_empty()
+                            && prior_dependencies.contains(fact.id.as_str())
+                            && explicit_scope
+                                .as_ref()
+                                .is_none_or(|scope| fact.proposition.scope == *scope)
+                    })
+                    .collect();
+                if candidates.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_RELATION_CONTEXT",
+                        "直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
+                    );
+                }
+                if candidates.len() != 1 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "AMBIGUOUS_RELATION_CONTEXT",
+                        "直前の回答は複数の直接前提を参照しています。代名詞の対象を一意に決められません。",
+                    );
+                }
+                let anchor = &candidates[0].proposition;
+                let resolved = Proposition {
+                    subject: anchor.subject.clone(),
+                    scope: explicit_scope
+                        .clone()
+                        .unwrap_or_else(|| anchor.scope.clone()),
+                    ..proposition.clone()
+                };
+                let answer = relations::query(&memory, &resolved, request.budget.max_actions)?;
+                let answer_dependencies = relations::answer_dependencies(&answer);
+                let answer_guarantee = relations::answer_guarantee(&answer);
+                if *explain {
+                    let explained = match answer.status.as_str() {
+                        "SUPPORTED" => resolved.clone(),
+                        "CONTRADICTED" => {
+                            let mut opposite = resolved.clone();
+                            opposite.negative = !opposite.negative;
+                            units.push(format!(
+                                "提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
+                                describe(&opposite)
+                            ));
+                            opposite
+                        }
+                        "CONFLICT" => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONFLICTING_PREMISES",
+                                "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                            );
+                        }
+                        _ => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "MISSING_PREMISES",
+                                "この関係を説明する有効な前提または導出経路がありません。",
+                            );
+                        }
+                    };
+                    units.extend(relation_explanation_lines(
+                        &memory,
+                        &explained,
+                        &answer,
+                        "提示された証拠が支える結論",
+                    ));
+                } else {
+                    match answer.status.as_str() {
+                        "SUPPORTED" => units.push(format!(
+                            "提示された前提の範囲では、{}。",
+                            describe(&resolved)
+                        )),
+                        "CONTRADICTED" => {
+                            let mut opposite = resolved.clone();
+                            opposite.negative = !opposite.negative;
+                            units.push(format!(
+                                "提示された前提の範囲では、{}。",
+                                describe(&opposite)
+                            ));
+                        }
+                        "CONFLICT" => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONFLICTING_PREMISES",
+                                "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                            );
+                        }
+                        _ => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "MISSING_PREMISES",
+                                "この問いに必要な有効な前提または導出経路がありません。",
+                            );
+                        }
+                    }
+                }
+                result.dependencies = answer_dependencies;
+                result.guarantee = answer_guarantee;
+            }
             Intent::Ask { proposition } => {
                 let memory = self.store.load_memory(actor)?;
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
