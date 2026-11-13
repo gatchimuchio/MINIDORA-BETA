@@ -218,6 +218,8 @@ pub fn write_file(action: &ActionRecord, bytes: &[u8]) -> Result<DeliveryReceipt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+    use std::time::Instant;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn directory() -> PathBuf {
@@ -260,6 +262,119 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), bytes);
         fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn separate_processes_cannot_overwrite_a_shared_target_with_different_bytes() {
+        let dir = directory();
+        let target = dir.join("shared.txt");
+        let first_bytes = b"first complete writer".to_vec();
+        let second_bytes = b"second complete writer".to_vec();
+        let mut first = action(&target, &first_bytes);
+        first.action_id = "writer-first".into();
+        first.idempotency_key = "writer-first-key".into();
+        let mut second = action(&target, &second_bytes);
+        second.action_id = "writer-second".into();
+        second.idempotency_key = "writer-second-key".into();
+
+        let gate = dir.join("release");
+        let mut children = Vec::new();
+        let mut ready_paths = Vec::new();
+        let mut result_paths = Vec::new();
+        for (worker, (action, bytes)) in
+            [(first, first_bytes.clone()), (second, second_bytes.clone())]
+                .into_iter()
+                .enumerate()
+        {
+            let action_path = dir.join(format!("action-{worker}.json"));
+            let bytes_path = dir.join(format!("bytes-{worker}.bin"));
+            let ready = dir.join(format!("ready-{worker}"));
+            let result = dir.join(format!("result-{worker}"));
+            fs::write(&action_path, serde_json::to_vec(&action).unwrap()).unwrap();
+            fs::write(&bytes_path, bytes).unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "output::tests::multi_process_write_worker",
+                    "--nocapture",
+                ])
+                .env("MINIDORA_OUTPUT_RACE_ACTION", &action_path)
+                .env("MINIDORA_OUTPUT_RACE_BYTES", &bytes_path)
+                .env("MINIDORA_OUTPUT_RACE_GATE", &gate)
+                .env("MINIDORA_OUTPUT_RACE_READY", &ready)
+                .env("MINIDORA_OUTPUT_RACE_RESULT", &result)
+                .spawn()
+                .unwrap();
+            children.push(child);
+            ready_paths.push(ready);
+            result_paths.push(result);
+        }
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if ready_paths.iter().all(|path| path.exists()) {
+                break;
+            }
+            for child in &mut children {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!("local writer exited before the barrier: {status}");
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "local writers did not reach the barrier"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        fs::write(&gate, b"go").unwrap();
+        for child in children {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "local writer process failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let mut outcomes: Vec<_> = result_paths
+            .iter()
+            .map(|path| fs::read_to_string(path).unwrap())
+            .collect();
+        outcomes.sort();
+        assert_eq!(outcomes, ["CONFIRMED", "ERR:EXISTING_FILE_CONFLICT"]);
+        let actual = fs::read(&target).unwrap();
+        assert!(actual == first_bytes || actual == second_bytes);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn multi_process_write_worker() {
+        let Ok(action_path) = std::env::var("MINIDORA_OUTPUT_RACE_ACTION") else {
+            return;
+        };
+        let bytes_path = std::env::var("MINIDORA_OUTPUT_RACE_BYTES").unwrap();
+        let gate = std::env::var("MINIDORA_OUTPUT_RACE_GATE").unwrap();
+        let ready = std::env::var("MINIDORA_OUTPUT_RACE_READY").unwrap();
+        let result = std::env::var("MINIDORA_OUTPUT_RACE_RESULT").unwrap();
+        let action: ActionRecord = serde_json::from_slice(&fs::read(action_path).unwrap()).unwrap();
+        let bytes = fs::read(bytes_path).unwrap();
+        fs::write(ready, b"ready").unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(15);
+        while !Path::new(&gate).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "parent did not release local writer barrier"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let outcome = match write_file(&action, &bytes) {
+            Ok(receipt) if receipt.phase == EffectPhase::Confirmed => "CONFIRMED".to_owned(),
+            Ok(receipt) => format!("PHASE:{:?}", receipt.phase),
+            Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
+            Err(error) => format!("ERR:{error}"),
+        };
+        fs::write(result, outcome).unwrap();
+    }
+
     #[test]
     fn authority_and_traversal_are_checked_before_creation() {
         let dir = directory();

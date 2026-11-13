@@ -1,0 +1,72 @@
+{
+  "work_item": "QC2-02 pairwise process race for local file delivery",
+  "stage": "BODY-2_EXECUTION",
+  "recorded_at": "2026-11-13T10:44:35Z",
+  "base_commit": "b7b435f586f9b3e3fafdbfdfa9a89dafbd4ef884",
+  "changed_paths": [
+    "rust/crates/minidora-engine/src/output.rs",
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/bb-local-write-multiprocess-conflict-20261113-validation.json"
+  ],
+  "subject": "MINIDORA Rust successor local-write adapter",
+  "applied_build_set": {
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux 6.18.57 x86_64"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/output.rs": "1029c6eecd8a75c89317d9cdb0c12c617ff5dad50b665bfb03811eeccfebd174"
+  },
+  "test_binary_sha256": "a34ed42e7242ce8dd92d0a59741b7b25742d333030159173227f1d612bdf8cdf",
+  "observation": {
+    "mode": "Two separate minidora-engine test processes, each with a valid ATTEMPTED LOCAL_WRITE record, synchronized immediately before output::write_file.",
+    "shared_target": "One absolute file inside a fresh temporary directory owned by the test.",
+    "distinct_action_ids": true,
+    "different_payloads": [
+      "first complete writer",
+      "second complete writer"
+    ],
+    "outcomes": [
+      "CONFIRMED",
+      "ERR:EXISTING_FILE_CONFLICT"
+    ],
+    "final_file": "Exactly one complete input payload; no overwrite or mixed bytes."
+  },
+  "verification": [
+    {
+      "command": "cargo test -p minidora-engine output::tests::separate_processes_cannot_overwrite_a_shared_target_with_different_bytes -- --exact --nocapture",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib --locked",
+      "exit_code": 0,
+      "passed": 224,
+      "failed": 0
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    }
+  ],
+  "scope_limits": [
+    "This exercises output::write_file directly with synthetic ActionRecord authorization digests; it does not exercise Core authorization or persisted action history for these two writers.",
+    "The test uses one pair of processes on the Linux temporary filesystem; hostile ancestor replacement, additional concurrency populations and Windows/macOS were not run.",
+    "No process termination during file write/fsync, physical power loss, real remote effect, or full workspace runtime suite was run.",
+    "This does not close QC2-02 or the full BB-RECOVER population; those acceptance states remain UNVERIFIED."
+  ],
+  "acceptance": "UNVERIFIED"
+}
