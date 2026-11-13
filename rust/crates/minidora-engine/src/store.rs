@@ -2,8 +2,9 @@
 //! blobs are durably published first. Orphan blobs are harmless, while a
 //! missing or corrupt referenced blob is an integrity failure.
 use minidora_domain::{
-    ActionRecord, CaseRevision, EffectPhase, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
-    RequestEnvelope, Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
+    ActionRecord, CaseRevision, EffectPhase, InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle,
+    MemoryState, RequestEnvelope, Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure,
+    identity,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -803,6 +804,54 @@ impl Store {
         sha.map(|sha| self.read_blob(&sha)).transpose()
     }
 
+    /// Load the exact immutable sealed input for one retained case input.
+    /// Actor/case/input identity and content-derived bundle fields are
+    /// rechecked before a consumer can use the original interpretation.
+    pub(crate) fn get_input_bundle(
+        &self,
+        actor: &str,
+        case: &str,
+        input: &str,
+        version: u64,
+    ) -> Result<Option<(String, InputBundle)>> {
+        if !Self::actor_for_case(&self.connection, actor, case)? {
+            return Ok(None);
+        }
+        self.verify_case(case)?;
+        let registered: Option<(String, String, Option<String>)> = sql(self.connection.query_row(
+            "SELECT fingerprint,request_sha256,bundle_sha256 FROM input_identity WHERE case_id=?1 AND input_id=?2 AND input_version=?3",
+            params![case, input, integer(version)?],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional())?;
+        let Some((request_fingerprint, request_sha, Some(bundle_sha))) = registered else {
+            return Ok(None);
+        };
+        let bundle: InputBundle = self.read_blob(&bundle_sha)?;
+        let request_bytes = self.read_blob_bytes(&request_sha)?;
+        let expected_bundle_fingerprint = identity(&(
+            &bundle.request,
+            &bundle.raw_sha256,
+            &bundle.context_sha256,
+            bundle.meaning.parser_version.as_str(),
+        ))?;
+        if bundle.request.actor_id != actor
+            || bundle.request.case_id != case
+            || bundle.request.input_id != input
+            || bundle.request.input_version != version
+            || canonical(&bundle.request)? != request_bytes
+            || identity(&bundle.request)? != request_fingerprint
+            || bundle.raw_sha256 != digest(bundle.request.text.as_bytes())
+            || bundle.fingerprint != expected_bundle_fingerprint
+            || bundle.semantic_signature != identity(&bundle.meaning)?
+        {
+            return Err(failure(
+                "INPUT_BUNDLE_INTEGRITY",
+                "retained sealed input does not match its immutable case identity",
+            ));
+        }
+        Ok(Some((bundle_sha, bundle)))
+    }
+
     pub fn save_action(&self, actor: &str, action: &ActionRecord) -> Result<()> {
         if actor != action.actor_id {
             return Err(failure(
@@ -1421,6 +1470,60 @@ mod tests {
         );
         next
     }
+
+    #[test]
+    fn retained_input_bundle_is_loaded_by_exact_actor_case_input_and_version() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = RequestEnvelope::new(
+            "case-a",
+            "input-a",
+            "alice",
+            "json-table-select \"name\":\n{\"columns\":[\"name\"],\"rows\":[[\"Mina\"]]}",
+        );
+        let fingerprint = identity(&request).unwrap();
+        assert!(
+            store
+                .register_input("alice", &request, &fingerprint)
+                .unwrap()
+        );
+        let received = received(&request);
+        store.append_case("alice", &received).unwrap();
+        let bundle = crate::input::seal(&request, None).unwrap();
+        let bundle_ref = digest(&canonical(&bundle).unwrap());
+        let mut sealed = received;
+        sealed.revision = 1;
+        sealed.parent_revision = Some(0);
+        sealed.lifecycle = Lifecycle::Sealed;
+        sealed.bundle = Some(bundle.clone());
+        sealed.goal_sha256 = Some(
+            store
+                .put_artifact("alice", "case-a", &"exact-retained-input-test-goal")
+                .unwrap(),
+        );
+        store.append_case("alice", &sealed).unwrap();
+
+        let (loaded_ref, loaded) = store
+            .get_input_bundle("alice", "case-a", "input-a", 1)
+            .unwrap()
+            .expect("the exact sealed input is retained");
+        assert_eq!(loaded_ref, bundle_ref);
+        assert_eq!(loaded, bundle);
+        assert!(
+            store
+                .get_input_bundle("alice", "case-a", "missing", 1)
+                .unwrap()
+                .is_none()
+        );
+        let error = store
+            .get_input_bundle("bob", "case-a", "input-a", 1)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. } if code == "ACCESS_DENIED"
+        ));
+    }
+
     fn run_store_workers(store_directory: &Path, mode: &str, records: [Vec<u8>; 2]) -> Vec<String> {
         let scenario = store_directory.join(format!("race-{mode}"));
         fs::create_dir(&scenario).unwrap();

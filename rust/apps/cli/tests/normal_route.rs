@@ -10667,6 +10667,74 @@ fn table_row_json_filter_and_sort_preserve_exact_values_and_source_ranges() {
 }
 
 #[test]
+fn json_table_transform_explanations_replay_the_sealed_input_and_report() {
+    for (input_id, request, source, marker) in [
+        (
+            "filter-explain",
+            format!("JSON表の列「状態」が値「open」の行を選択して:\n{ROW_JSON}"),
+            ROW_JSON,
+            "前回のJSON表フィルター",
+        ),
+        (
+            "sort-explain",
+            format!("JSON表の列「順位」を昇順に並べ替えて:\n{ROW_JSON}"),
+            ROW_JSON,
+            "前回のJSON表整列",
+        ),
+        (
+            "select-explain",
+            format!("JSON表の列「値」を選択して:\n{CONVERSION_ESCAPED_JSON}"),
+            CONVERSION_ESCAPED_JSON,
+            "前回のJSON表列選択",
+        ),
+        (
+            "project-explain",
+            format!("JSON表から列[\"補足\",\"名前\"]を抽出して:\n{CONVERSION_ESCAPED_JSON}"),
+            CONVERSION_ESCAPED_JSON,
+            "前回のJSON表投影",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", input_id, &request],
+        ));
+        assert_eq!(first["lifecycle"], "COMMIT");
+        let report = normal_row_report(&scratch.0, "owner", &first, &request, source);
+        let original_revision = inspect_normal_case(&scratch.0, "owner");
+        let input_bundle_ref = minidora_domain::digest(
+            &minidora_domain::canonical(&original_revision["bundle"]).unwrap(),
+        );
+        let report_ref = minidora_domain::digest(&minidora_domain::canonical(&report).unwrap());
+
+        let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+        assert_eq!(explanation["lifecycle"], "COMMIT");
+        let text = explanation["text"].as_str().unwrap();
+        assert!(text.contains(marker), "{text}");
+        assert!(text.contains("封印済みInputBundle SHA-256"), "{text}");
+        assert!(text.contains("report artifact SHA-256"), "{text}");
+        assert!(text.contains("byte["), "{text}");
+        assert!(text.contains("sha256="), "{text}");
+        let dependencies = explanation["dependencies"].as_array().unwrap();
+        assert_eq!(
+            dependencies,
+            &vec![
+                first["id"].clone(),
+                Value::String(input_bundle_ref),
+                Value::String(report_ref),
+            ]
+        );
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(
+            revision["bundle"]["meaning"]["context_result_ref"],
+            first["id"]
+        );
+        assert_eq!(revision["result"], explanation);
+    }
+}
+
+#[test]
 fn table_row_missing_columns_and_unsupported_operators_stop_durably() {
     for (header, document, code) in [
         (

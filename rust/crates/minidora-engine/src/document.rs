@@ -2,7 +2,9 @@
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
 use crate::ports::{JsonKind, JsonNode, strict_json_document};
-use minidora_domain::{Guarantee, Lifecycle, Result, ResultRecord, canonical, digest, failure};
+use minidora_domain::{
+    Guarantee, Intent, Lifecycle, Result, ResultRecord, canonical, digest, failure,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -349,6 +351,338 @@ pub(crate) fn previous_json_table_group_statistics_explanation(
         }
     }
     Ok(Some((source_ref, report_ref, lines)))
+}
+
+/// Recompute a prior JSON string-table filter/sort/select/project directly
+/// from its immutable sealed input, then explain the exact retained report and
+/// original byte ranges. The source input bundle and the report are returned
+/// separately so Core and local-file recovery can bind the same lineage.
+pub(crate) fn previous_json_table_transform_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    max_evidence_bytes: usize,
+) -> Result<Option<(String, String, Vec<String>)>> {
+    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let value: serde_json::Value = match serde_json::from_str(&previous.text) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let operation = if value.get("filter_column").is_some() {
+        "filter"
+    } else if value.get("sort_column").is_some() {
+        "sort"
+    } else if value.get("column_name").is_some() && value.get("source_spans").is_some() {
+        "select"
+    } else if value.get("selected_column_indices").is_some() {
+        "project"
+    } else {
+        return Ok(None);
+    };
+    let (bundle_ref, bundle) = store
+        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "the prior table operation has no retained sealed input bundle",
+            )
+        })?;
+
+    enum Report {
+        Filter(crate::ports::JsonTableFilterReport),
+        Sort(crate::ports::JsonTableSortReport),
+        Select(crate::ports::JsonTableSelectReport),
+        Project(crate::ports::JsonTableProjectReport),
+    }
+
+    let report = match (operation, &bundle.meaning.intent) {
+        (
+            "filter",
+            Intent::JsonTableFilter {
+                document,
+                column,
+                equals,
+            },
+        ) => Report::Filter(crate::ports::json_table_filter(document, column, equals)?),
+        (
+            "sort",
+            Intent::JsonTableSort {
+                document,
+                column,
+                descending,
+            },
+        ) => Report::Sort(crate::ports::json_table_sort(
+            document,
+            column,
+            *descending,
+        )?),
+        ("select", Intent::JsonTableSelect { document, column }) => {
+            Report::Select(crate::ports::json_table_select(document, column)?)
+        }
+        ("project", Intent::JsonTableProject { document, columns }) => {
+            Report::Project(crate::ports::json_table_project(document, columns)?)
+        }
+        _ => {
+            return Err(failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "the prior table report does not match its sealed input operation",
+            ));
+        }
+    };
+
+    let (report_bytes, report_text, source_document, mut lines) = match report {
+        Report::Filter(report) => {
+            let bytes = canonical(&report)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            let document = match &bundle.meaning.intent {
+                Intent::JsonTableFilter { document, .. } => document.as_str(),
+                _ => unreachable!("operation and sealed intent were checked"),
+            };
+            let matched = report
+                .decisions
+                .iter()
+                .filter(|decision| decision.matched)
+                .count();
+            let mut lines = vec![
+                "前回のJSON表フィルターを、保存済みの元入力から再計算しました。".into(),
+                format!(
+                    "条件: 列 {:?} が {:?} と完全一致",
+                    report.filter_column, report.equals
+                ),
+                format!("一致行: {} / {}", matched, report.decisions.len()),
+            ];
+            for decision in report.decisions.iter().take(8) {
+                lines.push(format!(
+                    "元行{} {} {:?} / 値 {:?} / {}",
+                    decision.source_row_index + 1,
+                    table_span(document, &decision.source)?,
+                    report.filter_column,
+                    preview(&decision.value),
+                    if decision.matched { "採用" } else { "除外" }
+                ));
+            }
+            if report.decisions.len() > 8 {
+                lines.push(format!(
+                    "残りの判定 {}件はreport artifactに保持されています。",
+                    report.decisions.len() - 8
+                ));
+            }
+            for (output_index, (source_row, row)) in report
+                .source_row_indices
+                .iter()
+                .zip(&report.rows)
+                .take(4)
+                .enumerate()
+            {
+                let cell = &report.cell_source_spans[output_index][report.filter_column_index];
+                lines.push(format!(
+                    "出力行{} ← 元行{}: {:?}; 条件セル {}",
+                    output_index + 1,
+                    source_row + 1,
+                    row.iter().map(|value| preview(value)).collect::<Vec<_>>(),
+                    table_span(document, cell)?
+                ));
+            }
+            if report.rows.len() > 4 {
+                lines.push(format!(
+                    "残りの出力行 {}件はreport artifactに保持されています。",
+                    report.rows.len() - 4
+                ));
+            }
+            (bytes, text, document, lines)
+        }
+        Report::Sort(report) => {
+            let bytes = canonical(&report)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            let document = match &bundle.meaning.intent {
+                Intent::JsonTableSort { document, .. } => document.as_str(),
+                _ => unreachable!("operation and sealed intent were checked"),
+            };
+            let mut lines = vec![
+                "前回のJSON表整列を、保存済みの元入力から再計算しました。".into(),
+                format!(
+                    "整列列: {:?}; 順序: {}",
+                    report.sort_column, report.sort_order
+                ),
+                format!("出力行数: {}", report.rows.len()),
+            ];
+            for (index, (source_row, row)) in report
+                .source_row_indices
+                .iter()
+                .zip(&report.rows)
+                .take(8)
+                .enumerate()
+            {
+                let key = &row[report.sort_column_index];
+                let span = &report.cell_source_spans[index][report.sort_column_index];
+                lines.push(format!(
+                    "出力行{} ← 元行{}: 整列値 {:?}; {}",
+                    index + 1,
+                    source_row + 1,
+                    preview(key),
+                    table_span(document, span)?
+                ));
+            }
+            if report.rows.len() > 8 {
+                lines.push(format!(
+                    "残りの整列行 {}件はreport artifactに保持されています。",
+                    report.rows.len() - 8
+                ));
+            }
+            (bytes, text, document, lines)
+        }
+        Report::Select(report) => {
+            let bytes = canonical(&report)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            let document = match &bundle.meaning.intent {
+                Intent::JsonTableSelect { document, .. } => document.as_str(),
+                _ => unreachable!("operation and sealed intent were checked"),
+            };
+            let mut lines = vec![
+                "前回のJSON表列選択を、保存済みの元入力から再計算しました。".into(),
+                format!(
+                    "選択列: {:?} (元列番号 {})",
+                    report.column_name,
+                    report.column_index + 1
+                ),
+                format!("選択値数: {}", report.values.len()),
+                format!("列見出し {}", table_span(document, &report.column_source)?),
+            ];
+            for ((source_row, value), span) in report
+                .source_row_indices
+                .iter()
+                .zip(&report.values)
+                .zip(&report.source_spans)
+                .take(8)
+            {
+                lines.push(format!(
+                    "元行{}: {:?}; {}",
+                    source_row + 1,
+                    preview(value),
+                    table_span(document, span)?
+                ));
+            }
+            if report.values.len() > 8 {
+                lines.push(format!(
+                    "残りの選択値 {}件はreport artifactに保持されています。",
+                    report.values.len() - 8
+                ));
+            }
+            (bytes, text, document, lines)
+        }
+        Report::Project(report) => {
+            let bytes = canonical(&report)?;
+            let text = serde_json::to_string_pretty(&report)?;
+            let document = match &bundle.meaning.intent {
+                Intent::JsonTableProject { document, .. } => document.as_str(),
+                _ => unreachable!("operation and sealed intent were checked"),
+            };
+            let mut lines = vec![
+                "前回のJSON表投影を、保存済みの元入力から再計算しました。".into(),
+                format!("投影列の順序: {:?}", report.columns),
+                format!("投影行数: {}", report.rows.len()),
+            ];
+            for (index, (source_row, row)) in report
+                .source_row_indices
+                .iter()
+                .zip(&report.rows)
+                .take(8)
+                .enumerate()
+            {
+                let mapped = row
+                    .iter()
+                    .zip(&report.cell_source_spans[index])
+                    .take(8)
+                    .map(|(value, span)| {
+                        Ok(format!(
+                            "{:?} {}",
+                            preview(value),
+                            table_span(document, span)?
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                lines.push(format!("元行{} → [{}]", source_row + 1, mapped.join("; ")));
+            }
+            if report.rows.len() > 8 {
+                lines.push(format!(
+                    "残りの投影行 {}件はreport artifactに保持されています。",
+                    report.rows.len() - 8
+                ));
+            }
+            (bytes, text, document, lines)
+        }
+    };
+
+    let report_ref = digest(&report_bytes);
+    let stored_report = store
+        .get_bytes_if_present(actor, case, &report_ref)?
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "the prior JSON table report artifact is missing",
+            )
+        })?;
+    if previous.dependencies != [report_ref.clone()]
+        || stored_report != report_bytes
+        || previous.text != report_text
+    {
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "the prior JSON table input, report artifact or rendered report no longer matches",
+        ));
+    }
+    lines.splice(
+        1..1,
+        [
+            format!("元資料 SHA-256: {}", digest(source_document.as_bytes())),
+            format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+            format!("report artifact SHA-256: {report_ref}"),
+        ],
+    );
+    if lines.join("\n").len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the exact JSON table explanation exceeds the request evidence budget",
+        ));
+    }
+    Ok(Some((bundle_ref, report_ref, lines)))
+}
+
+fn preview(value: &str) -> String {
+    let mut chars = value.chars();
+    let prefix: String = chars.by_ref().take(128).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+fn table_span(document: &str, span: &crate::ports::JsonComparisonSpan) -> Result<String> {
+    let raw = document
+        .get(span.source_start..span.source_end)
+        .ok_or_else(|| {
+            failure(
+                "JSON_TABLE_CONTEXT_INVALID",
+                "a retained table source range is outside the exact sealed input",
+            )
+        })?;
+    if digest(raw.as_bytes()) != span.source_sha256 {
+        return Err(failure(
+            "JSON_TABLE_CONTEXT_INVALID",
+            "a retained table source range does not match its source digest",
+        ));
+    }
+    Ok(format!(
+        "byte[{}..{})={:?} sha256={}",
+        span.source_start,
+        span.source_end,
+        preview(raw),
+        span.source_sha256
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -927,6 +927,27 @@ fn inspect(
         } else {
             None
         };
+    let previous_json_table_transform_explanation =
+        if matches!(goal.intent, Intent::ExplainPrevious) {
+            bundle
+                .meaning
+                .context_result_ref
+                .as_ref()
+                .and_then(|id| state.prior_results.get(id))
+                .map(|previous| {
+                    crate::document::previous_json_table_transform_explanation(
+                        store,
+                        actor,
+                        case,
+                        previous,
+                        goal.budget.max_evidence_bytes,
+                    )
+                })
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
     let previous_json_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
         bundle
             .meaning
@@ -1205,6 +1226,34 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
                 "the exact JSON source, grouped-statistics report or explanation changed",
+            ));
+        }
+    }
+    if let Some((bundle_ref, report_ref, expected_units)) =
+        &previous_json_table_transform_explanation
+    {
+        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+            failure(
+                "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
+                "the prior JSON table transformation reference is missing",
+            )
+        })?;
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
+                "the prior JSON table transformation is no longer retained",
+            )
+        })?;
+        let expected_dependencies =
+            vec![previous.id.clone(), bundle_ref.clone(), report_ref.clone()];
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != expected_dependencies
+            || plan.required_units != *expected_units
+            || result.guarantee != previous.guarantee
+        {
+            return Err(failure(
+                "RECOVERY_JSON_TABLE_CONTEXT_CHANGED",
+                "the sealed JSON source, exact report artifact or source-span explanation changed",
             ));
         }
     }
@@ -1489,6 +1538,21 @@ fn inspect(
         });
         sources.push(report_id);
     }
+    if previous_json_table_transform_explanation.is_some() {
+        let input_id = "previous-json-table-transform-input".to_string();
+        let report_id = "previous-json-table-transform-report".to_string();
+        expected_nodes.push(GoalNode {
+            id: input_id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        expected_nodes.push(GoalNode {
+            id: report_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![input_id],
+        });
+        sources.push(report_id);
+    }
     if previous_json_group_mean_answer.is_some() {
         let source_id = "previous-json-group-statistics-source".to_string();
         let report_id = "previous-json-group-statistics-report".to_string();
@@ -1660,6 +1724,17 @@ fn inspect(
             &report_id,
             report_ref,
             &BTreeMap::from([(source_id, source_ref.clone())]),
+        )?;
+        source_refs.insert(report_id, report_ref.clone());
+    }
+    if let Some((bundle_ref, report_ref, _)) = &previous_json_table_transform_explanation {
+        let input_id = "previous-json-table-transform-input".to_string();
+        let report_id = "previous-json-table-transform-report".to_string();
+        graph.observe(&input_id, bundle_ref, &BTreeMap::new())?;
+        graph.observe(
+            &report_id,
+            report_ref,
+            &BTreeMap::from([(input_id, bundle_ref.clone())]),
         )?;
         source_refs.insert(report_id, report_ref.clone());
     }
@@ -2504,6 +2579,104 @@ mod tests {
         }
     }
 
+    fn attempted_json_table_transform_explanation_prefix() -> Fixture {
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-recovery-json-table-context-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let state = directory.join("state");
+        let target = directory.join("json-table-explanation.txt");
+        let mut engine = Engine::open(&state).unwrap();
+        let source = r#"{"columns":["state","name"],"rows":[["open","Mina"],["closed","Nia"],["open","Kai"]]}"#;
+        let request = format!("JSON表の列「state」が値「open」の行を選択して:\n{source}");
+        let first = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "table-operation", "alice", &request),
+            )
+            .unwrap();
+        assert_eq!(first.lifecycle, Lifecycle::Commit);
+        let mut explanation =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation.output_path = Some(target.clone());
+        explanation.permissions.write_paths.insert(target.clone());
+        assert_eq!(
+            engine.execute("alice", explanation).unwrap().lifecycle,
+            Lifecycle::Commit
+        );
+        drop(engine);
+
+        // Preserve the actual Core journal at the post-render/pre-receipt
+        // edge while leaving the physical local write in place.
+        let database = Connection::open(state.join("state.sqlite3")).unwrap();
+        let snapshots: Vec<(i64, String)> = {
+            let mut statement = database
+                .prepare("SELECT revision,state_sha256 FROM case_revision ORDER BY revision")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let mut retained = None;
+        for (number, sha) in snapshots {
+            let revision: CaseRevision =
+                serde_json::from_slice(&fs::read(state.join("blobs").join(sha)).unwrap()).unwrap();
+            if revision.lifecycle == Lifecycle::Adopted
+                && revision
+                    .bundle
+                    .as_ref()
+                    .is_some_and(|bundle| matches!(bundle.meaning.intent, Intent::ExplainPrevious))
+                && revision.result.as_ref().is_some_and(|result| {
+                    result.dependencies.len() == 3
+                        && result.content_plan.is_some()
+                        && result.render.is_some()
+                })
+            {
+                retained = Some((number, revision));
+            }
+        }
+        let (number, revision) =
+            retained.expect("Core retained the table explanation before local-file confirmation");
+        let result = revision.result.as_ref().unwrap();
+        let result_sha = digest(&canonical(result).unwrap());
+        let token: String = database
+            .query_row("SELECT idempotency_key FROM action_identity", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        database
+            .execute_batch(
+                "PRAGMA foreign_keys=ON; DROP TRIGGER case_revision_no_delete; DROP TRIGGER action_history_no_delete;",
+            )
+            .unwrap();
+        database
+            .execute("DELETE FROM case_revision WHERE revision>?1", [number])
+            .unwrap();
+        database
+            .execute("DELETE FROM action_history WHERE sequence>3", [])
+            .unwrap();
+        database
+            .execute(
+                "UPDATE input_identity SET result_sha256=?1 WHERE case_id='case' AND input_id='explanation' AND input_version=1",
+                params![result_sha],
+            )
+            .unwrap();
+        drop(database);
+        Fixture {
+            directory,
+            state,
+            target,
+            token,
+        }
+    }
+
     #[test]
     fn calculation_explanation_candidates_replay_for_recovery() {
         let fixture = empty_fixture();
@@ -2555,6 +2728,35 @@ mod tests {
         assert_eq!(result.lifecycle, Lifecycle::Commit);
         assert!(result.text.contains("前回の記述統計を元の値から再計算"));
         assert_eq!(result.dependencies.len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+    }
+
+    #[test]
+    fn json_table_transform_explanation_reconciles_without_resending() {
+        let fixture = attempted_json_table_transform_explanation_prefix();
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+
+        let result = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit);
+        assert!(result.text.contains("前回のJSON表フィルター"));
+        assert!(result.text.contains("封印済みInputBundle SHA-256"));
+        assert!(result.text.contains("report artifact SHA-256"));
+        assert!(result.text.contains("byte["));
+        assert_eq!(result.dependencies.len(), 3);
         assert_eq!(fs::read(&fixture.target).unwrap(), original);
         assert_eq!(
             fs::metadata(&fixture.target).unwrap().modified().unwrap(),

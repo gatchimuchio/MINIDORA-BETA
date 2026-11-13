@@ -492,6 +492,37 @@ impl Engine {
             } else {
                 None
             };
+        let previous_json_table_transform_explanation =
+            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => {
+                        match crate::document::previous_json_table_transform_explanation(
+                            &self.store,
+                            actor,
+                            &request.case_id,
+                            prior,
+                            request.budget.max_evidence_bytes,
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let code = match &error {
+                                    Error::Contract { code, .. } => code.as_str(),
+                                    _ => "JSON_TABLE_CONTEXT_INVALID",
+                                };
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    code,
+                                    &error.to_string(),
+                                );
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
         let previous_json_group_mean_answer =
             if matches!(bundle.meaning.intent, Intent::AskPreviousGroupMean) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -868,6 +899,21 @@ impl Engine {
                 id: report_id.clone(),
                 kind: GoalNodeKind::ComputedValue,
                 requires: vec![source_id],
+            });
+            compute_requires.push(report_id);
+        }
+        if previous_json_table_transform_explanation.is_some() {
+            let input_id = "previous-json-table-transform-input".to_string();
+            let report_id = "previous-json-table-transform-report".to_string();
+            nodes.push(GoalNode {
+                id: input_id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            nodes.push(GoalNode {
+                id: report_id.clone(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: vec![input_id],
             });
             compute_requires.push(report_id);
         }
@@ -2619,6 +2665,24 @@ impl Engine {
                     result.dependencies.extend([
                         prior.id.clone(),
                         source_ref.clone(),
+                        report_ref.clone(),
+                    ]);
+                    result.guarantee = prior.guarantee.clone();
+                } else if let Some((bundle_ref, report_ref, explanation)) =
+                    &previous_json_table_transform_explanation
+                {
+                    let input_id = "previous-json-table-transform-input".to_string();
+                    let report_id = "previous-json-table-transform-report".to_string();
+                    graph.observe(&input_id, bundle_ref, &BTreeMap::new())?;
+                    graph.observe(
+                        &report_id,
+                        report_ref,
+                        &BTreeMap::from([(input_id, bundle_ref.clone())]),
+                    )?;
+                    units.extend(explanation.clone());
+                    result.dependencies.extend([
+                        prior.id.clone(),
+                        bundle_ref.clone(),
                         report_ref.clone(),
                     ]);
                     result.guarantee = prior.guarantee.clone();
