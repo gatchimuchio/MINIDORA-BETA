@@ -2840,6 +2840,221 @@ fn natural_transitive_object_questions_use_same_actor_scope_and_relation_proofs(
 }
 
 #[test]
+fn japanese_transitive_yes_no_questions_use_relation_support_negation_and_scope() {
+    let scratch = Scratch::new();
+    let direct = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "yu-notebook", "ユウはノートを使う"],
+    ));
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "yu-tool-rule",
+            "もしXはノートを使うならXは道具を使う",
+        ],
+    ));
+
+    let direct_answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "yu-notebook-question",
+            "ユウはノートを使いますか",
+        ],
+    ));
+    assert_eq!(direct_answer["lifecycle"], "COMMIT");
+    assert_eq!(direct_answer["guarantee"], "USER_PREMISE");
+    assert!(
+        direct_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ユウはノートを使う")
+    );
+    assert!(
+        direct_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&direct["dependencies"][0])
+    );
+
+    let derived_answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "yu-tool-question", "ユウは道具を使いますか"],
+    ));
+    assert_eq!(derived_answer["lifecycle"], "COMMIT");
+    assert_eq!(derived_answer["guarantee"], "DERIVED");
+    assert!(
+        derived_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ユウは道具を使う")
+    );
+    for identity in [&direct["dependencies"][0], &rule["dependencies"][0]] {
+        assert!(
+            derived_answer["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(identity)
+        );
+    }
+
+    let negative = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "yu-not-poison", "ユウは毒を使わない"],
+    ));
+    let negative_answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "yu-not-poison-question",
+            "ユウは毒を使いませんか",
+        ],
+    ));
+    assert_eq!(negative_answer["lifecycle"], "COMMIT");
+    assert_eq!(negative_answer["guarantee"], "USER_PREMISE");
+    assert!(
+        negative_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ユウは毒を使わない")
+    );
+    let refuted = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "yu-positive-poison-question",
+            "ユウは毒を使いますか",
+        ],
+    ));
+    assert_eq!(refuted["lifecycle"], "COMMIT");
+    assert_eq!(refuted["guarantee"], "USER_PREMISE");
+    assert!(
+        refuted["text"]
+            .as_str()
+            .unwrap()
+            .contains("ユウは毒を使わない")
+    );
+    assert!(
+        refuted["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&negative["dependencies"][0])
+    );
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "yu-story-notebook",
+            "[scope=story]ユウはノートを使う",
+        ],
+    ));
+    let wrong_scope = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "yu-ecology-question",
+                "[scope=ecology]ユウは道具を使いますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrong_scope["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "yu-pen-question", "ユウはペンを使いますか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let other_actor = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "another-actor",
+            "separate-actor-case",
+            &[
+                "--input",
+                "yu-other-actor-question",
+                "ユウはノートを使いますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        other_actor["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    let contradictory = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "yu-poison-positive", "ユウは毒を使う"],
+    ));
+    let conflict = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "yu-conflicting-question", "ユウは毒を使いますか"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        conflict["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONFLICTING_PREMISES")
+    );
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "invalidate-yu-poison-positive",
+            &format!(
+                "{}を無効化して",
+                contradictory["dependencies"][0].as_str().unwrap()
+            ),
+        ],
+    ));
+    let replay = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "yu-tool-question", "ユウは道具を使いますか"],
+    ));
+    assert_eq!(replay["text"], derived_answer["text"]);
+    assert_eq!(replay["dependencies"], derived_answer["dependencies"]);
+}
+
+#[test]
 fn natural_definition_questions_retrieve_only_the_exact_stored_premise() {
     let scratch = Scratch::new();
     let japanese_premise = record(&execute(

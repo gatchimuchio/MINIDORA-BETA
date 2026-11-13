@@ -1,0 +1,353 @@
+{
+  "work_item": "BODY-1 BB-LANG Japanese transitive yes/no questions through ordinary CLI",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T06:55:00+00:00",
+  "base_commit": "c50b483fb17b7a0f4fb0da1522c251823fdc8bad",
+  "requirement_ids": [
+    "A02",
+    "A04",
+    "A05",
+    "A09",
+    "A12",
+    "A13",
+    "A15",
+    "B01"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v65-transitive-yes-no-questions",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "implementation_change": "Terminal Japanese か and explicit question punctuation now seal supported transitive relations as Ask propositions. Core reuses the actor-scoped proof query and returns direct support, a derived conclusion, a supported opposite premise, or a typed missing/conflict stop.",
+  "binary_sha256": "fef68b0c71b456cf607281dac5f76985ac32bdec58654045d859a7a7d359558f",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "991ee79118de8d98d47df68901210317961aa08836365b9bcbafee6a5b0f97aa",
+    "rust/crates/minidora-engine/src/input.rs": "45db8d0e4fbacb66d57f374d12288a83e8b55e938c2667095bcf30e72c40c00f",
+    "rust/crates/minidora-engine/src/core.rs": "ccc10b31a6f11566b1408860696194aba4c126beab37b88964132e906edb5e68"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "45db8d0e4fbacb66d57f374d12288a83e8b55e938c2667095bcf30e72c40c00f",
+    "rust/apps/cli/tests/normal_route.rs": "21fc45e027a6517c4d9635f090a4d6757fde8230ff3ca7f580d5c2923ff61014",
+    "rust/tools/transitive_yes_no_question_route_test.py": "de7282311cc3cc9bfc5c5f929e9c6d2b86ac2bbd210368b0e506a0bd9db7aa31"
+  },
+  "documentation_snapshot_sha256": {
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "rust/README.md": "782b772a2dc96f423f3a8dfdedeba91147558eb03dd56f5704880dead0614e16"
+  },
+  "execution_mode": "fresh CLI process for every request; one temporary SQLite state; ordinary request inputs; no test-only result injection",
+  "scope": "Japanese present/polite transitive use relations, named subject/object, yes/no question particle or punctuation, exact scope and retained premise/rule proofs.",
+  "observations": [
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-notebook",
+      "request": "ユウはノートを使う",
+      "request_sha256": "cb9683905a69773a1c4bfeff8a538d3ea877d17782c7628f9ecc1c5df4fcb429",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ユウはノートを使う。\n前提ID: fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1"
+      ],
+      "result_id": "c0867f11c1f12b5d4a173a6652bd2729d07c99e069a5e37bb22605e45052746f"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-tool-rule",
+      "request": "もしXはノートを使うならXは道具を使う",
+      "request_sha256": "b13791e607bede9ebacfbe0f2df30c0af8a08f1c8099971fd8ea881c2dbd72ae",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはノートを使う ならば $xは道具を使う。\n規則ID: rule:e546764ebdf41fa7f4f5552f3adb8ac7a83955481351d52cfee61f7d4893d021\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:e546764ebdf41fa7f4f5552f3adb8ac7a83955481351d52cfee61f7d4893d021"
+      ],
+      "result_id": "c322a9df38e2a8a529e238d1ccf8caf5b7866f07ac2e0979a24a8648c32b26d2"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-notebook-question",
+      "request": "ユウはノートを使いますか",
+      "request_sha256": "9284d9182f0c4520e607e2d2daa6ec9288efd10e4c53bc4c821964816fecf30d",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ユウはノートを使う。",
+      "reason": null,
+      "dependencies": [
+        "fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1"
+      ],
+      "result_id": "5d736f0df0e9c0208af15e2bb025d443d3a2fec4ea7ce7f8fbdd07ed095c8f83"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-tool-question",
+      "request": "ユウは道具を使いますか",
+      "request_sha256": "c8c376a392ebec2270457ebbbed3a643242dfc74eabc53e88a65b1374b7e0eaf",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ユウは道具を使う。",
+      "reason": null,
+      "dependencies": [
+        "fact:e46b098b2cacdbedff2cc1406ea728bd59ddd78b5a850c3bb2ff13af588b7f0e",
+        "fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1",
+        "rule:e546764ebdf41fa7f4f5552f3adb8ac7a83955481351d52cfee61f7d4893d021"
+      ],
+      "result_id": "e310ce2e2c8b51b678ae66b6e106c96c02516c15ed06de91d16c6249e05195ca"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-not-poison",
+      "request": "ユウは毒を使わない",
+      "request_sha256": "56fe6bdebfa25ba2e42499022b601fca0f9a83deb326ec624d9353f234f20b23",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ユウは毒を使わない。\n前提ID: fact:c0f39602862d118c04ba60124107879aa5043c8af77d2be9375a4b2fca5626bc\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:c0f39602862d118c04ba60124107879aa5043c8af77d2be9375a4b2fca5626bc"
+      ],
+      "result_id": "d051a95c285623817c35285289a042d65bfa73cc1bd02a0576cad9d64cc19284"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-not-poison-question",
+      "request": "ユウは毒を使いませんか",
+      "request_sha256": "e1cbc025b1b538b724da13ba681a4f278de6a766baffe4f6fecab9b9c99c111a",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ユウは毒を使わない。",
+      "reason": null,
+      "dependencies": [
+        "fact:c0f39602862d118c04ba60124107879aa5043c8af77d2be9375a4b2fca5626bc"
+      ],
+      "result_id": "c7c503db000b9dd6054c167206a98d9e28fd3cae398a867274ffea12ce7af53c"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-positive-poison-question",
+      "request": "ユウは毒を使いますか",
+      "request_sha256": "e0d78c39c2e2112e12093e28dae3387d5a5fde010563f5ffe1bb8e68be7f3da6",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ユウは毒を使わない。",
+      "reason": null,
+      "dependencies": [
+        "fact:c0f39602862d118c04ba60124107879aa5043c8af77d2be9375a4b2fca5626bc"
+      ],
+      "result_id": "0822671ac6aad24ccdd911bbd70d9c1ba5ba221166d933546c2f88efe2ffed88"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-story-notebook",
+      "request": "[scope=story]ユウはノートを使う",
+      "request_sha256": "d6e284b19064a0a54fd51febbca169d98145995e0b66e852d9bf0a9155f1acd9",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ユウはノートを使う。\n前提ID: fact:52467067c28aaf09aecea3d2c229d949e8595d5b2c65b2e8fdcd1d39021bcdb1\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:52467067c28aaf09aecea3d2c229d949e8595d5b2c65b2e8fdcd1d39021bcdb1"
+      ],
+      "result_id": "137feed304847c11e8609b9f95024e47d7a267fd78eb333bd4d72d8157b130e2"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-ecology-question",
+      "request": "[scope=ecology]ユウは道具を使いますか",
+      "request_sha256": "fcd86ed4257ff753b39142ec7667928af1eace04061f548a3d22b47d302f19b7",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この問いに必要な有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: この問いに必要な有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "result_id": "cf9ceab6c6ad6f466ec7923be2bc89f2acda9d14b0c95bed91afcc52471c39c9"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-pen-question",
+      "request": "ユウはペンを使いますか",
+      "request_sha256": "b717cdf8753b43e2e426befc1add006ce673082b740242323dc4213c4ab9fa0d",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この問いに必要な有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: この問いに必要な有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "result_id": "6aa0f788492b73ad04d5b7d629dba89153e1c9bb84d3001045af973f231843d7"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "saki-notebook-question",
+      "request": "サキはノートを使いますか",
+      "request_sha256": "1674f54cbb24701f896d03fd7922d4ad9477e5a64750b9219cd5c3e1d220af93",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この問いに必要な有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: この問いに必要な有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "result_id": "4201e5555169a670d677e1a6396c509004d72af11ae35b128b644f481376b9d6"
+    },
+    {
+      "case_id": "isolated-actor-case",
+      "actor_id": "other-actor",
+      "input_id": "yu-other-actor-question",
+      "request": "ユウはノートを使いますか",
+      "request_sha256": "9284d9182f0c4520e607e2d2daa6ec9288efd10e4c53bc4c821964816fecf30d",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この問いに必要な有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: この問いに必要な有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "result_id": "d7eb5381d9ded80d30cd4163aa52cb882c3fb1a352f21e156aa26d70aa03a7c9"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-poison-positive",
+      "request": "ユウは毒を使う",
+      "request_sha256": "77df6c232355b2c64d6f521de3e3e6fc823cc497100fe2acdc9260d718f4374d",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ユウは毒を使う。\n前提ID: fact:e840f45b40d3693b218804b194dee5c1bfeefc69e6d3371699f2ad5aebb0f9d8\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e840f45b40d3693b218804b194dee5c1bfeefc69e6d3371699f2ad5aebb0f9d8"
+      ],
+      "result_id": "3c2f591892aa60978f3e774b4da5329e726e2cfbb85c5a5a7df21732b81ce676"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-conflict-question",
+      "request": "ユウは毒を使いますか",
+      "request_sha256": "e0d78c39c2e2112e12093e28dae3387d5a5fde010563f5ffe1bb8e68be7f3da6",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+      "reason": "CONFLICTING_PREMISES: 同じ対象・範囲に対して肯定と否定の根拠があります。一方を恣意的に採用しません。",
+      "dependencies": [],
+      "result_id": "30bc8f119972975d31c89ee64add29ea3926dd84a9010fe1d06ebba544900b13"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "invalidate-yu-poison-positive",
+      "request": "fact:e840f45b40d3693b218804b194dee5c1bfeefc69e6d3371699f2ad5aebb0f9d8を無効化して",
+      "request_sha256": "4a2f59694f9c183dcc5a295dc270d2c3dabd15b7bf8a75e77e139d9418a921fe",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:e840f45b40d3693b218804b194dee5c1bfeefc69e6d3371699f2ad5aebb0f9d8"
+      ],
+      "result_id": "a920f657ff701e32b31ac323d74926f025d4a4c0717aa40415f88fc10a533855"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-tool-question",
+      "request": "ユウは道具を使いますか",
+      "request_sha256": "c8c376a392ebec2270457ebbbed3a643242dfc74eabc53e88a65b1374b7e0eaf",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、ユウは道具を使う。",
+      "reason": null,
+      "dependencies": [
+        "fact:e46b098b2cacdbedff2cc1406ea728bd59ddd78b5a850c3bb2ff13af588b7f0e",
+        "fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1",
+        "rule:e546764ebdf41fa7f4f5552f3adb8ac7a83955481351d52cfee61f7d4893d021"
+      ],
+      "result_id": "e310ce2e2c8b51b678ae66b6e106c96c02516c15ed06de91d16c6249e05195ca"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "yu-notebook-question-punctuation",
+      "request": "ユウはノートを使う?",
+      "request_sha256": "a337ee60218139d13d8993ba1bd8850e43cf8811ccd1a24306b47224cb1ebc36",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、ユウはノートを使う。",
+      "reason": null,
+      "dependencies": [
+        "fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1"
+      ],
+      "result_id": "1c24aa6dc494275b295efb5a5e0746fffcf068a3f3bfe761c09ba7a23bcb48f5"
+    },
+    {
+      "case_id": "transitive-yes-no-route",
+      "actor_id": "japanese-owner",
+      "input_id": "unsupported-past-question",
+      "request": "ユウはノートを使ったか",
+      "request_sha256": "3d21d5ee939b3842b947a32e20849ce695a4806de8b452d2d1b62a822bcd3599",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": [],
+      "result_id": "bc5544547330390b571e5d68f41830eb1ef8150c6a9c367eb0d51e54fc5c142a"
+    }
+  ],
+  "summary": {
+    "total_requests": 18,
+    "lifecycle_counts": {
+      "COMMIT": 12,
+      "SUSPEND": 6
+    },
+    "direct_premise_id": "fact:f3d6d88cb4fab39c8f5ffdde41cced917a6b879d5289baabb4f54e58dc8d6dd1",
+    "rule_id": "rule:e546764ebdf41fa7f4f5552f3adb8ac7a83955481351d52cfee61f7d4893d021",
+    "negative_premise_id": "fact:c0f39602862d118c04ba60124107879aa5043c8af77d2be9375a4b2fca5626bc",
+    "invalidated_positive_id": "fact:e840f45b40d3693b218804b194dee5c1bfeefc69e6d3371699f2ad5aebb0f9d8"
+  },
+  "targeted_checks": {
+    "transitive_question_input_unit": "PASS",
+    "ordinary_cli_route": "PASS",
+    "direct_and_derived_support": "PASS",
+    "negation_and_refutation": "PASS",
+    "exact_scope_missing_subject_actor_isolation": "PASS",
+    "conflict_and_invalidation": "PASS",
+    "prior_result_immutability": "PASS",
+    "question_punctuation_form": "PASS",
+    "unsupported_past_tense_stop": "PASS"
+  },
+  "requirements_status": "A02/A04/A05/A09/A12/A13/A15/B01 acceptance remains UNVERIFIED; this is a bounded route observation, not the independent unseen-question QA population.",
+  "limitations": [
+    "The route covers the existing `使う` predicate only; it does not add verb vocabulary.",
+    "Past-tense, alternative-object, generic wh questions and outside-world truth are not established.",
+    "A contradicted yes/no claim returns the supported opposite premise; simultaneous support and refutation suspends.",
+    "Full workspace runtime suite, broad BB-LANG acceptance and independent 24-question QA were not run."
+  ]
+}

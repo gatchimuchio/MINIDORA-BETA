@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v64-transitive-object-questions";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v65-transitive-yes-no-questions";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1598,10 +1598,12 @@ fn interpret(text: &str) -> Result<Intent> {
     let question = text.trim_end().ends_with(['?', '？'])
         || body.ends_with("ですか")
         || body.ends_with("なのか")
+        || body.ends_with('か')
         || regex(r"(?i)^is\s+")?.is_match(body);
     let query_body = body
         .strip_suffix("ですか")
         .or_else(|| body.strip_suffix("なのか"))
+        .or_else(|| body.strip_suffix('か'))
         .unwrap_or(body);
     if let Some(intent) =
         transitive_object_question_intent(body, text.trim_end().ends_with(['?', '？']))?
@@ -2821,6 +2823,50 @@ mod tests {
             "ミナは何を使う",
             "それは何を使いますか",
         ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn japanese_yes_no_transitive_questions_preserve_relation_scope_and_polarity() {
+        for (text, object, negative, scope) in [
+            ("ユウはノートを使いますか", "ノート", false, "default"),
+            ("ユウは毒を使いませんか", "毒", true, "default"),
+            ("ユウはノートを使う?", "ノート", false, "default"),
+            ("[scope=story]ユウは道具を使うか", "道具", false, "story"),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::Ask { proposition }
+                        if proposition.subject == "ユウ"
+                            && proposition.predicate == "use"
+                            && proposition.object == object
+                            && proposition.negative == negative
+                            && proposition.scope == scope
+                ),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("ユウはノートを使う").unwrap(),
+            Intent::Assert { proposition } if proposition.predicate == "use"
+        ));
+        assert!(matches!(
+            interpret("それはノートを使いますか").unwrap(),
+            Intent::AskPreviousRelation {
+                proposition,
+                explain: false,
+                explicit_scope: None,
+            } if proposition.subject == "それ"
+                && proposition.predicate == "use"
+                && proposition.object == "ノート"
+        ));
+        for text in ["ユウはノートを使ったか", "ユウはノートまたはペンを使うか"]
+        {
             assert!(
                 matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
                 "{text}"
