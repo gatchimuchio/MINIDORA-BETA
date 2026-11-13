@@ -50,6 +50,46 @@ fn sync_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn next_temp_serial() -> Result<u64> {
+    let mut current = TEMP_SERIAL.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1).ok_or_else(|| {
+            failure(
+                "STORE_TEMP_SERIAL_EXHAUSTED",
+                "blob stage identity exhausted",
+            )
+        })?;
+        match TEMP_SERIAL.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return Ok(current),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn create_stage_file_with(
+    blobs: &Path,
+    process_id: u32,
+    mut next_serial: impl FnMut() -> Result<u64>,
+) -> Result<(PathBuf, File)> {
+    loop {
+        let serial = next_serial()?;
+        let temporary = blobs.join(format!(".stage-{process_id}-{serial}"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            // A previous process may have crashed after creating its stage
+            // file, then the OS may later reuse its PID. Keep the orphan and
+            // advance to another exclusive name instead of failing the write.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
 pub struct Store {
     connection: Connection,
     blobs: PathBuf,
@@ -268,14 +308,8 @@ impl Store {
             self.read_blob_bytes(&sha)?;
             return Ok((sha, bytes.len()));
         }
-        let serial = TEMP_SERIAL.fetch_add(1, Ordering::Relaxed);
-        let temporary = self
-            .blobs
-            .join(format!(".stage-{}-{serial}", std::process::id()));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let (temporary, mut file) =
+            create_stage_file_with(&self.blobs, std::process::id(), next_temp_serial)?;
         let result = (|| -> Result<()> {
             file.write_all(bytes)?;
             file.sync_all()?;
@@ -1262,6 +1296,8 @@ mod tests {
     use super::*;
     use minidora_domain::{InputBundle, Intent, MeaningIR, Permissions};
     use std::collections::BTreeMap;
+    use std::process::Command;
+    use std::time::Instant;
 
     struct Directory(PathBuf);
     impl Directory {
@@ -1406,6 +1442,132 @@ mod tests {
         assert!(store.append_case("alice", &next).is_err());
         assert_eq!(store.load_case("alice", "case-a").unwrap().unwrap(), next);
     }
+
+    #[test]
+    fn blob_staging_skips_a_stale_name_after_process_id_reuse() {
+        let directory = Directory::new();
+        let stale = directory.0.join(".stage-4242-41");
+        fs::write(&stale, b"orphan from a crashed process").unwrap();
+        let mut serials = [41, 42].into_iter();
+
+        let (created, file) = create_stage_file_with(&directory.0, 4242, || {
+            Ok(serials.next().expect("test provides a fallback serial"))
+        })
+        .unwrap();
+
+        assert_eq!(created, directory.0.join(".stage-4242-42"));
+        assert_eq!(fs::read(&stale).unwrap(), b"orphan from a crashed process");
+        assert!(created.exists());
+        drop(file);
+    }
+
+    #[test]
+    fn separate_processes_serialize_case_revision_compare_and_swap() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        let initial = register(&store, &request);
+        let candidate = sealed(&store, &request, &initial);
+        let candidate_path = directory.0.join("candidate.json");
+        fs::write(&candidate_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
+        drop(store);
+
+        let gate = directory.0.join("start");
+        let mut workers = Vec::new();
+        let mut ready_paths = Vec::new();
+        let mut result_paths = Vec::new();
+        for worker in 0..2 {
+            let ready = directory.0.join(format!("ready-{worker}"));
+            let result = directory.0.join(format!("result-{worker}"));
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "store::tests::multi_process_writer_worker",
+                    "--nocapture",
+                ])
+                .env("MINIDORA_STORE_MP_DIR", &directory.0)
+                .env("MINIDORA_STORE_MP_CANDIDATE", &candidate_path)
+                .env("MINIDORA_STORE_MP_GATE", &gate)
+                .env("MINIDORA_STORE_MP_READY", &ready)
+                .env("MINIDORA_STORE_MP_RESULT", &result)
+                .spawn()
+                .unwrap();
+            workers.push(child);
+            ready_paths.push(ready);
+            result_paths.push(result);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if ready_paths.iter().all(|path| path.exists()) {
+                break;
+            }
+            for child in &mut workers {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!("writer worker exited before the barrier: {status}");
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "writer workers did not reach the barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(&gate, b"go").unwrap();
+
+        for child in workers {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "writer process failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let mut outcomes: Vec<_> = result_paths
+            .iter()
+            .map(|path| fs::read_to_string(path).unwrap())
+            .collect();
+        outcomes.sort();
+        assert_eq!(outcomes, ["ERR:REVISION_CONFLICT", "OK"]);
+        assert_eq!(
+            Store::open(&directory.0)
+                .unwrap()
+                .load_case("alice", "case-a")
+                .unwrap()
+                .unwrap(),
+            candidate
+        );
+    }
+
+    #[test]
+    fn multi_process_writer_worker() {
+        let Ok(directory) = std::env::var("MINIDORA_STORE_MP_DIR") else {
+            return;
+        };
+        let candidate_path = std::env::var("MINIDORA_STORE_MP_CANDIDATE").unwrap();
+        let gate = std::env::var("MINIDORA_STORE_MP_GATE").unwrap();
+        let ready = std::env::var("MINIDORA_STORE_MP_READY").unwrap();
+        let result = std::env::var("MINIDORA_STORE_MP_RESULT").unwrap();
+        let candidate: CaseRevision =
+            serde_json::from_slice(&fs::read(candidate_path).unwrap()).unwrap();
+        let store = Store::open(directory).unwrap();
+        fs::write(ready, b"ready").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !Path::new(&gate).exists() {
+            assert!(
+                Instant::now() < deadline,
+                "parent did not release writer barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let outcome = match store.append_case("alice", &candidate) {
+            Ok(()) => "OK".to_owned(),
+            Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
+            Err(error) => format!("ERR:{error}"),
+        };
+        fs::write(result, outcome).unwrap();
+    }
+
     #[test]
     fn case_and_action_access_are_scoped_to_persisted_actor() {
         let directory = Directory::new();

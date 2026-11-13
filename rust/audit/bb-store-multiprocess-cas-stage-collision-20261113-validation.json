@@ -1,0 +1,84 @@
+{
+  "work_item": "BB-RECOVER / QC2-01 durable-store concurrency and stale stage-name follow-up",
+  "stage": "BODY-2_EXECUTION",
+  "recorded_at": "2026-11-13T10:21:33Z",
+  "base_commit": "218a4779f3e1fe3702fa0a36e916013765735305",
+  "changed_paths": [
+    "rust/crates/minidora-engine/src/store.rs",
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/bb-store-multiprocess-cas-stage-collision-20261113-validation.json"
+  ],
+  "subject": "MINIDORA Rust successor engine",
+  "applied_build_set": {
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux 6.18.57 x86_64"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/store.rs": "9765279b309b6cdf56df8e63f7f6d2cd10947ad8c8f8ba94748098c7860469a1"
+  },
+  "test_binary_sha256": "4ffae44286a22e3fad305ab9c43462b32408523713ab066e3e6bf080e3ae8279",
+  "observed_gap": "Blob stage identities were process ID plus a process-local serial that restarts at zero. An orphan from abrupt termination could collide after process ID reuse; create_new prevented overwrite but returned an error instead of choosing another name.",
+  "change": "Exclusive blob stage creation now advances the checked serial on AlreadyExists, preserves the pre-existing orphan, and reports serial exhaustion as STORE_TEMP_SERIAL_EXHAUSTED. A two-process SQLite writer test races the same case revision and verifies one commit plus one REVISION_CONFLICT.",
+  "observations": {
+    "stale_stage_name": {
+      "setup": "Seeded .stage-4242-41 with orphan bytes, then requested a stage using serials 41 and 42.",
+      "outcome": "Created .stage-4242-42 and preserved the original orphan bytes."
+    },
+    "multi_process_revision_cas": {
+      "processes": 2,
+      "shared_store": true,
+      "same_case_revision": true,
+      "outcomes": [
+        "OK",
+        "ERR:REVISION_CONFLICT"
+      ],
+      "reopened_case_matches_winning_revision": true
+    },
+    "existing_recovery_regressions_in_engine_suite": [
+      "orphan blob before database commit leaves no case revision",
+      "missing or corrupt referenced blob blocks restart",
+      "interrupted ATTEMPTED local effect remains UNKNOWN and cannot be reissued",
+      "actor-scoped case and action access"
+    ]
+  },
+  "verification": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine store::tests::blob_staging_skips_a_stale_name_after_process_id_reuse -- --exact --nocapture",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine store::tests::separate_processes_serialize_case_revision_compare_and_swap -- --exact --nocapture",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib --locked",
+      "exit_code": 0,
+      "passed": 211,
+      "failed": 0
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 0
+    }
+  ],
+  "scope_limits": [
+    "The stale-name test is deterministic seeded-state coverage, not an observed OS process-ID reuse event.",
+    "No process was killed at every WAL, file-write, link, sync, database-commit, or receipt boundary.",
+    "Physical power loss, network or multi-host filesystems, Windows/macOS, concurrent cross-process exact-input replay, and the full workspace runtime suite were not run.",
+    "This scoped result does not close BB-RECOVER or QC2-01; the full required fault and concurrency populations remain UNVERIFIED."
+  ],
+  "acceptance": "UNVERIFIED"
+}
