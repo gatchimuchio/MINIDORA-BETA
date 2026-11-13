@@ -998,6 +998,7 @@ fn inspect(
                 | "declarative-ja-en-v62-constrained-source-summary"
                 | "declarative-ja-en-v63-previous-output-edit"
                 | "declarative-ja-en-v68-previous-result-summary"
+                | "declarative-ja-en-v70-generic-transitive-verbs"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -1020,12 +1021,49 @@ fn inspect(
             ));
         }
     }
+    if let Intent::AskRelationObjects {
+        subject,
+        predicate,
+        negative,
+        scope,
+    } = &goal.intent
+    {
+        // Rebuild the exact supported object list from current Core memory.
+        // If a premise or rule changed after the original write attempt, the
+        // old bytes cannot be confirmed as the current goal's result.
+        let memory = store.load_memory(actor)?;
+        let answer = crate::core::relation_objects_answer(
+            &memory,
+            subject,
+            predicate,
+            *negative,
+            scope,
+            goal.budget.max_actions,
+            goal.budget.max_evidence_bytes,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                format!("the original object-answer proof is no longer valid: {error}"),
+            )
+        })?;
+        if result.dependencies != answer.dependencies
+            || result.guarantee != answer.guarantee
+            || plan.required_units != vec![answer.text]
+        {
+            return Err(failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                "the object-answer content or proof lineage differs from the original adoption",
+            ));
+        }
+    }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
         let current_inventory = if matches!(
             bundle.meaning.parser_version.as_str(),
             "declarative-ja-en-v68-previous-result-summary"
                 | "declarative-ja-en-v69-relation-profile-draft"
+                | "declarative-ja-en-v70-generic-transitive-verbs"
         ) {
             crate::relations::inventory_dependencies_and_guarantee(
                 &memory,
@@ -1074,6 +1112,7 @@ fn inspect(
             | "declarative-ja-en-v61-three-clause-relation-question"
             | "declarative-ja-en-v62-constrained-source-summary"
             | "declarative-ja-en-v63-previous-output-edit"
+            | "declarative-ja-en-v70-generic-transitive-verbs"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -1095,8 +1134,11 @@ fn inspect(
             ));
         }
     }
-    if bundle.meaning.parser_version == "declarative-ja-en-v50-code-context-explanation"
-        && matches!(goal.intent, Intent::ExplainPrevious)
+    if matches!(
+        bundle.meaning.parser_version.as_str(),
+        "declarative-ja-en-v50-code-context-explanation"
+            | "declarative-ja-en-v70-generic-transitive-verbs"
+    ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
         && let Some((report_ref, expected_units)) =
@@ -1232,6 +1274,7 @@ fn inspect(
             | "declarative-ja-en-v61-three-clause-relation-question"
             | "declarative-ja-en-v62-constrained-source-summary"
             | "declarative-ja-en-v63-previous-output-edit"
+            | "declarative-ja-en-v70-generic-transitive-verbs"
     ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
@@ -2676,6 +2719,74 @@ mod tests {
         assert!(result.text.contains("ココは動物ではない"));
         let revision = engine.latest("alice", "case").unwrap().unwrap();
         assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
+    }
+
+    #[test]
+    fn object_answer_recovery_rechecks_proof_before_confirming_saved_bytes() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ミナは水を飲む"),
+            )
+            .unwrap();
+        let premise_id = premise.dependencies[0].clone();
+        let mut request = RequestEnvelope::new("case", "object-answer", "alice", "ミナは何を飲む?");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert!(answer.dependencies.contains(&premise_id));
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        let snapshots: Vec<(i64, String)> = {
+            let mut statement = database
+                .prepare("SELECT revision,state_sha256 FROM case_revision ORDER BY revision")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let mut retained = None;
+        for (number, sha) in snapshots {
+            let revision: CaseRevision =
+                serde_json::from_slice(&fs::read(fixture.state.join("blobs").join(sha)).unwrap())
+                    .unwrap();
+            if revision.lifecycle == Lifecycle::Adopted
+                && revision.bundle.as_ref().is_some_and(|bundle| {
+                    matches!(bundle.meaning.intent, Intent::AskRelationObjects { .. })
+                })
+            {
+                retained = Some((number, revision));
+            }
+        }
+        let (_, adopted) =
+            retained.expect("Core persisted the object answer before its file write");
+        let adopted_result = adopted.result.as_ref().unwrap();
+        assert!(inspect(&engine.store, "alice", &adopted, adopted_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate-drink-premise",
+                    "alice",
+                    &format!("{premise_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &adopted, adopted_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
     #[test]

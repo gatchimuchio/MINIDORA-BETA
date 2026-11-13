@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v69-relation-profile-draft";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v70-generic-transitive-verbs";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -2396,14 +2396,57 @@ fn arithmetic_expression(text: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn japanese_transitive_verb(surface: &str) -> Option<(&'static str, bool)> {
-    match surface {
+fn japanese_transitive_verb(surface: &str) -> Option<(String, bool)> {
+    let legacy = match surface {
         "食べる" | "食べます" => Some(("eat", false)),
         "食べない" | "食べません" => Some(("eat", true)),
         "使う" | "使います" => Some(("use", false)),
         "使わない" | "使いません" => Some(("use", true)),
         _ => None,
+    };
+    if let Some((predicate, negative)) = legacy {
+        return Some((predicate.into(), negative));
     }
+
+    // Do not mistake a polite conjugation (飲みます) for a dictionary-form
+    // verb ending in す. Only normalize the plain forms whose conjugation
+    // class is encoded unambiguously by the suffix.
+    if surface.ends_with("ます") || surface.ends_with("ません") {
+        return None;
+    }
+    let negative_endings = [
+        ("わない", "う"),
+        ("かない", "く"),
+        ("がない", "ぐ"),
+        ("さない", "す"),
+        ("たない", "つ"),
+        ("ばない", "ぶ"),
+        ("まない", "む"),
+        ("らない", "る"),
+    ];
+    for (negative_ending, dictionary_ending) in negative_endings {
+        if let Some(stem) = surface.strip_suffix(negative_ending)
+            && valid_japanese_verb_stem(stem)
+        {
+            return Some((format!("{stem}{dictionary_ending}"), true));
+        }
+    }
+    for ending in ["う", "く", "ぐ", "す", "つ", "ぶ", "む"] {
+        if surface.ends_with(ending)
+            && surface.chars().count() >= 2
+            && valid_japanese_verb_stem(surface)
+        {
+            return Some((surface.into(), false));
+        }
+    }
+    None
+}
+
+fn valid_japanese_verb_stem(surface: &str) -> bool {
+    !surface.is_empty()
+        && surface.len() <= 512
+        && regex(r"^[\p{Han}\p{Hiragana}\p{Katakana}ー]+$")
+            .is_ok_and(|pattern| pattern.is_match(surface))
 }
 
 fn transitive_object_question_intent(text: &str, question_mark: bool) -> Result<Option<Intent>> {
@@ -2451,7 +2494,7 @@ fn transitive_object_question_intent(text: &str, question_mark: bool) -> Result<
     }
     Ok(Some(Intent::AskRelationObjects {
         subject: subject.into(),
-        predicate: predicate.into(),
+        predicate,
         negative,
         scope,
     }))
@@ -2463,41 +2506,24 @@ fn japanese_transitive_proposition(text: &str) -> Result<Option<(String, String,
     };
     let subject = captures[1].trim();
     let rest = captures[2].trim();
-    for (surface, predicate, negative) in [
-        ("食べません", "eat", true),
-        ("食べない", "eat", true),
-        ("食べます", "eat", false),
-        ("食べる", "eat", false),
-        ("使いません", "use", true),
-        ("使わない", "use", true),
-        ("使います", "use", false),
-        ("使う", "use", false),
-    ] {
-        let Some(object_particle) = rest.strip_suffix(surface) else {
-            continue;
-        };
-        let Some(object) = object_particle.strip_suffix('を') else {
-            continue;
-        };
-        let object = object.trim();
-        if subject.is_empty()
-            || object.is_empty()
-            || matches!(object, "何" | "なに" | "どれ" | "誰" | "だれ")
-            || subject.len() > 512
-            || object.len() > 512
-            || subject.contains(['と', '、', ',', ';', '；', '\n', '\r'])
-            || object.contains(['と', 'で', ';', '；', '\n', '\r'])
-        {
-            return Ok(None);
-        }
-        return Ok(Some((
-            subject.into(),
-            predicate.into(),
-            object.into(),
-            negative,
-        )));
+    let Some((object, verb)) = rest.rsplit_once('を') else {
+        return Ok(None);
+    };
+    let object = object.trim();
+    let Some((predicate, negative)) = japanese_transitive_verb(verb.trim()) else {
+        return Ok(None);
+    };
+    if subject.is_empty()
+        || object.is_empty()
+        || matches!(object, "何" | "なに" | "どれ" | "誰" | "だれ")
+        || subject.len() > 512
+        || object.len() > 512
+        || subject.contains(['と', '、', ',', ';', '；', '\n', '\r'])
+        || object.contains(['を', 'と', 'で', ';', '；', '\n', '\r'])
+    {
+        return Ok(None);
     }
-    Ok(None)
+    Ok(Some((subject.into(), predicate, object.into(), negative)))
 }
 
 /// Bounded copular and Japanese transitive relations, not a claim of general
@@ -2996,6 +3022,22 @@ mod tests {
             ("ミナはカッターを使います", "ミナ", "use", "カッター", false),
             ("ミナは毒を食べません", "ミナ", "eat", "毒", true),
             ("Xは道具を使わない", "$x", "use", "道具", true),
+            ("ミナは水を飲む", "ミナ", "飲む", "水", false),
+            ("ミナは毒を飲まない", "ミナ", "飲む", "毒", true),
+            ("ミナは本を読む", "ミナ", "読む", "本", false),
+            ("ミナは手紙を読まない", "ミナ", "読む", "手紙", true),
+            ("ミナは切符を買う", "ミナ", "買う", "切符", false),
+            ("ミナは字を書かない", "ミナ", "書く", "字", true),
+            ("ミナは危険を防ぐ", "ミナ", "防ぐ", "危険", false),
+            ("ミナは事故を防がない", "ミナ", "防ぐ", "事故", true),
+            ("ミナは列を待つ", "ミナ", "待つ", "列", false),
+            ("ミナは列を待たない", "ミナ", "待つ", "列", true),
+            ("ミナは友を運ぶ", "ミナ", "運ぶ", "友", false),
+            ("ミナは荷を運ばない", "ミナ", "運ぶ", "荷", true),
+            ("ミナは花を探さない", "ミナ", "探す", "花", true),
+            ("ミナはゴールを取らない", "ミナ", "取る", "ゴール", true),
+            ("ミナは花を探す", "ミナ", "探す", "花", false),
+            ("ミナは鍵を探さない", "ミナ", "探す", "鍵", true),
         ] {
             let proposition = parse_proposition(text, text.starts_with('X'))
                 .unwrap()
@@ -3013,11 +3055,19 @@ mod tests {
             Proposition { scope, predicate, .. }
                 if scope == "story" && predicate == "eat"
         ));
-        assert!(
-            parse_proposition("ミナが水を飲む", false)
-                .unwrap()
-                .is_none()
-        );
+        assert!(matches!(
+            parse_proposition("ミナが水を飲む", false).unwrap(),
+            Some(Proposition {
+                subject,
+                predicate,
+                object,
+                negative: false,
+                scope,
+            }) if subject == "ミナ"
+                && predicate == "飲む"
+                && object == "水"
+                && scope == "default"
+        ));
         assert!(matches!(
             interpret("もしXはカッターを使うならXは道具を使う").unwrap(),
             Intent::AddRule { premise, conclusion }
@@ -3033,6 +3083,9 @@ mod tests {
             ("ミナは何を使う?", "use", false, "default"),
             ("ミナは何を食べないの?", "eat", true, "default"),
             ("[scope=story]ミナは何を使いませんか", "use", true, "story"),
+            ("ミナは何を飲む?", "飲む", false, "default"),
+            ("ミナは何を飲まない?", "飲む", true, "default"),
+            ("ミナは何を読まない?", "読む", true, "default"),
         ] {
             assert!(
                 matches!(
@@ -3053,6 +3106,10 @@ mod tests {
         for text in [
             "ミナは何を使った?",
             "ミナは何を運びますか",
+            "ミナは何を飲みますか",
+            "ミナは何を飲んだ?",
+            "ミナは何を飲めない?",
+            "ミナは何を死ぬ?",
             "ミナは何を使う",
             "それは何を使いますか",
         ] {

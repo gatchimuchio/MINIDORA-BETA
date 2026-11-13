@@ -17,6 +17,165 @@ struct CalculationSequenceStepArtifact {
 const COMMON_RELATIONS_REPORT_KIND: &str = "minidora.common-relations-report.v1";
 const COMMON_RELATIONS_REPORT_HEADER: &str = "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RelationObjectsAnswer {
+    pub(crate) text: String,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) guarantee: Guarantee,
+}
+
+pub(crate) fn relation_objects_answer(
+    memory: &MemoryState,
+    subject: &str,
+    predicate: &str,
+    negative: bool,
+    scope: &str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+) -> Result<RelationObjectsAnswer> {
+    let scanned_records = memory
+        .facts
+        .len()
+        .checked_add(memory.rules.len())
+        .ok_or_else(|| {
+            failure(
+                "RESOURCE_LIMIT",
+                "relation memory scan count overflowed its bounded representation",
+            )
+        })?;
+    let action_budget = usize::try_from(max_actions).unwrap_or(usize::MAX);
+    if scanned_records > action_budget {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "保存済み関係を候補として確認する走査量が要求の推論予算を超えました。",
+        ));
+    }
+    let remaining_actions =
+        max_actions.saturating_sub(u32::try_from(scanned_records).unwrap_or(u32::MAX));
+    let mut candidates = BTreeSet::new();
+    for fact in &memory.facts {
+        if !fact.valid || matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown) {
+            continue;
+        }
+        if fact.proposition.scope == scope
+            && !fact.proposition.object.starts_with('$')
+            && !fact.proposition.object.starts_with('?')
+        {
+            candidates.insert(fact.proposition.object.clone());
+        }
+    }
+    for rule in memory.rules.iter().filter(|rule| rule.valid) {
+        for proposition in std::iter::once(&rule.premise)
+            .chain(rule.additional_premises.iter())
+            .chain(std::iter::once(&rule.conclusion))
+        {
+            if proposition.scope == scope
+                && !proposition.object.starts_with('$')
+                && !proposition.object.starts_with('?')
+            {
+                candidates.insert(proposition.object.clone());
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Err(failure(
+            "MISSING_PREMISES",
+            "同じ主体・scopeで確認できる関係値が保存されていません。",
+        ));
+    }
+    let max_candidates = usize::try_from(remaining_actions).unwrap_or(usize::MAX);
+    if candidates.len() > max_candidates {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "候補となる関係値が要求の推論予算を超えました。",
+        ));
+    }
+    let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
+        failure(
+            "RESOURCE_LIMIT",
+            "candidate count exceeds the bounded relation query representation",
+        )
+    })?;
+    let per_candidate_budget = remaining_actions / candidate_count;
+    if per_candidate_budget == 0 {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "すべての候補関係を確認する推論予算がありません。",
+        ));
+    }
+
+    let mut supported = BTreeMap::new();
+    let mut dependencies = BTreeSet::new();
+    let mut any_derived = false;
+    for object in candidates {
+        let proposition = Proposition {
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object,
+            negative,
+            scope: scope.into(),
+        };
+        let answer = relations::query(memory, &proposition, per_candidate_budget)?;
+        match answer.status.as_str() {
+            "SUPPORTED" => {
+                let guarantee = relations::answer_guarantee(&answer);
+                supported.insert(proposition, guarantee.clone());
+                dependencies.extend(relations::answer_dependencies(&answer));
+                any_derived |= guarantee == Guarantee::Derived;
+            }
+            "CONFLICT" => {
+                return Err(failure(
+                    "CONFLICTING_PREMISES",
+                    "対象・predicate・scopeが同じ関係に肯定と否定の根拠があります。選択せず停止します。",
+                ));
+            }
+            "CONTRADICTED" | "UNKNOWN" | "MISSING_PREMISES" => {}
+            _ => {
+                return Err(failure(
+                    "UNSUPPORTED_RELATION_RESULT",
+                    "関係値の照合が既知の終端状態を返しませんでした。",
+                ));
+            }
+        }
+    }
+    if supported.is_empty() {
+        return Err(failure(
+            "MISSING_PREMISES",
+            "質問された極性を支える同一subject・predicate・scopeの前提または導出がありません。",
+        ));
+    }
+    let descriptions = supported
+        .iter()
+        .map(|(proposition, guarantee)| {
+            let origin = match guarantee {
+                Guarantee::UserPremise => "直接提示",
+                Guarantee::Derived => "規則導出",
+                _ => "根拠付き",
+            };
+            format!("{origin}: {}", describe(proposition))
+        })
+        .collect::<Vec<_>>()
+        .join("；");
+    let text = format!(
+        "提示された前提の範囲では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
+    );
+    if text.len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "関係回答が要求の証拠・出力予算を超えました。",
+        ));
+    }
+    Ok(RelationObjectsAnswer {
+        text,
+        dependencies: dependencies.into_iter().collect(),
+        guarantee: if any_derived {
+            Guarantee::Derived
+        } else {
+            Guarantee::UserPremise
+        },
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CommonRelationsReportArtifact {
@@ -3496,166 +3655,27 @@ impl Engine {
                 scope,
             } => {
                 let memory = self.store.load_memory(actor)?;
-                let scanned_records = memory
-                    .facts
-                    .len()
-                    .checked_add(memory.rules.len())
-                    .ok_or_else(|| {
-                        failure(
-                            "RESOURCE_LIMIT",
-                            "relation memory scan count overflowed its bounded representation",
-                        )
-                    })?;
-                let action_budget =
-                    usize::try_from(request.budget.max_actions).unwrap_or(usize::MAX);
-                if scanned_records > action_budget {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "保存済み関係を候補として確認する走査量が要求の推論予算を超えました。",
-                    );
-                }
-                let remaining_actions = request
-                    .budget
-                    .max_actions
-                    .saturating_sub(u32::try_from(scanned_records).unwrap_or(u32::MAX));
-                let mut candidates = BTreeSet::new();
-                for fact in &memory.facts {
-                    if !fact.valid
-                        || matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown)
-                    {
-                        continue;
-                    }
-                    if fact.proposition.scope == *scope
-                        && !fact.proposition.object.starts_with('$')
-                        && !fact.proposition.object.starts_with('?')
-                    {
-                        candidates.insert(fact.proposition.object.clone());
-                    }
-                }
-                for rule in memory.rules.iter().filter(|rule| rule.valid) {
-                    for proposition in std::iter::once(&rule.premise)
-                        .chain(rule.additional_premises.iter())
-                        .chain(std::iter::once(&rule.conclusion))
-                    {
-                        if proposition.scope == *scope
-                            && !proposition.object.starts_with('$')
-                            && !proposition.object.starts_with('?')
-                        {
-                            candidates.insert(proposition.object.clone());
-                        }
-                    }
-                }
-                if candidates.is_empty() {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "MISSING_PREMISES",
-                        "同じ主体・scopeで確認できる関係値が保存されていません。",
-                    );
-                }
-                let max_candidates = usize::try_from(remaining_actions).unwrap_or(usize::MAX);
-                if candidates.len() > max_candidates {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "候補となる関係値が要求の推論予算を超えました。",
-                    );
-                }
-                let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
-                    failure(
-                        "RESOURCE_LIMIT",
-                        "candidate count exceeds the bounded relation query representation",
-                    )
-                })?;
-                let per_candidate_budget = remaining_actions / candidate_count;
-                if per_candidate_budget == 0 {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "すべての候補関係を確認する推論予算がありません。",
-                    );
-                }
-
-                let mut supported = BTreeMap::new();
-                let mut dependencies = BTreeSet::new();
-                let mut any_derived = false;
-                for object in candidates {
-                    let proposition = Proposition {
-                        subject: subject.clone(),
-                        predicate: predicate.clone(),
-                        object,
-                        negative: *negative,
-                        scope: scope.clone(),
-                    };
-                    let answer = relations::query(&memory, &proposition, per_candidate_budget)?;
-                    match answer.status.as_str() {
-                        "SUPPORTED" => {
-                            let guarantee = relations::answer_guarantee(&answer);
-                            supported.insert(proposition.clone(), guarantee.clone());
-                            dependencies.extend(relations::answer_dependencies(&answer));
-                            any_derived |= guarantee == Guarantee::Derived;
-                        }
-                        "CONFLICT" => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "CONFLICTING_PREMISES",
-                                "対象・predicate・scopeが同じ関係に肯定と否定の根拠があります。選択せず停止します。",
-                            );
-                        }
-                        "CONTRADICTED" | "UNKNOWN" | "MISSING_PREMISES" => {}
-                        _ => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "UNSUPPORTED_RELATION_RESULT",
-                                "関係値の照合が既知の終端状態を返しませんでした。",
-                            );
-                        }
-                    }
-                }
-                if supported.is_empty() {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "MISSING_PREMISES",
-                        "質問された極性を支える同一subject・predicate・scopeの前提または導出がありません。",
-                    );
-                }
-                let descriptions = supported
-                    .iter()
-                    .map(|(proposition, guarantee)| {
-                        let origin = match guarantee {
-                            Guarantee::UserPremise => "直接提示",
-                            Guarantee::Derived => "規則導出",
-                            _ => "根拠付き",
+                let answer = match relation_objects_answer(
+                    &memory,
+                    subject,
+                    predicate,
+                    *negative,
+                    scope,
+                    request.budget.max_actions,
+                    request.budget.max_evidence_bytes,
+                ) {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "RELATION_QUERY_UNAVAILABLE",
                         };
-                        format!("{origin}: {}", describe(proposition))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("；");
-                let answer_text = format!(
-                    "提示された前提の範囲では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
-                );
-                if answer_text.len() > request.budget.max_evidence_bytes {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "関係回答が要求の証拠・出力予算を超えました。",
-                    );
-                }
-                units.push(answer_text);
-                result.dependencies = dependencies.into_iter().collect();
-                result.guarantee = if any_derived {
-                    Guarantee::Derived
-                } else {
-                    Guarantee::UserPremise
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
                 };
+                units.push(answer.text);
+                result.dependencies = answer.dependencies;
+                result.guarantee = answer.guarantee;
             }
             Intent::AskWhy { proposition } => {
                 let memory = self.store.load_memory(actor)?;
@@ -5132,6 +5152,19 @@ fn describe(p: &Proposition) -> String {
             p.object,
             if p.negative { "使わない" } else { "使う" }
         )
+    } else if ["う", "く", "ぐ", "す", "つ", "ぬ", "ぶ", "む", "る"]
+        .iter()
+        .any(|ending| p.predicate.ends_with(ending))
+    {
+        let predicate = if p.negative {
+            let Some(predicate) = japanese_godan_negative_form(&p.predicate) else {
+                return format!("{} / {} / {} / 否定", p.subject, p.predicate, p.object);
+            };
+            predicate
+        } else {
+            p.predicate.clone()
+        };
+        format!("{}は{}を{}", p.subject, p.object, predicate)
     } else {
         format!(
             "{} / {} / {} / {}",
@@ -5141,6 +5174,32 @@ fn describe(p: &Proposition) -> String {
             if p.negative { "否定" } else { "肯定" }
         )
     }
+}
+
+fn japanese_godan_negative_form(predicate: &str) -> Option<String> {
+    let (ending, negative_ending) = if predicate.ends_with("う") {
+        ("う", "わない")
+    } else if predicate.ends_with("く") {
+        ("く", "かない")
+    } else if predicate.ends_with("ぐ") {
+        ("ぐ", "がない")
+    } else if predicate.ends_with("す") {
+        ("す", "さない")
+    } else if predicate.ends_with("つ") {
+        ("つ", "たない")
+    } else if predicate.ends_with("ぬ") {
+        ("ぬ", "なない")
+    } else if predicate.ends_with("ぶ") {
+        ("ぶ", "ばない")
+    } else if predicate.ends_with("む") {
+        ("む", "まない")
+    } else if predicate.ends_with("る") {
+        ("る", "らない")
+    } else {
+        return None;
+    };
+    let stem = predicate.strip_suffix(ending)?;
+    (!stem.is_empty()).then(|| format!("{stem}{negative_ending}"))
 }
 /// This verifier covers exact UTF-8 rendering of an already adopted surface,
 /// not arbitrary paraphrase equivalence or external-world truth.

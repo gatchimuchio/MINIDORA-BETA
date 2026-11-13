@@ -3215,6 +3215,100 @@ fn natural_transitive_object_questions_use_same_actor_scope_and_relation_proofs(
             .contains(&negative["dependencies"][0])
     );
 
+    let drink = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-drinks-water", "ミナは水を飲む"],
+    ));
+    assert_eq!(drink["lifecycle"], "COMMIT");
+    assert!(drink["text"].as_str().unwrap().contains("ミナは水を飲む"));
+    let drink_rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "drink-rule", "もしXは水を飲むならXは液体を飲む"],
+    ));
+    assert_eq!(drink_rule["lifecycle"], "COMMIT");
+    let drink_question = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-what-drinks", "ミナは何を飲む?"],
+    ));
+    assert_eq!(drink_question["lifecycle"], "COMMIT");
+    assert_eq!(drink_question["guarantee"], "DERIVED");
+    let drink_text = drink_question["text"].as_str().unwrap();
+    assert!(drink_text.contains("直接提示: ミナは水を飲む"));
+    assert!(drink_text.contains("規則導出: ミナは液体を飲む"));
+    for identity in [&drink["dependencies"][0], &drink_rule["dependencies"][0]] {
+        assert!(
+            drink_question["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(identity)
+        );
+    }
+    let drink_no_poison = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-no-poison-drink", "ミナは毒を飲まない"],
+    ));
+    assert_eq!(drink_no_poison["lifecycle"], "COMMIT");
+    assert!(
+        drink_no_poison["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは毒を飲まない")
+    );
+    let no_drink_question = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-what-not-drinks", "ミナは何を飲まない?"],
+    ));
+    assert_eq!(no_drink_question["lifecycle"], "COMMIT");
+    assert_eq!(no_drink_question["guarantee"], "USER_PREMISE");
+    assert!(
+        no_drink_question["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは毒を飲まない")
+    );
+    assert!(
+        no_drink_question["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&drink_no_poison["dependencies"][0])
+    );
+    let yes_no_drink = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-drinks-water-question", "ミナは水を飲むか"],
+    ));
+    assert_eq!(yes_no_drink["lifecycle"], "COMMIT");
+    assert!(
+        yes_no_drink["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは水を飲む")
+    );
+    let polite_drink_question = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "unsupported-polite-drink",
+                "ミナは何を飲みますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        polite_drink_question["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CAPABILITY_UNAVAILABLE")
+    );
+
     record(&execute(
         &scratch.0,
         "owner",

@@ -13,11 +13,12 @@ import subprocess
 import tempfile
 
 
-PARSER_VERSION = "declarative-ja-en-v64-transitive-object-questions"
+PARSER_VERSION = "declarative-ja-en-v70-generic-transitive-verbs"
 SOURCE_FILES = [
     "crates/minidora-domain/src/lib.rs",
     "crates/minidora-engine/src/input.rs",
     "crates/minidora-engine/src/core.rs",
+    "crates/minidora-engine/src/recovery.rs",
 ]
 TEST_FILES = [
     "crates/minidora-engine/src/input.rs",
@@ -139,6 +140,72 @@ def main() -> None:
             "negative answer omitted its premise ID",
         )
 
+        generic_positive = run("mina-drinks-water", "ミナは水を飲む")
+        generic_rule = run(
+            "drink-rule",
+            "もしXは水を飲むならXは液体を飲む",
+        )
+        generic_question = run("mina-what-drinks", "ミナは何を飲む?")
+        require(
+            generic_question["guarantee"] == "DERIVED",
+            "generic verb rule result lost its derived guarantee",
+        )
+        require(
+            "直接提示: ミナは水を飲む" in generic_question["text"],
+            "generic verb direct premise was omitted",
+        )
+        require(
+            "規則導出: ミナは液体を飲む" in generic_question["text"],
+            "generic verb rule result was omitted",
+        )
+        require(
+            generic_positive["dependencies"][0] in generic_question["dependencies"],
+            "generic verb answer omitted the direct premise ID",
+        )
+        require(
+            generic_rule["dependencies"][0] in generic_question["dependencies"],
+            "generic verb answer omitted the applied rule ID",
+        )
+        generic_negative = run("mina-no-poison-drink", "ミナは毒を飲まない")
+        generic_negative_answer = run(
+            "mina-what-not-drinks",
+            "ミナは何を飲まない?",
+        )
+        require(
+            "ミナは毒を飲まない" in generic_negative_answer["text"],
+            "generic negative relation was not rendered with its observed polarity",
+        )
+        require(
+            generic_negative["dependencies"][0]
+            in generic_negative_answer["dependencies"],
+            "generic negative answer omitted its premise ID",
+        )
+        generic_yes_no = run("mina-drinks-water-question", "ミナは水を飲むか")
+        require(
+            "ミナは水を飲む" in generic_yes_no["text"],
+            "generic yes/no proof did not keep the same canonical predicate",
+        )
+        unsupported_polite = run(
+            "unsupported-polite-drink",
+            "ミナは何を飲みますか",
+            expected_lifecycle="SUSPEND",
+            expected_exit=2,
+        )
+        require(
+            "CAPABILITY_UNAVAILABLE" in str(unsupported_polite["reason"]),
+            "ambiguous polite conjugation was not retained as unsupported",
+        )
+        unsupported_intransitive = run(
+            "unsupported-die-object-question",
+            "ミナは何を死ぬ?",
+            expected_lifecycle="SUSPEND",
+            expected_exit=2,
+        )
+        require(
+            "CAPABILITY_UNAVAILABLE" in str(unsupported_intransitive["reason"]),
+            "known intransitive verb was accepted as a transitive object question",
+        )
+
         run("mina-story-notebook", "[scope=story]ミナはノートを使う")
         wrong_scope = run(
             "mina-ecology-question",
@@ -203,11 +270,11 @@ def main() -> None:
     changed_tests = {f"rust/{path}": digest((rust_root / path).read_bytes()) for path in TEST_FILES}
     summary = Counter(item["lifecycle"] for item in observations)
     evidence = {
-        "work_item": "BODY-1 BB-LANG Japanese transitive object questions through ordinary CLI",
+        "work_item": "BODY-1 BB-LANG regular Japanese transitive verb forms and proof-safe local-write recovery",
         "stage": "BODY-1_EXECUTION",
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "base_commit": output(["git", "-C", str(repository_root), "rev-parse", "HEAD"]),
-        "requirement_ids": ["A01", "A02", "A04", "A05", "A09", "A12", "A13", "A15", "B01"],
+        "requirement_ids": ["A04", "A05", "A09", "A12", "A13", "A15", "B01", "E06", "E08"],
         "software_version": "0.7.0-alpha.8",
         "schema_version": "minidora-rust/0.7.0-alpha.8",
         "parser_version": PARSER_VERSION,
@@ -216,7 +283,7 @@ def main() -> None:
             "cargo": output([cargo, "--version"]),
             "platform": platform.platform(),
         },
-        "implementation_change": "The normal Japanese input route now parses bounded 食べる/使う subject-object relations, records them through the existing actor-scoped Core memory, and resolves 何を queries against typed relation proofs. It does not infer an exhaustive object list or outside-world truth.",
+        "implementation_change": "The ordinary input route preserves the existing 食べる/使う predicate identities and additionally normalizes unambiguous plain-form regular Japanese transitive predicates and godan negative inflections. Core stores the propositions and conditional rules in actor-scoped memory, then answers object and yes/no questions through one shared proof computation. The same computation verifies the exact content, guarantee and premise/rule dependency IDs before local-write recovery. It does not infer exhaustive object lists or outside-world truth.",
         "binary_sha256": digest(arguments.binary.read_bytes()),
         "source_snapshot_sha256": changed_sources,
         "test_and_tool_snapshot_sha256": changed_tests,
@@ -225,9 +292,15 @@ def main() -> None:
                 (repository_root / "docs/redesign/01_SYSTEM_SPECIFICATION.md").read_bytes()
             ),
             "rust/README.md": digest((rust_root / "README.md").read_bytes()),
+            "rust/audit/IMPLEMENTATION_STATUS.md": digest(
+                (rust_root / "audit/IMPLEMENTATION_STATUS.md").read_bytes()
+            ),
+            "rust/audit/requirements.tsv": digest(
+                (rust_root / "audit/requirements.tsv").read_bytes()
+            ),
         },
         "execution_mode": "fresh CLI process for each request; one temporary SQLite state; no test-only result injection",
-        "scope": "Two Japanese transitive predicates (eat/use), present/polite positive and negative forms, one named subject and exact scope; only stored or proof-supported objects are returned.",
+        "scope": "Existing 食べる/使う forms plus unambiguous plain-form godan transitive predicates, including corresponding plain negative forms, one explicit subject and exact scope; only stored or proof-supported objects are returned. Generic polite, past, potential, ichidan and unresolved forms remain unsupported.",
         "observations": observations,
         "summary": {
             "total_requests": len(observations),
@@ -243,15 +316,62 @@ def main() -> None:
             "derived_proof_dependencies": "PASS",
             "direct_vs_derived_labels": "PASS",
             "negative_polarity": "PASS",
+            "generic_verb_direct_and_rule_proofs": "PASS",
+            "generic_verb_negative_and_yes_no": "PASS",
+            "ambiguous_polite_form_typed_stop": "PASS",
+            "known_intransitive_form_typed_stop": "PASS",
             "missing_subject_and_scope_stops": "PASS",
             "actor_isolation": "PASS",
             "conflict_and_invalidation": "PASS",
             "prior_result_immutability": "PASS",
+            "local_write_recovery_rechecks_object_answer_proof": "PASS",
         },
-        "requirements_status": "A01/A02/A04/A05/A09/A12/A13/A15/B01 acceptance remains UNVERIFIED; this is a scoped route observation, not the independent unseen-question QA population.",
+        "validation_commands": {
+            "engine_parser_unit": {
+                "command": "cargo test -p minidora-engine japanese_transitive_relations_preserve_object_verb_and_question_polarity",
+                "exit_code": 0,
+                "passed": 1,
+            },
+            "object_answer_recovery_test": {
+                "command": "cargo test -p minidora-engine object_answer_recovery_rechecks_proof_before_confirming_saved_bytes",
+                "exit_code": 0,
+                "passed": 1,
+                "result": "same proof accepted; after premise invalidation the recovery inspector rejects the old proof and leaves actual file bytes unchanged",
+            },
+            "engine_library_suite": {
+                "command": "cargo test -p minidora-engine --lib",
+                "exit_code": 0,
+                "passed": 225,
+                "failed": 0,
+            },
+            "normal_cli_route_test": {
+                "command": "cargo test -p minidora-cli natural_transitive_object_questions_use_same_actor_scope_and_relation_proofs",
+                "exit_code": 0,
+                "passed": 1,
+            },
+            "format": {
+                "command": "cargo fmt --all -- --check",
+                "exit_code": 0,
+            },
+            "workspace_check": {
+                "command": "cargo check --workspace --all-targets --locked",
+                "exit_code": 0,
+            },
+            "clippy": {
+                "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+                "exit_code": 0,
+            },
+            "workspace_build": {
+                "command": "cargo build --workspace --locked",
+                "exit_code": 0,
+            },
+            "workspace_runtime_suite": "NOT_RUN",
+        },
+        "requirements_status": "A04/A05/A09/A12/A13/A15/B01/E06/E08 acceptance remains UNVERIFIED; this is a scoped route and recovery observation, not the independent unseen-question QA population.",
         "limitations": [
-            "Only 食べる and 使う are in the transitive verb vocabulary.",
-            "Past tense, unresolved subject pronouns, object alternatives and nonlisted verbs are not supported by this route.",
+            "Generic morphology is limited to explicit-scope plain forms whose predicate class is encoded unambiguously; generic polite, past, potential and ichidan forms are not supported.",
+            "The low-frequency ぬ verb class, including 死ぬ, remains unsupported. Other accepted suffix classes do not receive lexical transitivity or を-role/valency checks; route examples use ordinary direct-object verbs.",
+            "Unresolved subject pronouns and object alternatives remain unsupported by this route.",
             "Returned objects are supported values in the retained proof graph, not a guaranteed exhaustive inventory.",
             "The user-supplied premises and rules are not independently verified world facts.",
             "Full workspace runtime suite, full BB-LANG acceptance and the independent 24-question population were not run.",
