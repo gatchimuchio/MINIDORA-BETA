@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v55-natural-premise-question";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v56-natural-premise-correction";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -870,6 +870,102 @@ fn calculation_correction_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn premise_correction_intent(text: &str) -> Result<Option<Intent>> {
+    if text.contains(['\n', '\r']) {
+        return Ok(None);
+    }
+    let raw_statement = terminal_trim(text);
+    let (scope, statement) =
+        if let Some(capture) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(raw_statement) {
+            (capture[1].trim().to_string(), capture[2].trim().to_string())
+        } else {
+            ("default".to_string(), raw_statement.to_string())
+        };
+
+    let japanese = regex(r"^(?:(?:訂正|訂正します)[：:]\s*)?(.+?)(?:は|が)(.+?)ではなく(.+)$")?;
+    let english = regex(r"(?i)^(?:correction:\s*)?(.+?)\s+(?:is|are)\s+(.+?),\s+not\s+(.+)$")?;
+    let parts = japanese
+        .captures(&statement)
+        .map(|capture| {
+            (
+                capture[1].trim().to_string(),
+                capture[2].trim().to_string(),
+                capture[3].trim().to_string(),
+            )
+        })
+        .or_else(|| {
+            english.captures(&statement).map(|capture| {
+                (
+                    capture[1].trim().to_string(),
+                    capture[3].trim().to_string(),
+                    capture[2].trim().to_string(),
+                )
+            })
+        });
+    let Some((subject, superseded_object, replacement_object)) = parts else {
+        return Ok(None);
+    };
+    let replacement_object = match ["です", "である", "だ"]
+        .iter()
+        .find_map(|suffix| replacement_object.strip_suffix(suffix))
+        .map(str::trim)
+    {
+        Some(value) if !value.is_empty() => value,
+        Some(_) => {
+            return Ok(Some(Intent::Unknown {
+                reason: "premise correction needs a nonempty replacement relation".into(),
+            }));
+        }
+        None => &replacement_object,
+    };
+
+    let prefix = format!("[scope={scope}]");
+    let Some(superseded) =
+        parse_proposition(&format!("{prefix}{subject} is {superseded_object}"), false)?
+    else {
+        return Ok(Some(Intent::Unknown {
+            reason: "premise correction needs one supported prior relation".into(),
+        }));
+    };
+    let Some(replacement) =
+        parse_proposition(&format!("{prefix}{subject} is {replacement_object}"), false)?
+    else {
+        return Ok(Some(Intent::Unknown {
+            reason: "premise correction needs one supported replacement relation".into(),
+        }));
+    };
+    let lower_subject = superseded.subject.to_ascii_lowercase();
+    if matches!(
+        lower_subject.as_str(),
+        "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
+    ) || matches!(
+        superseded.subject.as_str(),
+        "これ" | "それ" | "あれ" | "これら" | "それら"
+    ) {
+        return Ok(Some(Intent::Unknown {
+            reason: "premise correction needs one explicit named subject; pronouns are unresolved"
+                .into(),
+        }));
+    }
+    if superseded.negative
+        || replacement.negative
+        || superseded.subject != replacement.subject
+        || superseded.predicate != replacement.predicate
+        || superseded.scope != replacement.scope
+        || superseded.object == replacement.object
+    {
+        return Ok(Some(Intent::Unknown {
+            reason:
+                "premise correction needs distinct positive relations for one subject and scope"
+                    .into(),
+        }));
+    }
+    Ok(Some(Intent::CorrectPremise {
+        superseded,
+        replacement,
+    }))
+}
+
 fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     let recorded_patterns = [
         r"(?i)^what (?:facts|premises) (?:have been|are) (?:provided|recorded|stated) about (.+)$",
@@ -1051,6 +1147,9 @@ fn interpret(text: &str) -> Result<Intent> {
         });
     }
     if let Some(correction) = calculation_correction_intent(body)? {
+        return Ok(correction);
+    }
+    if let Some(correction) = premise_correction_intent(body)? {
         return Ok(correction);
     }
     if matches!(
@@ -2013,6 +2112,61 @@ mod tests {
         assert!(matches!(
             interpret("ココについて何が分かっているか、ミケについても").unwrap(),
             Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn natural_premise_corrections_keep_both_relations_and_exact_scope() {
+        for (text, subject, old, replacement, scope) in [
+            (
+                "訂正: ココは哺乳類ではなく鳥です",
+                "ココ",
+                "哺乳類",
+                "鳥",
+                "default",
+            ),
+            (
+                "[scope=story]ココは哺乳類ではなく鳥です",
+                "ココ",
+                "哺乳類",
+                "鳥",
+                "story",
+            ),
+            (
+                "Correction: Coco is a bird, not a mammal.",
+                "Coco",
+                "mammal",
+                "bird",
+                "default",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::CorrectPremise { superseded, replacement: next }
+                        if superseded.subject == subject
+                            && superseded.object == old
+                            && !superseded.negative
+                            && superseded.scope == scope
+                            && next.subject == subject
+                            && next.object == replacement
+                            && !next.negative
+                            && next.scope == scope
+                ),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("It is a fish, not a bird").unwrap(),
+            Intent::Unknown { .. }
+        ));
+        assert!(!matches!(
+            interpret("Coco is a fish, not a fish").unwrap(),
+            Intent::CorrectPremise { .. }
+        ));
+        assert!(!matches!(
+            interpret("ココは哺乳類ではなく鳥です。そして灰色です").unwrap(),
+            Intent::CorrectPremise { .. }
         ));
     }
 

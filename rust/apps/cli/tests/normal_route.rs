@@ -1991,7 +1991,7 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v55-natural-premise-question"
+        "declarative-ja-en-v56-natural-premise-correction"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],
@@ -2148,6 +2148,274 @@ fn natural_definition_questions_retrieve_only_the_exact_stored_premise() {
 }
 
 #[test]
+fn natural_premise_correction_invalidates_only_exact_scope_and_dependents() {
+    let scratch = Scratch::new();
+    let mammal = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-mammal", "ココは哺乳類"],
+    ));
+    let story_mammal = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-story-mammal", "[scope=story]ココは哺乳類"],
+    ));
+    let gray = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-gray-for-correction", "ココは灰色"],
+    ));
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mammal-rule", "もしXは哺乳類ならXは動物"],
+    ));
+    let derived = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "coco-animal-before-correction",
+            "ココは動物ですか",
+        ],
+    ));
+    assert_eq!(derived["guarantee"], "DERIVED");
+
+    let old_id = mammal["dependencies"][0].as_str().unwrap();
+    let rule_id = rule["dependencies"][0].as_str().unwrap();
+    assert!(
+        derived["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(old_id.into()))
+    );
+    assert!(
+        derived["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(rule_id.into()))
+    );
+    let correction = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "coco-natural-correction",
+            "訂正: ココは哺乳類ではなく鳥です",
+        ],
+    ));
+    assert_eq!(correction["lifecycle"], "COMMIT");
+    assert_eq!(correction["guarantee"], "USER_PREMISE");
+    assert!(
+        correction["text"]
+            .as_str()
+            .unwrap()
+            .contains("現実世界の真偽を検証したものではありません")
+    );
+    assert!(
+        correction["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(old_id.into()))
+    );
+    assert!(
+        !correction["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(rule_id.into()))
+    );
+    assert!(
+        !correction["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&story_mammal["dependencies"][0])
+    );
+    assert!(
+        !correction["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&gray["dependencies"][0])
+    );
+
+    let contradicted = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "coco-mammal-after-correction",
+            "ココは哺乳類ですか",
+        ],
+    ));
+    assert_eq!(contradicted["lifecycle"], "COMMIT");
+    assert_eq!(contradicted["guarantee"], "USER_PREMISE");
+    assert!(
+        contradicted["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは哺乳類ではない")
+    );
+
+    stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "coco-animal-after-correction",
+                "ココは動物ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+
+    let listing = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-after-correction-list", "ココとは何ですか"],
+    ));
+    assert_eq!(listing["lifecycle"], "COMMIT");
+    assert_eq!(listing["guarantee"], "USER_PREMISE");
+    let listing_text = listing["text"].as_str().unwrap();
+    assert!(listing_text.contains("ココは鳥である"));
+    assert!(listing_text.contains("ココは哺乳類ではない"));
+    assert!(listing_text.contains("ココは哺乳類である（範囲: story"));
+    assert!(listing_text.contains("ココは灰色である"));
+    assert!(
+        !listing["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(old_id.into()))
+    );
+    assert!(
+        listing["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&story_mammal["dependencies"][0])
+    );
+    assert!(
+        listing["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&gray["dependencies"][0])
+    );
+
+    let scope_mismatch = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "coco-default-scope-mismatch",
+                "ココは哺乳類ではなく魚です",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        scope_mismatch["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_CORRECTION_TARGET")
+    );
+    let after_scope_mismatch = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-after-scope-mismatch", "ココとは何ですか"],
+    ));
+    assert_eq!(
+        after_scope_mismatch["dependencies"],
+        listing["dependencies"]
+    );
+
+    let unmatched = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "unknown-correction-target",
+                "ミケは哺乳類ではなく猫です",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        unmatched["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_CORRECTION_TARGET")
+    );
+    let other_actor = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "stranger",
+            "other-actor-correction-case",
+            &[
+                "--input",
+                "other-actor-correction-target",
+                "Coco is a bird, not a mammal",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        other_actor["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_CORRECTION_TARGET")
+    );
+
+    let english_initial = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-correction",
+        &["--input", "coco-mammal-en", "Coco is a mammal"],
+    ));
+    let english_correction = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-correction",
+        &[
+            "--input",
+            "coco-correction-en",
+            "Correction: Coco is a bird, not a mammal.",
+        ],
+    ));
+    let english_listing = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "english-correction",
+        &["--input", "coco-list-after-correction-en", "What is Coco?"],
+    ));
+    assert_eq!(english_initial["guarantee"], "USER_PREMISE");
+    assert_eq!(english_correction["lifecycle"], "COMMIT");
+    assert_eq!(english_correction["guarantee"], "USER_PREMISE");
+    assert_eq!(english_listing["lifecycle"], "COMMIT");
+    assert!(
+        english_listing["text"]
+            .as_str()
+            .unwrap()
+            .contains("Cocoはbirdである")
+    );
+    assert!(
+        english_listing["text"]
+            .as_str()
+            .unwrap()
+            .contains("Cocoはmammalではない")
+    );
+    assert!(
+        !english_listing["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&english_initial["dependencies"][0])
+    );
+}
+
+#[test]
 fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let scratch = Scratch::new();
     let rule = record(&execute(
@@ -2207,7 +2475,7 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v55-natural-premise-question"
+        "declarative-ja-en-v56-natural-premise-correction"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -7638,7 +7906,7 @@ fn generated_python_is_explained_from_the_prior_ir_and_keeps_its_lineage() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v55-natural-premise-question"
+        "declarative-ja-en-v56-natural-premise-correction"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["context_result_ref"],
@@ -7726,7 +7994,7 @@ fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() 
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v55-natural-premise-question"
+        "declarative-ja-en-v56-natural-premise-correction"
     );
     assert_eq!(
         saved["bundle"]["meaning"]["intent"]["kind"],

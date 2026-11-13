@@ -1845,6 +1845,70 @@ impl Engine {
                 units.extend(output_units);
                 result.guarantee = Guarantee::Hypothesis;
             }
+            Intent::CorrectPremise {
+                superseded,
+                replacement,
+            } => {
+                let mut memory = self.store.load_memory(actor)?;
+                let original_memory_revision = memory.revision;
+                let targets: Vec<_> = memory
+                    .facts
+                    .iter()
+                    .filter(|fact| {
+                        fact.valid
+                            && fact.guarantee == Guarantee::UserPremise
+                            && fact.dependencies.is_empty()
+                            && !fact.source_input.is_empty()
+                            && fact.proposition == *superseded
+                    })
+                    .map(|fact| fact.id.clone())
+                    .collect();
+                if targets.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_CORRECTION_TARGET",
+                        "この訂正に一致する有効な同一範囲の提示前提がありません。記憶は変更していません。",
+                    );
+                }
+
+                let mut invalidated = Vec::new();
+                for id in targets {
+                    for affected in relations::invalidate(&mut memory, &id)? {
+                        if !invalidated.contains(&affected) {
+                            invalidated.push(affected);
+                        }
+                    }
+                }
+                let negative_superseded = Proposition {
+                    negative: true,
+                    ..superseded.clone()
+                };
+                let negative_fact =
+                    relations::assert_fact(&mut memory, negative_superseded.clone(), &fingerprint)?;
+                let replacement_fact =
+                    relations::assert_fact(&mut memory, replacement.clone(), &fingerprint)?;
+                // Several relation helpers mutate one in-memory candidate.
+                // Persist the correction as one actor-memory CAS revision.
+                memory.revision = original_memory_revision
+                    .checked_add(1)
+                    .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))?;
+                self.store.save_memory(actor, &memory)?;
+                units.push(format!(
+                    "訂正を会話内の提示前提として記録しました: {}。",
+                    describe(&negative_superseded)
+                ));
+                units.push(format!("置き換え後の提示前提: {}。", describe(replacement)));
+                units.push(format!(
+                    "以前の前提とその依存記録を{}件失効させ、元の記録は保持しました。",
+                    invalidated.len()
+                ));
+                units.push("現実世界の真偽を検証したものではありません。".into());
+                result.dependencies = invalidated;
+                result.dependencies.push(negative_fact.id);
+                result.dependencies.push(replacement_fact.id);
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::Assert { proposition } => {
                 let mut memory = self.store.load_memory(actor)?;
                 let fact = relations::assert_fact(&mut memory, proposition.clone(), &fingerprint)?;

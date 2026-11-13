@@ -343,6 +343,10 @@ pub enum Intent {
     Assert {
         proposition: Proposition,
     },
+    CorrectPremise {
+        superseded: Proposition,
+        replacement: Proposition,
+    },
     AddRule {
         premise: Proposition,
         conclusion: Proposition,
