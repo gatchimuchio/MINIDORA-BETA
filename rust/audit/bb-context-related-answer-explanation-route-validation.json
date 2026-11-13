@@ -57,7 +57,7 @@
       "exit_code": 0,
       "lifecycle": "COMMIT",
       "guarantee": "DERIVED",
-      "text": "前回の結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467）\n導出された事実: ココは動物である（導出ID: fact:e8ddf41e86b4e44ebfcfd700982c3fbfd07362ca41527f1797a36134a026b2eb; 依存ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467, rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7）\nこの説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "text": "前回の結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467）\n導出された事実: ココは動物である（導出ID: fact:e8ddf41e86b4e44ebfcfd700982c3fbfd07362ca41527f1797a36134a026b2eb; 依存ID: fact:5031571a6cc303e92409b6a73e8688e0df2f09ed7509f733a224a56a0c6ab467, rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:669adcb54223b4bd5936b21fd490cdc41fa2dada9a58d341ca84c0531f2fcbb7）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
       "reason": null,
       "dependencies": [
         "bb3205e8a0adee33f7e72baf6e605a47614508770d2408d04093ff974a5d57f5",
@@ -144,7 +144,7 @@
       "exit_code": 0,
       "lifecycle": "COMMIT",
       "guarantee": "USER_PREMISE",
-      "text": "前回の結論: ミケは鳥ではない。\n直接提示された前提: ミケは鳥ではない（根拠ID: fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1）\nこの説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "text": "前回の結論: ミケは鳥ではない。\n直接提示された前提: ミケは鳥ではない（根拠ID: fact:4ecc946f67eb99849af3b66e35426f94b88d9e06a98e1cd88bffab1929084be1）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
       "reason": null,
       "dependencies": [
         "80600c8dec4f985151e01fdc3132bba4381345bc75cb7b5c0a6c04128a8e5cba",
@@ -203,7 +203,7 @@
       "exit_code": 0,
       "lifecycle": "COMMIT",
       "guarantee": "DERIVED",
-      "text": "前回の結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20）\n導出された事実: ココは動物である（導出ID: fact:c43c6fa4aab787a87d813e7bdd11fd125a08751631953bb3fd337ac2906fd085; 依存ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20, rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604）\nこの説明は前回回答と同じ有効な前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "text": "前回の結論: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20）\n導出された事実: ココは動物である（導出ID: fact:c43c6fa4aab787a87d813e7bdd11fd125a08751631953bb3fd337ac2906fd085; 依存ID: fact:1d1046c1dae0278f04a04cce23569c8d3eadd7b6312c320de16691536e72ec20, rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a88d5a16ce5367c70e549e8926723753139f647ba08e255ccb5e2227de1ac604）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
       "reason": null,
       "dependencies": [
         "c92d9083fccba171ff85756a23aee9cc78c9206ec427fe1fb6d806ebd8d36178",

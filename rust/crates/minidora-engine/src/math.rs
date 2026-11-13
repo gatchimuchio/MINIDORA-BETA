@@ -2,7 +2,7 @@
 //! Formal results apply to the supplied coefficients/data; they do not validate
 //! real-world premises or infer that observations share a physical population.
 use crate::language::{calculate, rational_text};
-use minidora_domain::{Result, failure};
+use minidora_domain::{Guarantee, Lifecycle, Result, ResultRecord, failure};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Zero};
@@ -868,6 +868,82 @@ pub fn summarize(values: &[String], units: Option<&[String]>) -> Result<Statisti
     })
 }
 
+/// Recompute an exact statistics report from its retained operands before a
+/// later turn explains the values. This remains descriptive of the supplied
+/// observations and does not infer population representativeness or causality.
+pub(crate) fn previous_statistics_explanation(
+    previous: &ResultRecord,
+) -> Result<Option<Vec<String>>> {
+    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let report = match serde_json::from_str::<Statistics>(&previous.text) {
+        Ok(report) => report,
+        Err(_) => return Ok(None),
+    };
+    if !previous.dependencies.is_empty() || previous.calculation.is_some() {
+        return Err(failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous statistics result has unexpected dependencies or calculation data",
+        ));
+    }
+    let recomputed = summarize(&report.input_values, report.input_units.as_deref())?;
+    if report != recomputed || serde_json::to_string_pretty(&recomputed)? != previous.text {
+        return Err(failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous statistics report does not match exact recomputation from its retained values",
+        ));
+    }
+
+    let observations = report
+        .input_values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let unit = report
+                .input_units
+                .as_ref()
+                .and_then(|units| units.get(index))
+                .map_or_else(String::new, |unit| format!(" {unit}"));
+            format!("{value}{unit}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let normalized = report.normalized_values.join(", ");
+    let unit = report.unit.as_deref().unwrap_or("");
+    let suffix = if unit.is_empty() {
+        String::new()
+    } else {
+        format!(" {unit}")
+    };
+    let variance_suffix = report
+        .variance_unit
+        .as_deref()
+        .map_or_else(String::new, |unit| format!(" {unit}"));
+    let sample_variance = report.sample_variance.as_deref().map_or_else(
+        || "標本分散: 算出対象外（観測値が1件）".into(),
+        |value| format!("標本分散: {value}{variance_suffix}"),
+    );
+    Ok(Some(vec![
+        "前回の記述統計を元の値から再計算し、保存レポートと照合しました。".into(),
+        format!("入力値 (n={}): [{observations}]", report.count),
+        format!("単位換算後の値: [{normalized}]{suffix}"),
+        format!(
+            "合計: {}{suffix}; 平均: {}{suffix}; 中央値: {}{suffix}",
+            report.sum, report.mean, report.median
+        ),
+        format!(
+            "最小値: {}{suffix}; 最大値: {}{suffix}",
+            report.min, report.max
+        ),
+        format!(
+            "母分散: {}{variance_suffix}; {sample_variance}",
+            report.population_variance
+        ),
+        format!("適用範囲: {}", report.scope),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,6 +1084,38 @@ mod tests {
         assert_eq!(reversed.mean, result.mean);
         assert_eq!(reversed.population_variance, result.population_variance);
     }
+
+    #[test]
+    fn previous_statistics_explanation_recomputes_the_saved_report() {
+        let report = summarize(&strings(&["0.1", "0.2", "0.3"]), None).unwrap();
+        let mut previous = ResultRecord {
+            id: "prior-statistics".into(),
+            input_id: "statistics".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: serde_json::to_string_pretty(&report).unwrap(),
+            reason: None,
+            guarantee: Guarantee::Computed,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: Vec::new(),
+            execution_graph_ref: None,
+        };
+        let lines = previous_statistics_explanation(&previous).unwrap().unwrap();
+        assert!(lines[0].contains("元の値から再計算"));
+        assert!(lines.iter().any(|line| line.contains("平均: 1/5")));
+        assert!(lines.iter().any(|line| line.contains("母分散: 1/150")));
+        assert!(lines.iter().any(|line| line.contains("representativeness")));
+
+        previous.text = previous
+            .text
+            .replace("\"mean\": \"1/5\"", "\"mean\": \"2/5\"");
+        assert!(previous_statistics_explanation(&previous).is_err());
+    }
+
     #[test]
     fn units_empty_population_and_single_observation() {
         assert!(summarize(&[], None).is_err());

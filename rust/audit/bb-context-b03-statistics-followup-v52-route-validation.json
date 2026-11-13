@@ -1,0 +1,129 @@
+{
+  "work_item": "BB-MATH-DATA B03 exact descriptive statistics to same-case context explanation",
+  "recorded_at": "2026-11-13T00:08:27Z",
+  "phase": "BODY-1",
+  "base_commit": "5593f1fe38114bd4f67e1bb0c085fd7203f53d5d",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v52-search-candidate-body",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "platform": {
+    "os": "Linux",
+    "kernel": "6.18.57",
+    "architecture": "x86_64"
+  },
+  "route_method": "The integration test starts the actual minidora-rust binary in fresh child processes. The engine unit tests rederive the report and simulate an interrupted production file effect at the adopted pre-confirmation journal edge.",
+  "source_and_artifact_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "ca62c50ae8ead26de3283a9455099945ad0633ea63926d4b695faab59f49ba0f",
+    "rust/crates/minidora-engine/src/math.rs": "80c0b55a9e3eaffd4c159a31e679f6fda6ffdbe92643e368d462950fac7e4aa0",
+    "rust/crates/minidora-engine/src/core.rs": "cf63592d1569a9f53d7a7c8b3b064214b813a5843114603e43c800da8409ca2b",
+    "rust/crates/minidora-engine/src/recovery.rs": "94be3e4e1ab7c9b569a5e4e7acb96ffd2acfcb6101d5655d28ae2a2c7d9d8131",
+    "rust/target/debug/minidora-rust": "f6d80464d57c60a1721133dc08f64bbe77bf53a532acad5522faa2b79c43d74a",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "aeae79bd9d03d3199aa8e831e1f2c36ee51a5e168db61e9f35b47576d41726be"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
+    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666"
+  },
+  "route_observations": {
+    "input": "統計 [0.1,0.2,0.3]",
+    "producer": {
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "input_values": [
+        "0.1",
+        "0.2",
+        "0.3"
+      ],
+      "normalized_values": [
+        "1/10",
+        "1/5",
+        "3/10"
+      ],
+      "sum": "3/5",
+      "mean": "1/5",
+      "median": "1/5",
+      "population_variance": "1/150",
+      "sample_variance": "1/100"
+    },
+    "consumer_input": "詳しく説明して",
+    "consumer_behavior": "Recomputes Statistics from the retained input_values/input_units, compares the typed report and complete pretty-serialized bytes, and emits a compact explanation that cites the supplied values and exact result fields.",
+    "consumer_dependency": "The explanation result depends on the exact prior result ID; its MeaningIR context_result_ref points to that same result.",
+    "consumer_scope": "The existing report scope is copied and states that no inference is made about population representativeness or causal effects.",
+    "tampering_behavior": "Replacing the stored mean 1/5 with 2/5 causes exact recomputation mismatch and MATH_CONTEXT_INVALID.",
+    "file_recovery": "The recovery unit test retains the actual rendered file and an UNKNOWN action at the adopted pre-confirmation edge. Reconcile returns COMMIT with the same prior-result dependency, CONFIRMED receipt, one unchanged action identity, unchanged bytes and unchanged modification time; no write is resent."
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo build -p minidora-cli --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check -p minidora-cli --all-targets --locked",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine previous_statistics_explanation_recomputes_the_saved_report --lib",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route statistics_followup_recomputes_the_previous_exact_b03_report",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine statistics_explanation_reconciles_the_original_file_without_resending --lib",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route csv_statistics_followup_explains_revalidated_source_cells",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli --test normal_route calculation_sequence_route",
+      "exit_code": 0,
+      "passed": 5,
+      "failed": 0
+    }
+  ],
+  "selected_test_total": 9,
+  "selected_tests_passed": 9,
+  "selected_tests_failed": 0,
+  "not_run": [
+    "full workspace runtime tests",
+    "Clippy",
+    "independent math acceptance population",
+    "full B03/B02/B04/B06 acceptance",
+    "Windows/macOS/physical 8 GB QA",
+    "release or deployment"
+  ],
+  "remaining_scope": [
+    "Only descriptive Statistics JSON reports use this explanation path; other B03 report types still fall through to their prior surface.",
+    "Ordinary open-domain language Q&A and free-form writing remain BUILD_GAPs.",
+    "B03 and B06 acceptance remain UNVERIFIED."
+  ],
+  "acceptance": {
+    "B03": "UNVERIFIED; bounded Statistics context route only",
+    "B06": "UNVERIFIED; existing bounded sequence route and regression only",
+    "full_successor_acceptance": "UNVERIFIED"
+  }
+}

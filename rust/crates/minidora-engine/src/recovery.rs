@@ -499,6 +499,18 @@ fn inspect(
     } else {
         None
     };
+    let previous_math_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
+        bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .map(crate::math::previous_statistics_explanation)
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
     if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
@@ -620,6 +632,30 @@ fn inspect(
             return Err(failure(
                 "RECOVERY_CSV_CONTEXT_CHANGED",
                 "the exact statistics report or source-cell explanation changed",
+            ));
+        }
+    }
+    if let Some(expected_units) = &previous_math_statistics_explanation {
+        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+            failure(
+                "RECOVERY_MATH_CONTEXT_CHANGED",
+                "the prior statistics result reference is missing",
+            )
+        })?;
+        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+            failure(
+                "RECOVERY_MATH_CONTEXT_CHANGED",
+                "the prior statistics result is no longer retained",
+            )
+        })?;
+        if previous.lifecycle != Lifecycle::Commit
+            || result.dependencies != vec![previous.id.clone()]
+            || plan.required_units != *expected_units
+            || result.guarantee != previous.guarantee
+        {
+            return Err(failure(
+                "RECOVERY_MATH_CONTEXT_CHANGED",
+                "the exact statistics values or explanation no longer match the prior result",
             ));
         }
     }
@@ -1165,6 +1201,102 @@ mod tests {
         }
     }
 
+    fn attempted_statistics_explanation_prefix() -> Fixture {
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-recovery-math-context-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let state = directory.join("state");
+        let target = directory.join("statistics-explanation.txt");
+        let mut engine = Engine::open(&state).unwrap();
+        let statistics = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "statistics", "alice", "統計 [0.1,0.2,0.3]"),
+            )
+            .unwrap();
+        assert_eq!(statistics.lifecycle, Lifecycle::Commit);
+        let mut explanation =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation.output_path = Some(target.clone());
+        explanation.permissions.write_paths.insert(target.clone());
+        assert_eq!(
+            engine.execute("alice", explanation).unwrap().lifecycle,
+            Lifecycle::Commit
+        );
+        drop(engine);
+
+        // Keep the actual Core journal at the post-render/pre-receipt edge;
+        // retain the physical write so reconciliation must observe it.
+        let database = Connection::open(state.join("state.sqlite3")).unwrap();
+        let snapshots: Vec<(i64, String)> = {
+            let mut statement = database
+                .prepare("SELECT revision,state_sha256 FROM case_revision ORDER BY revision")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let mut retained = None;
+        for (number, sha) in snapshots {
+            let revision: CaseRevision =
+                serde_json::from_slice(&fs::read(state.join("blobs").join(sha)).unwrap()).unwrap();
+            if revision.lifecycle == Lifecycle::Adopted
+                && revision
+                    .bundle
+                    .as_ref()
+                    .is_some_and(|bundle| matches!(bundle.meaning.intent, Intent::ExplainPrevious))
+                && revision.result.as_ref().is_some_and(|result| {
+                    result.dependencies.len() == 1
+                        && result.content_plan.is_some()
+                        && result.render.is_some()
+                })
+            {
+                retained = Some((number, revision));
+            }
+        }
+        let (number, revision) =
+            retained.expect("Core retained the math explanation before file confirmation");
+        let result = revision.result.as_ref().unwrap();
+        let result_sha = digest(&canonical(result).unwrap());
+        let token: String = database
+            .query_row("SELECT idempotency_key FROM action_identity", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        database
+            .execute_batch(
+                "PRAGMA foreign_keys=ON; DROP TRIGGER case_revision_no_delete; DROP TRIGGER action_history_no_delete;",
+            )
+            .unwrap();
+        database
+            .execute("DELETE FROM case_revision WHERE revision>?1", [number])
+            .unwrap();
+        database
+            .execute("DELETE FROM action_history WHERE sequence>3", [])
+            .unwrap();
+        database
+            .execute(
+                "UPDATE input_identity SET result_sha256=?1 WHERE case_id='case' AND input_id='explanation' AND input_version=1",
+                params![result_sha],
+            )
+            .unwrap();
+        drop(database);
+        Fixture {
+            directory,
+            state,
+            target,
+            token,
+        }
+    }
+
     #[test]
     fn calculation_explanation_candidates_replay_for_recovery() {
         let fixture = empty_fixture();
@@ -1199,6 +1331,32 @@ mod tests {
         let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes).unwrap();
         assert_eq!(emission.authorized_surfaces.as_ref().map(Vec::len), Some(2));
         assert!(inspect(&engine.store, "alice", &revision, result).is_ok());
+    }
+
+    #[test]
+    fn statistics_explanation_reconciles_the_original_file_without_resending() {
+        let fixture = attempted_statistics_explanation_prefix();
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+
+        let result = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit);
+        assert!(result.text.contains("前回の記述統計を元の値から再計算"));
+        assert_eq!(result.dependencies.len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
     }
 
     #[test]

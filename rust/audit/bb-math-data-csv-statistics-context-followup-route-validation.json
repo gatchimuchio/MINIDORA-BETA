@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 BB-MATH-DATA CSV statistics to BB-CONTEXT source-cell explanation",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-12T23:58:03+00:00",
-  "base_commit": "3859d100c7d759e91956a1336c8b5664a455e7a7",
+  "recorded_at": "2026-11-13T00:07:40+00:00",
+  "base_commit": "5593f1fe38114bd4f67e1bb0c085fd7203f53d5d",
   "requirement_ids": [
     "A07",
     "A14",
@@ -25,18 +25,18 @@
   },
   "source_snapshot_sha256": {
     "rust/crates/minidora-engine/src/document.rs": "ae076da42e5c3f23be510a52de8d9a4636da5a21a4b07e7dea7de06f0555c6be",
-    "rust/crates/minidora-engine/src/core.rs": "0b9fcfa4fd199debe92a548dfafbadf9fd81395f336c40496e58459c098ea0b9",
-    "rust/crates/minidora-engine/src/recovery.rs": "3d9d818432f636f124098d0f89fc8dc256baf395e9504463a7ec6b5b3e157b4d",
+    "rust/crates/minidora-engine/src/core.rs": "cf63592d1569a9f53d7a7c8b3b064214b813a5843114603e43c800da8409ca2b",
+    "rust/crates/minidora-engine/src/recovery.rs": "94be3e4e1ab7c9b569a5e4e7acb96ffd2acfcb6101d5655d28ae2a2c7d9d8131",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
   },
   "test_and_tool_snapshot_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "c3588039dba15be56976cb5ff810af906c06449466407af027155fab4f2fd254",
+    "rust/apps/cli/tests/normal_route.rs": "ca62c50ae8ead26de3283a9455099945ad0633ea63926d4b695faab59f49ba0f",
     "rust/tools/csv_statistics_context_followup_route_test.py": "32e6557b66a9110c7da104d202eeb5ffba13288bab08621701ae3e4b8faeb950"
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "73a52e0a5a4776da64f30dff424068ef5a04fcc623db7a7eae1384b33e2b0c2d",
-    "rust/audit/requirements.tsv": "361a4f76759d9086d667e17e001e04b94465e149b6d4edfca566db9e7c27b8d7"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
+    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666"
   },
   "execution_mode": "fresh CLI process per request; same actor/case; temporary SQLite and artifact state",
   "producer_consumer": "ordinary CSV input -> exact decimal statistics -> immutable DocumentResult with original-cell spans -> ordinary same-case 詳しく説明して -> report/source revalidation -> exact values and cell coordinates -> authorized local file -> recovery without resend",

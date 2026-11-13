@@ -3505,6 +3505,42 @@ fn csv_statistics_followup_explains_revalidated_source_cells() {
     assert!(text.contains("元セル 行2・列2"));
 }
 
+#[test]
+fn statistics_followup_recomputes_the_previous_exact_b03_report() {
+    let scratch = Scratch::new();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "b03-statistics", "統計 [0.1,0.2,0.3]"],
+    ));
+    assert_eq!(original["lifecycle"], "COMMIT");
+    assert_eq!(original["guarantee"], "COMPUTED");
+    assert_eq!(original["dependencies"], serde_json::json!([]));
+
+    let explained = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "b03-statistics-explanation", "詳しく説明して"],
+    ));
+    assert_eq!(explained["lifecycle"], "COMMIT");
+    assert_eq!(explained["guarantee"], "COMPUTED");
+    assert_eq!(
+        explained["dependencies"],
+        serde_json::json!([original["id"]])
+    );
+    let text = explained["text"].as_str().unwrap();
+    assert!(text.contains("前回の記述統計を元の値から再計算"));
+    assert!(text.contains("入力値 (n=3): [0.1, 0.2, 0.3]"));
+    assert!(text.contains("合計: 3/5; 平均: 1/5; 中央値: 1/5"));
+    assert!(text.contains("母分散: 1/150"));
+    assert!(text.contains("no inference about population representativeness"));
+    assert_ne!(text, original["text"]);
+    assert_eq!(
+        inspect_normal_case(&scratch.0, "owner")["bundle"]["meaning"]["context_result_ref"],
+        original["id"]
+    );
+}
+
 fn assert_basic_json_statistics(report: &Value, source: &str, pointer: &str, singleton: bool) {
     assert_eq!(report["pointer"], pointer);
     let array = if singleton {

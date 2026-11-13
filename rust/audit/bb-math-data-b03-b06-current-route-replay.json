@@ -1,9 +1,9 @@
 {
   "work_item": "BB-MATH-DATA current route replay for bounded B03 mathematics and B06 multi-step calculation",
-  "recorded_at": "2026-11-12T23:55:52Z",
+  "recorded_at": "2026-11-13T00:09:48Z",
   "phase": "BODY-1",
-  "base_commit": "3859d100c7d759e91956a1336c8b5664a455e7a7",
-  "final_commit_at_observation": "3859d100c7d759e91956a1336c8b5664a455e7a7",
+  "base_commit": "5593f1fe38114bd4f67e1bb0c085fd7203f53d5d",
+  "final_commit_at_observation": null,
   "software_version": "0.7.0-alpha.8",
   "schema_version": "minidora-rust/0.7.0-alpha.8",
   "parser_version": "declarative-ja-en-v52-search-candidate-body",
@@ -18,19 +18,19 @@
   },
   "working_directory": "rust/",
   "source_and_artifact_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "c3588039dba15be56976cb5ff810af906c06449466407af027155fab4f2fd254",
+    "rust/apps/cli/tests/normal_route.rs": "ca62c50ae8ead26de3283a9455099945ad0633ea63926d4b695faab59f49ba0f",
     "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
-    "rust/crates/minidora-engine/src/math.rs": "2dde9fa725710f5cccc30df04d9f019fba75c79a1706122fe1831af777de59cc",
-    "rust/crates/minidora-engine/src/core.rs": "0b9fcfa4fd199debe92a548dfafbadf9fd81395f336c40496e58459c098ea0b9",
+    "rust/crates/minidora-engine/src/math.rs": "80c0b55a9e3eaffd4c159a31e679f6fda6ffdbe92643e368d462950fac7e4aa0",
+    "rust/crates/minidora-engine/src/core.rs": "cf63592d1569a9f53d7a7c8b3b064214b813a5843114603e43c800da8409ca2b",
     "rust/crates/minidora-engine/src/language.rs": "087aedd7ffda14e848c3893b91dc9a09423a09dea5e7f6480c023c4a6ba0120e",
     "rust/crates/minidora-engine/src/scheduler.rs": "8fa52123f47fdfca1d1be9d8d1482fd15e5bdead83e9050a90d5721535916543",
     "rust/crates/minidora-engine/src/output.rs": "cfd0fc6d5808239e67dc82ee4c5af03835b59b75022bbf143705590b97dc129e",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e",
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "73a52e0a5a4776da64f30dff424068ef5a04fcc623db7a7eae1384b33e2b0c2d",
-    "rust/audit/requirements.tsv": "361a4f76759d9086d667e17e001e04b94465e149b6d4edfca566db9e7c27b8d7",
-    "rust/target/debug/minidora-rust": "b975ce79702315c1baa04ceb5b2f0b547c6705f27fa8ebe0eb23943ddfc33c50",
-    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "4309aeddc208cfd452dd9669fe071d7f91a4c1829417e13f30b6f2561deff793"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
+    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666",
+    "rust/target/debug/minidora-rust": "f6d80464d57c60a1721133dc08f64bbe77bf53a532acad5522faa2b79c43d74a",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "aeae79bd9d03d3199aa8e831e1f2c36ee51a5e168db61e9f35b47576d41726be"
   },
   "test_execution": {
     "route_method": "The normal_route integration tests start the actual minidora-rust executable in child processes with fresh temporary stores; no result or action is injected. Assertions inspect returned and stored route values.",
@@ -136,7 +136,8 @@
   ],
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "73a52e0a5a4776da64f30dff424068ef5a04fcc623db7a7eae1384b33e2b0c2d",
-    "rust/audit/requirements.tsv": "361a4f76759d9086d667e17e001e04b94465e149b6d4edfca566db9e7c27b8d7"
-  }
+    "rust/audit/IMPLEMENTATION_STATUS.md": "2ec5d3f7c8ecc03e0c92f61eb48324b24cc4a25af1d56dbf885ba61bb0ca3155",
+    "rust/audit/requirements.tsv": "9a3985d87eeb89a8e8dcebcb0700bd0dcf284e6276ad79399f6b371041359666"
+  },
+  "working_tree_snapshot": "The source hashes in this record identify the exact working tree tested after the B03 statistics context change; the containing commit is recorded by Git."
 }

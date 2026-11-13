@@ -289,6 +289,15 @@ impl Engine {
             } else {
                 None
             };
+        let previous_math_statistics_explanation =
+            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => crate::math::previous_statistics_explanation(prior)?,
+                    None => None,
+                }
+            } else {
+                None
+            };
         if let Intent::Retrieve { urls, .. } = &bundle.meaning.intent {
             for (index, _) in urls.iter().enumerate() {
                 let id = format!("source-{index}");
@@ -1319,6 +1328,10 @@ impl Engine {
                     units.extend(explanation.clone());
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.push(report_ref.clone());
+                    result.guarantee = prior.guarantee.clone();
+                } else if let Some(explanation) = &previous_math_statistics_explanation {
+                    units.extend(explanation.clone());
+                    result.dependencies.push(prior.id.clone());
                     result.guarantee = prior.guarantee.clone();
                 } else {
                     units.push(prior.text.clone());
