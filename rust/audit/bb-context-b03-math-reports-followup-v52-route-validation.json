@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 B03 retained exact math report context follow-up",
-  "recorded_at": "2026-11-13T00:34:30Z",
+  "recorded_at": "2026-11-13T00:40:25Z",
   "phase": "BODY-1_EXECUTION",
-  "base_commit": "ab5829273f027af4b14a8e6c90f9e2f5fcf09881",
+  "base_commit": "8b54978d7d179de63fcb4e27c9852ac0fb38c103",
   "final_commit_at_observation": null,
   "software_version": "0.7.0-alpha.8",
   "schema_version": "minidora-rust/0.7.0-alpha.8",
@@ -18,21 +18,21 @@
   },
   "route_method": "The normal_route integration tests invoke the actual CLI executable in fresh child processes and same-case stores. Engine unit tests reconstruct the typed report and simulate file recovery at the adopted pre-confirmation journal edge.",
   "source_and_artifact_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "f90fc1cec78879e06facb55fb1084b2abf61ea811b187786112ea9de425bfcb4",
-    "rust/crates/minidora-engine/src/math.rs": "91ce73002aa20c19a138b8465a22d67c9c1acabae5a8607f32386447a0c42057",
+    "rust/apps/cli/tests/normal_route.rs": "c2f8c6abf2ee30a120f83c0009da5c434eab8e71da615816de1f090d38676bb8",
+    "rust/crates/minidora-engine/src/math.rs": "90abd0d673f5f60edc36f907f273efa5b266f52fdf05e674ae7de95a0eda9aee",
     "rust/crates/minidora-engine/src/core.rs": "0a0f4beaae8d76a44e8aa932597e4da4748c4cd04ade2e002c88fc58ac478493",
-    "rust/crates/minidora-engine/src/recovery.rs": "077fe0bbe1eb6dd1d3f433e8a52d3fa94d55bc398f8b24e66cbce397e930074d",
+    "rust/crates/minidora-engine/src/recovery.rs": "0d540d0b1c53be253c8a517cf4d4e3e90abbdffbaffe810f807351432720761e",
     "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
-    "rust/target/debug/minidora-rust": "0663bd312cac807e47c9e1a691e910f38be2ffa4b35d37972b22330b1e9955c2",
-    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "d5774d409f881365fd44ba9a7240f0db65b98ee40c5172194a49f4eb66ed3122",
+    "rust/target/debug/minidora-rust": "591b9c55f837e9b062107174dcbeea9e58e4429a08fd38074fac24aedea21399",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "e56da2c64debf45aa911fc67477032e0df82c53027cd5ef92e172185d6e2c9af",
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "3c3e6d817b98f2cc5fc3e55937d3cc19fc1eb8aec8e8e730e4763b6908920e17",
-    "rust/audit/requirements.tsv": "97c0c6b3a42631ad683bd1ed551b30a68d7803c18d20ffbe4a2061a98db00bdd"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "99055c9a95a74ee4f22dd054156feaf41410bd31ab722e315fa1ff535353bb00",
+    "rust/audit/requirements.tsv": "1d8676dce4322efb5ac1483b47582479de060540f2213a0cf43ff9e5f3a27a8a"
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "3c3e6d817b98f2cc5fc3e55937d3cc19fc1eb8aec8e8e730e4763b6908920e17",
-    "rust/audit/requirements.tsv": "97c0c6b3a42631ad683bd1ed551b30a68d7803c18d20ffbe4a2061a98db00bdd"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "99055c9a95a74ee4f22dd054156feaf41410bd31ab722e315fa1ff535353bb00",
+    "rust/audit/requirements.tsv": "1d8676dce4322efb5ac1483b47582479de060540f2213a0cf43ff9e5f3a27a8a"
   },
   "report_types": {
     "statistics": "Statistics is reconstructed from retained input_values and input_units; exact struct equality and canonical pretty JSON must match.",
@@ -42,12 +42,13 @@
     "polynomial_evaluation": "PolynomialEvaluationReport is reconstructed from retained source expression and bindings.",
     "linear_system": "LinearSolution is reconstructed from original_coefficients and original_rhs; the independently checked exact linear certificate must match the full saved report.",
     "linear_equation": "LinearEquationSolution is reconstructed from equation_left and equation_right.",
-    "quadratic_equation": "QuadraticSolution is reconstructed from equation_left and equation_right."
+    "quadratic_equation": "QuadraticSolution is reconstructed from equation_left and equation_right.",
+    "symbolic_operations": "SymbolicResult is reconstructed from original_expression, operation and the optional target variable for simplify, derivative or antiderivative."
   },
   "producer_consumer": {
     "producer": "A normal Japanese math request commits an exact typed report with its complete JSON text as the prior result.",
     "consumer": "A following same-case 詳しく説明して request identifies the exact report schema, recomputes from the retained operands, checks the full typed report and serialized text, and emits exact intermediate values with a dependency on the prior result ID.",
-    "bounded_output": "Lists and row operations display at most 16 entries. Polynomial and equation sides display at most 512 Unicode scalar values; linear-system coefficient and RHS scalars display at most 128 and proof matrices show at most four rows. The full exact report remains available in prior history.",
+    "bounded_output": "Lists, symbolic terms, symbolic trace steps and row operations display at most 16 entries. Polynomial and equation text display at most 512 Unicode scalar values; linear-system coefficient and RHS scalars display at most 128 and proof matrices show at most four rows. The full exact report remains available in prior history.",
     "tampering": "Changes to recognized report values or field sets return MATH_CONTEXT_INVALID rather than explain a mismatched result."
   },
   "route_observations": [
@@ -144,13 +145,47 @@
         "two rational roots 1 and 2",
         "root sum and product"
       ]
+    },
+    {
+      "type": "SYMBOLIC_SIMPLIFY",
+      "input": "簡約 (x+1)*(x-1)",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "input and normalized term projections",
+        "canonical expression recomputed and matched"
+      ]
+    },
+    {
+      "type": "SYMBOLIC_DERIVATIVE",
+      "input": "微分 x^3+2*x 変数 x",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "derivative target x",
+        "canonical polynomial and term projection recomputed and matched"
+      ]
+    },
+    {
+      "type": "SYMBOLIC_ANTIDERIVATIVE",
+      "input": "積分 x^2 変数 x",
+      "follow_up": "詳しく説明して",
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "observed": [
+        "canonical antiderivative and term projection recomputed and matched",
+        "arbitrary term independent of x remains explicit"
+      ]
     }
   ],
   "lineage_and_recovery": {
     "normal_route": "Each math explanation keeps exactly the previous result ID dependency and its sealed context_result_ref.",
     "statistics_file_recovery": "The recovery test verifies the retained statistics report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending.",
     "probability_file_recovery": "The recovery test verifies a retained normalized-weight report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending.",
-    "quadratic_equation_file_recovery": "The recovery test verifies a retained quadratic report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending."
+    "quadratic_equation_file_recovery": "The recovery test verifies a retained quadratic report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending.",
+    "symbolic_file_recovery": "The recovery test verifies a retained derivative report, confirms the prior physical file write, preserves bytes and modification time, and uses one unchanged action identity without resending."
   },
   "commands": [
     {
@@ -168,7 +203,7 @@
     {
       "command": "cargo test -p minidora-engine previous_ --locked",
       "exit_code": 0,
-      "passed": 5,
+      "passed": 6,
       "failed": 0
     },
     {
@@ -190,9 +225,15 @@
       "failed": 0
     },
     {
+      "command": "cargo test -p minidora-cli --test normal_route symbolic_followups_recompute_the_previous_b03_report --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
       "command": "cargo test -p minidora-engine explanation_reconciles_the_original_file_without_resending --locked",
       "exit_code": 0,
-      "passed": 3,
+      "passed": 4,
       "failed": 0
     },
     {
@@ -214,20 +255,21 @@
       "failed": 0
     }
   ],
-  "selected_test_total": 24,
-  "selected_tests_passed": 24,
+  "selected_test_total": 27,
+  "selected_tests_passed": 27,
   "selected_tests_failed": 0,
   "not_run": [
     "full workspace runtime suite",
     "Clippy",
     "radical/complex equation follow-up contexts",
+    "general-purpose CAS or symbolic algebra acceptance",
     "independent math acceptance population",
     "full B03/B06/B02/B04 acceptance",
     "Windows/macOS/physical 8 GB QA",
     "release or deployment"
   ],
   "acceptance": {
-    "B03": "UNVERIFIED; eight selected exact report context routes only",
+    "B03": "UNVERIFIED; nine selected exact report context routes only",
     "B06": "UNVERIFIED; five sequence regressions only",
     "A07_A14_F04": "UNVERIFIED; bounded prior-report explanation route only",
     "full_successor_acceptance": "UNVERIFIED"
@@ -271,5 +313,32 @@
       "passed": 1,
       "failed": 0
     }
-  ]
+  ],
+  "final_revalidation_after_symbolic-report-extension": [
+    {
+      "command": "cargo test -p minidora-engine previous_symbolic_reports_recompute_simplify_derivative_and_integral --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route symbolic_followups_recompute_the_previous_b03_report --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "command": "cargo test -p minidora-engine symbolic_explanation_reconciles_the_original_file_without_resending --locked",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0
+    }
+  ],
+  "unproductive_command_probe": {
+    "attempt": "Seven B03 producer cargo test commands initially placed --locked after the -- separator.",
+    "outcome": "The Rust test harness rejected --locked as an unrecognized harness option before running tests.",
+    "selected_tests": 0,
+    "counted_as_pass": false,
+    "correction": "Reran all seven commands with --locked before --; each selected producer test passed."
+  }
 }

@@ -994,6 +994,29 @@ fn preview_math_values(values: &[String]) -> String {
         .join(", ")
 }
 
+fn preview_polynomial_terms(terms: &[PolynomialTerm]) -> String {
+    let mut preview = terms
+        .iter()
+        .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+        .enumerate()
+        .map(|(index, term)| {
+            format!(
+                "項{}: 係数 {}; powers={}",
+                index + 1,
+                preview_text(&term.coefficient, 128),
+                preview_text(&format!("{:?}", term.powers), 256)
+            )
+        })
+        .collect::<Vec<_>>();
+    if terms.len() > MAX_CONTEXT_EXPLANATION_ITEMS {
+        preview.push(format!(
+            "… {}項は保存レポートに保持",
+            terms.len() - MAX_CONTEXT_EXPLANATION_ITEMS
+        ));
+    }
+    preview.join("; ")
+}
+
 /// Recompute bounded native math reports from their retained operands before
 /// a later turn explains them. Large lists and expressions are abbreviated in
 /// the display; the complete exact report remains in the prior result.
@@ -1441,6 +1464,71 @@ pub(crate) fn previous_math_report_explanation(
             ),
         ]));
     }
+    if let Some(report) = parse_previous_math_report::<SymbolicResult>(
+        previous,
+        "input_terms",
+        &[
+            "original_expression",
+            "operation",
+            "variable",
+            "variables",
+            "input_terms",
+            "canonical_expression",
+            "terms",
+            "operations",
+            "trace",
+            "integration_limit",
+            "verification",
+        ],
+    )? {
+        let recomputed = symbolic(
+            &report.original_expression,
+            &report.operation,
+            report.variable.as_deref().unwrap_or(""),
+        )?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        let trace = report
+            .trace
+            .iter()
+            .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+            .map(|step| preview_text(step, 256))
+            .collect::<Vec<_>>();
+        let mut lines = vec![
+            format!(
+                "前回の記号式操作 ({}) を元の式と対象変数から再計算し、保存レポートと照合しました。",
+                report.operation
+            ),
+            format!("入力式: {}", preview_text(&report.original_expression, 512)),
+            format!(
+                "対象変数: {}; 変数一覧: [{}]",
+                report.variable.as_deref().unwrap_or("なし"),
+                report.variables.join(", ")
+            ),
+            format!("入力項: {}", preview_polynomial_terms(&report.input_terms)),
+            format!(
+                "変換後の標準式: {}",
+                preview_text(&report.canonical_expression, 512)
+            ),
+            format!("変換後の項: {}", preview_polynomial_terms(&report.terms)),
+            format!(
+                "処理記録 ({}件中最大{}件表示): [{}]",
+                report.trace.len(),
+                MAX_CONTEXT_EXPLANATION_ITEMS,
+                trace.join("; ")
+            ),
+        ];
+        if report.trace.len() > MAX_CONTEXT_EXPLANATION_ITEMS {
+            lines.push(format!(
+                "残りの処理 {}件は保存レポートに保持されています。",
+                report.trace.len() - MAX_CONTEXT_EXPLANATION_ITEMS
+            ));
+        }
+        if let Some(limit) = &report.integration_limit {
+            lines.push(format!("積分の任意項: {limit}"));
+        }
+        lines.push(format!("検証情報: {}", report.verification));
+        return Ok(Some(lines));
+    }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&previous.text) {
         if value.as_object().is_some_and(|object| {
             [
@@ -1455,6 +1543,7 @@ pub(crate) fn previous_math_report_explanation(
                 "event_values",
                 "event_membership",
                 "original_expression",
+                "input_terms",
                 "original_coefficients",
                 "original_rhs",
                 "equation_left",
@@ -1812,6 +1901,53 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .insert(field.into(), replacement);
+            previous.text = serde_json::to_string_pretty(&tampered).unwrap();
+            assert!(previous_math_report_explanation(&previous).is_err());
+        }
+    }
+
+    #[test]
+    fn previous_symbolic_reports_recompute_simplify_derivative_and_integral() {
+        let reports = [
+            symbolic("(x+1)*(x-1)", "simplify", "").unwrap(),
+            symbolic("x^3+2*x", "derive", "x").unwrap(),
+            symbolic("x^2", "integrate", "x").unwrap(),
+        ];
+        for (index, report) in reports.into_iter().enumerate() {
+            let expected = report.canonical_expression.clone();
+            let mut previous = ResultRecord {
+                id: format!("prior-symbolic-{index}"),
+                input_id: "symbolic".into(),
+                input_version: 1,
+                lifecycle: Lifecycle::Commit,
+                text: serde_json::to_string_pretty(&report).unwrap(),
+                reason: None,
+                guarantee: Guarantee::Computed,
+                calculation: None,
+                content_plan: None,
+                render: None,
+                receipts: Vec::new(),
+                evidence: Vec::new(),
+                dependencies: Vec::new(),
+                execution_graph_ref: None,
+            };
+            let lines = previous_math_report_explanation(&previous)
+                .unwrap_or_else(|error| panic!("symbolic report {index}: {error}"))
+                .unwrap_or_else(|| panic!("symbolic report {index} was not explained"));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains(&format!("変換後の標準式: {expected}"))),
+                "{lines:?}"
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains("再計算し、保存レポートと照合しました"))
+            );
+
+            let mut tampered: serde_json::Value = serde_json::from_str(&previous.text).unwrap();
+            tampered["canonical_expression"] = serde_json::json!("0");
             previous.text = serde_json::to_string_pretty(&tampered).unwrap();
             assert!(previous_math_report_explanation(&previous).is_err());
         }

@@ -1225,6 +1225,14 @@ mod tests {
         )
     }
 
+    fn attempted_symbolic_explanation_prefix() -> Fixture {
+        attempted_math_report_explanation_prefix(
+            "symbolic",
+            "微分 x^3+2*x 変数 x",
+            "symbolic-explanation.txt",
+        )
+    }
+
     fn attempted_math_report_explanation_prefix(
         input_id: &str,
         input_text: &str,
@@ -1429,6 +1437,33 @@ mod tests {
         assert_eq!(result.lifecycle, Lifecycle::Commit);
         assert!(result.text.contains("前回の二次方程式を元の両辺から再計算"));
         assert!(result.text.contains("判別式: 1"));
+        assert_eq!(result.dependencies.len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+    }
+
+    #[test]
+    fn symbolic_explanation_reconciles_the_original_file_without_resending() {
+        let fixture = attempted_symbolic_explanation_prefix();
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].idempotency_key, fixture.token);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+
+        let result = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit);
+        assert!(result.text.contains("前回の記号式操作 (derive)"));
+        assert!(result.text.contains("変換後の標準式:"));
         assert_eq!(result.dependencies.len(), 1);
         assert_eq!(fs::read(&fixture.target).unwrap(), original);
         assert_eq!(

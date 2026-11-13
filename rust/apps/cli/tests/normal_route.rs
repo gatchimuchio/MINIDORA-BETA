@@ -3684,6 +3684,56 @@ fn linear_and_quadratic_followups_recompute_the_previous_b03_report() {
     }
 }
 
+#[test]
+fn symbolic_followups_recompute_the_previous_b03_report() {
+    let scratch = Scratch::new();
+    let cases = [
+        ("simplify", "簡約 (x+1)*(x-1)"),
+        ("derive", "微分 x^3+2*x 変数 x"),
+        ("integrate", "積分 x^2 変数 x"),
+    ];
+    for (case, request) in cases {
+        let original = record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            case,
+            &["--input", "b03-symbolic", request],
+        ));
+        assert_eq!(original["lifecycle"], "COMMIT", "{case}");
+        assert_eq!(original["guarantee"], "COMPUTED", "{case}");
+        assert_eq!(original["dependencies"], serde_json::json!([]), "{case}");
+        let report: Value = serde_json::from_str(original["text"].as_str().unwrap()).unwrap();
+        assert_eq!(report["operation"], case);
+
+        let explained = record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            case,
+            &["--input", "symbolic-explanation", "詳しく説明して"],
+        ));
+        assert_eq!(explained["lifecycle"], "COMMIT", "{case}");
+        assert_eq!(explained["guarantee"], "COMPUTED", "{case}");
+        assert_eq!(
+            explained["dependencies"],
+            serde_json::json!([original["id"]]),
+            "{case}"
+        );
+        let text = explained["text"].as_str().unwrap();
+        assert!(text.contains("前回の記号式操作"), "{case}: {text}");
+        assert!(
+            text.contains(&format!(
+                "変換後の標準式: {}",
+                report["canonical_expression"].as_str().unwrap()
+            )),
+            "{case}: {text}"
+        );
+        if case == "integrate" {
+            assert!(text.contains("積分の任意項"), "{text}");
+        }
+        assert_ne!(text, original["text"].as_str().unwrap(), "{case}");
+    }
+}
+
 fn assert_basic_json_statistics(report: &Value, source: &str, pointer: &str, singleton: bool) {
     assert_eq!(report["pointer"], pointer);
     let array = if singleton {

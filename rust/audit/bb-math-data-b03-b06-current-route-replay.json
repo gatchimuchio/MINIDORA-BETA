@@ -1,8 +1,8 @@
 {
   "work_item": "BB-MATH-DATA current route replay for bounded B03 mathematics and B06 multi-step calculation",
-  "recorded_at": "2026-11-13T00:34:30Z",
+  "recorded_at": "2026-11-13T00:40:25Z",
   "phase": "BODY-1",
-  "base_commit": "ab5829273f027af4b14a8e6c90f9e2f5fcf09881",
+  "base_commit": "8b54978d7d179de63fcb4e27c9852ac0fb38c103",
   "final_commit_at_observation": null,
   "software_version": "0.7.0-alpha.8",
   "schema_version": "minidora-rust/0.7.0-alpha.8",
@@ -22,16 +22,16 @@
     "rust/crates/minidora-engine/src/scheduler.rs": "8fa52123f47fdfca1d1be9d8d1482fd15e5bdead83e9050a90d5721535916543",
     "rust/crates/minidora-engine/src/output.rs": "cfd0fc6d5808239e67dc82ee4c5af03835b59b75022bbf143705590b97dc129e",
     "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e",
-    "rust/apps/cli/tests/normal_route.rs": "f90fc1cec78879e06facb55fb1084b2abf61ea811b187786112ea9de425bfcb4",
-    "rust/crates/minidora-engine/src/math.rs": "91ce73002aa20c19a138b8465a22d67c9c1acabae5a8607f32386447a0c42057",
+    "rust/apps/cli/tests/normal_route.rs": "c2f8c6abf2ee30a120f83c0009da5c434eab8e71da615816de1f090d38676bb8",
+    "rust/crates/minidora-engine/src/math.rs": "90abd0d673f5f60edc36f907f273efa5b266f52fdf05e674ae7de95a0eda9aee",
     "rust/crates/minidora-engine/src/core.rs": "0a0f4beaae8d76a44e8aa932597e4da4748c4cd04ade2e002c88fc58ac478493",
-    "rust/crates/minidora-engine/src/recovery.rs": "077fe0bbe1eb6dd1d3f433e8a52d3fa94d55bc398f8b24e66cbce397e930074d",
+    "rust/crates/minidora-engine/src/recovery.rs": "0d540d0b1c53be253c8a517cf4d4e3e90abbdffbaffe810f807351432720761e",
     "rust/crates/minidora-engine/src/input.rs": "9ec2d1e2e8f56846286cb8a01ccd49531d1783120db83692a557356cc2efe775",
-    "rust/target/debug/minidora-rust": "0663bd312cac807e47c9e1a691e910f38be2ffa4b35d37972b22330b1e9955c2",
-    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "d5774d409f881365fd44ba9a7240f0db65b98ee40c5172194a49f4eb66ed3122",
+    "rust/target/debug/minidora-rust": "591b9c55f837e9b062107174dcbeea9e58e4429a08fd38074fac24aedea21399",
+    "rust/target/debug/deps/normal_route-b20cbcd277bfbfe1": "e56da2c64debf45aa911fc67477032e0df82c53027cd5ef92e172185d6e2c9af",
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "3c3e6d817b98f2cc5fc3e55937d3cc19fc1eb8aec8e8e730e4763b6908920e17",
-    "rust/audit/requirements.tsv": "97c0c6b3a42631ad683bd1ed551b30a68d7803c18d20ffbe4a2061a98db00bdd"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "99055c9a95a74ee4f22dd054156feaf41410bd31ab722e315fa1ff535353bb00",
+    "rust/audit/requirements.tsv": "1d8676dce4322efb5ac1483b47582479de060540f2213a0cf43ff9e5f3a27a8a"
   },
   "test_execution": {
     "route_method": "The normal_route integration tests start the actual minidora-rust executable in child processes with fresh temporary stores; no result or action is injected. Assertions inspect returned and stored route values.",
@@ -109,7 +109,7 @@
         "Japanese and English bounded polynomial evaluation reports each exact term contribution; examples report 3 and 17.",
         "Normal CLI linear/quadratic equation cases report exact rational solutions, identity and contradiction classes, and suspend on an unsupported degree; a supplied 2x2 linear system retains its original matrix and exact solution [2,1]."
       ],
-      "follow_up": "Eight exact same-case math reports now have bounded recompute/explanation consumers: Statistics, normalized weights, finite expectation/variance, finite-event probability, polynomial evaluation, LinearSolution, LinearEquationSolution and QuadraticSolution. See bb-context-b03-math-reports-followup-v52-route-validation.json."
+      "follow_up": "Nine exact same-case math reports now have bounded recompute/explanation consumers: Statistics, normalized weights, finite expectation/variance, finite-event probability, polynomial evaluation, LinearSolution, LinearEquationSolution, QuadraticSolution and SymbolicResult simplify/derive/integrate. See bb-context-b03-math-reports-followup-v52-route-validation.json."
     },
     "B06": {
       "scope": "Bounded declared calculation sequences; not general natural-language multi-step planning.",
@@ -121,7 +121,7 @@
         "Malformed references, unsupported quantity contexts, action/deadline/evidence limits and arithmetic errors preserve only actual step progress and do not create a final report or effect receipt.",
         "With an exact local write grant, emitted file bytes match rendered text and one CONFIRMED receipt records the target/hash/length; exact retry leaves bytes and modification time unchanged and retains one action receipt."
       ],
-      "regression_after_current_math_context_change": "All five calculation_sequence_route tests passed after the equation-report context extension."
+      "regression_after_current_math_context_change": "All five calculation_sequence_route tests passed after the symbolic-report context extension."
     }
   },
   "requirements_trace": {
@@ -142,8 +142,8 @@
   ],
   "documentation_snapshot_sha256": {
     "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "3c3e6d817b98f2cc5fc3e55937d3cc19fc1eb8aec8e8e730e4763b6908920e17",
-    "rust/audit/requirements.tsv": "97c0c6b3a42631ad683bd1ed551b30a68d7803c18d20ffbe4a2061a98db00bdd"
+    "rust/audit/IMPLEMENTATION_STATUS.md": "99055c9a95a74ee4f22dd054156feaf41410bd31ab722e315fa1ff535353bb00",
+    "rust/audit/requirements.tsv": "1d8676dce4322efb5ac1483b47582479de060540f2213a0cf43ff9e5f3a27a8a"
   },
-  "working_tree_snapshot": "Hashes bind the source and documentation tree after the equation-report context extension, including exact system certificates and rational equation reports. The containing Git commit records this tested snapshot."
+  "working_tree_snapshot": "Hashes bind the source and documentation tree after exact context coverage for statistics, probability, equations, polynomial evaluation and symbolic operations. The containing Git commit records this tested snapshot."
 }
