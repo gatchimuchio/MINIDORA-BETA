@@ -1,0 +1,296 @@
+{
+  "work_item": "BODY-1 BB-CONTEXT proof-revalidated detailed explanation of common-relation reports",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T07:33:13+00:00",
+  "base_commit": "9321d66cc89089a23b63c16e9517abf1861adb35",
+  "requirement_ids": [
+    "A07",
+    "A08",
+    "A12",
+    "A13",
+    "A14",
+    "A15",
+    "B01"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v67-common-relation-questions",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "implementation_change": "Common-relation results now retain a canonical actor/case-bound typed artifact containing the exact result identity, scope, each shared proposition pair, side-specific guarantees and proof dependencies. ExplainPrevious reads only the immediate same-case committed result, revalidates each side through the relation proof engine, and emits a separate proof-by-proof explanation. Missing, malformed, changed or over-budget context suspends.",
+  "binary_sha256": "a1a49f5d20113a6b1b8ad067046d876d55b06cd45ff0ada64cb64f2ff4587e54",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/core.rs": "927b6d18d93d523e362c090131d5a4fae1e4ace2c42f4ecd381957ce72b76d5e",
+    "rust/crates/minidora-engine/src/relations.rs": "5b1b8d7cd10c4347e6fc84b77bd393150653d14c2529f140acff2a59cf7af84d"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "31f356d2bd78f060eefab76eb5803232a855af6536c7d9e63989cdaa4eb8cf32",
+    "rust/tools/common_relation_explanation_route_test.py": "d8a9d9e5349ea8eb05a450a654ea6720c10a33747cba6103867797ec94b5b929"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "dfb1d7a64803b51aa1fa900292d2565d37f21bcab3845cd49145e56119188863",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "ce556bd689ceaaeb1eb436d75a524383106a74c4cf8f006e2513d5b7474b6ba2",
+    "rust/audit/requirements.tsv": "62e69ff701c34cf34c8926b29277b73994b75c0e732ef86590e09dd186ac83c5"
+  },
+  "execution_mode": "fresh CLI process per request with one temporary actor-scoped SQLite store; ordinary input route; no fixture injection or external effect",
+  "scope": "Two-subject common-relation reports created by the v67 route, followed by same-case 詳しく説明して; direct, derived and invalidated premise paths.",
+  "observations": [
+    {
+      "actor": "common-explain-direct",
+      "case": "common-explain-direct-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:c36f5233a058c3a7b9b5380af52d7b1a106577884429c7d3b2171b4e078389e5\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:c36f5233a058c3a7b9b5380af52d7b1a106577884429c7d3b2171b4e078389e5"
+      ]
+    },
+    {
+      "actor": "common-explain-direct",
+      "case": "common-explain-direct-case",
+      "input_id": "mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:766f613418d8b317408666ad4ba9534dbabdd1d5142466b46fbc66491c81e9af\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:766f613418d8b317408666ad4ba9534dbabdd1d5142466b46fbc66491c81e9af"
+      ]
+    },
+    {
+      "actor": "common-explain-direct",
+      "case": "common-explain-direct-case",
+      "input_id": "common-ja",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:c36f5233a058c3a7b9b5380af52d7b1a106577884429c7d3b2171b4e078389e5）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:766f613418d8b317408666ad4ba9534dbabdd1d5142466b46fbc66491c81e9af）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "54865d31e46f1c8760c332d9f34849b1f2dd8f277a610508a2d16c9f9a05e6b3",
+        "fact:766f613418d8b317408666ad4ba9534dbabdd1d5142466b46fbc66491c81e9af",
+        "fact:c36f5233a058c3a7b9b5380af52d7b1a106577884429c7d3b2171b4e078389e5"
+      ]
+    },
+    {
+      "actor": "common-explain-direct",
+      "case": "common-explain-direct-case",
+      "input_id": "common-ja-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前回比較の詳細説明（比較結果ID: 76c1bbf7435e41549d64bf31d05c10e86a2c337df3b8122f03a4653ffb4d68ec）。候補となった各関係を、同一ケースの現在有効な記憶に対して両対象ごとに再照合しました。\n共通関係の照合: ココは鳥である ／ ミケは鳥である（範囲: default）。両側で同一の述語・対象・肯定否定・範囲が支持されています。\nココ側: SUPPORTED（直接提示された前提）；ミケ側: SUPPORTED（直接提示された前提）。左右の証拠IDを別々に再確認しました。\nココ側の証明: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:c36f5233a058c3a7b9b5380af52d7b1a106577884429c7d3b2171b4e078389e5）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の証明: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:766f613418d8b317408666ad4ba9534dbabdd1d5142466b46fbc66491c81e9af）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\n一覧にない関係は「共通点がない」ことを意味しません。この説明は保存済みの前提・規則の範囲に限られ、現実世界の真偽を確認したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "76c1bbf7435e41549d64bf31d05c10e86a2c337df3b8122f03a4653ffb4d68ec",
+        "54865d31e46f1c8760c332d9f34849b1f2dd8f277a610508a2d16c9f9a05e6b3",
+        "fact:766f613418d8b317408666ad4ba9534dbabdd1d5142466b46fbc66491c81e9af",
+        "fact:c36f5233a058c3a7b9b5380af52d7b1a106577884429c7d3b2171b4e078389e5"
+      ]
+    },
+    {
+      "actor": "common-explain-derived",
+      "case": "common-explain-derived-case",
+      "input_id": "bird-animal-rule",
+      "request": "もしXは鳥ならXは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447"
+      ]
+    },
+    {
+      "actor": "common-explain-derived",
+      "case": "common-explain-derived-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae"
+      ]
+    },
+    {
+      "actor": "common-explain-derived",
+      "case": "common-explain-derived-case",
+      "input_id": "mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62"
+      ]
+    },
+    {
+      "actor": "common-explain-derived",
+      "case": "common-explain-derived-case",
+      "input_id": "common-derived",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは動物である（規則導出）／ミケは動物である（規則導出）\nココ側の根拠: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae）\n導出された事実: ココは動物である（導出ID: fact:73e7dc0fe50c1e74626942abb01bb7ebe6fc3c4ad5e334a7a6f7e4e25c64f887; 依存ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae, rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは動物である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62）\n導出された事実: ミケは動物である（導出ID: fact:f39f176e10a95d01c406ab6e5850dfaeb6a44f5d0ae5585be3bef2709411896b; 依存ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62, rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "e718e005d0c51cef0f0a9b373142fb4716504dddfacf138756adbd9b47ab7621",
+        "fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62",
+        "fact:73e7dc0fe50c1e74626942abb01bb7ebe6fc3c4ad5e334a7a6f7e4e25c64f887",
+        "fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae",
+        "fact:f39f176e10a95d01c406ab6e5850dfaeb6a44f5d0ae5585be3bef2709411896b",
+        "rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447"
+      ]
+    },
+    {
+      "actor": "common-explain-derived",
+      "case": "common-explain-derived-case",
+      "input_id": "common-derived-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "前回比較の詳細説明（比較結果ID: 7651fdb5197ea9d556183988d9859801191b34d752648b51ed2923aafc2445b4）。候補となった各関係を、同一ケースの現在有効な記憶に対して両対象ごとに再照合しました。\n共通関係の照合: ココは動物である ／ ミケは動物である（範囲: default）。両側で同一の述語・対象・肯定否定・範囲が支持されています。\nココ側: SUPPORTED（保存規則からの導出）；ミケ側: SUPPORTED（保存規則からの導出）。左右の証拠IDを別々に再確認しました。\nココ側の証明: ココは動物である。\n直接提示された前提: ココは鳥である（根拠ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae）\n導出された事実: ココは動物である（導出ID: fact:73e7dc0fe50c1e74626942abb01bb7ebe6fc3c4ad5e334a7a6f7e4e25c64f887; 依存ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae, rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の証明: ミケは動物である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62）\n導出された事実: ミケは動物である（導出ID: fact:f39f176e10a95d01c406ab6e5850dfaeb6a44f5d0ae5585be3bef2709411896b; 依存ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62, rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\n適用規則: $xは鳥である ならば $xは動物である（規則ID: rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\n共通関係の照合: ココは鳥である ／ ミケは鳥である（範囲: default）。両側で同一の述語・対象・肯定否定・範囲が支持されています。\nココ側: SUPPORTED（直接提示された前提）；ミケ側: SUPPORTED（直接提示された前提）。左右の証拠IDを別々に再確認しました。\nココ側の証明: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の証明: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\n一覧にない関係は「共通点がない」ことを意味しません。この説明は保存済みの前提・規則の範囲に限られ、現実世界の真偽を確認したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "7651fdb5197ea9d556183988d9859801191b34d752648b51ed2923aafc2445b4",
+        "e718e005d0c51cef0f0a9b373142fb4716504dddfacf138756adbd9b47ab7621",
+        "fact:4e81c2eca60ff166f49610f9e0bbf213d636807772238a1843dbf822d3b38f62",
+        "fact:73e7dc0fe50c1e74626942abb01bb7ebe6fc3c4ad5e334a7a6f7e4e25c64f887",
+        "fact:ae0e702334f174fd66fb33616713be1fb089a524a6018465aecdd6ae18b8f7ae",
+        "fact:f39f176e10a95d01c406ab6e5850dfaeb6a44f5d0ae5585be3bef2709411896b",
+        "rule:a81445d80d39c212b235cc6d61051901da40ee01942d8097534ec4db21743447"
+      ]
+    },
+    {
+      "actor": "common-explain-stale",
+      "case": "common-explain-stale-case",
+      "input_id": "stale-coco-bird",
+      "request": "ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:433afaef20c3af45b8c3217d9d004b53448b9f87312ad4f0a90747e2bae4ad3e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:433afaef20c3af45b8c3217d9d004b53448b9f87312ad4f0a90747e2bae4ad3e"
+      ]
+    },
+    {
+      "actor": "common-explain-stale",
+      "case": "common-explain-stale-case",
+      "input_id": "stale-mike-bird",
+      "request": "ミケは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:1c68a30e3524ad5227036464c0bfab47d96b458cbd1543ba419415f8fe6fa072\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:1c68a30e3524ad5227036464c0bfab47d96b458cbd1543ba419415f8fe6fa072"
+      ]
+    },
+    {
+      "actor": "common-explain-stale",
+      "case": "common-explain-stale-case",
+      "input_id": "stale-common",
+      "request": "ココとミケの共通点は何ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。\n共通関係: ココは鳥である（直接提示）／ミケは鳥である（直接提示）\nココ側の根拠: ココは鳥である。\n直接提示された前提: ココは鳥である（根拠ID: fact:433afaef20c3af45b8c3217d9d004b53448b9f87312ad4f0a90747e2bae4ad3e）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。\nミケ側の根拠: ミケは鳥である。\n直接提示された前提: ミケは鳥である（根拠ID: fact:1c68a30e3524ad5227036464c0bfab47d96b458cbd1543ba419415f8fe6fa072）\nこの説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+      "reason": null,
+      "dependencies": [
+        "a05b24eb0901d5252adbf21677e04575231a381bac7fd7e5ef95269a8fad0acd",
+        "fact:1c68a30e3524ad5227036464c0bfab47d96b458cbd1543ba419415f8fe6fa072",
+        "fact:433afaef20c3af45b8c3217d9d004b53448b9f87312ad4f0a90747e2bae4ad3e"
+      ]
+    },
+    {
+      "actor": "common-explain-stale",
+      "case": "common-explain-stale-invalidation",
+      "input_id": "stale-invalidate-coco",
+      "request": "fact:433afaef20c3af45b8c3217d9d004b53448b9f87312ad4f0a90747e2bae4ad3eを無効化して",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:433afaef20c3af45b8c3217d9d004b53448b9f87312ad4f0a90747e2bae4ad3e"
+      ]
+    },
+    {
+      "actor": "common-explain-stale",
+      "case": "common-explain-stale-case",
+      "input_id": "stale-common-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "前回比較の左右いずれかを支えた現在有効な根拠が変わっています。新しい比較を行ってください。",
+      "reason": "CONTEXT_PROOF_CHANGED: 前回比較の左右いずれかを支えた現在有効な根拠が変わっています。新しい比較を行ってください。",
+      "dependencies": []
+    },
+    {
+      "actor": "common-explain-empty",
+      "case": "common-explain-empty-case",
+      "input_id": "missing-common-explanation",
+      "request": "詳しく説明して",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "説明対象となる実際の採用済み成果がありません。",
+      "reason": "MISSING_ACTUAL_RESULT: 説明対象となる実際の採用済み成果がありません。",
+      "dependencies": []
+    }
+  ],
+  "summary": {
+    "total_requests": 15,
+    "lifecycle_counts": {
+      "COMMIT": 13,
+      "SUSPEND": 2
+    }
+  },
+  "targeted_checks": {
+    "direct_left_and_right_proof_lineage_after_process_restart": "PASS",
+    "derived_left_and_right_rule_lineage_after_process_restart": "PASS",
+    "typed_artifact_and_prior_result_dependencies": "PASS",
+    "followup_is_distinct_from_initial_commonality_report": "PASS",
+    "invalidated_premise_causes_context_proof_changed_stop": "PASS",
+    "missing_prior_result_typed_stop": "PASS"
+  },
+  "quality_gates": {
+    "focused_normal_cli_route_test": "PASS: natural_common_relation_questions_compare_two_subjects_using_shared_proofs and relation_answer_follow_up_explains_the_same_current_proof_after_restart",
+    "formatting": "PASS: cargo fmt --all -- --check",
+    "workspace_all_targets_check": "PASS: cargo check --workspace --all-targets --locked",
+    "warnings_denied_clippy": "PASS: cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "workspace_build": "PASS: cargo build --workspace --locked",
+    "full_workspace_runtime_suite": "NOT_RUN: scoped BUILD validation only"
+  },
+  "requirements_status": "This scoped follow-up route does not establish A07/A08/A12/A13/A14/A15/B01 acceptance; those remain UNVERIFIED.",
+  "limitations": [
+    "The explanation covers only shared relations recorded by the immediately previous comparison artifact.",
+    "It rechecks the stored proposition pairs; the original comparison remains non-exhaustive and does not prove that unlisted commonality is absent.",
+    "Any changed or unavailable proof suspends rather than rebuilding a new comparison implicitly.",
+    "Full workspace runtime tests and broad contextual explanation acceptance were not run."
+  ]
+}

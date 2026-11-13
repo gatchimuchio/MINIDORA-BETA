@@ -4197,6 +4197,35 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
             .unwrap()
             .contains(&coco_feathers["dependencies"][0])
     );
+    let direct_explanation = record(&execute_in_case(
+        &scratch.0,
+        direct_actor,
+        direct_case,
+        &["--input", "common-ja-explanation", "詳しく説明して"],
+    ));
+    assert_eq!(direct_explanation["lifecycle"], "COMMIT");
+    assert_eq!(direct_explanation["guarantee"], "USER_PREMISE");
+    let direct_explanation_text = direct_explanation["text"].as_str().unwrap();
+    assert_ne!(direct_explanation_text, direct_text);
+    for marker in [
+        "前回比較の詳細説明",
+        direct_common["id"].as_str().unwrap(),
+        "ココ側の証明: ココは鳥である",
+        "ミケ側の証明: ミケは鳥である",
+        coco_bird["dependencies"][0].as_str().unwrap(),
+        mike_bird["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(direct_explanation_text.contains(marker), "missing {marker}");
+    }
+    for dependency in direct_common["dependencies"].as_array().unwrap() {
+        assert!(
+            direct_explanation["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency),
+            "detailed comparison explanation lost {dependency}"
+        );
+    }
 
     let derived_actor = "common-relation-derived";
     let derived_case = "common-relation-derived-case";
@@ -4246,6 +4275,79 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
                 .contains(dependency)
         );
     }
+    let derived_explanation = record(&execute_in_case(
+        &scratch.0,
+        derived_actor,
+        derived_case,
+        &["--input", "derived-common-explanation", "詳しく説明して"],
+    ));
+    assert_eq!(derived_explanation["lifecycle"], "COMMIT");
+    assert_eq!(derived_explanation["guarantee"], "DERIVED");
+    let derived_explanation_text = derived_explanation["text"].as_str().unwrap();
+    assert_ne!(derived_explanation_text, derived_text);
+    for marker in [
+        "ココ側の証明: ココは動物である",
+        "ミケ側の証明: ミケは動物である",
+        "適用規則:",
+        rule["dependencies"][0].as_str().unwrap(),
+        derived_coco["dependencies"][0].as_str().unwrap(),
+        derived_mike["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            derived_explanation_text.contains(marker),
+            "missing {marker}"
+        );
+    }
+
+    let stale_actor = "common-relation-stale";
+    let stale_case = "common-relation-stale-case";
+    let stale_fact = record(&execute_in_case(
+        &scratch.0,
+        stale_actor,
+        stale_case,
+        &["--input", "stale-coco-bird", "ココは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        stale_actor,
+        stale_case,
+        &["--input", "stale-mike-bird", "ミケは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        stale_actor,
+        stale_case,
+        &["--input", "stale-common", "ココとミケの共通点は何ですか"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        stale_actor,
+        "common-relation-stale-invalidation",
+        &[
+            "--input",
+            "stale-invalidate-coco",
+            &format!(
+                "{}を無効化して",
+                stale_fact["dependencies"][0].as_str().unwrap()
+            ),
+        ],
+    ));
+    let stale_explanation = stopped(
+        &execute_in_case(
+            &scratch.0,
+            stale_actor,
+            stale_case,
+            &["--input", "stale-common-explanation", "詳しく説明して"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        stale_explanation["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_PROOF_CHANGED")
+    );
 
     let english_actor = "common-relation-english";
     let english_case = "common-relation-english-case";

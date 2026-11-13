@@ -14,6 +14,32 @@ struct CalculationSequenceStepArtifact {
     consumed: Vec<language::CalculationReferenceUse>,
 }
 
+const COMMON_RELATIONS_REPORT_KIND: &str = "minidora.common-relations-report.v1";
+const COMMON_RELATIONS_REPORT_HEADER: &str = "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。";
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommonRelationsReportArtifact {
+    kind: String,
+    result_id: String,
+    report_sha256: String,
+    subject_a: String,
+    subject_b: String,
+    scope: String,
+    shared_proofs: Vec<CommonRelationProofArtifact>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommonRelationProofArtifact {
+    proposition_a: Proposition,
+    proposition_b: Proposition,
+    guarantee_a: Guarantee,
+    guarantee_b: Guarantee,
+    dependencies_a: Vec<String>,
+    dependencies_b: Vec<String>,
+}
+
 /// Trusted frontends supply an authenticated local principal. A caller-controlled
 /// actor string is not remote authentication; the HTTP adapter binds it to its
 /// configured authenticated identity before entering this API.
@@ -1715,6 +1741,224 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
+                } else if prior.text.starts_with(COMMON_RELATIONS_REPORT_HEADER) {
+                    if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_COMMON_RELATION_CONTEXT",
+                            "説明対象として固定された直前の共通関係比較がありません。",
+                        );
+                    }
+                    let Some(report_ref) = prior.dependencies.first().cloned() else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "COMMON_RELATION_CONTEXT_UNAVAILABLE",
+                            "前回の共通関係比較に再検証可能な証拠artifactがありません。",
+                        );
+                    };
+                    let Some(report_bytes) =
+                        self.store
+                            .get_bytes_if_present(actor, &request.case_id, &report_ref)?
+                    else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "COMMON_RELATION_CONTEXT_UNAVAILABLE",
+                            "前回の共通関係比較artifactを同一ケースから取得できません。",
+                        );
+                    };
+                    if report_bytes.len() > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "前回の共通関係artifactが今回の証拠予算を超えています。",
+                        );
+                    }
+                    let artifact = match serde_json::from_slice::<CommonRelationsReportArtifact>(
+                        &report_bytes,
+                    ) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "COMMON_RELATION_CONTEXT_INVALID",
+                                "前回の共通関係artifactの形式を検証できません。",
+                            );
+                        }
+                    };
+                    if canonical(&artifact)? != report_bytes
+                        || artifact.kind != COMMON_RELATIONS_REPORT_KIND
+                        || artifact.result_id != prior.id
+                        || !prior.content_plan.as_ref().is_some_and(|plan| {
+                            plan.required_units.len() == 1
+                                && digest(plan.required_units[0].as_bytes())
+                                    == artifact.report_sha256
+                        })
+                        || artifact.subject_a.is_empty()
+                        || artifact.subject_b.is_empty()
+                        || artifact.subject_a == artifact.subject_b
+                        || artifact.scope.is_empty()
+                        || artifact.shared_proofs.is_empty()
+                        || prior.dependencies.first() != Some(&report_ref)
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "COMMON_RELATION_CONTEXT_INVALID",
+                            "前回結果とartifactの同一性または比較条件が一致しません。",
+                        );
+                    }
+                    let query_count = match u32::try_from(artifact.shared_proofs.len())
+                        .ok()
+                        .and_then(|count| count.checked_mul(2))
+                    {
+                        Some(count) if count <= request.budget.max_actions => count,
+                        _ => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RESOURCE_LIMIT",
+                                "各共通関係を両対象について再検証する推論予算が不足しています。",
+                            );
+                        }
+                    };
+                    let per_query_budget = request.budget.max_actions / query_count;
+                    let memory = self.store.load_memory(actor)?;
+                    let mut explanation = vec![format!(
+                        "前回比較の詳細説明（比較結果ID: {}）。候補となった各関係を、同一ケースの現在有効な記憶に対して両対象ごとに再照合しました。",
+                        prior.id
+                    )];
+                    let mut expected_dependencies = BTreeSet::from([report_ref.clone()]);
+                    let mut candidate_keys = BTreeSet::new();
+                    let mut any_derived = false;
+                    for proof in &artifact.shared_proofs {
+                        let expected_b = Proposition {
+                            subject: artifact.subject_b.clone(),
+                            ..proof.proposition_a.clone()
+                        };
+                        let candidate_key = (
+                            proof.proposition_a.predicate.clone(),
+                            proof.proposition_a.object.clone(),
+                            proof.proposition_a.negative,
+                        );
+                        if proof.proposition_a.subject != artifact.subject_a
+                            || proof.proposition_a.scope != artifact.scope
+                            || proof.proposition_a.predicate.starts_with(['$', '?'])
+                            || proof.proposition_a.object.starts_with(['$', '?'])
+                            || proof.proposition_b != expected_b
+                            || !candidate_keys.insert(candidate_key)
+                            || !matches!(
+                                proof.guarantee_a,
+                                Guarantee::UserPremise | Guarantee::Derived
+                            )
+                            || !matches!(
+                                proof.guarantee_b,
+                                Guarantee::UserPremise | Guarantee::Derived
+                            )
+                            || proof.dependencies_a.is_empty()
+                            || proof.dependencies_b.is_empty()
+                            || !proof
+                                .dependencies_a
+                                .windows(2)
+                                .all(|pair| pair[0] < pair[1])
+                            || !proof
+                                .dependencies_b
+                                .windows(2)
+                                .all(|pair| pair[0] < pair[1])
+                        {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "COMMON_RELATION_CONTEXT_INVALID",
+                                "前回の比較条件または左右の証拠一覧に不整合があります。",
+                            );
+                        }
+                        let answer_a =
+                            relations::query(&memory, &proof.proposition_a, per_query_budget)?;
+                        let answer_b =
+                            relations::query(&memory, &proof.proposition_b, per_query_budget)?;
+                        let dependencies_a = relations::answer_dependencies(&answer_a);
+                        let dependencies_b = relations::answer_dependencies(&answer_b);
+                        let guarantee_a = relations::answer_guarantee(&answer_a);
+                        let guarantee_b = relations::answer_guarantee(&answer_b);
+                        if answer_a.status != "SUPPORTED"
+                            || answer_b.status != "SUPPORTED"
+                            || dependencies_a != proof.dependencies_a
+                            || dependencies_b != proof.dependencies_b
+                            || guarantee_a != proof.guarantee_a
+                            || guarantee_b != proof.guarantee_b
+                        {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTEXT_PROOF_CHANGED",
+                                "前回比較の左右いずれかを支えた現在有効な根拠が変わっています。新しい比較を行ってください。",
+                            );
+                        }
+                        expected_dependencies.extend(dependencies_a.iter().cloned());
+                        expected_dependencies.extend(dependencies_b.iter().cloned());
+                        any_derived |=
+                            guarantee_a == Guarantee::Derived || guarantee_b == Guarantee::Derived;
+                        explanation.push(format!(
+                            "共通関係の照合: {} ／ {}（範囲: {}）。両側で同一の述語・対象・肯定否定・範囲が支持されています。",
+                            describe(&proof.proposition_a),
+                            describe(&proof.proposition_b),
+                            artifact.scope
+                        ));
+                        explanation.push(format!(
+                            "{}側: SUPPORTED（{}）；{}側: SUPPORTED（{}）。左右の証拠IDを別々に再確認しました。",
+                            artifact.subject_a,
+                            guarantee_label(&guarantee_a),
+                            artifact.subject_b,
+                            guarantee_label(&guarantee_b)
+                        ));
+                        explanation.extend(relation_explanation_lines(
+                            &memory,
+                            &proof.proposition_a,
+                            &answer_a,
+                            &format!("{}側の証明", artifact.subject_a),
+                        ));
+                        explanation.extend(relation_explanation_lines(
+                            &memory,
+                            &proof.proposition_b,
+                            &answer_b,
+                            &format!("{}側の証明", artifact.subject_b),
+                        ));
+                    }
+                    if expected_dependencies
+                        != prior.dependencies.iter().cloned().collect::<BTreeSet<_>>()
+                        || prior.dependencies.len() != expected_dependencies.len()
+                        || (any_derived && prior.guarantee != Guarantee::Derived)
+                        || (!any_derived && prior.guarantee != Guarantee::UserPremise)
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "COMMON_RELATION_CONTEXT_INVALID",
+                            "前回比較の依存記録または全体保証がartifactと一致しません。",
+                        );
+                    }
+                    explanation.push(
+                        "一覧にない関係は「共通点がない」ことを意味しません。この説明は保存済みの前提・規則の範囲に限られ、現実世界の真偽を確認したものではありません。".into(),
+                    );
+                    if explanation.join("\n").len() > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "再検証した共通関係の説明が今回の証拠予算を超えています。",
+                        );
+                    }
+                    units.extend(explanation);
+                    result.dependencies.push(prior.id.clone());
+                    result
+                        .dependencies
+                        .extend(prior.dependencies.iter().cloned());
+                    result.guarantee = prior.guarantee.clone();
                 } else if let Some((report_ref, explanation)) =
                     crate::code_generation::previous_code_explanation(
                         &self.store,
@@ -2437,6 +2681,7 @@ impl Engine {
                 }
 
                 let mut common = Vec::new();
+                let mut shared_proofs = Vec::new();
                 let mut dependencies = BTreeSet::new();
                 let mut any_derived = false;
                 for (predicate, object, negative) in candidates {
@@ -2480,10 +2725,20 @@ impl Engine {
                     }
                     let guarantee_a = relations::answer_guarantee(&answer_a);
                     let guarantee_b = relations::answer_guarantee(&answer_b);
-                    dependencies.extend(relations::answer_dependencies(&answer_a));
-                    dependencies.extend(relations::answer_dependencies(&answer_b));
+                    let dependencies_a = relations::answer_dependencies(&answer_a);
+                    let dependencies_b = relations::answer_dependencies(&answer_b);
+                    dependencies.extend(dependencies_a.iter().cloned());
+                    dependencies.extend(dependencies_b.iter().cloned());
                     any_derived |=
                         guarantee_a == Guarantee::Derived || guarantee_b == Guarantee::Derived;
+                    shared_proofs.push(CommonRelationProofArtifact {
+                        proposition_a: proposition_a.clone(),
+                        proposition_b: proposition_b.clone(),
+                        guarantee_a: guarantee_a.clone(),
+                        guarantee_b: guarantee_b.clone(),
+                        dependencies_a,
+                        dependencies_b,
+                    });
                     common.push((
                         proposition_a,
                         proposition_b,
@@ -2506,7 +2761,7 @@ impl Engine {
                     Guarantee::Derived => "規則導出",
                     _ => "根拠付き",
                 };
-                let mut report = vec!["保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。".to_string()];
+                let mut report = vec![COMMON_RELATIONS_REPORT_HEADER.to_string()];
                 for (proposition_a, proposition_b, answer_a, answer_b, guarantee_a, guarantee_b) in
                     common
                 {
@@ -2531,21 +2786,38 @@ impl Engine {
                     ));
                 }
                 let report = report.join("\n");
-                if report.len() > request.budget.max_evidence_bytes {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "共通関係と証拠の出力が要求の証拠予算を超えました。",
-                    );
-                }
-                units.push(report);
-                result.dependencies = dependencies.into_iter().collect();
-                result.guarantee = if any_derived {
+                let overall_guarantee = if any_derived {
                     Guarantee::Derived
                 } else {
                     Guarantee::UserPremise
                 };
+                let artifact = CommonRelationsReportArtifact {
+                    kind: COMMON_RELATIONS_REPORT_KIND.into(),
+                    result_id: result.id.clone(),
+                    report_sha256: digest(report.as_bytes()),
+                    subject_a: subject_a.clone(),
+                    subject_b: subject_b.clone(),
+                    scope: scope.clone(),
+                    shared_proofs,
+                };
+                let artifact_bytes = canonical(&artifact)?;
+                if report.len().saturating_add(artifact_bytes.len())
+                    > request.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "共通関係の出力と再検証artifactが要求の証拠予算を超えました。",
+                    );
+                }
+                let report_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &artifact_bytes)?;
+                units.push(report);
+                result.dependencies.push(report_ref);
+                result.dependencies.extend(dependencies);
+                result.guarantee = overall_guarantee;
             }
             Intent::AskPreviousRelation {
                 proposition,
@@ -4013,6 +4285,16 @@ fn relation_explanation_lines(
         "この説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。".into(),
     );
     lines
+}
+fn guarantee_label(guarantee: &Guarantee) -> &'static str {
+    match guarantee {
+        Guarantee::UserPremise => "直接提示された前提",
+        Guarantee::Derived => "保存規則からの導出",
+        Guarantee::Computed => "計算結果",
+        Guarantee::SourceReport => "出典付き報告",
+        Guarantee::Hypothesis => "仮説",
+        Guarantee::Unknown => "未確定",
+    }
 }
 fn describe(p: &Proposition) -> String {
     if p.predicate == "is" {
