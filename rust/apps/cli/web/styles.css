@@ -202,6 +202,11 @@ h2 {
 }
 
 .form-footer p { max-width: 170px; margin: 0; color: #87949a; font-size: 10px; line-height: 1.5; }
+.form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.secondary-button { min-height: 39px; padding: 0 11px; border: 1px solid #dbe3e3; color: #59676d; background: #fff; font-size: 10px; }
+.secondary-button:hover:not(:disabled) { border-color: #c4d0d0; color: #35464c; background: #f5f8f7; }
+.secondary-button:disabled { cursor: not-allowed; transform: none; opacity: .48; }
+.cancel-note { margin: 9px 0 0; color: #87949a; font-size: 9px; line-height: 1.5; text-align: right; }
 
 button {
   min-height: 43px;

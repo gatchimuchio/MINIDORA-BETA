@@ -249,6 +249,7 @@ def main() -> None:
                     set(result.get("dependencies", []))
                 ):
                     raise AssertionError("browser result omitted the direct premise or rule")
+                expect(page.locator("#cancel-case-button")).to_be_enabled()
                 browser_script = (rust_root / "apps/cli/web/app.js").read_text(encoding="utf-8")
                 if any(
                     marker in browser_script
@@ -296,6 +297,57 @@ def main() -> None:
                             ]
                             if headers.get(key)
                         ),
+                    }
+                )
+
+                page.locator("#api-token").fill(local_token)
+                page.locator("#cancel-case-button").click()
+                expect(page.locator("#result-state")).to_have_text("CANCEL", timeout=15_000)
+                page.locator(".record-details summary").click()
+                cancellation = json.loads(page.locator("#record-json").inner_text())
+                if cancellation.get("lifecycle") != "CANCEL":
+                    raise AssertionError("the browser did not record a Core cancellation result")
+                if "既発生・未確定の作用は消去せず保持" not in page.locator(
+                    "#answer-text"
+                ).inner_text():
+                    raise AssertionError("the browser did not disclose that cancellation is not undo")
+
+                inspected = subprocess.run(
+                    [
+                        str(binary),
+                        "inspect",
+                        "--db",
+                        str(database),
+                        "--case",
+                        case,
+                        "--actor",
+                        actor,
+                        "--json",
+                    ],
+                    cwd=repository_root,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if inspected.returncode != 0:
+                    raise RuntimeError(f"case history inspection failed: {inspected.stderr}")
+                revision = json.loads(inspected.stdout)
+                retained = revision.get("prior_results", {}).get(result["id"])
+                if not retained or retained.get("text") != result.get("text"):
+                    raise AssertionError("Core cancellation failed to retain the previous profile result")
+                page.locator("#api-token").fill("")
+                observations.append(
+                    {
+                        "operation": "chromium_browser_ui_cancel_case",
+                        "actor": actor,
+                        "case": case,
+                        "input_id": cancellation["input_id"],
+                        "result_id": cancellation["id"],
+                        "lifecycle": cancellation["lifecycle"],
+                        "reason": cancellation["reason"],
+                        "previous_profile_result_retained": result["id"] in revision["prior_results"],
+                        "past_effects_reversed": False,
                     }
                 )
 
@@ -405,9 +457,9 @@ def main() -> None:
         "test_and_tool_snapshot_sha256": snapshot(test_paths, rust_root),
         "documentation_snapshot_sha256": snapshot(documentation_paths, rust_root),
         "execution_mode": "fresh local CLI producer processes -> 127.0.0.1-only authenticated Rust HTTP process -> Chromium Playwright form submission -> same Engine/Core result -> browser rendered result and dependency list; wrong-token request rejected; no external requests or data",
-        "previous_consumer_gap": "The authenticated loopback HTTP route had been validated directly, but no browser form or rendered dependency list was connected to that route.",
-        "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> authenticated POST /v1/execute -> same Engine/Core relation-profile producer -> HYPOTHESIS result -> browser renders lifecycle, guarantee, text, disclosure, result ID and exact dependency list",
-        "scope": "Confirms one local Chromium browser submission, same-origin-only resource requests, security headers, displayed proof dependencies and a wrong-token 401. This does not establish public deployment, streaming, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
+        "previous_consumer_gap": "The browser rendered the Core profile but had not submitted the Core cancellation intent or checked that the previous result remained in case history.",
+        "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> authenticated POST /v1/execute -> same Engine/Core relation-profile producer -> browser renders HYPOTHESIS result and exact dependencies -> same actor/case Core CANCEL input -> prior profile retained in case history",
+        "scope": "Confirms one local Chromium browser profile submission, same-origin-only resource requests, security headers, exact displayed proof dependencies, a Core cancellation that preserves the prior profile result without undoing past effects, and a wrong-token 401. This does not establish streaming, undo, public deployment, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
         "actual_input": {
             "actor": "profile-browser-owner",
             "case": "profile-browser-case",
@@ -430,6 +482,11 @@ def main() -> None:
                 for item in observations
                 if item["operation"] == "chromium_browser_ui_request"
             ),
+            "browser_cancel_result_id": next(
+                item["result_id"]
+                for item in observations
+                if item["operation"] == "chromium_browser_ui_cancel_case"
+            ),
             "wrong_token_rejected_with_401": True,
             "browser_requests_same_origin_only": True,
             "browser_console_errors": browser_errors,
@@ -441,7 +498,7 @@ def main() -> None:
             "full_workspace_runtime_suite": "NOT_RUN",
             "streaming_public_deployment_and_broad_browser_matrix": "NOT_RUN",
             "full_requirement_acceptance": "UNVERIFIED",
-            "next_consumer": "Streaming remains unverified; broad browser acceptance and general B08 writing quality remain outside this scoped observation.",
+            "next_consumer": "Provisional/final streaming and reversible undo remain unimplemented; broad browser acceptance and general B08 writing quality remain outside this scoped observation.",
         },
         "observations": observations,
     }

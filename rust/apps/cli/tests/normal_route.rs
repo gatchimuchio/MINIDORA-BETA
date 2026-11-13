@@ -1485,6 +1485,8 @@ fn loopback_browser_assets_are_fixed_and_security_headered() {
     assert!(page.contains("/favicon.svg"));
     assert!(page.contains("method=\"post\" action=\"/v1/execute\""));
     assert!(!page.contains("name=\"token\""));
+    assert!(page.contains("id=\"cancel-case-button\""));
+    assert!(page.contains("記録済みの結果や外部作用は元に戻しません"));
 
     let (status, headers, script) = http_get(address, "/app.js");
     assert_eq!(status, 200);

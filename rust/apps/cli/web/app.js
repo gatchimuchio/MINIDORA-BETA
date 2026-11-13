@@ -6,6 +6,7 @@ const caseField = document.querySelector("#case-id");
 const tokenField = document.querySelector("#api-token");
 const requestField = document.querySelector("#request-text");
 const submitButton = document.querySelector("#submit-button");
+const cancelCaseButton = document.querySelector("#cancel-case-button");
 const connectionStatus = document.querySelector("#connection-status");
 const formError = document.querySelector("#form-error");
 const resultState = document.querySelector("#result-state");
@@ -62,6 +63,7 @@ function showRecord(record) {
   resultContent.hidden = false;
   resultState.textContent = record.lifecycle || "不明";
   resultState.dataset.state = record.lifecycle || "UNKNOWN";
+  cancelCaseButton.disabled = record.lifecycle === "CANCEL";
   resultMeta.replaceChildren();
   addMeta("保証", record.guarantee || "UNKNOWN");
   addMeta("Input", record.input_id || "-");
@@ -90,6 +92,7 @@ function showTransportError(message) {
   reasonText.classList.add("is-error");
   resultMeta.replaceChildren();
   dependencyList.replaceChildren();
+  cancelCaseButton.disabled = true;
   recordJson.textContent = "";
   emptyState.hidden = true;
   loadingState.hidden = true;
@@ -131,6 +134,7 @@ form.addEventListener("submit", async (event) => {
 
   submitButton.disabled = true;
   submitButton.setAttribute("aria-busy", "true");
+  cancelCaseButton.disabled = true;
   emptyState.hidden = true;
   resultContent.hidden = true;
   loadingState.hidden = false;
@@ -161,6 +165,12 @@ form.addEventListener("submit", async (event) => {
     submitButton.disabled = false;
     submitButton.removeAttribute("aria-busy");
   }
+});
+
+cancelCaseButton.addEventListener("click", () => {
+  if (cancelCaseButton.disabled) return;
+  requestField.value = "キャンセル";
+  form.requestSubmit();
 });
 
 checkConnection();

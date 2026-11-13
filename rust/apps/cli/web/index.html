@@ -66,11 +66,15 @@
 
               <div class="form-footer">
                 <p>送信ごとに新しいInput IDを発行します。</p>
-                <button id="submit-button" type="submit">
-                  <span>Coreへ送信</span>
-                  <span aria-hidden="true">→</span>
-                </button>
+                <div class="form-actions">
+                  <button id="cancel-case-button" class="secondary-button" type="button" disabled>ケースをキャンセル</button>
+                  <button id="submit-button" type="submit">
+                    <span>Coreへ送信</span>
+                    <span aria-hidden="true">→</span>
+                  </button>
+                </div>
               </div>
+              <p class="cancel-note">キャンセルはケースを停止します。記録済みの結果や外部作用は元に戻しません。</p>
               <p class="form-error" id="form-error" role="alert" hidden></p>
             </form>
           </section>
