@@ -1374,6 +1374,71 @@ mod tests {
         );
         next
     }
+    fn run_store_workers(store_directory: &Path, mode: &str, records: [Vec<u8>; 2]) -> Vec<String> {
+        let scenario = store_directory.join(format!("race-{mode}"));
+        fs::create_dir(&scenario).unwrap();
+        let gate = scenario.join("start");
+        let mut workers = Vec::new();
+        let mut ready_paths = Vec::new();
+        let mut result_paths = Vec::new();
+        for (worker, record) in records.iter().enumerate() {
+            let record_path = scenario.join(format!("record-{worker}.json"));
+            fs::write(&record_path, record).unwrap();
+            let ready = scenario.join(format!("ready-{worker}"));
+            let result = scenario.join(format!("result-{worker}"));
+            let child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "store::tests::multi_process_writer_worker",
+                    "--nocapture",
+                ])
+                .env("MINIDORA_STORE_MP_DIR", store_directory)
+                .env("MINIDORA_STORE_MP_MODE", mode)
+                .env("MINIDORA_STORE_MP_RECORD", &record_path)
+                .env("MINIDORA_STORE_MP_GATE", &gate)
+                .env("MINIDORA_STORE_MP_READY", &ready)
+                .env("MINIDORA_STORE_MP_RESULT", &result)
+                .spawn()
+                .unwrap();
+            workers.push(child);
+            ready_paths.push(ready);
+            result_paths.push(result);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if ready_paths.iter().all(|path| path.exists()) {
+                break;
+            }
+            for child in &mut workers {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!("writer worker exited before the barrier: {status}");
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "writer workers did not reach the barrier"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(&gate, b"go").unwrap();
+
+        for child in workers {
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "writer process failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let mut outcomes: Vec<_> = result_paths
+            .iter()
+            .map(|path| fs::read_to_string(path).unwrap())
+            .collect();
+        outcomes.sort();
+        outcomes
+    }
+
     fn action(store: &Store, request: &RequestEnvelope) -> ActionRecord {
         ActionRecord {
             case_id: request.case_id.clone(),
@@ -1468,66 +1533,15 @@ mod tests {
         let request = request();
         let initial = register(&store, &request);
         let candidate = sealed(&store, &request, &initial);
-        let candidate_path = directory.0.join("candidate.json");
-        fs::write(&candidate_path, serde_json::to_vec(&candidate).unwrap()).unwrap();
         drop(store);
-
-        let gate = directory.0.join("start");
-        let mut workers = Vec::new();
-        let mut ready_paths = Vec::new();
-        let mut result_paths = Vec::new();
-        for worker in 0..2 {
-            let ready = directory.0.join(format!("ready-{worker}"));
-            let result = directory.0.join(format!("result-{worker}"));
-            let child = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "store::tests::multi_process_writer_worker",
-                    "--nocapture",
-                ])
-                .env("MINIDORA_STORE_MP_DIR", &directory.0)
-                .env("MINIDORA_STORE_MP_CANDIDATE", &candidate_path)
-                .env("MINIDORA_STORE_MP_GATE", &gate)
-                .env("MINIDORA_STORE_MP_READY", &ready)
-                .env("MINIDORA_STORE_MP_RESULT", &result)
-                .spawn()
-                .unwrap();
-            workers.push(child);
-            ready_paths.push(ready);
-            result_paths.push(result);
-        }
-
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if ready_paths.iter().all(|path| path.exists()) {
-                break;
-            }
-            for child in &mut workers {
-                if let Some(status) = child.try_wait().unwrap() {
-                    panic!("writer worker exited before the barrier: {status}");
-                }
-            }
-            assert!(
-                Instant::now() < deadline,
-                "writer workers did not reach the barrier"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        fs::write(&gate, b"go").unwrap();
-
-        for child in workers {
-            let output = child.wait_with_output().unwrap();
-            assert!(
-                output.status.success(),
-                "writer process failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        let mut outcomes: Vec<_> = result_paths
-            .iter()
-            .map(|path| fs::read_to_string(path).unwrap())
-            .collect();
-        outcomes.sort();
+        let outcomes = run_store_workers(
+            &directory.0,
+            "append",
+            [
+                serde_json::to_vec(&candidate).unwrap(),
+                serde_json::to_vec(&candidate).unwrap(),
+            ],
+        );
         assert_eq!(outcomes, ["ERR:REVISION_CONFLICT", "OK"]);
         assert_eq!(
             Store::open(&directory.0)
@@ -1540,16 +1554,96 @@ mod tests {
     }
 
     #[test]
+    fn separate_processes_register_exact_input_once() {
+        let directory = Directory::new();
+        Store::open(&directory.0).unwrap();
+        let request = request();
+        let request_bytes = serde_json::to_vec(&request).unwrap();
+        let outcomes = run_store_workers(
+            &directory.0,
+            "register",
+            [request_bytes.clone(), request_bytes],
+        );
+        assert_eq!(outcomes, ["NEW", "REPLAY"]);
+
+        let store = Store::open(&directory.0).unwrap();
+        assert!(
+            !store
+                .register_input("alice", &request, &identity(&request).unwrap())
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn separate_processes_retain_conflicting_input_attempt() {
+        let directory = Directory::new();
+        Store::open(&directory.0).unwrap();
+        let accepted = request();
+        let mut conflict = accepted.clone();
+        conflict.text = "2+4".into();
+        let outcomes = run_store_workers(
+            &directory.0,
+            "register",
+            [
+                serde_json::to_vec(&accepted).unwrap(),
+                serde_json::to_vec(&conflict).unwrap(),
+            ],
+        );
+        assert_eq!(outcomes, ["ERR:INPUT_IDENTITY_COLLISION", "NEW"]);
+        let attempts = Store::open(&directory.0)
+            .unwrap()
+            .conflict_attempts("alice", "case-a")
+            .unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts == vec![accepted] || attempts == vec![conflict]);
+    }
+
+    #[test]
+    fn separate_processes_cannot_claim_one_case_for_different_actors() {
+        let directory = Directory::new();
+        Store::open(&directory.0).unwrap();
+        let alice = request();
+        let mut bob = alice.clone();
+        bob.actor_id = "bob".into();
+        let outcomes = run_store_workers(
+            &directory.0,
+            "register",
+            [
+                serde_json::to_vec(&alice).unwrap(),
+                serde_json::to_vec(&bob).unwrap(),
+            ],
+        );
+        assert_eq!(outcomes, ["ERR:ACCESS_DENIED", "NEW"]);
+
+        let store = Store::open(&directory.0).unwrap();
+        match store.register_input("alice", &alice, &identity(&alice).unwrap()) {
+            Ok(false) => assert!(
+                store
+                    .register_input("bob", &bob, &identity(&bob).unwrap())
+                    .is_err()
+            ),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "ACCESS_DENIED" => {
+                assert!(
+                    !store
+                        .register_input("bob", &bob, &identity(&bob).unwrap())
+                        .unwrap()
+                );
+            }
+            other => panic!("unexpected owner observation: {other:?}"),
+        }
+    }
+
+    #[test]
     fn multi_process_writer_worker() {
         let Ok(directory) = std::env::var("MINIDORA_STORE_MP_DIR") else {
             return;
         };
-        let candidate_path = std::env::var("MINIDORA_STORE_MP_CANDIDATE").unwrap();
+        let mode = std::env::var("MINIDORA_STORE_MP_MODE").unwrap();
+        let record_path = std::env::var("MINIDORA_STORE_MP_RECORD").unwrap();
         let gate = std::env::var("MINIDORA_STORE_MP_GATE").unwrap();
         let ready = std::env::var("MINIDORA_STORE_MP_READY").unwrap();
         let result = std::env::var("MINIDORA_STORE_MP_RESULT").unwrap();
-        let candidate: CaseRevision =
-            serde_json::from_slice(&fs::read(candidate_path).unwrap()).unwrap();
+        let record = fs::read(record_path).unwrap();
         let store = Store::open(directory).unwrap();
         fs::write(ready, b"ready").unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -1560,10 +1654,29 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        let outcome = match store.append_case("alice", &candidate) {
-            Ok(()) => "OK".to_owned(),
-            Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
-            Err(error) => format!("ERR:{error}"),
+        let outcome = match mode.as_str() {
+            "append" => {
+                let candidate: CaseRevision = serde_json::from_slice(&record).unwrap();
+                match store.append_case("alice", &candidate) {
+                    Ok(()) => "OK".to_owned(),
+                    Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
+                    Err(error) => format!("ERR:{error}"),
+                }
+            }
+            "register" => {
+                let request: RequestEnvelope = serde_json::from_slice(&record).unwrap();
+                match store.register_input(
+                    &request.actor_id,
+                    &request,
+                    &identity(&request).unwrap(),
+                ) {
+                    Ok(true) => "NEW".to_owned(),
+                    Ok(false) => "REPLAY".to_owned(),
+                    Err(minidora_domain::Error::Contract { code, .. }) => format!("ERR:{code}"),
+                    Err(error) => format!("ERR:{error}"),
+                }
+            }
+            _ => panic!("unsupported multi-process test mode"),
         };
         fs::write(result, outcome).unwrap();
     }

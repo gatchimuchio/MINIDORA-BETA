@@ -1,8 +1,8 @@
 {
   "work_item": "BB-RECOVER / QC2-01 durable-store concurrency and stale stage-name follow-up",
   "stage": "BODY-2_EXECUTION",
-  "recorded_at": "2026-11-13T10:21:33Z",
-  "base_commit": "218a4779f3e1fe3702fa0a36e916013765735305",
+  "recorded_at": "2026-11-13T10:27:51Z",
+  "base_commit": "bde5c88b9e310760ad0136518e146a9916b8e23f",
   "changed_paths": [
     "rust/crates/minidora-engine/src/store.rs",
     "rust/audit/IMPLEMENTATION_STATUS.md",
@@ -19,9 +19,9 @@
     "platform": "Linux 6.18.57 x86_64"
   },
   "source_snapshot_sha256": {
-    "rust/crates/minidora-engine/src/store.rs": "9765279b309b6cdf56df8e63f7f6d2cd10947ad8c8f8ba94748098c7860469a1"
+    "rust/crates/minidora-engine/src/store.rs": "979aa9e72b30d42e78d0df05b0b670c2f96d6fac6e7586903e83b3358a806a0d"
   },
-  "test_binary_sha256": "4ffae44286a22e3fad305ab9c43462b32408523713ab066e3e6bf080e3ae8279",
+  "test_binary_sha256": "8c4793854a1f5e793ef815212820def1a7dc0d83c8d08de8016945af52c5e5f3",
   "observed_gap": "Blob stage identities were process ID plus a process-local serial that restarts at zero. An orphan from abrupt termination could collide after process ID reuse; create_new prevented overwrite but returned an error instead of choosing another name.",
   "change": "Exclusive blob stage creation now advances the checked serial on AlreadyExists, preserves the pre-existing orphan, and reports serial exhaustion as STORE_TEMP_SERIAL_EXHAUSTED. A two-process SQLite writer test races the same case revision and verifies one commit plus one REVISION_CONFLICT.",
   "observations": {
@@ -38,6 +38,36 @@
         "ERR:REVISION_CONFLICT"
       ],
       "reopened_case_matches_winning_revision": true
+    },
+    "multi_process_exact_input_replay": {
+      "processes": 2,
+      "shared_store": true,
+      "same_case_input_id_version_and_envelope": true,
+      "outcomes": [
+        "NEW",
+        "REPLAY"
+      ],
+      "subsequent_registration_is_replay": true
+    },
+    "multi_process_conflicting_input": {
+      "processes": 2,
+      "shared_store": true,
+      "same_case_input_identity_different_body": true,
+      "outcomes": [
+        "ERR:INPUT_IDENTITY_COLLISION",
+        "NEW"
+      ],
+      "one_losing_request_retained_in_conflict_journal": true
+    },
+    "multi_process_actor_ownership": {
+      "processes": 2,
+      "shared_store": true,
+      "same_case_different_actor_ids": true,
+      "outcomes": [
+        "ERR:ACCESS_DENIED",
+        "NEW"
+      ],
+      "one_actor_owns_case_after_reopen": true
     },
     "existing_recovery_regressions_in_engine_suite": [
       "orphan blob before database commit leaves no case revision",
@@ -60,9 +90,15 @@
       "exit_code": 0
     },
     {
+      "command": "cargo test -p minidora-engine store::tests::separate_processes_ -- --nocapture",
+      "exit_code": 0,
+      "passed": 4,
+      "failed": 0
+    },
+    {
       "command": "cargo test -p minidora-engine --lib --locked",
       "exit_code": 0,
-      "passed": 211,
+      "passed": 214,
       "failed": 0
     },
     {
@@ -77,7 +113,7 @@
   "scope_limits": [
     "The stale-name test is deterministic seeded-state coverage, not an observed OS process-ID reuse event.",
     "No process was killed at every WAL, file-write, link, sync, database-commit, or receipt boundary.",
-    "Physical power loss, network or multi-host filesystems, Windows/macOS, concurrent cross-process exact-input replay, and the full workspace runtime suite were not run.",
+    "Physical power loss, network or multi-host filesystems, Windows/macOS, larger than pairwise concurrent populations, and the full workspace runtime suite were not run.",
     "This scoped result does not close BB-RECOVER or QC2-01; the full required fault and concurrency populations remain UNVERIFIED."
   ],
   "acceptance": "UNVERIFIED"
