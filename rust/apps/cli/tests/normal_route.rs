@@ -3652,6 +3652,138 @@ fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
             .contains("CONFLICTING_PREMISES")
     );
 
+    let three_clause_actor = "conjunction-three-clause-owner";
+    let three_clause_case = "conjunction-three-clause-case";
+    let three_clause_rule = record(&execute_in_case(
+        &scratch.0,
+        three_clause_actor,
+        three_clause_case,
+        &[
+            "--input",
+            "conjunction-three-clause-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let three_clause_bird = record(&execute_in_case(
+        &scratch.0,
+        three_clause_actor,
+        three_clause_case,
+        &[
+            "--input",
+            "conjunction-three-clause-bird",
+            "[scope=biology]ココは鳥",
+        ],
+    ));
+    let three_clause_mammal = record(&execute_in_case(
+        &scratch.0,
+        three_clause_actor,
+        three_clause_case,
+        &[
+            "--input",
+            "conjunction-three-clause-mammal",
+            "[scope=biology]ココは哺乳類",
+        ],
+    ));
+    let three_clause = record(&execute_in_case(
+        &scratch.0,
+        three_clause_actor,
+        three_clause_case,
+        &[
+            "--input",
+            "conjunction-three-clause-question",
+            "[scope=biology]ココは鳥かつ動物かつ哺乳類ですか",
+        ],
+    ));
+    assert_eq!(three_clause["lifecycle"], "COMMIT");
+    assert_eq!(three_clause["guarantee"], "DERIVED");
+    let three_clause_text = three_clause["text"].as_str().unwrap();
+    assert!(three_clause_text.contains("三つの関係"));
+    assert!(three_clause_text.contains("鳥である"));
+    assert!(three_clause_text.contains("動物である"));
+    assert!(three_clause_text.contains("哺乳類である"));
+    for dependency in [
+        &three_clause_rule["dependencies"][0],
+        &three_clause_bird["dependencies"][0],
+        &three_clause_mammal["dependencies"][0],
+    ] {
+        assert!(
+            three_clause["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency)
+        );
+    }
+    let three_clause_negative = record(&execute_in_case(
+        &scratch.0,
+        three_clause_actor,
+        three_clause_case,
+        &[
+            "--input",
+            "conjunction-three-clause-negative-question",
+            "[scope=biology]ココは鳥ではないかつ動物かつ哺乳類ですか",
+        ],
+    ));
+    assert_eq!(three_clause_negative["lifecycle"], "COMMIT");
+    assert!(
+        three_clause_negative["text"]
+            .as_str()
+            .unwrap()
+            .contains("三つの関係")
+    );
+    assert!(
+        three_clause_negative["text"]
+            .as_str()
+            .unwrap()
+            .contains("組み合わせを支持しません")
+    );
+    assert!(
+        three_clause_negative["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&three_clause_bird["dependencies"][0])
+    );
+    let conflict_actor = "conjunction-three-clause-conflict-owner";
+    let conflict_case = "conjunction-three-clause-conflict-case";
+    for (input_id, fact) in [
+        ("three-clause-conflict-bird", "[scope=biology]ココは鳥"),
+        ("three-clause-conflict-animal", "[scope=biology]ココは動物"),
+        (
+            "three-clause-conflict-mammal",
+            "[scope=biology]ココは哺乳類",
+        ),
+        (
+            "three-clause-conflict-not-mammal",
+            "[scope=biology]ココは哺乳類ではない",
+        ),
+    ] {
+        record(&execute_in_case(
+            &scratch.0,
+            conflict_actor,
+            conflict_case,
+            &["--input", input_id, fact],
+        ));
+    }
+    let three_clause_conflict = stopped(
+        &execute_in_case(
+            &scratch.0,
+            conflict_actor,
+            conflict_case,
+            &[
+                "--input",
+                "conjunction-three-clause-conflict-question",
+                "[scope=biology]ココは鳥かつ動物かつ哺乳類ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        three_clause_conflict["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONFLICTING_PREMISES")
+    );
+
     record(&execute_in_case(
         &scratch.0,
         "owner",
@@ -3691,6 +3823,40 @@ fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
             .as_array()
             .unwrap()
             .contains(&english_bird["dependencies"][0])
+    );
+
+    record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "conjunction-english-three-clause",
+        &[
+            "--input",
+            "conjunction-english-three-clause-mammal",
+            "Coco is a mammal",
+        ],
+    ));
+    let english_three_clause = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        "conjunction-english-three-clause",
+        &[
+            "--input",
+            "conjunction-english-three-clause-question",
+            "Is Coco a bird and an animal and a mammal?",
+        ],
+    ));
+    assert_eq!(english_three_clause["lifecycle"], "COMMIT");
+    assert!(
+        english_three_clause["text"]
+            .as_str()
+            .unwrap()
+            .contains("三つの関係")
+    );
+    assert!(
+        english_three_clause["text"]
+            .as_str()
+            .unwrap()
+            .contains("Cocoはmammalである")
     );
 }
 

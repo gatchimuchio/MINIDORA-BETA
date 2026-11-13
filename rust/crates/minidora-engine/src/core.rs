@@ -2070,14 +2070,19 @@ impl Engine {
                 result.guarantee = Guarantee::UserPremise;
             }
             Intent::AskConjunction { propositions } => {
-                if propositions.len() != 2 {
+                if !(2..=3).contains(&propositions.len()) {
                     return self.stop(
                         &mut state,
                         Lifecycle::Reject,
                         "INVALID_CONJUNCTION_QUERY",
-                        "この質問経路は二つの関係節だけを受け付けます。",
+                        "この質問経路は二つまたは三つの関係節を受け付けます。",
                     );
                 }
+                let relation_count = match propositions.len() {
+                    2 => "二つ",
+                    3 => "三つ",
+                    _ => unreachable!("the conjunction length was bounded above"),
+                };
                 let first = &propositions[0];
                 if propositions.iter().any(|proposition| {
                     proposition.subject != first.subject || proposition.scope != first.scope
@@ -2086,16 +2091,18 @@ impl Engine {
                         &mut state,
                         Lifecycle::Reject,
                         "INVALID_CONJUNCTION_QUERY",
-                        "二つの関係節で主語とscopeが一致しません。",
+                        "すべての関係節で主語とscopeが一致しません。",
                     );
                 }
-                let per_relation_budget = request.budget.max_actions / 2;
+                let clause_count =
+                    u32::try_from(propositions.len()).expect("the conjunction length is bounded");
+                let per_relation_budget = request.budget.max_actions / clause_count;
                 if per_relation_budget == 0 {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "RESOURCE_LIMIT",
-                        "二つの関係を確認するための推論予算が不足しています。",
+                        "すべての関係を確認するための推論予算が不足しています。",
                     );
                 }
                 let memory = self.store.load_memory(actor)?;
@@ -2123,7 +2130,7 @@ impl Engine {
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "CONFLICTING_PREMISES",
-                                "複数の関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+                                "関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
                             );
                         }
                         _ => {
@@ -2131,7 +2138,7 @@ impl Engine {
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "MISSING_PREMISES",
-                                "複数の関係節をすべて判定する有効な前提または導出経路がありません。",
+                                "関係節をすべて判定する有効な前提または導出経路がありません。",
                             );
                         }
                     }
@@ -2139,14 +2146,13 @@ impl Engine {
                     any_derived |= relations::answer_guarantee(&answer) == Guarantee::Derived;
                 }
                 if all_supported {
-                    units.push(
-                        "提示された前提の範囲では、尋ねた二つの関係がともに支持されます。".into(),
-                    );
+                    units.push(format!(
+                        "提示された前提の範囲では、尋ねた{relation_count}の関係がともに支持されます。"
+                    ));
                 } else {
-                    units.push(
-                        "提示された根拠は、尋ねた二つの関係がともに成立するという組み合わせを支持しません。"
-                            .into(),
-                    );
+                    units.push(format!(
+                        "提示された根拠は、尋ねた{relation_count}の関係がともに成立するという組み合わせを支持しません。"
+                    ));
                 }
                 units.extend(conclusions);
                 result.dependencies = dependencies.into_iter().collect();

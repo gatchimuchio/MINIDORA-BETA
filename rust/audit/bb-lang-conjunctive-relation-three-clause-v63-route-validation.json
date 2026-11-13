@@ -1,0 +1,593 @@
+{
+  "work_item": "BODY-1 BB-LANG ordinary two/three-clause relation question",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T05:25:24+00:00",
+  "base_commit": "54c6b7779f8cc13933735d8b48b0494ef769e63b",
+  "requirement_ids": [
+    "A02",
+    "A04",
+    "A05",
+    "A09",
+    "B01",
+    "A15"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v61-three-clause-relation-question",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "pre_change_probe": {
+    "binary_sha256": "NOT_CAPTURED_BEFORE_SOURCE_EDIT",
+    "reason": "No pre-edit executable hash or route observation was captured."
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "3e0d01739a2e2b1bd6c5c3afff21b651aeec34f3ec2c5eb5790bc058cead6d44",
+    "rust/crates/minidora-engine/src/input.rs": "50be1dbc947d727e44a44c48c67cb4d7f5a36d20880796388dede544e285245f",
+    "rust/crates/minidora-engine/src/core.rs": "ad14610ee94ba8f8c8d3e3b4aa45e91820b5d72e968ac34e3544bbe73fbd7f80",
+    "rust/crates/minidora-engine/src/relations.rs": "5b1b8d7cd10c4347e6fc84b77bd393150653d14c2529f140acff2a59cf7af84d"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "50be1dbc947d727e44a44c48c67cb4d7f5a36d20880796388dede544e285245f",
+    "rust/apps/cli/tests/normal_route.rs": "a42119a2fd28cac0b094b50c2d6f5365b95ba1927c92e56fd2289954e83347fc",
+    "rust/tools/conjunctive_relation_three_clause_route_test.py": "f1b724709443b25af633c7e555c32ac630b9d812c00a8c9906dc4ce830655b0a"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "dbe4c15fcdecaf1b52e02d0f343f462137f8a06a60362c3bbd4c7dc345093235",
+    "rust/audit/README.md": "7f89e1727d91041d54d6a46db83cdd6ad7d35d9da7a67d10d9231ebf0d660c4c",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "c71f515d84111ab2cc80118179e7fa25276eca9c79ff5baadaa075e7d8e69c80",
+    "rust/audit/requirements.tsv": "1c6321db4ecb638a5902f605b773b1d5b6cf36a602d593c32717df29a04c70a4",
+    "rust/audit/rust-requirement-observations.json": "03b8729ad9c79be04d4b167dc902d27969d8720ec8b2a0d61b5efd0b48912420"
+  },
+  "execution_mode": "fresh CLI process for every request; one temporary SQLite state; Japanese and English relation proofs",
+  "scope": "Two or three copular clauses joined by one homogeneous Japanese かつ/且つ or English and connector form; the first clause names one subject, shorthand later clauses inherit it, and all share one scope.",
+  "producer_consumer": "ordinary Japanese/English question -> sealed AskConjunction with two or three propositions -> Core queries every clause against one actor memory -> combined answer plus exact union of premise/rule dependencies -> normal renderer",
+  "rule_id": "rule:9609330b8fc6796cca7bf364a2448902d12abe618cea7a2f83fde4caa528fa01",
+  "direct_premise_id": "fact:fd1b1bb256c59f4955feddd4d0a3780502e7f7534be3db933871f52bc5cacfc6",
+  "english_rule_id": "rule:cc9068438b70ab1542e0937c4f7fbb70d69595309b1292d3a964145d745c5da2",
+  "english_direct_premise_id": "fact:130afa09c0cb4ddc12e8d9b18f0fa587762bc84eca76b038ad6cf3f71f3e9fd6",
+  "observations": [
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "biology-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:9609330b8fc6796cca7bf364a2448902d12abe618cea7a2f83fde4caa528fa01\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:9609330b8fc6796cca7bf364a2448902d12abe618cea7a2f83fde4caa528fa01"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "coco-bird",
+      "request": "[scope=biology]ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:fd1b1bb256c59f4955feddd4d0a3780502e7f7534be3db933871f52bc5cacfc6\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:fd1b1bb256c59f4955feddd4d0a3780502e7f7534be3db933871f52bc5cacfc6"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "both-supported",
+      "request": "[scope=biology]ココは鳥かつ動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、尋ねた二つの関係がともに支持されます。\n- 支持: ココは鳥である。\n- 支持: ココは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:b144543e813173213f8579182dea63133dd14eb9c67285fad497065e92cab592",
+        "fact:fd1b1bb256c59f4955feddd4d0a3780502e7f7534be3db933871f52bc5cacfc6",
+        "rule:9609330b8fc6796cca7bf364a2448902d12abe618cea7a2f83fde4caa528fa01"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "negative-clause",
+      "request": "[scope=biology]ココは鳥ではないかつ動物ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された根拠は、尋ねた二つの関係がともに成立するという組み合わせを支持しません。\n- 質問された関係は支持されず、提示された根拠は反対に「ココは鳥である」を支持します。\n- 支持: ココは動物である。",
+      "reason": null,
+      "dependencies": [
+        "fact:b144543e813173213f8579182dea63133dd14eb9c67285fad497065e92cab592",
+        "fact:fd1b1bb256c59f4955feddd4d0a3780502e7f7534be3db933871f52bc5cacfc6",
+        "rule:9609330b8fc6796cca7bf364a2448902d12abe618cea7a2f83fde4caa528fa01"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "coco-not-mammal",
+      "request": "[scope=biology]ココは哺乳類ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類ではない。\n前提ID: fact:cc5f8c11cad3b9e55e7a0d5edf9b0ee5b5ae2e677e0efd45c8e64db3d864a6b6\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:cc5f8c11cad3b9e55e7a0d5edf9b0ee5b5ae2e677e0efd45c8e64db3d864a6b6"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "one-clause-refuted",
+      "request": "[scope=biology]ココは鳥かつ哺乳類ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された根拠は、尋ねた二つの関係がともに成立するという組み合わせを支持しません。\n- 支持: ココは鳥である。\n- 質問された関係は支持されず、提示された根拠は反対に「ココは哺乳類ではない」を支持します。",
+      "reason": null,
+      "dependencies": [
+        "fact:cc5f8c11cad3b9e55e7a0d5edf9b0ee5b5ae2e677e0efd45c8e64db3d864a6b6",
+        "fact:fd1b1bb256c59f4955feddd4d0a3780502e7f7534be3db933871f52bc5cacfc6"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "missing-clause",
+      "request": "[scope=biology]ココは鳥かつふわふわですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "関係節をすべて判定する有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: 関係節をすべて判定する有効な前提または導出経路がありません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "coco-mammal",
+      "request": "[scope=biology]ココは哺乳類",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類である。\n前提ID: fact:6616194197434bc23a7e22b585538e66caf1b601dfca241f298961f04e5dc44c\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:6616194197434bc23a7e22b585538e66caf1b601dfca241f298961f04e5dc44c"
+      ]
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "conflicting-clause",
+      "request": "[scope=biology]ココは鳥かつ哺乳類ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+      "reason": "CONFLICTING_PREMISES: 関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+      "dependencies": []
+    },
+    {
+      "case_id": "same-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "wrong-scope",
+      "request": "[scope=ecology]ココは鳥かつ動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "関係節をすべて判定する有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: 関係節をすべて判定する有効な前提または導出経路がありません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "english-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "english-rule",
+      "request": "If X is a bird then X is an animal",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはbirdである ならば $xはanimalである。\n規則ID: rule:cc9068438b70ab1542e0937c4f7fbb70d69595309b1292d3a964145d745c5da2\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:cc9068438b70ab1542e0937c4f7fbb70d69595309b1292d3a964145d745c5da2"
+      ]
+    },
+    {
+      "case_id": "english-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "english-bird",
+      "request": "Coco is a bird",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはbirdである。\n前提ID: fact:130afa09c0cb4ddc12e8d9b18f0fa587762bc84eca76b038ad6cf3f71f3e9fd6\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:130afa09c0cb4ddc12e8d9b18f0fa587762bc84eca76b038ad6cf3f71f3e9fd6"
+      ]
+    },
+    {
+      "case_id": "english-case",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "english-conjunction",
+      "request": "Is Coco a bird and an animal?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、尋ねた二つの関係がともに支持されます。\n- 支持: Cocoはbirdである。\n- 支持: Cocoはanimalである。",
+      "reason": null,
+      "dependencies": [
+        "fact:130afa09c0cb4ddc12e8d9b18f0fa587762bc84eca76b038ad6cf3f71f3e9fd6",
+        "fact:a6e678db880cf3966e60334e69a23a7ac6ee35dc3ae2fff047b0cffbc4e907c2",
+        "rule:cc9068438b70ab1542e0937c4f7fbb70d69595309b1292d3a964145d745c5da2"
+      ]
+    },
+    {
+      "case_id": "japanese-three-clause",
+      "actor_id": "fixture-three-clause-owner",
+      "input_id": "three-clause-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:79a9f6357fc5fc3a0e40b4ec71d847301548eff5f545e219e5dd508c5c5661d0\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:79a9f6357fc5fc3a0e40b4ec71d847301548eff5f545e219e5dd508c5c5661d0"
+      ]
+    },
+    {
+      "case_id": "japanese-three-clause",
+      "actor_id": "fixture-three-clause-owner",
+      "input_id": "three-clause-bird",
+      "request": "[scope=biology]ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:abde354b901a86793e9f335eff759fbf61539a16f3a336c96348ac16e0c9137d\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:abde354b901a86793e9f335eff759fbf61539a16f3a336c96348ac16e0c9137d"
+      ]
+    },
+    {
+      "case_id": "japanese-three-clause",
+      "actor_id": "fixture-three-clause-owner",
+      "input_id": "three-clause-mammal",
+      "request": "[scope=biology]ココは哺乳類",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類である。\n前提ID: fact:d9d685500dc4921b297ff89a6e384352e4eda1bc7434cedb650016d7722d819c\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:d9d685500dc4921b297ff89a6e384352e4eda1bc7434cedb650016d7722d819c"
+      ]
+    },
+    {
+      "case_id": "japanese-three-clause",
+      "actor_id": "fixture-three-clause-owner",
+      "input_id": "three-clause-supported",
+      "request": "[scope=biology]ココは鳥かつ動物かつ哺乳類ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、尋ねた三つの関係がともに支持されます。\n- 支持: ココは鳥である。\n- 支持: ココは動物である。\n- 支持: ココは哺乳類である。",
+      "reason": null,
+      "dependencies": [
+        "fact:94c21f0742d8d94ee5bd2dc54958b8a4ce9ac9a6138f7b538c6ca1669b29cfb5",
+        "fact:abde354b901a86793e9f335eff759fbf61539a16f3a336c96348ac16e0c9137d",
+        "fact:d9d685500dc4921b297ff89a6e384352e4eda1bc7434cedb650016d7722d819c",
+        "rule:79a9f6357fc5fc3a0e40b4ec71d847301548eff5f545e219e5dd508c5c5661d0"
+      ]
+    },
+    {
+      "case_id": "japanese-three-clause",
+      "actor_id": "fixture-three-clause-owner",
+      "input_id": "three-clause-negative",
+      "request": "[scope=biology]ココは鳥ではないかつ動物かつ哺乳類ですか",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された根拠は、尋ねた三つの関係がともに成立するという組み合わせを支持しません。\n- 質問された関係は支持されず、提示された根拠は反対に「ココは鳥である」を支持します。\n- 支持: ココは動物である。\n- 支持: ココは哺乳類である。",
+      "reason": null,
+      "dependencies": [
+        "fact:94c21f0742d8d94ee5bd2dc54958b8a4ce9ac9a6138f7b538c6ca1669b29cfb5",
+        "fact:abde354b901a86793e9f335eff759fbf61539a16f3a336c96348ac16e0c9137d",
+        "fact:d9d685500dc4921b297ff89a6e384352e4eda1bc7434cedb650016d7722d819c",
+        "rule:79a9f6357fc5fc3a0e40b4ec71d847301548eff5f545e219e5dd508c5c5661d0"
+      ]
+    },
+    {
+      "case_id": "three-clause-conflict",
+      "actor_id": "fixture-three-clause-conflict-owner",
+      "input_id": "bird",
+      "request": "[scope=biology]ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:2ccca5219f9b74115455671bdb4502cc748f13a91cdae11d5730103dfde9896e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:2ccca5219f9b74115455671bdb4502cc748f13a91cdae11d5730103dfde9896e"
+      ]
+    },
+    {
+      "case_id": "three-clause-conflict",
+      "actor_id": "fixture-three-clause-conflict-owner",
+      "input_id": "animal",
+      "request": "[scope=biology]ココは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは動物である。\n前提ID: fact:3053eee485a1a3521c25471401934c77001f65b3bfc556af1ecc04fd7337b682\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:3053eee485a1a3521c25471401934c77001f65b3bfc556af1ecc04fd7337b682"
+      ]
+    },
+    {
+      "case_id": "three-clause-conflict",
+      "actor_id": "fixture-three-clause-conflict-owner",
+      "input_id": "mammal",
+      "request": "[scope=biology]ココは哺乳類",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類である。\n前提ID: fact:acf813aae43f122821e5e5428faa6553220309bc9c83970252990761a00cd609\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:acf813aae43f122821e5e5428faa6553220309bc9c83970252990761a00cd609"
+      ]
+    },
+    {
+      "case_id": "three-clause-conflict",
+      "actor_id": "fixture-three-clause-conflict-owner",
+      "input_id": "not-mammal",
+      "request": "[scope=biology]ココは哺乳類ではない",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類ではない。\n前提ID: fact:faa64ec66d24e8c328c24066470e13a40fdf581eb270f5fc5324ababaaaeeb12\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:faa64ec66d24e8c328c24066470e13a40fdf581eb270f5fc5324ababaaaeeb12"
+      ]
+    },
+    {
+      "case_id": "three-clause-conflict",
+      "actor_id": "fixture-three-clause-conflict-owner",
+      "input_id": "question",
+      "request": "[scope=biology]ココは鳥かつ動物かつ哺乳類ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+      "reason": "CONFLICTING_PREMISES: 関係節のいずれかに肯定・否定の競合があります。個別の根拠を確認してください。",
+      "dependencies": []
+    },
+    {
+      "case_id": "english-three-clause",
+      "actor_id": "fixture-english-three-clause-owner",
+      "input_id": "english-three-clause-rule",
+      "request": "If X is a bird then X is an animal",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはbirdである ならば $xはanimalである。\n規則ID: rule:e4ed36297286cd20da1157452aa6a7045a0b802c2be67a460cd59a8fe953935a\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:e4ed36297286cd20da1157452aa6a7045a0b802c2be67a460cd59a8fe953935a"
+      ]
+    },
+    {
+      "case_id": "english-three-clause",
+      "actor_id": "fixture-english-three-clause-owner",
+      "input_id": "english-three-clause-bird",
+      "request": "Coco is a bird",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはbirdである。\n前提ID: fact:4a129415ffdd1e5f73cb579bedceac4c25e3e62449ab2c1b75a006515cad8010\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:4a129415ffdd1e5f73cb579bedceac4c25e3e62449ab2c1b75a006515cad8010"
+      ]
+    },
+    {
+      "case_id": "english-three-clause",
+      "actor_id": "fixture-english-three-clause-owner",
+      "input_id": "english-three-clause-mammal",
+      "request": "Coco is a mammal",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはmammalである。\n前提ID: fact:10dd3423b9f635382da33fe9a2f0ef07c2b8e402b3b2c64f3f1aabbc8e1d9456\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:10dd3423b9f635382da33fe9a2f0ef07c2b8e402b3b2c64f3f1aabbc8e1d9456"
+      ]
+    },
+    {
+      "case_id": "english-three-clause",
+      "actor_id": "fixture-english-three-clause-owner",
+      "input_id": "english-three-clause-question",
+      "request": "Is Coco a bird and an animal and a mammal?",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、尋ねた三つの関係がともに支持されます。\n- 支持: Cocoはbirdである。\n- 支持: Cocoはanimalである。\n- 支持: Cocoはmammalである。",
+      "reason": null,
+      "dependencies": [
+        "fact:10dd3423b9f635382da33fe9a2f0ef07c2b8e402b3b2c64f3f1aabbc8e1d9456",
+        "fact:1c16dc5467925c9cc05e5f10d751e2a3cb8bf6b6de14f05e867e10fcf9baae6f",
+        "fact:4a129415ffdd1e5f73cb579bedceac4c25e3e62449ab2c1b75a006515cad8010",
+        "rule:e4ed36297286cd20da1157452aa6a7045a0b802c2be67a460cd59a8fe953935a"
+      ]
+    },
+    {
+      "case_id": "missing-third-clause",
+      "actor_id": "fixture-three-clause-missing-owner",
+      "input_id": "rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:5cffed40f81f3f091894612947913fc5f0d937d443be3200a88e8a116e11d165\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:5cffed40f81f3f091894612947913fc5f0d937d443be3200a88e8a116e11d165"
+      ]
+    },
+    {
+      "case_id": "missing-third-clause",
+      "actor_id": "fixture-three-clause-missing-owner",
+      "input_id": "bird",
+      "request": "[scope=biology]ココは鳥",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:cc3937a5486bfd27e88e79832d449ed50a2fa63bdf408e336461056d1b38a299\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:cc3937a5486bfd27e88e79832d449ed50a2fa63bdf408e336461056d1b38a299"
+      ]
+    },
+    {
+      "case_id": "missing-third-clause",
+      "actor_id": "fixture-three-clause-missing-owner",
+      "input_id": "question",
+      "request": "[scope=biology]ココは鳥かつ動物かつふわふわですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "関係節をすべて判定する有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: 関係節をすべて判定する有効な前提または導出経路がありません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "japanese-three-clause",
+      "actor_id": "fixture-three-clause-owner",
+      "input_id": "three-clause-wrong-scope",
+      "request": "[scope=ecology]ココは鳥かつ動物かつ哺乳類ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "関係節をすべて判定する有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: 関係節をすべて判定する有効な前提または導出経路がありません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "or",
+      "request": "ココは鳥または動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "japanese-conjunction-disjunction",
+      "request": "ココは鳥かつ動物または哺乳類ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "english-conjunction-disjunction",
+      "request": "Is Coco a bird and an animal or a mammal?",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "four-clauses",
+      "request": "ココは鳥かつ動物かつ哺乳類かつ生物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "mixed-connectors",
+      "request": "ココは鳥かつ動物且つ哺乳類ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "different-subjects",
+      "request": "ココは鳥かつミケは動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    },
+    {
+      "case_id": "unsupported-conjunctions",
+      "actor_id": "fixture-conjunction-owner",
+      "input_id": "unresolved-pronoun",
+      "request": "それは鳥かつ動物ですか",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": []
+    }
+  ],
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo test -p minidora-engine conjunctive_relation_questions_keep_both_same_subject_clauses --locked",
+    "cargo test -p minidora-cli --test normal_route conjunctive_relation_questions_query_every_clause_and_keep_their_proofs --locked",
+    "cargo check --workspace --all-targets --locked",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo build --workspace --locked",
+    "python3 tools/conjunctive_relation_three_clause_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-conjunctive-relation-three-clause-v63-route-validation.json"
+  ],
+  "not_run": [
+    "full workspace runtime suite",
+    "positive support for four or more clauses, alternative semantics and different-subject conjunctions",
+    "pronoun co-reference and causal AskWhy",
+    "open-domain natural-language question answering, general writing and full BB-LANG acceptance"
+  ],
+  "acceptance_boundary": "This is a bounded same-subject two/three-clause relation question over caller-provided premises and rules. It evaluates every clause and preserves the combined proof lineage, but it does not establish open-domain Q&A, unrestricted compositional language, causal explanation, or full A02/A04/A05/A09/B01/A15 acceptance.",
+  "next_consumer": "Connect further ordinary-language producers to existing typed consumers while measuring unseen variants; broad open-domain Q&A and writing remain BUILD_GAP."
+}
