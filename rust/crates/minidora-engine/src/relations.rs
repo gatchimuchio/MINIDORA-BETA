@@ -37,6 +37,99 @@ pub fn explicit_premises_about(memory: &MemoryState, subject: &str) -> Vec<Fact>
     facts
 }
 
+/// Build the bounded set of exact relation queries that can return direct or
+/// rule-derived facts for one subject. Predicate and scope come only from
+/// stored facts or rule conclusions. A variable conclusion object is expanded
+/// only over terms already present in the same actor's memory.
+pub fn query_shapes_about(
+    memory: &MemoryState,
+    subject: &str,
+    max_queries: usize,
+) -> Result<BTreeSet<Proposition>> {
+    let mut terms = BTreeSet::from([subject.to_string()]);
+    for fact in &memory.facts {
+        if !fact.valid || matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown) {
+            continue;
+        }
+        for term in [&fact.proposition.subject, &fact.proposition.object] {
+            if !variable(term) {
+                terms.insert(term.clone());
+            }
+        }
+    }
+    for rule in memory.rules.iter().filter(|rule| rule.valid) {
+        for proposition in std::iter::once(&rule.premise)
+            .chain(rule.additional_premises.iter())
+            .chain(std::iter::once(&rule.conclusion))
+        {
+            for term in [&proposition.subject, &proposition.object] {
+                if !variable(term) {
+                    terms.insert(term.clone());
+                }
+            }
+        }
+    }
+
+    let mut shapes = BTreeSet::new();
+    for fact in &memory.facts {
+        if fact.valid
+            && !matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown)
+            && fact.proposition.subject == subject
+        {
+            insert_query_shape(&mut shapes, &fact.proposition, max_queries)?;
+        }
+    }
+    for rule in memory.rules.iter().filter(|rule| rule.valid) {
+        let conclusion = &rule.conclusion;
+        if conclusion.subject != subject && !variable(&conclusion.subject) {
+            continue;
+        }
+        if variable(&conclusion.object) {
+            for object in &terms {
+                insert_query_shape(
+                    &mut shapes,
+                    &Proposition {
+                        subject: subject.to_string(),
+                        object: object.clone(),
+                        negative: false,
+                        ..conclusion.clone()
+                    },
+                    max_queries,
+                )?;
+            }
+        } else {
+            insert_query_shape(
+                &mut shapes,
+                &Proposition {
+                    subject: subject.to_string(),
+                    negative: false,
+                    ..conclusion.clone()
+                },
+                max_queries,
+            )?;
+        }
+    }
+    Ok(shapes)
+}
+
+fn insert_query_shape(
+    shapes: &mut BTreeSet<Proposition>,
+    proposition: &Proposition,
+    max_queries: usize,
+) -> Result<()> {
+    let shape = Proposition {
+        negative: false,
+        ..proposition.clone()
+    };
+    if shapes.insert(shape) && shapes.len() > max_queries {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "relation inventory exceeds the bounded query budget",
+        ));
+    }
+    Ok(())
+}
+
 fn variable(term: &str) -> bool {
     term.starts_with('$') || term.starts_with('?')
 }

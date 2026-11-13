@@ -3701,17 +3701,72 @@ impl Engine {
             }
             Intent::InspectPremises { subject } => {
                 let memory = self.store.load_memory(actor)?;
-                let facts = relations::explicit_premises_about(&memory, subject);
-                if facts.is_empty() {
+                let scanned_records = memory
+                    .facts
+                    .len()
+                    .checked_add(memory.rules.len())
+                    .ok_or_else(|| {
+                        failure(
+                            "RESOURCE_LIMIT",
+                            "relation inventory scan count overflowed its bounded representation",
+                        )
+                    })?;
+                let action_budget =
+                    usize::try_from(request.budget.max_actions).unwrap_or(usize::MAX);
+                if scanned_records > action_budget {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "保存済み関係を列挙する走査量が要求の推論予算を超えました。",
+                    );
+                }
+                let remaining_actions = request
+                    .budget
+                    .max_actions
+                    .saturating_sub(u32::try_from(scanned_records).unwrap_or(u32::MAX));
+                let query_shapes = match relations::query_shapes_about(
+                    &memory,
+                    subject,
+                    usize::try_from(remaining_actions).unwrap_or(usize::MAX),
+                ) {
+                    Ok(shapes) => shapes,
+                    Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "対象について確認する関係候補が要求の推論予算を超えました。",
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                if query_shapes.is_empty() {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "MISSING_PREMISES",
-                        "この対象について有効な提示前提は保存されていません。",
+                        "この対象について有効な提示前提または規則導出はありません。",
                     );
                 }
+                let query_count = u32::try_from(query_shapes.len()).map_err(|_| {
+                    failure(
+                        "RESOURCE_LIMIT",
+                        "relation query count exceeds the bounded representation",
+                    )
+                })?;
+                let per_query_budget = remaining_actions / query_count;
+                if per_query_budget == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "対象のすべての関係を確認する推論予算がありません。",
+                    );
+                }
+
                 let disclosure = format!(
-                    "会話に保存された「{subject}」の提示前提です。現実世界の真偽は確認していません。"
+                    "会話に保存された「{subject}」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。"
                 );
                 let mut evidence_bytes = disclosure.len();
                 if evidence_bytes > request.budget.max_evidence_bytes {
@@ -3719,16 +3774,115 @@ impl Engine {
                         &mut state,
                         Lifecycle::Suspend,
                         "RESOURCE_LIMIT",
-                        "提示前提の一覧が要求の証拠予算を超えました。",
+                        "保存済み関係の一覧が要求の証拠予算を超えました。",
                     );
                 }
                 let mut lines = vec![disclosure];
+                let mut reported_facts = BTreeMap::new();
+                let mut contested_fact_ids = BTreeSet::new();
+                let mut dependencies = BTreeSet::new();
+                let mut has_conflict = false;
+                for shape in query_shapes {
+                    let answer = match relations::query(&memory, &shape, per_query_budget) {
+                        Ok(answer) => answer,
+                        Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RESOURCE_LIMIT",
+                                "保存済み関係を導出する計算が要求の推論予算を超えました。",
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match answer.status.as_str() {
+                        "SUPPORTED" | "CONTRADICTED" => {}
+                        "CONFLICT" => has_conflict = true,
+                        "UNKNOWN" | "MISSING_PREMISES" => continue,
+                        _ => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "UNSUPPORTED_RELATION_RESULT",
+                                "関係の列挙が既知の終端状態を返しませんでした。",
+                            );
+                        }
+                    }
+                    dependencies.extend(relations::answer_dependencies(&answer));
+                    if answer.status == "CONFLICT" {
+                        contested_fact_ids.extend(answer.facts.iter().map(|fact| fact.id.clone()));
+                    }
+                    for fact in answer.facts {
+                        reported_facts.insert(fact.id.clone(), fact);
+                    }
+                }
+                if reported_facts.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "この対象について有効な提示前提または規則導出はありません。",
+                    );
+                }
+                if has_conflict {
+                    let line = "一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。".to_string();
+                    evidence_bytes = evidence_bytes
+                        .checked_add(line.len())
+                        .and_then(|total| total.checked_add(1))
+                        .unwrap_or(usize::MAX);
+                    if evidence_bytes > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "保存済み関係の一覧が要求の証拠予算を超えました。",
+                        );
+                    }
+                    lines.push(line);
+                }
+                let mut facts: Vec<_> = reported_facts.into_values().collect();
+                facts.sort_by(|left, right| {
+                    left.proposition
+                        .cmp(&right.proposition)
+                        .then_with(|| left.id.cmp(&right.id))
+                });
+                let mut any_derived = false;
                 for fact in &facts {
+                    let (category, origin) = match &fact.guarantee {
+                        Guarantee::UserPremise => (
+                            "提示前提",
+                            format!("提示前提ID: {}", fact.id),
+                        ),
+                        Guarantee::Derived => {
+                            any_derived = true;
+                            (
+                                "規則導出",
+                                format!(
+                                    "導出ID: {}; 依存ID: {}",
+                                    fact.id,
+                                    fact.dependencies.join(", ")
+                                ),
+                            )
+                        }
+                        Guarantee::Computed => {
+                            ("計算記録", format!("計算記録ID: {}", fact.id))
+                        }
+                        Guarantee::SourceReport => {
+                            ("出典報告", format!("出典報告ID: {}", fact.id))
+                        }
+                        Guarantee::Hypothesis | Guarantee::Unknown => {
+                            ("未確定", format!("未確定記録ID: {}", fact.id))
+                        }
+                    };
+                    let conflict = if contested_fact_ids.contains(&fact.id) {
+                        "対立根拠として"
+                    } else {
+                        ""
+                    };
                     let line = format!(
-                        "・{}（範囲: {}; 提示前提ID: {}）",
+                        "・{conflict}{category}: {}（範囲: {}; {origin}）",
                         describe(&fact.proposition),
-                        fact.proposition.scope,
-                        fact.id
+                        fact.proposition.scope
                     );
                     evidence_bytes = evidence_bytes
                         .checked_add(line.len())
@@ -3739,14 +3893,33 @@ impl Engine {
                             &mut state,
                             Lifecycle::Suspend,
                             "RESOURCE_LIMIT",
-                            "提示前提の一覧が要求の証拠予算を超えました。",
+                            "保存済み関係の一覧が要求の証拠予算を超えました。",
                         );
                     }
                     lines.push(line);
                 }
                 units.extend(lines);
-                result.dependencies = facts.into_iter().map(|fact| fact.id).collect();
-                result.guarantee = Guarantee::UserPremise;
+                result.dependencies = dependencies.into_iter().collect();
+                result.guarantee = if any_derived {
+                    Guarantee::Derived
+                } else if facts
+                    .iter()
+                    .any(|fact| matches!(&fact.guarantee, Guarantee::UserPremise))
+                {
+                    Guarantee::UserPremise
+                } else if facts
+                    .iter()
+                    .any(|fact| matches!(&fact.guarantee, Guarantee::Computed))
+                {
+                    Guarantee::Computed
+                } else if facts
+                    .iter()
+                    .any(|fact| matches!(&fact.guarantee, Guarantee::SourceReport))
+                {
+                    Guarantee::SourceReport
+                } else {
+                    Guarantee::Unknown
+                };
             }
             Intent::Invalidate { id } => {
                 let mut memory = self.store.load_memory(actor)?;
