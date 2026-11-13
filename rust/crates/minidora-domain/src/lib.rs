@@ -394,6 +394,11 @@ pub enum Intent {
         subject_b: String,
         scope: String,
     },
+    CompareRelationInventories {
+        subject_a: String,
+        subject_b: String,
+        scope: String,
+    },
     AskPreviousRelation {
         proposition: Proposition,
         explain: bool,

@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v70-generic-transitive-verbs";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v71-saved-relation-comparison";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1135,6 +1135,52 @@ fn common_relations_question_intent(text: &str) -> Result<Option<Intent>> {
     }))
 }
 
+fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
+    let scoped = regex(r"^\[scope=([^\]]*)\]\s*(.+)$")?.captures(text);
+    let scope = scoped
+        .as_ref()
+        .map(|capture| capture[1].trim().to_string())
+        .unwrap_or_else(|| "default".into());
+    let body = scoped.as_ref().map_or(text, |capture| {
+        capture.get(2).expect("matched body").as_str()
+    });
+    let japanese = regex(
+        r"^(.+?)と(.+?)の(?:保存済みの)?関係を(?:比較して|比較してください|比べて|比べてください)$",
+    )?;
+    let english = regex(r"(?i)^compare (?:the )?(?:saved )?relations for (.+?) and (.+?)$")?;
+    let captures = japanese.captures(body).or_else(|| english.captures(body));
+    let Some(captures) = captures else {
+        return Ok(None);
+    };
+    let subject_a = captures[1].trim();
+    let subject_b = captures[2].trim();
+    if !valid_relation_subject(subject_a)
+        || !valid_relation_subject(subject_b)
+        || subject_a == subject_b
+        || scope.is_empty()
+    {
+        return Ok(Some(Intent::Unknown {
+            reason: "saved-relation comparisons require two distinct explicit subjects and one nonempty scope".into(),
+        }));
+    }
+    Ok(Some(Intent::CompareRelationInventories {
+        subject_a: subject_a.into(),
+        subject_b: subject_b.into(),
+        scope,
+    }))
+}
+
+fn valid_relation_subject(subject: &str) -> bool {
+    !subject.is_empty()
+        && subject.len() <= 512
+        && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
+        && !matches!(
+            subject.to_ascii_lowercase().as_str(),
+            "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
+        )
+        && !matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら")
+}
+
 fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
     let patterns = [
         r"(?i)^(?:which|what) group(?:'s)? (?:has )?(?:the )?highest (?:mean|average)(?: value)?$",
@@ -1531,6 +1577,9 @@ fn interpret(text: &str) -> Result<Intent> {
         });
     }
     if let Some(intent) = why_question_intent(body)? {
+        return Ok(intent);
+    }
+    if let Some(intent) = relation_inventory_comparison_intent(body)? {
         return Ok(intent);
     }
     if let Some(intent) = common_relations_question_intent(body)? {
@@ -2733,6 +2782,56 @@ mod tests {
         ] {
             assert!(
                 matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn saved_relation_comparisons_preserve_two_subjects_and_scope() {
+        for (text, subject_a, subject_b, scope) in [
+            (
+                "ココとミケの保存済みの関係を比較して",
+                "ココ",
+                "ミケ",
+                "default",
+            ),
+            (
+                "[scope=biology]ココとミケの関係を比べて",
+                "ココ",
+                "ミケ",
+                "biology",
+            ),
+            (
+                "Compare saved relations for Coco and Mike",
+                "Coco",
+                "Mike",
+                "default",
+            ),
+        ] {
+            match interpret(text).unwrap() {
+                Intent::CompareRelationInventories {
+                    subject_a: parsed_a,
+                    subject_b: parsed_b,
+                    scope: parsed_scope,
+                } => {
+                    assert_eq!(parsed_a, subject_a, "{text}");
+                    assert_eq!(parsed_b, subject_b, "{text}");
+                    assert_eq!(parsed_scope, scope, "{text}");
+                }
+                other => panic!("{text}: {other:?}"),
+            }
+        }
+        for text in [
+            "ココとココの関係を比較して",
+            "それとミケの関係を比較して",
+            "ココとミケの関係を比較して送信して",
+        ] {
+            assert!(
+                !matches!(
+                    interpret(text).unwrap(),
+                    Intent::CompareRelationInventories { .. }
+                ),
                 "{text}"
             );
         }

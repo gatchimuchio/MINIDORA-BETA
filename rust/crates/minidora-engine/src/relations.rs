@@ -13,7 +13,8 @@ pub struct QueryOutcome {
     pub steps: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RelationInventory {
     pub facts: Vec<Fact>,
     pub contested_fact_ids: BTreeSet<String>,

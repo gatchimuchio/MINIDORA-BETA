@@ -1,0 +1,348 @@
+{
+  "work_item": "BODY-1 BB-LANG saved-relation comparison and previous-result summary",
+  "recorded_at": "2026-11-13T12:12:59.445663+00:00",
+  "base_commit": "33a5b067dc5edc225dbfd0e9d84262eabc1584ca",
+  "source_snapshot_sha256": "12cf667d20e9e1f4ff0931416d86c5ff329fae3bb10fd69222a81902c9eb17db",
+  "subject": "MINIDORA-BETA engine",
+  "purpose": "Compare two actor-scoped scoped relation inventories in ordinary Japanese, retain both proof lineages, and pass the committed result to the same-case previous-result summary consumer.",
+  "parser_version": "declarative-ja-en-v71-saved-relation-comparison",
+  "execution_mode": "each request ran as a separate process of the supplied CLI binary against one temporary SQLite state directory; the directory was removed on exit",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "binary_sha256": "82d6918387b3b62a7f556a1780f6256c77c06c6eb85677f9a8672dc2779958f5",
+  "observation_count": 13,
+  "lifecycle_counts": {
+    "COMMIT": 12,
+    "SUSPEND": 1
+  },
+  "route_assertions": {
+    "requested_scope_only": true,
+    "shared_direct_and_rule_derived_relations": true,
+    "one_sided_saved_support_is_labeled_without_claiming_absence": true,
+    "source_fact_and_rule_dependencies_retained": true,
+    "same_case_previous_result_summary_consumed_comparison": true,
+    "conflicting_polarities_are_retained_without_unambiguous_classification": true,
+    "other_actor_without_memory_suspended": true
+  },
+  "observations": [
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "biology-rule",
+      "request": "もし[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "request_sha256": "cd1e9dbe98cb024e5ad22a84bdecf491a65ef8b8c70dc9e3a3c05add8a0db890",
+      "exit_code": 0,
+      "stdout_sha256": "0c7dda3d5c9a479219b4c89247843e09e79b1fd783c634e7f5fc59dcaee90217",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:416a8795226cc9a2e60df743eb4e4ff9dd9485b0d3ce9ae99b987ef4bdce1b70\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:416a8795226cc9a2e60df743eb4e4ff9dd9485b0d3ce9ae99b987ef4bdce1b70"
+      ],
+      "result_id": "1810872d64a777a18927c797bc8adcd8388202d5d70600160fa590d1d678045f"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "coco-bird",
+      "request": "[scope=biology]ココは鳥",
+      "request_sha256": "27b4b08ccca4dfe17c9928b55245e49183d8adef9768a42682f38ff3aaa17fb5",
+      "exit_code": 0,
+      "stdout_sha256": "7cfd4d342c980eca8ad85dbdcb97d374e3fa87663813e050216560903431d363",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb"
+      ],
+      "result_id": "80e554d669b5b362d13d7feead8099fc258d91e0bf31b119ac2e1047bc2973fc"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "mike-bird",
+      "request": "[scope=biology]ミケは鳥",
+      "request_sha256": "8c75abd612bbf72803621908809523edd115fcabbb8e2f3c67a98095387585ae",
+      "exit_code": 0,
+      "stdout_sha256": "18c28f81356866ef3ed558d94515e08f1796b2999b2fab839434c49ae0a152db",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780"
+      ],
+      "result_id": "1a4dcc844da4c3e44841a4580b30d3e4621fbf7a214b24c6613cb4201926c7f1"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "coco-feathers",
+      "request": "[scope=biology]ココは羽毛持ち",
+      "request_sha256": "b5ca9365cf632758aac2cbc7f3c1e022a3437cdf2dde239c7af0e1b13ed894aa",
+      "exit_code": 0,
+      "stdout_sha256": "54f2072804850cb7396f891771e51b430c8a715c5583c66a3d76092e82c8bdc9",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは羽毛持ちである。\n前提ID: fact:6a9526e792505819ff84dfe28b8a8508297584432e2e366ef278caef7428101e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:6a9526e792505819ff84dfe28b8a8508297584432e2e366ef278caef7428101e"
+      ],
+      "result_id": "efa700101d20bb520c4534dbc53d6f1eadb0e72f154722d923d263b6d7eb5cfe"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "mike-cat",
+      "request": "[scope=biology]ミケは猫",
+      "request_sha256": "bb158a2383906c2347027f92a852bb598feb4001d795ae6f120a1c6b80a64a4c",
+      "exit_code": 0,
+      "stdout_sha256": "7cccd62a1cf50d8c420189b7d1640ec42bcea53daa305038331ad886281a7e15",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは猫である。\n前提ID: fact:a4b337cd7a66ef21347cac74655e2e68ab67800cecb41a5f05dcb6491a16e1eb\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:a4b337cd7a66ef21347cac74655e2e68ab67800cecb41a5f05dcb6491a16e1eb"
+      ],
+      "result_id": "6bc39bdd141ed678d0b847302c65d6abc516940f48c89a8e260958ee92bbb83d"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "other-scope",
+      "request": "[scope=fiction]ココは王族",
+      "request_sha256": "6cde6e012f75624d4a951e8e91e50e44a1d0dd35122cc1b55d446fb4d76b8d01",
+      "exit_code": 0,
+      "stdout_sha256": "5a046b56dc1b5289850ae1808523e385ea6c71ee810e1fd24b057fdceef64e5f",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは王族である。\n前提ID: fact:17fffceeb31721fd3bfb8a879cf19db03c1602a09b86fb8d71226105d891b9f3\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:17fffceeb31721fd3bfb8a879cf19db03c1602a09b86fb8d71226105d891b9f3"
+      ],
+      "result_id": "12bdc9118af2c16882ea536a4b0cd9249880150f958491b3b117345a2c2c30b6"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "compare-relation-inventories",
+      "request": "[scope=biology]ココとミケの保存済みの関係を比較して",
+      "request_sha256": "31e31f43779009ae5936e73c57c894ed823063c464d6aabd46a579b7d2be01cf",
+      "exit_code": 0,
+      "stdout_sha256": "9cad125b86acd74e8e67b82568467af633bd9c7472a451e3e72c88e9d4e2db4a",
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。\n比較対象: ココ／ミケ（scope: biology）\n両側で確認した同じ関係: ココは動物である ／ ミケは動物である\n根拠(ココ): ココは動物である（保存規則からの導出; 記録ID: fact:9154519a97cba6490102e4b9dea458c75855ee0e4445467e9ef274beb2010adb; 依存ID: fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb, rule:416a8795226cc9a2e60df743eb4e4ff9dd9485b0d3ce9ae99b987ef4bdce1b70）\n根拠(ミケ): ミケは動物である（保存規則からの導出; 記録ID: fact:c9904c5e4d796f0a68264250d6bc001505676cbbe1fffabb31ce439a8a5faf95; 依存ID: fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780, rule:416a8795226cc9a2e60df743eb4e4ff9dd9485b0d3ce9ae99b987ef4bdce1b70）\nミケ側で確認した関係（ココ側では同じ関係の支持を確認できず）: ミケは猫である\n根拠(ミケ): ミケは猫である（直接提示された前提; 記録ID: fact:a4b337cd7a66ef21347cac74655e2e68ab67800cecb41a5f05dcb6491a16e1eb; 依存ID: なし）\nココ側で確認した関係（ミケ側では同じ関係の支持を確認できず）: ココは羽毛持ちである\n根拠(ココ): ココは羽毛持ちである（直接提示された前提; 記録ID: fact:6a9526e792505819ff84dfe28b8a8508297584432e2e366ef278caef7428101e; 依存ID: なし）\n両側で確認した同じ関係: ココは鳥である ／ ミケは鳥である\n根拠(ココ): ココは鳥である（直接提示された前提; 記録ID: fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb; 依存ID: なし）\n根拠(ミケ): ミケは鳥である（直接提示された前提; 記録ID: fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780; 依存ID: なし）",
+      "reason": null,
+      "dependencies": [
+        "22c8b781ceb6b55d8f085923b141cedec6657eb28bf7bc6b0ad1cf50919c7017",
+        "fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780",
+        "fact:6a9526e792505819ff84dfe28b8a8508297584432e2e366ef278caef7428101e",
+        "fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb",
+        "fact:9154519a97cba6490102e4b9dea458c75855ee0e4445467e9ef274beb2010adb",
+        "fact:a4b337cd7a66ef21347cac74655e2e68ab67800cecb41a5f05dcb6491a16e1eb",
+        "fact:c9904c5e4d796f0a68264250d6bc001505676cbbe1fffabb31ce439a8a5faf95",
+        "rule:416a8795226cc9a2e60df743eb4e4ff9dd9485b0d3ce9ae99b987ef4bdce1b70"
+      ],
+      "result_id": "33f653893d33c0a653160198862d830979d046b69cbc116e1eb517f1471deee4"
+    },
+    {
+      "actor": "relation-compare-owner",
+      "case": "relation-compare-case",
+      "input_id": "summarize-relation-comparison",
+      "request": "前回の比較を2文以内で要約して",
+      "request_sha256": "e3d4d62c86e4196de91a4827b9ffa6b1345879f810e811cbdf8aa4d933540219",
+      "exit_code": 0,
+      "stdout_sha256": "2f239d2172f6f037c3dcf004d0610af809c3282f636548f1f8a51ba1b62c54cc",
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果からの抽出候補（結果ID: 33f653893d33c0a653160198862d830979d046b69cbc116e1eb517f1471deee4）。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 根拠(ココ): ココは鳥である（直接提示された前提; 記録ID: fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb; 依存ID: なし）\n- 根拠(ミケ): ミケは鳥である（直接提示された前提; 記録ID: fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780; 依存ID: なし）",
+      "reason": null,
+      "dependencies": [
+        "5dfd4c4cd4244ad04d53f27fc89b8c954fae2e480cf0f0171ee15601c071eba9",
+        "33f653893d33c0a653160198862d830979d046b69cbc116e1eb517f1471deee4",
+        "44b5a8678ad9fb84e7713215088c9f76d8e64addf3ada33e02c95900d6f26fd5",
+        "224179ce5fab86851a75be70468f80239151f09be54dcf87a1bb1c646222d019",
+        "22c8b781ceb6b55d8f085923b141cedec6657eb28bf7bc6b0ad1cf50919c7017",
+        "fact:4b8dca97e913b3d3c906a03603266baa8f847e56649e1faf01f190d4580ea780",
+        "fact:6a9526e792505819ff84dfe28b8a8508297584432e2e366ef278caef7428101e",
+        "fact:87a28b2b7463a6b301c128f1d81a1962663c8c55a5980d89df6205cb806427fb",
+        "fact:9154519a97cba6490102e4b9dea458c75855ee0e4445467e9ef274beb2010adb",
+        "fact:a4b337cd7a66ef21347cac74655e2e68ab67800cecb41a5f05dcb6491a16e1eb",
+        "fact:c9904c5e4d796f0a68264250d6bc001505676cbbe1fffabb31ce439a8a5faf95",
+        "rule:416a8795226cc9a2e60df743eb4e4ff9dd9485b0d3ce9ae99b987ef4bdce1b70"
+      ],
+      "result_id": "4f90497776bd475b1c8ec3b062214d232e1faba73c386708e21e126311e146ab"
+    },
+    {
+      "actor": "relation-compare-conflict-owner",
+      "case": "relation-compare-conflict-case",
+      "input_id": "coco-bird-positive",
+      "request": "[scope=biology]ココは鳥",
+      "request_sha256": "27b4b08ccca4dfe17c9928b55245e49183d8adef9768a42682f38ff3aaa17fb5",
+      "exit_code": 0,
+      "stdout_sha256": "e5582213d73ab6de0359241ea01dc1beecf2b65cfa1cc49475973d217b2246c5",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:9879d83869b8aca9e7cb5ef1c41b6498628c29e7642051352c626a558e36b0a7\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:9879d83869b8aca9e7cb5ef1c41b6498628c29e7642051352c626a558e36b0a7"
+      ],
+      "result_id": "46dd1ffda9cea680d283a6e7d4fddf26f3b5f02f88242e07932a7fb5b6bc66b1"
+    },
+    {
+      "actor": "relation-compare-conflict-owner",
+      "case": "relation-compare-conflict-case",
+      "input_id": "coco-bird-negative",
+      "request": "[scope=biology]ココは鳥ではない",
+      "request_sha256": "1fb7547f939bc717b78398ff55768fd6fcfa3db05cb558ceac0b91f84e48592d",
+      "exit_code": 0,
+      "stdout_sha256": "46d13be24d6e96fba0e2a2befebd55abd576f68e8755d07ecab23b5a31187330",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥ではない。\n前提ID: fact:10f97c98fa9553d8bd1e423002543eb205a16a71531d148e2e2ab7f8767f90a1\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:10f97c98fa9553d8bd1e423002543eb205a16a71531d148e2e2ab7f8767f90a1"
+      ],
+      "result_id": "1cead2469eee15c519109f4ba686f8abead5b5e5d0a34c24b28949a99b2d1b0a"
+    },
+    {
+      "actor": "relation-compare-conflict-owner",
+      "case": "relation-compare-conflict-case",
+      "input_id": "mike-bird-positive",
+      "request": "[scope=biology]ミケは鳥",
+      "request_sha256": "8c75abd612bbf72803621908809523edd115fcabbb8e2f3c67a98095387585ae",
+      "exit_code": 0,
+      "stdout_sha256": "ffe8620791ecf0c2e3cfef3223ae0f8ed67f4ee1a3d75bc09c3f51f563cf75bc",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:ebd002fb96783c2cde52c64ead1484af01b650f98a4d04002f11c3bf0a8fc12c\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:ebd002fb96783c2cde52c64ead1484af01b650f98a4d04002f11c3bf0a8fc12c"
+      ],
+      "result_id": "185d0903baa0c867fe47c5362ea8bfbb1e9835ecb9a29baa5d8d762035dff7bf"
+    },
+    {
+      "actor": "relation-compare-conflict-owner",
+      "case": "relation-compare-conflict-case",
+      "input_id": "compare-conflicting-relations",
+      "request": "[scope=biology]ココとミケの関係を比較して",
+      "request_sha256": "756702da88d0cfc72299afab3f4687e5b2a3c3d825ef19bfe866df333fc543a4",
+      "exit_code": 0,
+      "stdout_sha256": "cc70a6e69664e20d805a3aa2569aea663d7f658bb8cf85744c4f0e37a726c2cf",
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。\n比較対象: ココ／ミケ（scope: biology）\n同一対象・範囲内で肯定と否定の競合根拠があります。競合は解消せず、確認した記録として併記します。\n競合根拠を含む関係（共通・片側のみと確定しません）: ココは鳥である\n根拠(ココ): ココは鳥である（直接提示された前提; 記録ID: fact:9879d83869b8aca9e7cb5ef1c41b6498628c29e7642051352c626a558e36b0a7; 依存ID: なし; 対立根拠あり）\n根拠(ミケ): ミケは鳥である（直接提示された前提; 記録ID: fact:ebd002fb96783c2cde52c64ead1484af01b650f98a4d04002f11c3bf0a8fc12c; 依存ID: なし）\n競合根拠を含む関係（共通・片側のみと確定しません）: ココは鳥ではない\n根拠(ココ): ココは鳥ではない（直接提示された前提; 記録ID: fact:10f97c98fa9553d8bd1e423002543eb205a16a71531d148e2e2ab7f8767f90a1; 依存ID: なし; 対立根拠あり）\n確認できた範囲では、明確に片側のみと分類できる関係はありませんでした。保存記録が網羅的とは限りません。",
+      "reason": null,
+      "dependencies": [
+        "b2240e1e31b27d9424dc622e797049fa4afe2e1c27c7a765c7f214b36357dec1",
+        "fact:10f97c98fa9553d8bd1e423002543eb205a16a71531d148e2e2ab7f8767f90a1",
+        "fact:9879d83869b8aca9e7cb5ef1c41b6498628c29e7642051352c626a558e36b0a7",
+        "fact:ebd002fb96783c2cde52c64ead1484af01b650f98a4d04002f11c3bf0a8fc12c"
+      ],
+      "result_id": "cf953c5fbf726f1e745091bd17c517f5787b25b98a9578aca1c3f5ad72333fe9"
+    },
+    {
+      "actor": "relation-compare-other-actor",
+      "case": "relation-compare-empty-case",
+      "input_id": "no-saved-relations",
+      "request": "ココとミケの関係を比較して",
+      "request_sha256": "e9e85594700f822ece1cf52314faa7c9f3021dbc3851fc7d614ff85ed4e7467d",
+      "exit_code": 2,
+      "stdout_sha256": "d7958ee1a9eadf083c0fb45fa62ff070b4a038842e7f8303713f95e76033fb6d",
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "このscopeで二つの対象について比較できる支持記録がありません。共通点や差異がないとは断定しません。",
+      "reason": "MISSING_PREMISES: このscopeで二つの対象について比較できる支持記録がありません。共通点や差異がないとは断定しません。",
+      "dependencies": [],
+      "result_id": "a4429865d4f1643b49a49077e876b4a2097197a67745ef15602e575e480314d3"
+    }
+  ],
+  "requirements": [
+    "A02",
+    "A09",
+    "B01",
+    "B08"
+  ],
+  "acceptance_status": "UNVERIFIED",
+  "limitations": [
+    "Only explicit Japanese and English saved-relation comparison forms are supported.",
+    "One-sided output means support was not found in the other bounded scoped inventory; it does not prove that the relation is false or absent.",
+    "Relation records and rules are user-supplied premises; outside-world truth, memory completeness, open-domain comparison and general writing quality are not established.",
+    "Full workspace runtime tests and full R2 acceptance were not run."
+  ],
+  "changed_file_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "fabd38e8d8730279d9f9a2dbe3cb57cce96edb13895af02e6567e6a238ee3df7",
+    "rust/crates/minidora-engine/src/input.rs": "a08a81bd9ac0e732e15f20feb5ce9304a9cb3612cb168e02aca1bad29a5d66f8",
+    "rust/crates/minidora-engine/src/relations.rs": "8ccaa29d8b18c7fb52484113c43ebc7f95cd9222f1d8f63e9219a6154d9706f2",
+    "rust/crates/minidora-engine/src/core.rs": "ee14ec356be5b3ae873b49fdbf0061e01f89e74a35f8c11aa960f7e94a731c33",
+    "rust/apps/cli/tests/normal_route.rs": "4cbb3fa67cfe65889c1efeb60c25062ca73d50f0e21cf41273612991d79856f0",
+    "rust/tools/saved_relation_comparison_route_test.py": "049c68369ac2be5627e7f21ad19c30119a7abee380850f9e2f6be84fa0940a57"
+  },
+  "documentation_file_sha256": {
+    "rust/README.md": "52bd5110bfc47345f3f41c30b1784a283f172688ed4e76ed9d391fee5a442330",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "3281b7bd1ab286fc81a315d90eb5acb9cafdd140dc0e248653be895761314838",
+    "rust/audit/requirements.tsv": "57df1f136a6703fcf58c8706728d8ae62697a5020ce9b3a07f31a56ebdd08fc7",
+    "rust/audit/README.md": "3b0f88950462b7e7aa519737de658b3cec667bf427b4a8b30fee5b3312289d7b",
+    "rust/audit/code-snapshot.json": "0dbbeb9c68548ae49c291846898a5b8cea378f9a36763d8abc2653eb3cf31287",
+    "docs/redesign/03_REQUIREMENT_TRACE.tsv": "46174e1f2c24808ee112221ba3bbbdc8275e7f69ec061f4a1c7ebf7894eda7cf",
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "test_runs": [
+    {
+      "command": "cargo test -p minidora-engine --lib saved_relation_comparisons_preserve_two_subjects_and_scope --locked",
+      "result": "PASS",
+      "detail": "1 passed; 227 filtered out"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_summary --locked",
+      "result": "PASS",
+      "detail": "1 passed; 136 filtered out, rerun after final assertions and formatting"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route natural_common_relation_questions_compare_two_subjects_using_shared_proofs --locked",
+      "result": "PASS",
+      "detail": "1 passed; 136 filtered out"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "detail": "Final check after formatting the added assertions"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo build -p minidora-cli --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "result": "NOT_RUN",
+      "detail": "Not run for this scoped BODY-1 batch."
+    },
+    {
+      "command": "python3 rust/tools/saved_relation_comparison_route_test.py --binary rust/target/debug/minidora-rust",
+      "result": "PASS",
+      "detail": "13 fresh-process requests: 12 COMMIT and 1 SUSPEND; temporary database removed on exit"
+    }
+  ],
+  "test_setup_corrections": [
+    "The first route-test artifact-count assertion expected two right-side inventory facts; the observed biology-scope inventory held bird, rule-derived animal and cat, so the assertion was corrected to three.",
+    "The first conflict test assertion used wording not emitted by the report; it was corrected to the exact unresolved-conflict wording. The conflict fixture was isolated to a distinct actor so prior-case duplicate premises did not participate in that focused conflict check."
+  ],
+  "source_snapshot_method": "SHA-256 of the compact JSON file inventory in code-snapshot.json.",
+  "code_snapshot_ref": "code-snapshot.json"
+}

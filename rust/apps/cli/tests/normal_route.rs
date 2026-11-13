@@ -5331,6 +5331,231 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
 }
 
 #[test]
+fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_summary() {
+    let scratch = Scratch::new();
+    let actor = "relation-comparison-owner";
+    let case = "relation-comparison-case";
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &[
+            "--input",
+            "biology-rule",
+            "もし[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let coco_bird = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "coco-bird", "[scope=biology]ココは鳥"],
+    ));
+    let mike_bird = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "mike-bird", "[scope=biology]ミケは鳥"],
+    ));
+    let coco_feathers = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "coco-feathers", "[scope=biology]ココは羽毛持ち"],
+    ));
+    let mike_cat = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "mike-cat", "[scope=biology]ミケは猫"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "other-scope", "[scope=fiction]ココは王族"],
+    ));
+
+    let comparison = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &[
+            "--input",
+            "compare-relation-inventories",
+            "[scope=biology]ココとミケの保存済みの関係を比較して",
+        ],
+    ));
+    assert_eq!(comparison["lifecycle"], "COMMIT");
+    assert_eq!(comparison["guarantee"], "HYPOTHESIS");
+    let comparison_text = comparison["text"].as_str().unwrap();
+    for marker in [
+        "保存記録の網羅性",
+        "ココは鳥である",
+        "ミケは鳥である",
+        "ココは動物である",
+        "ミケは動物である",
+        "羽毛持ち",
+        "ミケは猫である",
+        "規則からの導出",
+    ] {
+        assert!(comparison_text.contains(marker), "missing {marker}");
+    }
+    assert!(!comparison_text.contains("王族"));
+    for dependency in [
+        &rule["dependencies"][0],
+        &coco_bird["dependencies"][0],
+        &mike_bird["dependencies"][0],
+        &coco_feathers["dependencies"][0],
+        &mike_cat["dependencies"][0],
+    ] {
+        assert!(
+            comparison["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency),
+            "comparison lost source dependency {dependency}"
+        );
+    }
+
+    let comparison_report_ref = comparison["dependencies"][0].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let artifact_bytes = store.get_bytes(actor, case, comparison_report_ref).unwrap();
+    assert_eq!(
+        minidora_domain::digest(&artifact_bytes),
+        comparison_report_ref
+    );
+    let artifact: Value = serde_json::from_slice(&artifact_bytes).unwrap();
+    assert_eq!(artifact["kind"], "minidora.relation-comparison-report.v1");
+    assert_eq!(artifact["result_id"], comparison["id"]);
+    assert_eq!(artifact["scope"], "biology");
+    assert_eq!(
+        artifact["inventory_a"]["facts"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(
+        artifact["inventory_b"]["facts"].as_array().unwrap().len(),
+        3
+    );
+    for side in ["inventory_a", "inventory_b"] {
+        assert!(
+            artifact[side]["facts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|fact| { fact["proposition"]["scope"] == "biology" })
+        );
+    }
+
+    let summary = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &[
+            "--input",
+            "summarize-relation-comparison",
+            "前回の比較を2文以内で要約して",
+        ],
+    ));
+    assert_eq!(summary["lifecycle"], "COMMIT");
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    for dependency in
+        std::iter::once(&comparison["id"]).chain(comparison["dependencies"].as_array().unwrap())
+    {
+        assert!(
+            summary["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency),
+            "previous-result summary lost relation comparison dependency {dependency}"
+        );
+    }
+
+    let conflict_case = "relation-comparison-conflict-case";
+    let conflict_actor = "relation-comparison-conflict-owner";
+    let coco_positive = record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &["--input", "coco-bird-positive", "[scope=biology]ココは鳥"],
+    ));
+    let coco_negative = record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &[
+            "--input",
+            "coco-bird-negative",
+            "[scope=biology]ココは鳥ではない",
+        ],
+    ));
+    let mike_positive = record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &["--input", "mike-bird-positive", "[scope=biology]ミケは鳥"],
+    ));
+    let conflicting_comparison = record(&execute_in_case(
+        &scratch.0,
+        conflict_actor,
+        conflict_case,
+        &[
+            "--input",
+            "compare-conflicting-relations",
+            "[scope=biology]ココとミケの関係を比較して",
+        ],
+    ));
+    assert_eq!(conflicting_comparison["lifecycle"], "COMMIT");
+    let conflict_text = conflicting_comparison["text"].as_str().unwrap();
+    assert!(
+        conflict_text.contains("競合は解消せず"),
+        "conflict text was: {conflict_text}"
+    );
+    assert!(conflict_text.contains("競合根拠を含む関係"));
+    assert!(conflict_text.contains("対立根拠あり"));
+    assert!(conflict_text.contains("ココは鳥である"));
+    assert!(conflict_text.contains("ココは鳥ではない"));
+    assert!(
+        !conflict_text.contains("両側で確認した同じ関係: ココは鳥である"),
+        "contested support was mislabeled as an unambiguous common relation"
+    );
+    for source in [&coco_positive, &coco_negative, &mike_positive] {
+        for dependency in source["dependencies"].as_array().unwrap() {
+            assert!(
+                conflicting_comparison["dependencies"]
+                    .as_array()
+                    .unwrap()
+                    .contains(dependency),
+                "comparison lost conflicting premise dependency {dependency}; got {}",
+                conflicting_comparison["dependencies"]
+            );
+        }
+    }
+
+    let no_memory = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "relation-comparison-other-actor",
+            "relation-comparison-empty-case",
+            &[
+                "--input",
+                "no-saved-relations",
+                "ココとミケの関係を比較して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        no_memory["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    assert!(no_memory["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans() {
     let scratch = Scratch::new();
     let actor = "previous-result-summary-owner";

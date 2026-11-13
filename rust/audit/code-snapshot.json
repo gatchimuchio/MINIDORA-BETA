@@ -1,6 +1,6 @@
 {
   "snapshot_kind": "first-party code/tests/tools plus manifests/lock/toolchain",
-  "sha256": "488d53ce5311915553fbadde6ec6605ab902b4c8e1d2a4d71a2d9771c2fb7f11",
+  "sha256": "12cf667d20e9e1f4ff0931416d86c5ff329fae3bb10fd69222a81902c9eb17db",
   "files": [
     {
       "path": "Cargo.lock",
@@ -16,11 +16,11 @@
     },
     {
       "path": "apps/cli/src/main.rs",
-      "sha256": "5dc6cbbe589b3247f9e847bba158d57cfd06f5e276aae4cae178ff5fdf04eb57"
+      "sha256": "0f60366cabcbc2293ab38fa8cf359b1f1b0dec91bbcd4739ef8bddf92efd9ebc"
     },
     {
       "path": "apps/cli/tests/normal_route.rs",
-      "sha256": "967daac6867a25a9a3e8bb77ceee00db9f85a67a68ddb8cb05be0fa42f53571e"
+      "sha256": "4cbb3fa67cfe65889c1efeb60c25062ca73d50f0e21cf41273612991d79856f0"
     },
     {
       "path": "crates/minidora-domain/Cargo.toml",
@@ -32,7 +32,7 @@
     },
     {
       "path": "crates/minidora-domain/src/lib.rs",
-      "sha256": "ee83cbad4c7e6602e6527106cec51efc84e0925ea7e061be9d34510038dae50e"
+      "sha256": "fabd38e8d8730279d9f9a2dbe3cb57cce96edb13895af02e6567e6a238ee3df7"
     },
     {
       "path": "crates/minidora-engine/Cargo.toml",
@@ -40,27 +40,27 @@
     },
     {
       "path": "crates/minidora-engine/src/code_capability.rs",
-      "sha256": "957758f0be088840c4c9f71c5f321dc85056e410027f01bfa6feca5498106534"
+      "sha256": "7343805ab74d0b1b6282c7f34b657ae88bb5b73a4dfe0fb00faacb53d2ac04cf"
     },
     {
       "path": "crates/minidora-engine/src/code_generation.rs",
-      "sha256": "e7425a4e7dfa13e5243d9c76c5ce6737633d990dfa5d415ccd8931b7d01c80f1"
+      "sha256": "3a6651ea3920bd5789e739e454b469a2f1c450a79484b32f1a5045220b3b95de"
     },
     {
       "path": "crates/minidora-engine/src/core.rs",
-      "sha256": "d2dce4ebe246958ed298c64cd847a4171f0e967499c02730c8807162fb956a34"
+      "sha256": "ee14ec356be5b3ae873b49fdbf0061e01f89e74a35f8c11aa960f7e94a731c33"
     },
     {
       "path": "crates/minidora-engine/src/document.rs",
-      "sha256": "f548ff8a1228b45d68aa6601260ec246256ba78fee6f47ee7c2b73485773e791"
+      "sha256": "0768b73c28401b701df6008f97b20d0c6efcab24d65ff2dae1c82bc532386656"
     },
     {
       "path": "crates/minidora-engine/src/input.rs",
-      "sha256": "2a40f32f03d7963eee8a1e4fc97853bee4255ea08a82eabbfcb9c8f169905a2f"
+      "sha256": "a08a81bd9ac0e732e15f20feb5ce9304a9cb3612cb168e02aca1bad29a5d66f8"
     },
     {
       "path": "crates/minidora-engine/src/language.rs",
-      "sha256": "bcc422add2afd763b84b1eee2a91c024dc225bc13f49dc54d54ead8908aec70c"
+      "sha256": "24abaeb5d7b398740371930bf0599d6fa6b22109801e0ce4a11a0546f7c460f2"
     },
     {
       "path": "crates/minidora-engine/src/lib.rs",
@@ -68,7 +68,7 @@
     },
     {
       "path": "crates/minidora-engine/src/math.rs",
-      "sha256": "2dde9fa725710f5cccc30df04d9f019fba75c79a1706122fe1831af777de59cc"
+      "sha256": "6da0bc7bcff3497f4f0824094b42aa223aed909c1caa0a7fad4e550d87d625e4"
     },
     {
       "path": "crates/minidora-engine/src/meaning_compare.rs",
@@ -76,19 +76,19 @@
     },
     {
       "path": "crates/minidora-engine/src/output.rs",
-      "sha256": "cfd0fc6d5808239e67dc82ee4c5af03835b59b75022bbf143705590b97dc129e"
+      "sha256": "1029c6eecd8a75c89317d9cdb0c12c617ff5dad50b665bfb03811eeccfebd174"
     },
     {
       "path": "crates/minidora-engine/src/ports.rs",
-      "sha256": "8c62c227e152167b62def452dc334019fce62b3af0f67d5c53e85238206b8d39"
+      "sha256": "afaae5b6446cc25f42b6a8bd240f4c761eeb1b58d846afef1f1bc882c6683c21"
     },
     {
       "path": "crates/minidora-engine/src/recovery.rs",
-      "sha256": "d37db20aeba8a39b568e2280bb07696ab3a326f2a8d4f1c9b58b514d1276eb74"
+      "sha256": "966f13631d218ad696fda257ef551b13cfaf8c7616d31d04bd609d18118fc30e"
     },
     {
       "path": "crates/minidora-engine/src/relations.rs",
-      "sha256": "4e7ca663125f4280dfb20e756f28312687cbd3940f8ef41ebb4a4a570c008059"
+      "sha256": "8ccaa29d8b18c7fb52484113c43ebc7f95cd9222f1d8f63e9219a6154d9706f2"
     },
     {
       "path": "crates/minidora-engine/src/scheduler.rs",
@@ -96,11 +96,11 @@
     },
     {
       "path": "crates/minidora-engine/src/search.rs",
-      "sha256": "1fb03d7977bab784725c9cc6685c969a718fadbb5e6735735576f499a0abd61b"
+      "sha256": "e88ed5573d94a12f1a7d94d8bbaba29109bae270e3bad3d7b8e95cf3ad514011"
     },
     {
       "path": "crates/minidora-engine/src/store.rs",
-      "sha256": "3ee5e740cb5f161f40a9051cfd5ed9f488229767289b5701306a45b3c29f7a87"
+      "sha256": "7df8a6753bd467c4482a3525bb7908dfab3901f6bf580d8464d3b3ddc8a92865"
     },
     {
       "path": "crates/minidora-engine/src/text_editing.rs",
@@ -108,7 +108,7 @@
     },
     {
       "path": "crates/minidora-engine/src/text_summary.rs",
-      "sha256": "1187810cdd0738fead2143212e51ab5da5e2eed8be49b1466c99cbd7384a1b25"
+      "sha256": "16cc492dc898f3afef8fa4c30a1c1ddff56eb1aa8349436c609bae5924639d21"
     },
     {
       "path": "rust-toolchain.toml",
@@ -124,7 +124,11 @@
     },
     {
       "path": "tools/local_tls_observer_test.py",
-      "sha256": "02ac44f147cd012082f682ced9f8f93a1e82d96fca9dbf508bdedf893e19a0d2"
+      "sha256": "420af0d034d24bbde0809b2ac2bc81651ec6f6fdbc0f09df75ceff9455fd570a"
+    },
+    {
+      "path": "tools/saved_relation_comparison_route_test.py",
+      "sha256": "049c68369ac2be5627e7f21ad19c30119a7abee380850f9e2f6be84fa0940a57"
     }
   ]
 }

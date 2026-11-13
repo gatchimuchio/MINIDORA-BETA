@@ -16,6 +16,8 @@ struct CalculationSequenceStepArtifact {
 
 const COMMON_RELATIONS_REPORT_KIND: &str = "minidora.common-relations-report.v1";
 const COMMON_RELATIONS_REPORT_HEADER: &str = "保存済みの前提・規則から、両対象に共通して支持される関係です。列挙は保存記録で確認できた範囲に限られ、網羅的な比較でも現実世界の真偽確認でもありません。";
+const RELATION_COMPARISON_REPORT_KIND: &str = "minidora.relation-comparison-report.v1";
+const RELATION_COMPARISON_REPORT_HEADER: &str = "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RelationObjectsAnswer {
@@ -197,6 +199,19 @@ struct CommonRelationProofArtifact {
     guarantee_b: Guarantee,
     dependencies_a: Vec<String>,
     dependencies_b: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationComparisonReportArtifact {
+    kind: String,
+    result_id: String,
+    report_sha256: String,
+    subject_a: String,
+    subject_b: String,
+    scope: String,
+    inventory_a: relations::RelationInventory,
+    inventory_b: relations::RelationInventory,
 }
 
 /// Trusted frontends supply an authenticated local principal. A caller-controlled
@@ -3306,6 +3321,114 @@ impl Engine {
                     Guarantee::UserPremise
                 };
             }
+            Intent::CompareRelationInventories {
+                subject_a,
+                subject_b,
+                scope,
+            } => {
+                let per_subject_actions = request.budget.max_actions / 2;
+                if per_subject_actions == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "二つの対象の関係を調べるための推論予算がありません。",
+                    );
+                }
+                let memory = self.store.load_memory(actor)?;
+                let inventory_a = match relation_comparison_inventory(
+                    &memory,
+                    subject_a,
+                    scope,
+                    per_subject_actions,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let inventory_b = match relation_comparison_inventory(
+                    &memory,
+                    subject_b,
+                    scope,
+                    per_subject_actions,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                if inventory_a.facts.is_empty() && inventory_b.facts.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "このscopeで二つの対象について比較できる支持記録がありません。共通点や差異がないとは断定しません。",
+                    );
+                }
+                let report = relation_comparison_report(
+                    subject_a,
+                    subject_b,
+                    scope,
+                    &inventory_a,
+                    &inventory_b,
+                );
+                let artifact = RelationComparisonReportArtifact {
+                    kind: RELATION_COMPARISON_REPORT_KIND.into(),
+                    result_id: result.id.clone(),
+                    report_sha256: digest(report.as_bytes()),
+                    subject_a: subject_a.clone(),
+                    subject_b: subject_b.clone(),
+                    scope: scope.clone(),
+                    inventory_a: inventory_a.clone(),
+                    inventory_b: inventory_b.clone(),
+                };
+                let artifact_bytes = canonical(&artifact)?;
+                if report.len().saturating_add(artifact_bytes.len())
+                    > request.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "関係比較の出力と再検証artifactが要求の証拠予算を超えました。",
+                    );
+                }
+                let report_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &artifact_bytes)?;
+                units.push(report);
+                result.dependencies.push(report_ref);
+                result.dependencies.extend(
+                    inventory_a
+                        .dependencies
+                        .iter()
+                        .chain(&inventory_b.dependencies)
+                        .cloned()
+                        .collect::<BTreeSet<_>>(),
+                );
+                // The report contrasts only the saved record set; omitted facts
+                // and outside-world truth have not been checked.
+                result.guarantee = Guarantee::Hypothesis;
+            }
             Intent::AskCommonRelations {
                 subject_a,
                 subject_b,
@@ -5050,6 +5173,212 @@ pub(crate) fn relation_why_explanation_units(
         "提示された証拠が支える結論",
     ));
     Ok(units)
+}
+
+fn relation_inventory_in_scope(
+    memory: &MemoryState,
+    subject: &str,
+    scope: &str,
+    max_actions: u32,
+) -> Result<relations::RelationInventory> {
+    let total_records = memory
+        .facts
+        .len()
+        .checked_add(memory.rules.len())
+        .ok_or_else(|| failure("RELATION_BUDGET", "relation memory scan count overflowed"))?;
+    let facts: Vec<_> = memory
+        .facts
+        .iter()
+        .filter(|fact| fact.proposition.scope == scope)
+        .cloned()
+        .collect();
+    let rules: Vec<_> = memory
+        .rules
+        .iter()
+        .filter(|rule| {
+            rule.premise.scope == scope
+                && rule.conclusion.scope == scope
+                && rule
+                    .additional_premises
+                    .iter()
+                    .all(|premise| premise.scope == scope)
+        })
+        .cloned()
+        .collect();
+    let relevant_records = facts
+        .len()
+        .checked_add(rules.len())
+        .ok_or_else(|| failure("RELATION_BUDGET", "scoped relation scan count overflowed"))?;
+    let excluded_records = total_records.saturating_sub(relevant_records);
+    let excluded_actions = u32::try_from(excluded_records).map_err(|_| {
+        failure(
+            "RELATION_BUDGET",
+            "relation memory scan exceeds action range",
+        )
+    })?;
+    let remaining_actions = max_actions.checked_sub(excluded_actions).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "scanning the actor memory exceeds the relation comparison budget",
+        )
+    })?;
+    relations::inventory_about(
+        &MemoryState {
+            revision: memory.revision,
+            facts,
+            rules,
+        },
+        subject,
+        remaining_actions,
+    )
+}
+
+fn relation_comparison_inventory(
+    memory: &MemoryState,
+    subject: &str,
+    scope: &str,
+    max_actions: u32,
+) -> Result<relations::RelationInventory> {
+    match relation_inventory_in_scope(memory, subject, scope, max_actions) {
+        Err(Error::Contract { code, .. }) if code == "MISSING_PREMISES" => {
+            Ok(relations::RelationInventory {
+                facts: Vec::new(),
+                contested_fact_ids: BTreeSet::new(),
+                has_conflict: false,
+                dependencies: Vec::new(),
+                guarantee: Guarantee::Unknown,
+            })
+        }
+        other => other,
+    }
+}
+
+type RelationComparisonKey = (String, String, bool, String);
+
+fn relation_comparison_map(
+    inventory: &relations::RelationInventory,
+) -> BTreeMap<RelationComparisonKey, Vec<&Fact>> {
+    let mut grouped = BTreeMap::new();
+    for fact in &inventory.facts {
+        let proposition = &fact.proposition;
+        grouped
+            .entry((
+                proposition.predicate.clone(),
+                proposition.object.clone(),
+                proposition.negative,
+                proposition.scope.clone(),
+            ))
+            .or_insert_with(Vec::new)
+            .push(fact);
+    }
+    grouped
+}
+
+fn relation_comparison_report(
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+) -> String {
+    let left = relation_comparison_map(inventory_a);
+    let right = relation_comparison_map(inventory_b);
+    let mut keys: BTreeSet<_> = left.keys().cloned().collect();
+    keys.extend(right.keys().cloned());
+    let mut lines = vec![
+        RELATION_COMPARISON_REPORT_HEADER.to_string(),
+        format!("比較対象: {subject_a}／{subject_b}（scope: {scope}）"),
+    ];
+    if inventory_a.has_conflict || inventory_b.has_conflict {
+        lines.push(
+            "同一対象・範囲内で肯定と否定の競合根拠があります。競合は解消せず、確認した記録として併記します。".into(),
+        );
+    }
+    if inventory_a.facts.is_empty() {
+        lines.push(format!(
+            "{subject_a}について、このscopeで比較に使える支持記録はありません。記録がないことは、関係がない証明ではありません。"
+        ));
+    }
+    if inventory_b.facts.is_empty() {
+        lines.push(format!(
+            "{subject_b}について、このscopeで比較に使える支持記録はありません。記録がないことは、関係がない証明ではありません。"
+        ));
+    }
+    let mut common_count = 0usize;
+    let mut one_sided_count = 0usize;
+    let mut contested_count = 0usize;
+    for key in keys {
+        let facts_a = left.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let facts_b = right.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let contested_a = facts_a
+            .iter()
+            .any(|fact| inventory_a.contested_fact_ids.contains(&fact.id));
+        let contested_b = facts_b
+            .iter()
+            .any(|fact| inventory_b.contested_fact_ids.contains(&fact.id));
+        if contested_a || contested_b {
+            contested_count += 1;
+            let example = facts_a.first().or_else(|| facts_b.first()).unwrap();
+            lines.push(format!(
+                "競合根拠を含む関係（共通・片側のみと確定しません）: {}",
+                describe(&example.proposition)
+            ));
+        } else if !facts_a.is_empty() && !facts_b.is_empty() {
+            common_count += 1;
+            lines.push(format!(
+                "両側で確認した同じ関係: {} ／ {}",
+                describe(&facts_a[0].proposition),
+                describe(&facts_b[0].proposition)
+            ));
+        } else if !facts_a.is_empty() {
+            one_sided_count += 1;
+            lines.push(format!(
+                "{subject_a}側で確認した関係（{subject_b}側では同じ関係の支持を確認できず）: {}",
+                describe(&facts_a[0].proposition)
+            ));
+        } else {
+            one_sided_count += 1;
+            lines.push(format!(
+                "{subject_b}側で確認した関係（{subject_a}側では同じ関係の支持を確認できず）: {}",
+                describe(&facts_b[0].proposition)
+            ));
+        }
+        for (side, facts, inventory) in [
+            (subject_a, facts_a, inventory_a),
+            (subject_b, facts_b, inventory_b),
+        ] {
+            for fact in facts {
+                let contested = if inventory.contested_fact_ids.contains(&fact.id) {
+                    "; 対立根拠あり"
+                } else {
+                    ""
+                };
+                let dependencies = if fact.dependencies.is_empty() {
+                    "なし".to_string()
+                } else {
+                    fact.dependencies.join(", ")
+                };
+                lines.push(format!(
+                    "根拠({side}): {}（{}; 記録ID: {}; 依存ID: {}{contested}）",
+                    describe(&fact.proposition),
+                    guarantee_label(&fact.guarantee),
+                    fact.id,
+                    dependencies
+                ));
+            }
+        }
+    }
+    if common_count == 0 && contested_count == 0 {
+        lines.push(
+            "両側で同じ関係は確認できませんでした。これは共通関係が存在しないことの証明ではありません。".into(),
+        );
+    }
+    if one_sided_count == 0 {
+        lines.push(
+            "確認できた範囲では、明確に片側のみと分類できる関係はありませんでした。保存記録が網羅的とは限りません。".into(),
+        );
+    }
+    lines.join("\n")
 }
 
 pub(crate) fn relation_profile_units(
