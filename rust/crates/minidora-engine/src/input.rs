@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v63-previous-output-edit";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v64-transitive-object-questions";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1603,6 +1603,11 @@ fn interpret(text: &str) -> Result<Intent> {
         .strip_suffix("ですか")
         .or_else(|| body.strip_suffix("なのか"))
         .unwrap_or(body);
+    if let Some(intent) =
+        transitive_object_question_intent(body, text.trim_end().ends_with(['?', '？']))?
+    {
+        return Ok(intent);
+    }
     if question && let Some(intent) = conjunctive_relation_question_intent(query_body)? {
         return Ok(intent);
     }
@@ -2255,8 +2260,113 @@ fn arithmetic_expression(text: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Restricted copular propositions, not a claim of general Japanese parsing.
-/// Constants are preserved; only declared rule variables gain variable syntax.
+fn japanese_transitive_verb(surface: &str) -> Option<(&'static str, bool)> {
+    match surface {
+        "食べる" | "食べます" => Some(("eat", false)),
+        "食べない" | "食べません" => Some(("eat", true)),
+        "使う" | "使います" => Some(("use", false)),
+        "使わない" | "使いません" => Some(("use", true)),
+        _ => None,
+    }
+}
+
+fn transitive_object_question_intent(text: &str, question_mark: bool) -> Result<Option<Intent>> {
+    let scope_match = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(text);
+    let scope = scope_match
+        .as_ref()
+        .map(|capture| capture[1].trim().to_string())
+        .unwrap_or_else(|| "default".into());
+    let body = scope_match.as_ref().map_or(text, |capture| {
+        capture.get(2).expect("matched body").as_str()
+    });
+    let Some(captures) = regex(r"^([^はが]+?)(?:は|が)何を(.+)$")?.captures(body) else {
+        return Ok(None);
+    };
+    let mut verb = captures[2].trim();
+    let explicit_question = if let Some(without_question_particle) = verb.strip_suffix('か') {
+        verb = without_question_particle;
+        true
+    } else if question_mark {
+        if let Some(without_nominalizer) = verb.strip_suffix('の') {
+            verb = without_nominalizer;
+        }
+        true
+    } else {
+        false
+    };
+    if !explicit_question || scope.is_empty() {
+        return Ok(None);
+    }
+    let Some((predicate, negative)) = japanese_transitive_verb(verb) else {
+        return Ok(None);
+    };
+    let subject = captures[1].trim();
+    let lower = subject.to_ascii_lowercase();
+    if subject.is_empty()
+        || subject.len() > 512
+        || subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
+        || matches!(
+            lower.as_str(),
+            "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
+        )
+        || matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら")
+    {
+        return Ok(None);
+    }
+    Ok(Some(Intent::AskRelationObjects {
+        subject: subject.into(),
+        predicate: predicate.into(),
+        negative,
+        scope,
+    }))
+}
+
+fn japanese_transitive_proposition(text: &str) -> Result<Option<(String, String, String, bool)>> {
+    let Some(captures) = regex(r"^([^はが]+?)(?:は|が)(.+)$")?.captures(text) else {
+        return Ok(None);
+    };
+    let subject = captures[1].trim();
+    let rest = captures[2].trim();
+    for (surface, predicate, negative) in [
+        ("食べません", "eat", true),
+        ("食べない", "eat", true),
+        ("食べます", "eat", false),
+        ("食べる", "eat", false),
+        ("使いません", "use", true),
+        ("使わない", "use", true),
+        ("使います", "use", false),
+        ("使う", "use", false),
+    ] {
+        let Some(object_particle) = rest.strip_suffix(surface) else {
+            continue;
+        };
+        let Some(object) = object_particle.strip_suffix('を') else {
+            continue;
+        };
+        let object = object.trim();
+        if subject.is_empty()
+            || object.is_empty()
+            || matches!(object, "何" | "なに" | "どれ" | "誰" | "だれ")
+            || subject.len() > 512
+            || object.len() > 512
+            || subject.contains(['と', '、', ',', ';', '；', '\n', '\r'])
+            || object.contains(['と', 'で', ';', '；', '\n', '\r'])
+        {
+            return Ok(None);
+        }
+        return Ok(Some((
+            subject.into(),
+            predicate.into(),
+            object.into(),
+            negative,
+        )));
+    }
+    Ok(None)
+}
+
+/// Bounded copular and Japanese transitive relations, not a claim of general
+/// Japanese parsing. Constants are preserved; only declared rule variables
+/// gain variable syntax.
 pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Proposition>> {
     let mut body = terminal_trim(text).trim().to_string();
     let mut scope = "default".to_string();
@@ -2269,17 +2379,21 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
     if regex(r"(?:すべて|全て|任意|一部|少なくとも|たいてい|通常|常に|必ず|かもしれ|とは限ら|じゃなく|ではなく|でなく|だけ|のみ|以外|かつ|且つ|および|及び|または|あるいは|もしくは|ただし|しかし|もし|なら|場合|時点|以前|以後|以降|現在|過去|将来|昨日|今日|明日|まで|から|[0-9]+[年月日])|(?i:\b(?:all|every|any|some|might|may|and|or|but|unless|if|then|when|before|after|currently|yesterday|today|tomorrow|never|always|only|except|please|also)\b)")?.is_match(&body) {
         return Ok(None);
     }
-    let parsed = if let Some(capture) =
+    let parsed = if let Some(parsed) = japanese_transitive_proposition(&body)? {
+        Some(parsed)
+    } else if let Some(capture) =
         regex(r"(?i)^(?:is\s+)?(.+?)\s+(?:is|are)\s+(not\s+)?(.+)$")?.captures(&body)
     {
         Some((
             capture[1].trim().to_string(),
+            "is".into(),
             capture[3].trim().to_string(),
             capture.get(2).is_some(),
         ))
     } else if let Some(capture) = regex(r"(?i)^is\s+(.+?)\s+(not\s+)?(.+)$")?.captures(&body) {
         Some((
             capture[1].trim().to_string(),
+            "is".into(),
             capture[3].trim().to_string(),
             capture.get(2).is_some(),
         ))
@@ -2311,11 +2425,11 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         if object.contains(['を', 'は', 'が', 'に', '。', '、', '!', '！', '?', '？']) {
             return Ok(None);
         }
-        Some((subject, object, negative))
+        Some((subject, "is".into(), object, negative))
     } else {
         None
     };
-    let Some((mut subject, mut object, negative)) = parsed else {
+    let Some((mut subject, predicate, mut object, negative)) = parsed else {
         return Ok(None);
     };
     if let Some(value) = object
@@ -2346,7 +2460,7 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
     }
     Ok(Some(Proposition {
         subject,
-        predicate: "is".into(),
+        predicate,
         object,
         negative,
         scope,
@@ -2638,6 +2752,80 @@ mod tests {
             interpret("ココについて何が分かっているか、ミケについても").unwrap(),
             Intent::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn japanese_transitive_relations_preserve_object_verb_and_question_polarity() {
+        for (text, subject, predicate, object, negative) in [
+            ("ミナはカレーを食べる", "ミナ", "eat", "カレー", false),
+            ("ミナはカッターを使います", "ミナ", "use", "カッター", false),
+            ("ミナは毒を食べません", "ミナ", "eat", "毒", true),
+            ("Xは道具を使わない", "$x", "use", "道具", true),
+        ] {
+            let proposition = parse_proposition(text, text.starts_with('X'))
+                .unwrap()
+                .unwrap();
+            assert_eq!(proposition.subject, subject, "{text}");
+            assert_eq!(proposition.predicate, predicate, "{text}");
+            assert_eq!(proposition.object, object, "{text}");
+            assert_eq!(proposition.negative, negative, "{text}");
+            assert_eq!(proposition.scope, "default", "{text}");
+        }
+        assert!(matches!(
+            parse_proposition("[scope=story]ミナは魚を食べます", false)
+                .unwrap()
+                .unwrap(),
+            Proposition { scope, predicate, .. }
+                if scope == "story" && predicate == "eat"
+        ));
+        assert!(
+            parse_proposition("ミナが水を飲む", false)
+                .unwrap()
+                .is_none()
+        );
+        assert!(matches!(
+            interpret("もしXはカッターを使うならXは道具を使う").unwrap(),
+            Intent::AddRule { premise, conclusion }
+                if premise.subject == "$x"
+                    && premise.predicate == "use"
+                    && premise.object == "カッター"
+                    && conclusion.subject == "$x"
+                    && conclusion.object == "道具"
+        ));
+
+        for (text, predicate, negative, scope) in [
+            ("ミナは何を食べますか", "eat", false, "default"),
+            ("ミナは何を使う?", "use", false, "default"),
+            ("ミナは何を食べないの?", "eat", true, "default"),
+            ("[scope=story]ミナは何を使いませんか", "use", true, "story"),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::AskRelationObjects {
+                        subject,
+                        predicate: actual_predicate,
+                        negative: actual_negative,
+                        scope: actual_scope,
+                    } if subject == "ミナ"
+                        && actual_predicate == predicate
+                        && actual_negative == negative
+                        && actual_scope == scope
+                ),
+                "{text}"
+            );
+        }
+        for text in [
+            "ミナは何を使った?",
+            "ミナは何を運びますか",
+            "ミナは何を使う",
+            "それは何を使いますか",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 
     #[test]

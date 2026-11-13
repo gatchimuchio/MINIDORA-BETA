@@ -2640,6 +2640,206 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
 }
 
 #[test]
+fn natural_transitive_object_questions_use_same_actor_scope_and_relation_proofs() {
+    let scratch = Scratch::new();
+    let direct = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-cutter", "ミナはカッターを使う"],
+    ));
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "tool-rule",
+            "もしXはカッターを使うならXは道具を使う",
+        ],
+    ));
+    let supported = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-uses-question", "ミナは何を使いますか"],
+    ));
+    assert_eq!(supported["lifecycle"], "COMMIT");
+    assert_eq!(supported["guarantee"], "DERIVED");
+    assert!(
+        supported["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナはカッターを使う")
+    );
+    assert!(
+        supported["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは道具を使う")
+    );
+    assert!(supported["text"].as_str().unwrap().contains("直接提示:"));
+    assert!(supported["text"].as_str().unwrap().contains("規則導出:"));
+    assert!(
+        supported["text"]
+            .as_str()
+            .unwrap()
+            .contains("網羅性や現実世界の真偽は確認していません")
+    );
+    for identity in [&direct["dependencies"][0], &rule["dependencies"][0]] {
+        assert!(
+            supported["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(identity)
+        );
+    }
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "ASK_RELATION_OBJECTS"
+    );
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["subject"], "ミナ");
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["predicate"], "use");
+
+    let negative = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-not-cloud", "ミナは毒を使わない"],
+    ));
+    let negative_answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "mina-not-uses-question",
+            "ミナは何を使いませんか",
+        ],
+    ));
+    assert_eq!(negative_answer["lifecycle"], "COMMIT");
+    assert_eq!(negative_answer["guarantee"], "USER_PREMISE");
+    assert!(
+        negative_answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは毒を使わない")
+    );
+    assert!(
+        negative_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&negative["dependencies"][0])
+    );
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "mina-story-notebook",
+            "[scope=story]ミナはノートを使う",
+        ],
+    ));
+    let wrong_scope = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "mina-ecology-question",
+                "[scope=ecology]ミナは何を使う?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrong_scope["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let missing_subject = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "saki-uses-question", "サキは何を使う?"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing_subject["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let other_actor = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "another-actor",
+            "separate-actor-case",
+            &["--input", "mina-other-actor-question", "ミナは何を使う?"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        other_actor["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    let contradictory = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-uses-poison", "ミナは毒を使う"],
+    ));
+    let conflict = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "mina-uses-conflict-question", "ミナは何を使う?"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        conflict["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONFLICTING_PREMISES")
+    );
+
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "invalidate-poison-positive",
+            &format!(
+                "{}を無効化して",
+                contradictory["dependencies"][0].as_str().unwrap()
+            ),
+        ],
+    ));
+    let after_invalidation = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mina-uses-question", "ミナは何を使いますか"],
+    ));
+    assert_eq!(after_invalidation["text"], supported["text"]);
+    assert_eq!(
+        after_invalidation["dependencies"],
+        supported["dependencies"]
+    );
+    assert!(
+        !after_invalidation["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは毒を使う")
+    );
+}
+
+#[test]
 fn natural_definition_questions_retrieve_only_the_exact_stored_premise() {
     let scratch = Scratch::new();
     let japanese_premise = record(&execute(

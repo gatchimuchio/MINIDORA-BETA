@@ -2489,6 +2489,174 @@ impl Engine {
                         "この問いに必要な有効な前提または導出経路がありません。"),
                 }
             }
+            Intent::AskRelationObjects {
+                subject,
+                predicate,
+                negative,
+                scope,
+            } => {
+                let memory = self.store.load_memory(actor)?;
+                let scanned_records = memory
+                    .facts
+                    .len()
+                    .checked_add(memory.rules.len())
+                    .ok_or_else(|| {
+                        failure(
+                            "RESOURCE_LIMIT",
+                            "relation memory scan count overflowed its bounded representation",
+                        )
+                    })?;
+                let action_budget =
+                    usize::try_from(request.budget.max_actions).unwrap_or(usize::MAX);
+                if scanned_records > action_budget {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "保存済み関係を候補として確認する走査量が要求の推論予算を超えました。",
+                    );
+                }
+                let remaining_actions = request
+                    .budget
+                    .max_actions
+                    .saturating_sub(u32::try_from(scanned_records).unwrap_or(u32::MAX));
+                let mut candidates = BTreeSet::new();
+                for fact in &memory.facts {
+                    if !fact.valid
+                        || matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown)
+                    {
+                        continue;
+                    }
+                    if fact.proposition.scope == *scope
+                        && !fact.proposition.object.starts_with('$')
+                        && !fact.proposition.object.starts_with('?')
+                    {
+                        candidates.insert(fact.proposition.object.clone());
+                    }
+                }
+                for rule in memory.rules.iter().filter(|rule| rule.valid) {
+                    for proposition in std::iter::once(&rule.premise)
+                        .chain(rule.additional_premises.iter())
+                        .chain(std::iter::once(&rule.conclusion))
+                    {
+                        if proposition.scope == *scope
+                            && !proposition.object.starts_with('$')
+                            && !proposition.object.starts_with('?')
+                        {
+                            candidates.insert(proposition.object.clone());
+                        }
+                    }
+                }
+                if candidates.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "同じ主体・scopeで確認できる関係値が保存されていません。",
+                    );
+                }
+                let max_candidates = usize::try_from(remaining_actions).unwrap_or(usize::MAX);
+                if candidates.len() > max_candidates {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "候補となる関係値が要求の推論予算を超えました。",
+                    );
+                }
+                let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
+                    failure(
+                        "RESOURCE_LIMIT",
+                        "candidate count exceeds the bounded relation query representation",
+                    )
+                })?;
+                let per_candidate_budget = remaining_actions / candidate_count;
+                if per_candidate_budget == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "すべての候補関係を確認する推論予算がありません。",
+                    );
+                }
+
+                let mut supported = BTreeMap::new();
+                let mut dependencies = BTreeSet::new();
+                let mut any_derived = false;
+                for object in candidates {
+                    let proposition = Proposition {
+                        subject: subject.clone(),
+                        predicate: predicate.clone(),
+                        object,
+                        negative: *negative,
+                        scope: scope.clone(),
+                    };
+                    let answer = relations::query(&memory, &proposition, per_candidate_budget)?;
+                    match answer.status.as_str() {
+                        "SUPPORTED" => {
+                            let guarantee = relations::answer_guarantee(&answer);
+                            supported.insert(proposition.clone(), guarantee.clone());
+                            dependencies.extend(relations::answer_dependencies(&answer));
+                            any_derived |= guarantee == Guarantee::Derived;
+                        }
+                        "CONFLICT" => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONFLICTING_PREMISES",
+                                "対象・predicate・scopeが同じ関係に肯定と否定の根拠があります。選択せず停止します。",
+                            );
+                        }
+                        "CONTRADICTED" | "UNKNOWN" | "MISSING_PREMISES" => {}
+                        _ => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "UNSUPPORTED_RELATION_RESULT",
+                                "関係値の照合が既知の終端状態を返しませんでした。",
+                            );
+                        }
+                    }
+                }
+                if supported.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_PREMISES",
+                        "質問された極性を支える同一subject・predicate・scopeの前提または導出がありません。",
+                    );
+                }
+                let descriptions = supported
+                    .iter()
+                    .map(|(proposition, guarantee)| {
+                        let origin = match guarantee {
+                            Guarantee::UserPremise => "直接提示",
+                            Guarantee::Derived => "規則導出",
+                            _ => "根拠付き",
+                        };
+                        format!("{origin}: {}", describe(proposition))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("；");
+                let answer_text = format!(
+                    "提示された前提の範囲では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
+                );
+                if answer_text.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "関係回答が要求の証拠・出力予算を超えました。",
+                    );
+                }
+                units.push(answer_text);
+                result.dependencies = dependencies.into_iter().collect();
+                result.guarantee = if any_derived {
+                    Guarantee::Derived
+                } else {
+                    Guarantee::UserPremise
+                };
+            }
             Intent::AskWhy { proposition } => {
                 let memory = self.store.load_memory(actor)?;
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
@@ -3639,6 +3807,24 @@ fn describe(p: &Proposition) -> String {
             } else {
                 "である"
             }
+        )
+    } else if p.predicate == "eat" {
+        format!(
+            "{}は{}を{}",
+            p.subject,
+            p.object,
+            if p.negative {
+                "食べない"
+            } else {
+                "食べる"
+            }
+        )
+    } else if p.predicate == "use" {
+        format!(
+            "{}は{}を{}",
+            p.subject,
+            p.object,
+            if p.negative { "使わない" } else { "使う" }
         )
     } else {
         format!(

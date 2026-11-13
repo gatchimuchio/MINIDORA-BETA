@@ -1,0 +1,293 @@
+{
+  "work_item": "BODY-1 BB-LANG Japanese transitive object questions through ordinary CLI",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T06:46:23+00:00",
+  "base_commit": "745740fbc58fdeca7b224905d2ec935a7431e1e9",
+  "requirement_ids": [
+    "A01",
+    "A02",
+    "A04",
+    "A05",
+    "A09",
+    "A12",
+    "A13",
+    "A15",
+    "B01"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v64-transitive-object-questions",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "implementation_change": "The normal Japanese input route now parses bounded 食べる/使う subject-object relations, records them through the existing actor-scoped Core memory, and resolves 何を queries against typed relation proofs. It does not infer an exhaustive object list or outside-world truth.",
+  "binary_sha256": "01d5a9364bf3d832f243af3792e55821fd3c1ffbdcf8a2b8b461306067dffe4b",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "991ee79118de8d98d47df68901210317961aa08836365b9bcbafee6a5b0f97aa",
+    "rust/crates/minidora-engine/src/input.rs": "f39bee810b4c6485063745f83cc54001fc5b4a53efa9c91839daefb8fdf481b4",
+    "rust/crates/minidora-engine/src/core.rs": "ccc10b31a6f11566b1408860696194aba4c126beab37b88964132e906edb5e68"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "f39bee810b4c6485063745f83cc54001fc5b4a53efa9c91839daefb8fdf481b4",
+    "rust/apps/cli/tests/normal_route.rs": "9c083cf46992ce9b882201f2ba04404eac0e70147840022bc89303c5623561d8",
+    "rust/tools/transitive_object_question_route_test.py": "7a214f56a599d838d0c21517bb3006255bc6819bd6547aef611604534a7b9c6d"
+  },
+  "documentation_snapshot_sha256": {
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+    "rust/README.md": "2aaa413df96fd14d12c158fb806cc7c81fb719cf17ce0a20985d80b5a9869718"
+  },
+  "execution_mode": "fresh CLI process for each request; one temporary SQLite state; no test-only result injection",
+  "scope": "Two Japanese transitive predicates (eat/use), present/polite positive and negative forms, one named subject and exact scope; only stored or proof-supported objects are returned.",
+  "observations": [
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-cutter",
+      "request": "ミナはカッターを使う",
+      "request_sha256": "97cf6e7f9935608ebf04ae19c647a7ec73fa4507ece013f37dcf1a88a0c9f74d",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミナはカッターを使う。\n前提ID: fact:2fc8a17d8f71c55c220019f5cb224c24a9676735cd56c79d38fc7d948dd0e69b\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:2fc8a17d8f71c55c220019f5cb224c24a9676735cd56c79d38fc7d948dd0e69b"
+      ],
+      "result_id": "4e80adb7f4a904021357349f0a6dc7f4e0bc83931fd36ac39fcc783c8ce6451d"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "tool-rule",
+      "request": "もしXはカッターを使うならXは道具を使う",
+      "request_sha256": "f5ee7db4c54ae57de5ed8ab81eaa3c65f419a66f3b2a27c3a40163cfc41882c6",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xはカッターを使う ならば $xは道具を使う。\n規則ID: rule:b519f8b9fa4b4c04b8f1309bcb2911c517a3ac9acca8c2b1473332e634dff2ac\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:b519f8b9fa4b4c04b8f1309bcb2911c517a3ac9acca8c2b1473332e634dff2ac"
+      ],
+      "result_id": "3dd2904f618c0200e8d4f715ad0cbcbf5e3a6b1765409dae0569edcc904cfc6c"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-uses-question",
+      "request": "ミナは何を使いますか",
+      "request_sha256": "5df3cc71951cc365b63a8a4e1138271dfaac8d8e8a3d982eb9cd410820010102",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、次の関係が支持されます: 直接提示: ミナはカッターを使う；規則導出: ミナは道具を使う。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。",
+      "reason": null,
+      "dependencies": [
+        "fact:2fc8a17d8f71c55c220019f5cb224c24a9676735cd56c79d38fc7d948dd0e69b",
+        "fact:a306af6fd566c6a01ac8fd5d6e598ecbe21ec636e5973edfb16f2e5b7fe5367b",
+        "rule:b519f8b9fa4b4c04b8f1309bcb2911c517a3ac9acca8c2b1473332e634dff2ac"
+      ],
+      "result_id": "5d05de7e74864691dc72b62999018ff808657ffd6b2305c4f4d34be4c6a1f6c4"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-no-poison",
+      "request": "ミナは毒を使わない",
+      "request_sha256": "d927f620808cf4179c923924c84513d3a6f39cf03aa56afcae73f03722428f77",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミナは毒を使わない。\n前提ID: fact:51992e8715ef3a73a7d80a325a7a127c83f63721c037e2115a0cf2438afadcfe\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:51992e8715ef3a73a7d80a325a7a127c83f63721c037e2115a0cf2438afadcfe"
+      ],
+      "result_id": "430a693a83cee4a287c9ebb0880d0637187b10872a3fed84b687861ea2c3f9c7"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-not-uses-question",
+      "request": "ミナは何を使いませんか",
+      "request_sha256": "59aa113956131d1d3c3ee51420e915ab87e59a86b89dd4cd2c409677579a954b",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "提示された前提の範囲では、次の関係が支持されます: 直接提示: ミナは毒を使わない。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。",
+      "reason": null,
+      "dependencies": [
+        "fact:51992e8715ef3a73a7d80a325a7a127c83f63721c037e2115a0cf2438afadcfe"
+      ],
+      "result_id": "6276cd1e1bca970a0ede11c395087bb070714ed4694643dfa131bf04533e0bd2"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-story-notebook",
+      "request": "[scope=story]ミナはノートを使う",
+      "request_sha256": "06bf22e143f05790952d624a73af6ea2869060daab286b2187426d25327bd76b",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミナはノートを使う。\n前提ID: fact:642367ba7ce8a0284d8635ffae7f2f241a49da9961745df90c96dab2558e293e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:642367ba7ce8a0284d8635ffae7f2f241a49da9961745df90c96dab2558e293e"
+      ],
+      "result_id": "b27cb3e5212b9468f61cd82ad2a6c8213f2a7575eb0d86a7b8219928fc64b95e"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-ecology-question",
+      "request": "[scope=ecology]ミナは何を使う?",
+      "request_sha256": "eaa326621d29eb1a692fe6c5b9394008ceddcd306171602b5d6167b21ea1ee43",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "同じ主体・scopeで確認できる関係値が保存されていません。",
+      "reason": "MISSING_PREMISES: 同じ主体・scopeで確認できる関係値が保存されていません。",
+      "dependencies": [],
+      "result_id": "3594cf30db4929599d10db58b9df0e382321964e988c45127771402ce6cf3ef7"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "saki-uses-question",
+      "request": "サキは何を使う?",
+      "request_sha256": "34e39ea649ddc9038a7eb347688c22cef530aebd68e3c15017ba8ae9e018421a",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "質問された極性を支える同一subject・predicate・scopeの前提または導出がありません。",
+      "reason": "MISSING_PREMISES: 質問された極性を支える同一subject・predicate・scopeの前提または導出がありません。",
+      "dependencies": [],
+      "result_id": "2d648c2b3fee02e362375600172d1039013969640b387f639e22ef6aa696b4c9"
+    },
+    {
+      "case_id": "isolated-actor-case",
+      "actor_id": "other-actor",
+      "input_id": "mina-other-actor-question",
+      "request": "ミナは何を使う?",
+      "request_sha256": "c7222e83f087e9ee819c2c87df4223add11f6dbad1055406c992fa4e25cfb2a8",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "同じ主体・scopeで確認できる関係値が保存されていません。",
+      "reason": "MISSING_PREMISES: 同じ主体・scopeで確認できる関係値が保存されていません。",
+      "dependencies": [],
+      "result_id": "cb26da33c716eef48406f19c1680d4c8e3844f8b7ff47db279fde38ca401d58b"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-uses-poison",
+      "request": "ミナは毒を使う",
+      "request_sha256": "93f4b6f9aa2f3f9cd29fdd5ad3017bc2f61bde19a08c12d92b1d802f0dc33365",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミナは毒を使う。\n前提ID: fact:445796e1a47f2b99301dffcaeaae4cc86aedb2e41a4599b9f6e77b6dc5b13510\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:445796e1a47f2b99301dffcaeaae4cc86aedb2e41a4599b9f6e77b6dc5b13510"
+      ],
+      "result_id": "2759c78804d3f79388c4af2417fb7595612539a737f48d929d00d11f95476cb6"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-conflict-question",
+      "request": "ミナは何を使う?",
+      "request_sha256": "c7222e83f087e9ee819c2c87df4223add11f6dbad1055406c992fa4e25cfb2a8",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "対象・predicate・scopeが同じ関係に肯定と否定の根拠があります。選択せず停止します。",
+      "reason": "CONFLICTING_PREMISES: 対象・predicate・scopeが同じ関係に肯定と否定の根拠があります。選択せず停止します。",
+      "dependencies": [],
+      "result_id": "987f711c160cdbdc1fbeb2f96358c2b24ea04b0108b4b2f732f7358718cf7348"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "invalidate-poison-positive",
+      "request": "fact:445796e1a47f2b99301dffcaeaae4cc86aedb2e41a4599b9f6e77b6dc5b13510を無効化して",
+      "request_sha256": "25111cd8bcf6b0f75ae4a6bb51823e5991b35aae24b5c48a3b6a6ffe4d8f8ed7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:445796e1a47f2b99301dffcaeaae4cc86aedb2e41a4599b9f6e77b6dc5b13510"
+      ],
+      "result_id": "39581ef6cfd14aa2ed6e8d67407b66201a845e8e90e11ad6e8b1bd5783da2be4"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "mina-uses-question",
+      "request": "ミナは何を使いますか",
+      "request_sha256": "5df3cc71951cc365b63a8a4e1138271dfaac8d8e8a3d982eb9cd410820010102",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "提示された前提の範囲では、次の関係が支持されます: 直接提示: ミナはカッターを使う；規則導出: ミナは道具を使う。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。",
+      "reason": null,
+      "dependencies": [
+        "fact:2fc8a17d8f71c55c220019f5cb224c24a9676735cd56c79d38fc7d948dd0e69b",
+        "fact:a306af6fd566c6a01ac8fd5d6e598ecbe21ec636e5973edfb16f2e5b7fe5367b",
+        "rule:b519f8b9fa4b4c04b8f1309bcb2911c517a3ac9acca8c2b1473332e634dff2ac"
+      ],
+      "result_id": "5d05de7e74864691dc72b62999018ff808657ffd6b2305c4f4d34be4c6a1f6c4"
+    },
+    {
+      "case_id": "transitive-object-route",
+      "actor_id": "japanese-owner",
+      "input_id": "unsupported-past-question",
+      "request": "ミナは何を使った?",
+      "request_sha256": "d120d9f7ce9f3503ac6c3b15f2798b56ebfa3de0c64c645ef426bd6f80c4dfc0",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "reason": "CAPABILITY_UNAVAILABLE: この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+      "dependencies": [],
+      "result_id": "990f46391d2ab15318678a3e1702a0f7dcb214e440c0e9dcd5c3071c14efa69e"
+    }
+  ],
+  "summary": {
+    "total_requests": 14,
+    "lifecycle_counts": {
+      "COMMIT": 9,
+      "SUSPEND": 5
+    },
+    "direct_premise_id": "fact:2fc8a17d8f71c55c220019f5cb224c24a9676735cd56c79d38fc7d948dd0e69b",
+    "rule_id": "rule:b519f8b9fa4b4c04b8f1309bcb2911c517a3ac9acca8c2b1473332e634dff2ac",
+    "negative_premise_id": "fact:51992e8715ef3a73a7d80a325a7a127c83f63721c037e2115a0cf2438afadcfe",
+    "invalidated_conflict_premise_id": "fact:445796e1a47f2b99301dffcaeaae4cc86aedb2e41a4599b9f6e77b6dc5b13510"
+  },
+  "targeted_checks": {
+    "japanese_parser_unit": "PASS",
+    "ordinary_cli_route": "PASS",
+    "derived_proof_dependencies": "PASS",
+    "direct_vs_derived_labels": "PASS",
+    "negative_polarity": "PASS",
+    "missing_subject_and_scope_stops": "PASS",
+    "actor_isolation": "PASS",
+    "conflict_and_invalidation": "PASS",
+    "prior_result_immutability": "PASS"
+  },
+  "requirements_status": "A01/A02/A04/A05/A09/A12/A13/A15/B01 acceptance remains UNVERIFIED; this is a scoped route observation, not the independent unseen-question QA population.",
+  "limitations": [
+    "Only 食べる and 使う are in the transitive verb vocabulary.",
+    "Past tense, unresolved subject pronouns, object alternatives and nonlisted verbs are not supported by this route.",
+    "Returned objects are supported values in the retained proof graph, not a guaranteed exhaustive inventory.",
+    "The user-supplied premises and rules are not independently verified world facts.",
+    "Full workspace runtime suite, full BB-LANG acceptance and the independent 24-question population were not run."
+  ]
+}
