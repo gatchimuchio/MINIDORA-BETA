@@ -161,6 +161,83 @@ def main() -> None:
         if not set(comparison["dependencies"]).issubset(summary["dependencies"]):
             raise AssertionError("previous-result summary lost comparison evidence")
 
+        comparison_for_explanation = run(
+            actor,
+            case,
+            "compare-before-detailed-explanation",
+            "[scope=biology]ココとミケの保存済みの関係を比較して",
+            "COMMIT",
+        )
+        explanation = run(
+            actor, case, "explain-saved-relation-comparison", "詳しく説明して", "COMMIT"
+        )
+        explanation_text = explanation["text"]
+        for marker in (
+            "前回の保存関係比較を詳しく説明します",
+            "左右のscope別inventoryを再計算",
+            "両側で確認した同じ関係",
+            "ココ側で確認した関係",
+            "ミケ側で確認した関係",
+            "直接提示された前提",
+            "規則からの導出",
+            "関係が偽または存在しない証明ではありません",
+            "現実世界の真偽は確認していません",
+        ):
+            if marker not in explanation_text:
+                raise AssertionError(f"detailed explanation omitted {marker}")
+        if explanation["guarantee"] != "HYPOTHESIS":
+            raise AssertionError("detailed comparison explanation overstated its guarantee")
+        if comparison_for_explanation["id"] not in explanation["dependencies"]:
+            raise AssertionError("detailed explanation lost its comparison result")
+        if not set(comparison_for_explanation["dependencies"]).issubset(
+            explanation["dependencies"]
+        ):
+            raise AssertionError("detailed explanation lost comparison proof dependencies")
+
+        stale_actor, stale_case = (
+            "relation-compare-stale-explanation-owner",
+            "relation-compare-stale-explanation-case",
+        )
+        stale_coco = run(
+            stale_actor,
+            stale_case,
+            "stale-coco-bird",
+            "[scope=biology]ココは鳥",
+            "COMMIT",
+        )
+        run(
+            stale_actor,
+            stale_case,
+            "stale-mike-bird",
+            "[scope=biology]ミケは鳥",
+            "COMMIT",
+        )
+        run(
+            stale_actor,
+            stale_case,
+            "compare-before-memory-change",
+            "[scope=biology]ココとミケの保存済みの関係を比較して",
+            "COMMIT",
+        )
+        run(
+            stale_actor,
+            "relation-compare-stale-maintenance-case",
+            "invalidate-stale-coco-premise",
+            f"{stale_coco['dependencies'][0]}を無効化して",
+            "COMMIT",
+        )
+        stale_explanation = run(
+            stale_actor,
+            stale_case,
+            "explain-after-memory-change",
+            "詳しく説明して",
+            "SUSPEND",
+        )
+        if not str(stale_explanation.get("reason", "")).startswith(
+            "CONTEXT_PROOF_CHANGED:"
+        ):
+            raise AssertionError("changed relation proof did not stop with CONTEXT_PROOF_CHANGED")
+
         conflict_actor, conflict_case = (
             "relation-compare-conflict-owner",
             "relation-compare-conflict-case",
@@ -223,12 +300,12 @@ def main() -> None:
     counts = Counter(observation["lifecycle"] for observation in observations)
     args.evidence_output.parent.mkdir(parents=True, exist_ok=True)
     evidence = {
-        "work_item": "BODY-1 BB-LANG saved-relation comparison and previous-result summary",
+        "work_item": "BODY-1 BB-CONTEXT saved-relation comparison explanation consumer",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "base_commit": base_commit,
         "source_snapshot_sha256": source_snapshot_sha256,
         "subject": "MINIDORA-BETA engine",
-        "purpose": "Compare two actor-scoped scoped relation inventories in ordinary Japanese, retain both proof lineages, and pass the committed result to the same-case previous-result summary consumer.",
+        "purpose": "Explain an ordinary same-case saved-relation comparison by checking the exact prior report and rendered output, recomputing both actor-scoped inventories, and preserving their proof dependencies.",
         "parser_version": PARSER_VERSION,
         "execution_mode": "each request ran as a separate process of the supplied CLI binary against one temporary SQLite state directory; the directory was removed on exit",
         "platform": platform.platform(),
@@ -241,16 +318,20 @@ def main() -> None:
             "one_sided_saved_support_is_labeled_without_claiming_absence": True,
             "source_fact_and_rule_dependencies_retained": True,
             "same_case_previous_result_summary_consumed_comparison": True,
+            "same_case_explanation_revalidated_both_inventories_and_output": True,
+            "comparison_explanation_retained_prior_and_proof_dependencies": True,
+            "changed_inventory_suspended_with_context_proof_changed": True,
             "conflicting_polarities_are_retained_without_unambiguous_classification": True,
             "other_actor_without_memory_suspended": True,
         },
         "observations": observations,
-        "requirements": ["A02", "A09", "B01", "B08"],
+        "requirements": ["A07", "A09", "B01", "F04"],
         "acceptance_status": "UNVERIFIED",
         "limitations": [
             "Only explicit Japanese and English saved-relation comparison forms are supported.",
             "One-sided output means support was not found in the other bounded scoped inventory; it does not prove that the relation is false or absent.",
             "Relation records and rules are user-supplied premises; outside-world truth, memory completeness, open-domain comparison and general writing quality are not established.",
+            "Only the saved-relation comparison artifact has this detailed previous-result consumer; other result types are handled by their existing routes or remain unverified.",
             "Full workspace runtime tests and full R2 acceptance were not run.",
         ],
     }

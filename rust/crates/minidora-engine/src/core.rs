@@ -2106,6 +2106,231 @@ impl Engine {
                     result.dependencies.push(prior.id.clone());
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
+                } else if prior.text.starts_with(RELATION_COMPARISON_REPORT_HEADER) {
+                    if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_RELATION_COMPARISON_CONTEXT",
+                            "説明対象として固定された直前の保存関係比較がありません。",
+                        );
+                    }
+                    let Some(report_ref) = prior.dependencies.first().cloned() else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_ARTIFACT_UNAVAILABLE",
+                            "前回の保存関係比較に再検証可能なartifactがありません。",
+                        );
+                    };
+                    let Some(report_bytes) =
+                        self.store
+                            .get_bytes_if_present(actor, &request.case_id, &report_ref)?
+                    else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_ARTIFACT_UNAVAILABLE",
+                            "前回の保存関係比較artifactを同一ケースから取得できません。",
+                        );
+                    };
+                    if report_bytes.len() > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "前回の保存関係比較artifactが今回の証拠予算を超えています。",
+                        );
+                    }
+                    let artifact = match serde_json::from_slice::<RelationComparisonReportArtifact>(
+                        &report_bytes,
+                    ) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RELATION_COMPARISON_ARTIFACT_INVALID",
+                                "前回の保存関係比較artifactの形式を検証できません。",
+                            );
+                        }
+                    };
+                    let (Some(prior_plan), Some(prior_render)) =
+                        (&prior.content_plan, &prior.render)
+                    else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_OUTPUT_UNAVAILABLE",
+                            "前回比較の採用ContentPlanまたは実表示記録がありません。",
+                        );
+                    };
+                    let mut unsigned_plan = prior_plan.clone();
+                    unsigned_plan.id.clear();
+                    if canonical(&artifact)? != report_bytes
+                        || digest(&report_bytes) != report_ref
+                        || artifact.kind != RELATION_COMPARISON_REPORT_KIND
+                        || artifact.result_id != prior.id
+                        || artifact.subject_a.is_empty()
+                        || artifact.subject_b.is_empty()
+                        || artifact.subject_a == artifact.subject_b
+                        || artifact.scope.is_empty()
+                        || prior.lifecycle != Lifecycle::Commit
+                        || prior.guarantee != Guarantee::Hypothesis
+                        || prior_plan.guarantee != Guarantee::Hypothesis
+                        || prior_plan.id != identity(&unsigned_plan)?
+                        || prior_plan.text != prior.text
+                        || !validate_render(prior_plan, prior_render)
+                        || prior.dependencies.first() != Some(&report_ref)
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_ARTIFACT_INVALID",
+                            "前回比較結果とartifactまたは表示記録の同一性が一致しません。",
+                        );
+                    }
+                    let prior_content_bytes = canonical(prior_plan)?;
+                    let prior_content_ref = digest(&prior_content_bytes);
+                    let prior_render_bytes = canonical(prior_render)?;
+                    let prior_render_ref = digest(&prior_render_bytes);
+                    for (reference, expected) in [
+                        (prior_content_ref.as_str(), prior_content_bytes.as_slice()),
+                        (prior_render_ref.as_str(), prior_render_bytes.as_slice()),
+                    ] {
+                        match self
+                            .store
+                            .get_bytes_if_present(actor, &request.case_id, reference)?
+                        {
+                            Some(stored) if stored == expected => {}
+                            Some(_) => {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Fail,
+                                    "RELATION_COMPARISON_OUTPUT_INTEGRITY",
+                                    "前回比較のContentPlanまたはrender artifactが保存済み実体と一致しません。",
+                                );
+                            }
+                            None => {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    "RELATION_COMPARISON_OUTPUT_UNAVAILABLE",
+                                    "前回比較のContentPlanまたはrender artifactを同一ケースから取得できません。",
+                                );
+                            }
+                        }
+                    }
+                    let per_subject_actions = request.budget.max_actions / 2;
+                    if per_subject_actions == 0 {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "左右の保存関係を再検証する推論予算が不足しています。",
+                        );
+                    }
+                    let memory = self.store.load_memory(actor)?;
+                    let inventory_a = match relation_comparison_inventory(
+                        &memory,
+                        &artifact.subject_a,
+                        &artifact.scope,
+                        per_subject_actions,
+                    ) {
+                        Ok(value) => value,
+                        Err(Error::Contract { code, message }) => {
+                            let code = if code == "RELATION_BUDGET" {
+                                "RESOURCE_LIMIT"
+                            } else {
+                                "RELATION_COMPARISON_ARTIFACT_INVALID"
+                            };
+                            return self.stop(&mut state, Lifecycle::Suspend, code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let inventory_b = match relation_comparison_inventory(
+                        &memory,
+                        &artifact.subject_b,
+                        &artifact.scope,
+                        per_subject_actions,
+                    ) {
+                        Ok(value) => value,
+                        Err(Error::Contract { code, message }) => {
+                            let code = if code == "RELATION_BUDGET" {
+                                "RESOURCE_LIMIT"
+                            } else {
+                                "RELATION_COMPARISON_ARTIFACT_INVALID"
+                            };
+                            return self.stop(&mut state, Lifecycle::Suspend, code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    if inventory_a != artifact.inventory_a || inventory_b != artifact.inventory_b {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTEXT_PROOF_CHANGED",
+                            "前回比較の左右いずれかの保存根拠・競合状態が変わっています。新しい比較を行ってください。",
+                        );
+                    }
+                    let report = relation_comparison_report(
+                        &artifact.subject_a,
+                        &artifact.subject_b,
+                        &artifact.scope,
+                        &inventory_a,
+                        &inventory_b,
+                    );
+                    if digest(report.as_bytes()) != artifact.report_sha256
+                        || prior_plan.required_units != [report.clone()]
+                        || prior.text != report
+                        || !prior_plan.dependencies.starts_with(&prior.dependencies)
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_ARTIFACT_INVALID",
+                            "再生成した比較本文または出力依存記録が前回artifactと一致しません。",
+                        );
+                    }
+                    let mut expected_dependencies = vec![report_ref];
+                    expected_dependencies.extend(
+                        inventory_a
+                            .dependencies
+                            .iter()
+                            .chain(&inventory_b.dependencies)
+                            .cloned()
+                            .collect::<BTreeSet<_>>(),
+                    );
+                    if prior.dependencies != expected_dependencies {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_ARTIFACT_INVALID",
+                            "前回比較の依存記録が左右の再検証済みinventoryと一致しません。",
+                        );
+                    }
+                    let mut explanation = vec![format!(
+                        "前回の保存関係比較を詳しく説明します（比較結果ID: {}）。同じactorの現在有効な記憶から左右のscope別inventoryを再計算し、前回と一致することを確認しました。",
+                        prior.id
+                    )];
+                    explanation.extend(report.lines().skip(1).map(str::to_string));
+                    explanation.push(
+                        "比較分類は保存済みの前提・規則の範囲に限られます。片側で支持を確認できないことは、関係が偽または存在しない証明ではありません。記録の網羅性と現実世界の真偽は確認していません。".into(),
+                    );
+                    if explanation.join("\n").len() > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "再検証した保存関係比較の説明が今回の証拠予算を超えています。",
+                        );
+                    }
+                    units.extend(explanation);
+                    result.dependencies.push(prior.id.clone());
+                    result
+                        .dependencies
+                        .extend(prior.dependencies.iter().cloned());
+                    result.guarantee = Guarantee::Hypothesis;
                 } else if prior.text.starts_with(COMMON_RELATIONS_REPORT_HEADER) {
                     if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
                         return self.stop(

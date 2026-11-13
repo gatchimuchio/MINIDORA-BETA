@@ -5556,6 +5556,142 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
 }
 
 #[test]
+fn saved_relation_comparison_explanation_revalidates_both_scoped_inventories() {
+    let scratch = Scratch::new();
+    let actor = "relation-comparison-explanation-owner";
+    let comparison_case = "relation-comparison-explanation-case";
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &[
+            "--input",
+            "biology-rule",
+            "もし[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        ],
+    ));
+    let coco = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &["--input", "coco-bird", "[scope=biology]ココは鳥"],
+    ));
+    let mike = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &["--input", "mike-bird", "[scope=biology]ミケは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &["--input", "coco-feathers", "[scope=biology]ココは羽毛持ち"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &["--input", "mike-cat", "[scope=biology]ミケは猫"],
+    ));
+
+    let comparison = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &[
+            "--input",
+            "compare-relations-for-explanation",
+            "[scope=biology]ココとミケの保存済みの関係を比較して",
+        ],
+    ));
+    assert_eq!(comparison["lifecycle"], "COMMIT");
+    assert_eq!(comparison["guarantee"], "HYPOTHESIS");
+
+    let explanation = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &["--input", "explain-relation-comparison", "詳しく説明して"],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    let explanation_text = explanation["text"].as_str().unwrap();
+    assert_ne!(explanation_text, comparison["text"]);
+    for marker in [
+        "前回の保存関係比較を詳しく説明します",
+        "左右のscope別inventoryを再計算",
+        "両側で確認した同じ関係",
+        "ココ側で確認した関係",
+        "ミケ側で確認した関係",
+        "直接提示された前提",
+        "規則からの導出",
+        "関係が偽または存在しない証明ではありません",
+        "現実世界の真偽は確認していません",
+    ] {
+        assert!(explanation_text.contains(marker), "missing {marker}");
+    }
+    for source in [&rule, &coco, &mike] {
+        for dependency in source["dependencies"].as_array().unwrap() {
+            assert!(explanation_text.contains(dependency.as_str().unwrap()));
+        }
+    }
+    let explanation_dependencies = explanation["dependencies"].as_array().unwrap();
+    for dependency in
+        std::iter::once(&comparison["id"]).chain(comparison["dependencies"].as_array().unwrap())
+    {
+        assert!(
+            explanation_dependencies.contains(dependency),
+            "comparison explanation lost dependency {dependency}"
+        );
+    }
+
+    let stale_comparison = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        comparison_case,
+        &[
+            "--input",
+            "compare-relations-before-invalidation",
+            "[scope=biology]ココとミケの保存済みの関係を比較して",
+        ],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        actor,
+        "relation-comparison-explanation-maintenance-case",
+        &[
+            "--input",
+            "invalidate-coco-bird",
+            &format!("{}を無効化して", coco["dependencies"][0].as_str().unwrap()),
+        ],
+    ));
+    let stale_explanation = stopped(
+        &execute_in_case(
+            &scratch.0,
+            actor,
+            comparison_case,
+            &[
+                "--input",
+                "explain-stale-relation-comparison",
+                "詳しく説明して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert_eq!(
+        stale_explanation["reason"]
+            .as_str()
+            .unwrap()
+            .split(':')
+            .next(),
+        Some("CONTEXT_PROOF_CHANGED")
+    );
+    assert_eq!(stale_comparison["lifecycle"], "COMMIT");
+}
+
+#[test]
 fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans() {
     let scratch = Scratch::new();
     let actor = "previous-result-summary-owner";
