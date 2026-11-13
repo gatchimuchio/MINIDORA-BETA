@@ -3849,10 +3849,7 @@ impl Engine {
                 let mut any_derived = false;
                 for fact in &facts {
                     let (category, origin) = match &fact.guarantee {
-                        Guarantee::UserPremise => (
-                            "提示前提",
-                            format!("提示前提ID: {}", fact.id),
-                        ),
+                        Guarantee::UserPremise => ("提示前提", format!("提示前提ID: {}", fact.id)),
                         Guarantee::Derived => {
                             any_derived = true;
                             (
@@ -3864,12 +3861,8 @@ impl Engine {
                                 ),
                             )
                         }
-                        Guarantee::Computed => {
-                            ("計算記録", format!("計算記録ID: {}", fact.id))
-                        }
-                        Guarantee::SourceReport => {
-                            ("出典報告", format!("出典報告ID: {}", fact.id))
-                        }
+                        Guarantee::Computed => ("計算記録", format!("計算記録ID: {}", fact.id)),
+                        Guarantee::SourceReport => ("出典報告", format!("出典報告ID: {}", fact.id)),
                         Guarantee::Hypothesis | Guarantee::Unknown => {
                             ("未確定", format!("未確定記録ID: {}", fact.id))
                         }

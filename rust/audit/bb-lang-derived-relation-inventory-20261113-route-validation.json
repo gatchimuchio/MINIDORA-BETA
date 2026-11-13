@@ -1,0 +1,301 @@
+{
+  "work_item": "BODY-1 BB-LANG bounded derived-relation inventory",
+  "parser_version": "declarative-ja-en-v68-previous-result-summary",
+  "requirement_ids": [
+    "A07",
+    "A08",
+    "A12",
+    "A13"
+  ],
+  "execution_mode": "fresh CLI process for each request; one durable actor/case store",
+  "producer_consumer": "ordinary Japanese/English subject question -> sealed v68 InspectPremises intent -> actor-scoped relation facts/rules -> bounded Core proof queries -> content/render/result dependencies",
+  "scope": "Lists supported active direct relations and rule-derived conclusions for the named subject, preserving guarantee, scope, derived result IDs and transitive premise/rule dependencies. Conflicting support is rendered without arbitrary resolution. The listing is bounded by candidate/action/proof/evidence budgets, is not exhaustive and does not verify outside-world truth.",
+  "observations": [
+    {
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "request_sha256": "2ab163cfac2b22adba11a5f3b49a18b3ffc3c587c4fee07335cb8701876dbd94",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-gray",
+      "request": "[scope=story]ココは灰色",
+      "request_sha256": "b7bb459060c22d82b747ab42d9a9d691189fbf1f16414069ccff0be3202c5ad7",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは灰色である。\n前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62"
+      ]
+    },
+    {
+      "input_id": "coco-negative",
+      "request": "ココは哺乳類ではない",
+      "request_sha256": "d4ee2eace813046a68ddf365525f5ceb9ec008b329a9f018fe8f00e6c8159a3b",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは哺乳類ではない。\n前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843"
+      ]
+    },
+    {
+      "input_id": "coco-negative-animal",
+      "request": "ココは動物ではない",
+      "request_sha256": "21ea433d0ebba8b974688d3b4d5be9def3645f7fe323f6fd93964ca1c4661fd2",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは動物ではない。\n前提ID: fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7"
+      ]
+    },
+    {
+      "input_id": "bird-rule",
+      "request": "もしXは鳥ならXは動物",
+      "request_sha256": "5af8707ddb3c122841a95fd6affc589446845e9d7ae9ceb2cf433ca6eeddc706",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01"
+      ]
+    },
+    {
+      "input_id": "coco-listing",
+      "request": "ココについて、何が分かっていますか",
+      "request_sha256": "2bdef202ac611c1bb32db0516becd5a6bb67ec22c1b9fe9907015e91d43f8e9b",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "text": "会話に保存された「ココ」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。\n一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。\n・対立根拠として規則導出: ココは動物である（範囲: default; 導出ID: fact:1192f21274d0f7a6397491d405552afe67e923ceeffeaf8976c3c70b66110757; 依存ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515, rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01）\n・対立根拠として提示前提: ココは動物ではない（範囲: default; 提示前提ID: fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7）\n・提示前提: ココは哺乳類ではない（範囲: default; 提示前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843）\n・提示前提: ココは灰色である（範囲: story; 提示前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62）\n・提示前提: ココは鳥である（範囲: default; 提示前提ID: fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515）",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515",
+        "fact:1192f21274d0f7a6397491d405552afe67e923ceeffeaf8976c3c70b66110757",
+        "fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7",
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62",
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843",
+        "rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01"
+      ]
+    },
+    {
+      "input_id": "coco-mammal-en",
+      "request": "Coco is a mammal",
+      "request_sha256": "902dda2e90c1ff1480b817185adbb463ee093ee6a8c08d07e067dc3db0ec22a0",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: Cocoはmammalである。\n前提ID: fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37"
+      ]
+    },
+    {
+      "input_id": "coco-listing-en",
+      "request": "What is Coco?",
+      "request_sha256": "1de9a41cada291d58eb4dc13b68733e30aca7ec67b0d1dd506804b5b17b37b8f",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「Coco」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。\n・提示前提: Cocoはmammalである（範囲: default; 提示前提ID: fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37）",
+      "reason": null,
+      "dependencies": [
+        "fact:3854459db1c06b62c2a4bf25f4333192ebe91e9b2c7198b84d4bced8bc79ee37"
+      ]
+    },
+    {
+      "input_id": "invalidate-coco-bird",
+      "request": "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515を無効化して",
+      "request_sha256": "cce45fa6f550aad64fc8b4dd9a1f95a868b3cdf48caa608b464e5f4426b45b76",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "COMPUTED",
+      "text": "1件の前提・依存を失効させ、元の記録を保持しました。",
+      "reason": null,
+      "dependencies": [
+        "fact:00b71a55d237910a4ea48d77e0ffb7dae91245f7de2ed2923258b1e9d012e515"
+      ]
+    },
+    {
+      "input_id": "coco-listing-after",
+      "request": "ココとは何ですか",
+      "request_sha256": "b1b3f9bec286f0276c88026a22cb97e2b7729a004c2a29560dac96a253e0f731",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "会話に保存された「ココ」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。\n・提示前提: ココは動物ではない（範囲: default; 提示前提ID: fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7）\n・提示前提: ココは哺乳類ではない（範囲: default; 提示前提ID: fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843）\n・提示前提: ココは灰色である（範囲: story; 提示前提ID: fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62）",
+      "reason": null,
+      "dependencies": [
+        "fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7",
+        "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62",
+        "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843"
+      ]
+    },
+    {
+      "input_id": "other-actor-listing",
+      "request": "ココについて、何が分かっていますか",
+      "request_sha256": "2bdef202ac611c1bb32db0516becd5a6bb67ec22c1b9fe9907015e91d43f8e9b",
+      "actor": "separate-premise-reader",
+      "case": "separate-actor-case",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この対象について有効な提示前提または規則導出はありません。",
+      "reason": "MISSING_PREMISES: この対象について有効な提示前提または規則導出はありません。",
+      "dependencies": []
+    },
+    {
+      "input_id": "candidate-budget",
+      "request": "ココについて、何が分かっていますか",
+      "request_sha256": "2bdef202ac611c1bb32db0516becd5a6bb67ec22c1b9fe9907015e91d43f8e9b",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "対象について確認する関係候補が要求の推論予算を超えました。",
+      "reason": "RESOURCE_LIMIT: 対象について確認する関係候補が要求の推論予算を超えました。",
+      "dependencies": []
+    },
+    {
+      "input_id": "unknown-subject-listing",
+      "request": "What is a unicorn?",
+      "request_sha256": "9ef9a72218455534179d8315f7d80f416df62aba4a50b040cb89ff5d00865b53",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この対象について有効な提示前提または規則導出はありません。",
+      "reason": "MISSING_PREMISES: この対象について有効な提示前提または規則導出はありません。",
+      "dependencies": []
+    },
+    {
+      "input_id": "coco-bird-restored",
+      "request": "ココは鳥",
+      "request_sha256": "2ab163cfac2b22adba11a5f3b49a18b3ffc3c587c4fee07335cb8701876dbd94",
+      "actor": "fixture-premise-reader",
+      "case": "premise-inspection-recovery",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:ddf79162a026adb6f71b4f88b436f07c167b68fcb69e7e679946b5988af5d359\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:ddf79162a026adb6f71b4f88b436f07c167b68fcb69e7e679946b5988af5d359"
+      ]
+    }
+  ],
+  "adopted_file_recovery": {
+    "lifecycle": "COMMIT",
+    "guarantee": "DERIVED",
+    "output_guarantee": "DERIVED",
+    "derived_listing_present": true,
+    "conflict_rendered": true,
+    "dependencies": [
+      "fact:2f96594fe9ba22032b3e59a6aebabede875b6f52c8fe82957fd7928abce545b7",
+      "fact:7700c2576ca04b39de6b10fef5e2d8ade8b836c74ee2ba2008f8699eb7435b62",
+      "fact:ddf79162a026adb6f71b4f88b436f07c167b68fcb69e7e679946b5988af5d359",
+      "fact:e6f9b6265d107f2102a562559af5f40c97549f218730a4a9e05a7917ac38a41a",
+      "fact:e700af57668bdfcc38ffb10cedbca48e31f8b5005475f9a595faea7021538843",
+      "rule:0cfc614f7f69ad9f67de0849e3aaaa5d5281e9dbdf8fcfe50c9ccc3f14b7da01"
+    ],
+    "file_sha256": "cf79eb73bbe5071ef22f1182ed1eac5e5a559f07e3642a6b4460aa32de6c63d0",
+    "file_bytes": 1264,
+    "receipt_phase": "CONFIRMED",
+    "receipt_reason": "LOCAL_FILE_RECONCILED_NO_RESEND",
+    "dependencies_unchanged": true,
+    "file_inode_mtime_size_unchanged": true
+  },
+  "outcome": "PASS",
+  "acceptance_boundary": "This validates a bounded actor-memory inventory route only. It does not provide open-world definitions or general what/why/how answers. Broader A07/A08/A12/A13 and BB-LANG acceptance remain BUILD_GAP/UNVERIFIED.",
+  "validation": {
+    "base_commit": "d8361afb57dd443dd919733fd35205211f92d23b",
+    "toolchain": {
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+      "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+    },
+    "checks": [
+      {
+        "command": "cargo fmt --all -- --check",
+        "outcome": "PASS"
+      },
+      {
+        "command": "cargo check --workspace --all-targets --locked",
+        "outcome": "PASS"
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "outcome": "PASS"
+      },
+      {
+        "command": "cargo build --workspace --locked",
+        "outcome": "PASS"
+      },
+      {
+        "command": "cargo test --workspace --all-features --locked --quiet",
+        "outcome": "PASS",
+        "passed": 350,
+        "failed": 0,
+        "test_binary_counts": [
+          10,
+          131,
+          4,
+          205
+        ]
+      }
+    ],
+    "fresh_cli_processes": {
+      "captured_observations": 14,
+      "file_delivery": 1,
+      "reconciliation": 1,
+      "total": 16
+    },
+    "source_sha256": {
+      "crates/minidora-engine/src/core.rs": "43a37c566a51175aefe465967aacd579bea96273d47150bb8c48269073cc58ea",
+      "crates/minidora-engine/src/relations.rs": "e1e28fbbf6f1848a500bc878d153d2580f13e4da6f1fbc6217ad71415b23c8f7",
+      "crates/minidora-engine/src/recovery.rs": "15a365ac862a49a77b0d1e375b336e7dc65c7adecc4cf3f43d9ed94de9d84097",
+      "apps/cli/tests/normal_route.rs": "962b8cd05d434f40383aa9f89e2dc1c2f4c72dec6a30237f4d82932abba28c3f",
+      "tools/premise_inspection_route_test.py": "227ba68dd3e75f18037433f15c9ade7efbf9965a994bbe3751b8124327b51fb8",
+      "Cargo.lock": "306b812d94996764d7a1a6e2097ac44891e7478a5166742de7916e70cf9d2e37",
+      "rust-toolchain.toml": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33"
+    }
+  }
+}

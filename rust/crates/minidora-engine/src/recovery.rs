@@ -1020,13 +1020,30 @@ fn inspect(
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
-        let dependencies: Vec<String> = crate::relations::explicit_premises_about(&memory, subject)
-            .into_iter()
-            .map(|fact| fact.id)
-            .collect();
+        let current_inventory =
+            if bundle.meaning.parser_version == "declarative-ja-en-v68-previous-result-summary" {
+                crate::relations::inventory_dependencies_and_guarantee(
+                    &memory,
+                    subject,
+                    goal.budget.max_actions,
+                )
+                .ok()
+            } else {
+                let dependencies = crate::relations::explicit_premises_about(&memory, subject)
+                    .into_iter()
+                    .map(|fact| fact.id)
+                    .collect();
+                Some((dependencies, Guarantee::UserPremise))
+            };
+        let Some((dependencies, guarantee)) = current_inventory else {
+            return Err(failure(
+                "RECOVERY_PREMISES_CHANGED",
+                "the original active premise listing is no longer valid unchanged",
+            ));
+        };
         if dependencies.is_empty()
             || dependencies != result.dependencies
-            || result.guarantee != Guarantee::UserPremise
+            || result.guarantee != guarantee
         {
             return Err(failure(
                 "RECOVERY_PREMISES_CHANGED",

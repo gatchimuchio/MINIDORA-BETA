@@ -2504,7 +2504,7 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
 }
 
 #[test]
-fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart() {
+fn ordinary_question_lists_direct_and_derived_relations_with_provenance_after_restart() {
     let scratch = Scratch::new();
     let bird = record(&execute(
         &scratch.0,
@@ -2520,6 +2520,11 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
         &scratch.0,
         "owner",
         &["--input", "coco-negative", "ココは哺乳類ではない"],
+    ));
+    let negative_animal = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "coco-negative-animal", "ココは動物ではない"],
     ));
     let rule = record(&execute(
         &scratch.0,
@@ -2537,13 +2542,16 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     ));
 
     assert_eq!(listed["lifecycle"], "COMMIT");
-    assert_eq!(listed["guarantee"], "USER_PREMISE");
+    assert_eq!(listed["guarantee"], "DERIVED");
     assert!(
         listed["text"]
             .as_str()
             .unwrap()
-            .contains("現実世界の真偽は確認していません")
+            .contains("現実世界の真偽や全件網羅性を確認したものではありません")
     );
+    assert!(listed["text"].as_str().unwrap().contains("規則導出"));
+    assert!(listed["text"].as_str().unwrap().contains("導出ID:"));
+    assert!(listed["text"].as_str().unwrap().contains("対立根拠として"));
     assert!(listed["text"].as_str().unwrap().contains("ココは鳥である"));
     assert!(
         listed["text"]
@@ -2553,12 +2561,18 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     );
     assert!(listed["text"].as_str().unwrap().contains("範囲: story"));
     assert!(
-        !listed["text"]
+        listed["text"]
             .as_str()
             .unwrap()
             .contains("ココは動物である")
     );
-    assert_eq!(listed["dependencies"].as_array().unwrap().len(), 3);
+    assert!(
+        listed["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは動物ではない")
+    );
+    assert_eq!(listed["dependencies"].as_array().unwrap().len(), 6);
     for source in [&bird, &gray, &negative] {
         assert!(
             listed["dependencies"]
@@ -2568,10 +2582,35 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
         );
     }
     assert!(
-        !listed["dependencies"]
+        listed["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&negative_animal["dependencies"][0])
+    );
+    assert!(
+        listed["dependencies"]
             .as_array()
             .unwrap()
             .contains(&rule["dependencies"][0])
+    );
+    let derived_line = listed["text"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.contains("導出ID: "))
+        .unwrap();
+    let derived_id = derived_line
+        .split("導出ID: ")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert!(
+        listed["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(derived_id.to_string()))
     );
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
@@ -2604,8 +2643,9 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
     ));
     assert_eq!(
         after_invalidation["dependencies"].as_array().unwrap().len(),
-        2
+        3
     );
+    assert_eq!(after_invalidation["guarantee"], "USER_PREMISE");
     assert!(
         !after_invalidation["dependencies"]
             .as_array()
@@ -2617,6 +2657,18 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
             .as_str()
             .unwrap()
             .contains("ココは鳥である")
+    );
+    assert!(
+        after_invalidation["text"]
+            .as_str()
+            .unwrap()
+            .contains("ココは動物ではない")
+    );
+    assert!(
+        !after_invalidation["text"]
+            .as_str()
+            .unwrap()
+            .contains("規則導出")
     );
     let missing = stopped(
         &execute(
@@ -2636,6 +2688,49 @@ fn ordinary_question_lists_active_direct_premises_with_provenance_after_restart(
             .as_str()
             .unwrap()
             .contains("MISSING_PREMISES")
+    );
+    let other_actor = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "separate-actor",
+            "other-actor-inventory",
+            &[
+                "--input",
+                "other-actor-listing",
+                "ココについて、何が分かっていますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        other_actor["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    let resource_limited = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "inventory-budget-limit",
+            &[
+                "--input",
+                "coco-listing-low-budget",
+                "--max-actions",
+                "6",
+                "ココについて、何が分かっていますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        resource_limited["reason"]
+            .as_str()
+            .unwrap()
+            .contains("RESOURCE_LIMIT")
     );
 }
 
@@ -3085,7 +3180,7 @@ fn natural_definition_questions_retrieve_only_the_exact_stored_premise() {
         japanese["text"]
             .as_str()
             .unwrap()
-            .contains("現実世界の真偽は確認していません")
+            .contains("現実世界の真偽や全件網羅性を確認したものではありません")
     );
     assert!(
         japanese["dependencies"]
@@ -5205,7 +5300,7 @@ fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context()
             .contains("MISSING_RELATION_CONTEXT")
     );
 
-    record(&execute_in_case(
+    let biology_rule = record(&execute_in_case(
         &scratch.0,
         "owner",
         "pronoun-ambiguous-context",
@@ -5225,7 +5320,7 @@ fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context()
             "[scope=biology]ツバメは鳥",
         ],
     ));
-    record(&execute_in_case(
+    let ecology_bird = record(&execute_in_case(
         &scratch.0,
         "owner",
         "pronoun-ambiguous-context",
@@ -5241,7 +5336,54 @@ fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context()
         "pronoun-ambiguous-context",
         &["--input", "list-pronoun-context", "ツバメとは何ですか"],
     ));
-    assert_eq!(listed["dependencies"].as_array().unwrap().len(), 2);
+    assert_eq!(listed["guarantee"], "DERIVED");
+    assert_eq!(listed["dependencies"].as_array().unwrap().len(), 4);
+    assert!(listed["text"].as_str().unwrap().contains("範囲: biology"));
+    assert!(listed["text"].as_str().unwrap().contains("範囲: ecology"));
+    assert!(listed["text"].as_str().unwrap().contains("規則導出"));
+    for source in [&biology_bird, &ecology_bird] {
+        assert!(
+            listed["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&source["dependencies"][0]),
+            "missing prior dependency {:?} from {:?}; listed text: {}; rule result: {:?}",
+            source["dependencies"][0],
+            listed["dependencies"],
+            listed["text"],
+            biology_rule
+        );
+    }
+    assert!(
+        listed["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule["dependencies"][0])
+            || listed["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&biology_rule["dependencies"][0]),
+        "the derived relation must retain one applicable rule proof"
+    );
+    let derived_line = listed["text"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.contains("導出ID: "))
+        .unwrap();
+    let derived_id = derived_line
+        .split("導出ID: ")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    assert!(
+        listed["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(derived_id.to_string()))
+    );
     let ambiguous = stopped(
         &execute_in_case(
             &scratch.0,
@@ -9619,13 +9761,27 @@ fn normal_row_report(
         minidora_domain::digest(source.as_bytes())
     );
     let dependencies = result["dependencies"].as_array().unwrap();
-    assert_eq!(dependencies.len(), 1);
     let store = minidora_engine::store::Store::open(directory).unwrap();
-    let bytes = store
-        .get_bytes(actor, "normal-route", dependencies[0].as_str().unwrap())
-        .unwrap();
-    assert_eq!(minidora_domain::digest(&bytes), dependencies[0]);
-    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), report);
+    let report_bytes = minidora_domain::canonical(&report).unwrap();
+    let report_id = minidora_domain::digest(&report_bytes);
+    assert!(dependencies.contains(&Value::String(report_id.clone())));
+    let stored_report = store.get_bytes(actor, "normal-route", &report_id).unwrap();
+    assert_eq!(stored_report, report_bytes);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&stored_report).unwrap(),
+        report
+    );
+    let source_id = minidora_domain::digest(source.as_bytes());
+    if dependencies.contains(&Value::String(source_id.clone())) {
+        assert_eq!(
+            store.get_bytes(actor, "normal-route", &source_id).unwrap(),
+            source.as_bytes()
+        );
+    }
+    assert!(dependencies.iter().all(|dependency| {
+        dependency == &Value::String(report_id.clone())
+            || dependency == &Value::String(source_id.clone())
+    }));
     let revision = inspect_normal_case(directory, actor);
     assert_eq!(revision["bundle"]["request"]["text"], request);
     assert_eq!(revision["bundle"]["meaning"]["intent"]["document"], source);

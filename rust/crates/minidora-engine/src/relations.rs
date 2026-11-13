@@ -112,6 +112,105 @@ pub fn query_shapes_about(
     Ok(shapes)
 }
 
+/// Recompute the exact lineage and guarantee for a bounded subject inventory.
+/// Recovery uses this to ensure an adopted listing still describes the same
+/// actor memory before confirming its original local effect.
+pub fn inventory_dependencies_and_guarantee(
+    memory: &MemoryState,
+    subject: &str,
+    max_actions: u32,
+) -> Result<(Vec<String>, Guarantee)> {
+    let scanned_records = memory
+        .facts
+        .len()
+        .checked_add(memory.rules.len())
+        .ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "relation inventory scan count overflowed",
+            )
+        })?;
+    let action_budget = usize::try_from(max_actions).unwrap_or(usize::MAX);
+    if scanned_records > action_budget {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "relation inventory scan exceeds the original action budget",
+        ));
+    }
+    let remaining_actions =
+        max_actions.saturating_sub(u32::try_from(scanned_records).unwrap_or(u32::MAX));
+    let query_shapes = query_shapes_about(
+        memory,
+        subject,
+        usize::try_from(remaining_actions).unwrap_or(usize::MAX),
+    )?;
+    if query_shapes.is_empty() {
+        return Err(failure(
+            "MISSING_PREMISES",
+            "no active supported relation query applies to this subject",
+        ));
+    }
+    let query_count = u32::try_from(query_shapes.len())
+        .map_err(|_| failure("RELATION_BUDGET", "relation query count overflowed"))?;
+    let per_query_budget = remaining_actions / query_count;
+    if per_query_budget == 0 {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "no proof budget remains for every relation query",
+        ));
+    }
+
+    let mut dependencies = BTreeSet::new();
+    let mut reported_facts = BTreeMap::new();
+    for shape in query_shapes {
+        let answer = query(memory, &shape, per_query_budget)?;
+        match answer.status.as_str() {
+            "SUPPORTED" | "CONTRADICTED" | "CONFLICT" => {}
+            "UNKNOWN" | "MISSING_PREMISES" => continue,
+            _ => {
+                return Err(failure(
+                    "UNSUPPORTED_RELATION_RESULT",
+                    "relation inventory proof returned an unknown terminal status",
+                ));
+            }
+        }
+        dependencies.extend(answer_dependencies(&answer));
+        for fact in answer.facts {
+            reported_facts.insert(fact.id.clone(), fact);
+        }
+    }
+    if reported_facts.is_empty() {
+        return Err(failure(
+            "MISSING_PREMISES",
+            "no supported relation result remains for this subject",
+        ));
+    }
+    let guarantee = if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::Derived))
+    {
+        Guarantee::Derived
+    } else if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::UserPremise))
+    {
+        Guarantee::UserPremise
+    } else if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::Computed))
+    {
+        Guarantee::Computed
+    } else if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::SourceReport))
+    {
+        Guarantee::SourceReport
+    } else {
+        Guarantee::Unknown
+    };
+    Ok((dependencies.into_iter().collect(), guarantee))
+}
+
 fn insert_query_shape(
     shapes: &mut BTreeSet<Proposition>,
     proposition: &Proposition,
