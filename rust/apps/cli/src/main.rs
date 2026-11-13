@@ -60,10 +60,11 @@ case CANCEL. Exit 2 means an effect still requires reconciliation; exit 0 means
 all recorded effects are confirmed, failed or cancelled.
 
 Serve binds only a loopback IP and requires MINIDORA_API_TOKEN (at least 32 bytes).
-GET /health reports the schema. POST /v1/execute requires Authorization: Bearer
-TOKEN and a full RequestEnvelope JSON object. The configured server actor is the
-only authenticated identity. Request permissions must be subsets of --allow-*
-grants; budgets are capped to server limits. HTTP is local plaintext only.
+GET / serves a small same-origin browser workspace; GET /health reports the
+schema. POST /v1/execute requires Authorization: Bearer TOKEN and a full
+RequestEnvelope JSON object. The configured server actor is the only
+authenticated identity. Request permissions must be subsets of --allow-* grants;
+budgets are capped to server limits. HTTP is local plaintext only.
 
 Exit: COMMIT 0; SUSPEND 2; REJECT 3; FAIL 4; CANCEL 5; frontend error 1.
 "#;
@@ -465,6 +466,25 @@ impl Read for AdmissionReader<'_> {
 #[derive(Debug)]
 struct HttpError(u16, &'static str);
 
+fn static_asset(target: &str) -> Option<(&'static str, &'static [u8])> {
+    match target {
+        "/" => Some((
+            "text/html; charset=utf-8",
+            include_bytes!("../web/index.html"),
+        )),
+        "/favicon.svg" => Some(("image/svg+xml", include_bytes!("../web/favicon.svg"))),
+        "/app.js" => Some((
+            "application/javascript; charset=utf-8",
+            include_bytes!("../web/app.js"),
+        )),
+        "/styles.css" => Some((
+            "text/css; charset=utf-8",
+            include_bytes!("../web/styles.css"),
+        )),
+        _ => None,
+    }
+}
+
 fn read_http(reader: &mut impl BufRead, max_body: usize) -> Result<HttpRequest, HttpError> {
     let mut header = Vec::new();
     loop {
@@ -577,7 +597,10 @@ fn validate_http(request: &HttpRequest, address: SocketAddr, token: &str) -> Res
     {
         return Err(HttpError(403, "Origin is not permitted"));
     }
-    if request.method == "GET" && request.target == "/health" && request.body.is_empty() {
+    if request.method == "GET"
+        && request.body.is_empty()
+        && (request.target == "/health" || static_asset(&request.target).is_some())
+    {
         return Ok(());
     }
     let authorization = request
@@ -671,6 +694,16 @@ fn send_http(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()>
     stream.flush()
 }
 
+fn send_static_http(stream: &mut TcpStream, content_type: &str, body: &[u8]) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nContent-Security-Policy: default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'\r\n\r\n",
+        body.len()
+    )?;
+    stream.write_all(body)?;
+    stream.flush()
+}
+
 fn handle_http(
     engine: &mut Engine,
     options: &Options,
@@ -690,6 +723,13 @@ fn handle_http(
     };
     let request = read_http(&mut BufReader::new(input), max_body)?;
     validate_http(&request, address, token)?;
+    if request.method == "GET"
+        && let Some((content_type, body)) = static_asset(&request.target)
+    {
+        send_static_http(stream, content_type, body)
+            .map_err(|_| HttpError(500, "cannot write response"))?;
+        return Ok(());
+    }
     let body = if request.method == "GET" {
         serde_json::to_vec(&serde_json::json!({ "status": "ok", "schema_version": SCHEMA_VERSION }))
             .map_err(|_| HttpError(500, "cannot encode response"))?

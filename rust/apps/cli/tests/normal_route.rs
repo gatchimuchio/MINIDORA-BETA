@@ -1416,6 +1416,96 @@ fn http(address: SocketAddr, token: &str, body: &[u8]) -> (u16, Value) {
     (status, serde_json::from_str(body).unwrap())
 }
 
+fn http_get(address: SocketAddr, target: &str) -> (u16, String, String) {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET {target} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+    let status = headers.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, headers.to_ascii_lowercase(), body.to_owned())
+}
+
+#[test]
+fn loopback_browser_assets_are_fixed_and_security_headered() {
+    let scratch = Scratch::new();
+    let token = "test-only-constant-not-a-secret-0123456789";
+    let child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args([
+            "serve",
+            "--db",
+            scratch.0.to_str().unwrap(),
+            "--actor",
+            "browser-owner",
+            "--bind",
+            "127.0.0.1:0",
+        ])
+        .env("MINIDORA_API_TOKEN", token)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut server = Server(child);
+    let stderr = server.0.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let outcome = BufReader::new(stderr).read_line(&mut line).map(|_| line);
+        let _ = sender.send(outcome);
+    });
+    let line = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("server startup timeout")
+        .unwrap();
+    let address: SocketAddr = line
+        .split("listening on ")
+        .nth(1)
+        .expect("server readiness line")
+        .split(';')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let (status, headers, page) = http_get(address, "/");
+    assert_eq!(status, 200);
+    assert!(headers.contains("content-type: text/html; charset=utf-8"));
+    assert!(headers.contains("content-security-policy: default-src 'self'"));
+    assert!(headers.contains("script-src 'self'; style-src 'self'; connect-src 'self'"));
+    assert!(headers.contains("x-content-type-options: nosniff"));
+    assert!(headers.contains("referrer-policy: no-referrer"));
+    assert!(page.contains("/app.js") && page.contains("/styles.css"));
+    assert!(page.contains("/favicon.svg"));
+    assert!(page.contains("method=\"post\" action=\"/v1/execute\""));
+    assert!(!page.contains("name=\"token\""));
+
+    let (status, headers, script) = http_get(address, "/app.js");
+    assert_eq!(status, 200);
+    assert!(headers.contains("content-type: application/javascript; charset=utf-8"));
+    assert!(script.contains("fetch(\"/v1/execute\""));
+    assert!(!script.contains("localStorage"));
+    assert!(!script.contains("innerHTML"));
+
+    let (status, headers, stylesheet) = http_get(address, "/styles.css");
+    assert_eq!(status, 200);
+    assert!(headers.contains("content-type: text/css; charset=utf-8"));
+    assert!(stylesheet.contains("@media (max-width: 540px)"));
+
+    let (status, headers, favicon) = http_get(address, "/favicon.svg");
+    assert_eq!(status, 200);
+    assert!(headers.contains("content-type: image/svg+xml"));
+    assert!(favicon.contains("<svg"));
+
+    assert_eq!(http_get(address, "/../Cargo.toml").0, 401);
+}
+
 #[test]
 fn authenticated_http_and_cli_share_actual_case_result() {
     let scratch = Scratch::new();

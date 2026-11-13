@@ -1,0 +1,216 @@
+{
+  "work_item": "BODY-3 BB-RENDER loopback browser UI consumer for a saved-relation profile",
+  "stage": "BODY-3_EXECUTION",
+  "recorded_at": "2026-11-13T09:58:03.087027+00:00",
+  "base_commit": "31f467d298ef37b3cc40fdb0af9d5d86a05d4e8e",
+  "changed_paths": [
+    "rust/README.md",
+    "rust/apps/cli/src/main.rs",
+    "rust/apps/cli/tests/normal_route.rs",
+    "rust/apps/cli/web/index.html",
+    "rust/apps/cli/web/app.js",
+    "rust/apps/cli/web/styles.css",
+    "rust/apps/cli/web/favicon.svg",
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/requirements.tsv",
+    "rust/audit/bb-content-known-relation-profile-v69-browser-ui-route-validation.json",
+    "rust/tools/known_relation_profile_browser_route_test.py",
+    "rust/audit/bb-content-known-relation-profile-v69-browser-ui.png"
+  ],
+  "subject": "MINIDORA Rust successor engine",
+  "requirement_ids": [
+    "A01",
+    "A02",
+    "A07",
+    "A08",
+    "A13",
+    "B08"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v69-relation-profile-draft",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "python": "3.12.14",
+    "chromium": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "applied_build_set": {
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf",
+    "source_artifacts": [
+      {
+        "artifact_name": "MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+        "sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+        "bytes": 31553,
+        "role": "original_user_archive",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip"
+      },
+      {
+        "artifact_name": "01_MINIDORA_BETA_BUILD仕様書_20261113.md",
+        "sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474",
+        "bytes": 19617,
+        "role": "build_specification",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/01_MINIDORA_BETA_BUILD仕様書_20261113.md"
+      },
+      {
+        "artifact_name": "02_MINIDORA_BETA_BUILD工程表_20261113.md",
+        "sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8",
+        "bytes": 19061,
+        "role": "build_schedule",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/02_MINIDORA_BETA_BUILD工程表_20261113.md"
+      },
+      {
+        "artifact_name": "03_MINIDORA_BETA_Codex施工指示書_20261113.md",
+        "sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d",
+        "bytes": 21690,
+        "role": "codex_work_instruction",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/03_MINIDORA_BETA_Codex施工指示書_20261113.md"
+      }
+    ]
+  },
+  "binary_sha256": "f2376f4d395054abcdaa398cf06a8ac86415920a0c386cfe1e594d9ab18812e1",
+  "source_snapshot_sha256": {
+    "rust/apps/cli/src/main.rs": "5e45170835f09bdbf8f8e6961650f5003cdccd7268da122890be7b560bab0ec0",
+    "rust/apps/cli/web/index.html": "e6b41158cdaf4924a7a7bfb23eed164499e5f28c9bd77169ca0aa6e60caddfb7",
+    "rust/apps/cli/web/app.js": "f314b8bb7e9ce55e1d58f6b59ede930e6008721c38a5b9361d65e67287780a65",
+    "rust/apps/cli/web/styles.css": "050df3248afc7027c4b1bcc4f5a811ab9e6f9eb97662abe37d8aff9ab319f6ac",
+    "rust/apps/cli/web/favicon.svg": "5b89fa9226600709256863d39eac74e83997151cf695876958d69bed01acdda5"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "ebb329890f0e4546c0f1c2df1253eb31ec84c8be6c9d1e8da90a6a48ae28fc7b",
+    "rust/tools/known_relation_profile_browser_route_test.py": "910d91a3d33000a1a6474a1c4a0a43241d14b14a5f2f04701907a6b88590d121"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "76a174d4f6c7673703bc0c1d03ba7f11d0ee66958549d3ff4b4118d528bf33d2",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "1ac98006413560f77c1db1d106fa1f456eaa01131d03e2c9f9aff3ef5500c003",
+    "rust/audit/requirements.tsv": "696e3f8058c3c80043ec04c8d4f6bbf0e27b1fdf0a9bc18197df84a114000caf",
+    "rust/docs/IMPLEMENTATION_CHOICES.md": "33eba1505e6a43667b9c112cc9e3c39906742e0bd88a0151a560a4bdcfc7517e",
+    "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf"
+  },
+  "execution_mode": "fresh local CLI producer processes -> 127.0.0.1-only authenticated Rust HTTP process -> Chromium Playwright form submission -> same Engine/Core result -> browser rendered result and dependency list; wrong-token request rejected; no external requests or data",
+  "previous_consumer_gap": "The authenticated loopback HTTP route had been validated directly, but no browser form or rendered dependency list was connected to that route.",
+  "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> authenticated POST /v1/execute -> same Engine/Core relation-profile producer -> HYPOTHESIS result -> browser renders lifecycle, guarantee, text, disclosure, result ID and exact dependency list",
+  "scope": "Confirms one local Chromium browser submission, same-origin-only resource requests, security headers, displayed proof dependencies and a wrong-token 401. This does not establish public deployment, streaming, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
+  "actual_input": {
+    "actor": "profile-browser-owner",
+    "case": "profile-browser-case",
+    "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+    "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+    "browser": "Chromium headless via Playwright",
+    "server_bind": "127.0.0.1 only; ephemeral port",
+    "test_token": "generated randomly in process memory; not recorded or persisted"
+  },
+  "summary": {
+    "fresh_client_observation_count": 4,
+    "lifecycle_counts": {
+      "COMMIT": 3,
+      "HTTP_ERROR": 1
+    },
+    "browser_result_id": "51379265ba7fc1fe11118ee9464d0538fd9688d45d0b953e4269cf5e11ec088d",
+    "wrong_token_rejected_with_401": true,
+    "browser_requests_same_origin_only": true,
+    "browser_console_errors": [],
+    "browser_server_terminated": true,
+    "added_dependencies": "NONE to the Rust application; browser verification uses the preinstalled cloud Playwright/Chromium",
+    "external_network_or_messages": "NOT_USED",
+    "screenshot": {
+      "path": "rust/audit/bb-content-known-relation-profile-v69-browser-ui.png",
+      "bytes": 255275,
+      "sha256": "d38ed0fbd6bf270caaf6aa02d6d5cabe432bebefbfb1c7506143c2c80175bc56",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      }
+    },
+    "validation_commands": [
+      {
+        "command": "/workspace/.cargo/bin/cargo fmt --all -- --check",
+        "exit_code": 0
+      },
+      {
+        "command": "/workspace/.cargo/bin/cargo check --workspace --all-targets --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "/workspace/.cargo/bin/cargo test -p minidora-cli --test normal_route loopback_browser_assets_are_fixed_and_security_headered --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "/workspace/.cargo/bin/cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "exit_code": 0
+      },
+      {
+        "command": "/workspace/.cargo/bin/cargo build --workspace --locked",
+        "exit_code": 0
+      }
+    ],
+    "full_workspace_runtime_suite": "NOT_RUN",
+    "streaming_public_deployment_and_broad_browser_matrix": "NOT_RUN",
+    "full_requirement_acceptance": "UNVERIFIED",
+    "next_consumer": "Streaming remains unverified; broad browser acceptance and general B08 writing quality remain outside this scoped observation."
+  },
+  "observations": [
+    {
+      "operation": "normal_cli_input",
+      "actor": "profile-browser-owner",
+      "case": "profile-browser-case",
+      "input_id": "browser-profile-rule",
+      "request": "もしXは鳥ならXは動物",
+      "request_sha256": "5af8707ddb3c122841a95fd6affc589446845e9d7ae9ceb2cf433ca6eeddc706",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "8edf2cdb49a091d3dbccdaa0a96b0a207662a9d45bb46635276a9ec57bc9d00e",
+      "dependencies": [
+        "rule:8d160b9250be8f60bc534cd252e40d90be48f8e7181bc69d824b04ae750b75ea"
+      ]
+    },
+    {
+      "operation": "normal_cli_input",
+      "actor": "profile-browser-owner",
+      "case": "profile-browser-case",
+      "input_id": "browser-profile-premise",
+      "request": "ココは鳥",
+      "request_sha256": "2ab163cfac2b22adba11a5f3b49a18b3ffc3c587c4fee07335cb8701876dbd94",
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "711b5688df6a385fa55a5313d7bad648553d1fd9165f4448125d4967e1f7e059",
+      "dependencies": [
+        "fact:15fe8b49307f384a609495d921e20ae0da106fd522ffa2c54e05c1d5cd2ff559"
+      ]
+    },
+    {
+      "operation": "chromium_browser_ui_request",
+      "actor": "profile-browser-owner",
+      "case": "profile-browser-case",
+      "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+      "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+      "http_status": 200,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "input_id": "browser-9c5345df-4ab2-4f68-9e98-cc1c2c1fdc62",
+      "result_id": "51379265ba7fc1fe11118ee9464d0538fd9688d45d0b953e4269cf5e11ec088d",
+      "text": "「ココ」の紹介文案です。\n会話に記録された内容から、次の紹介文案をまとめました。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:96611c62abda1a3a2ab892fe03ce941df548c3156e2eaee73f1438b030e7e9e0; 依存ID: fact:15fe8b49307f384a609495d921e20ae0da106fd522ffa2c54e05c1d5cd2ff559, rule:8d160b9250be8f60bc534cd252e40d90be48f8e7181bc69d824b04ae750b75ea）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:15fe8b49307f384a609495d921e20ae0da106fd522ffa2c54e05c1d5cd2ff559）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
+      "text_sha256": "68c880626fa04989ccc35cbf8db99680dd518bac75512f79f81da1b175a147b3",
+      "dependencies": [
+        "fact:15fe8b49307f384a609495d921e20ae0da106fd522ffa2c54e05c1d5cd2ff559",
+        "fact:96611c62abda1a3a2ab892fe03ce941df548c3156e2eaee73f1438b030e7e9e0",
+        "rule:8d160b9250be8f60bc534cd252e40d90be48f8e7181bc69d824b04ae750b75ea"
+      ],
+      "dependency_list_rendered_exactly": true,
+      "security_headers": [
+        "content-security-policy",
+        "permissions-policy",
+        "referrer-policy",
+        "x-content-type-options",
+        "x-frame-options"
+      ]
+    },
+    {
+      "operation": "chromium_browser_ui_wrong_token",
+      "http_status": 401,
+      "authentication_rejected": true
+    }
+  ]
+}
