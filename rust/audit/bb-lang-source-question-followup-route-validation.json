@@ -1,0 +1,125 @@
+{
+  "work_item": "BODY-1 BB-SOURCE natural question over a prior fetched body",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T01:38:30+00:00",
+  "base_commit": "93ae08e56d029bd719e785171b842fee5742e1f8",
+  "requirement_ids": [
+    "A07",
+    "A13",
+    "B09",
+    "C01",
+    "C04",
+    "C11",
+    "C13",
+    "E03",
+    "E06",
+    "E08",
+    "E09",
+    "E12"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v54-source-question-followup",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "e8820622c2158ed4e93f7517e79eabceab6169b2234dff2978c5c63a53d150c8",
+    "rust/crates/minidora-engine/src/input.rs": "362d5e7f501c9e8f61380259bc8880e69d26bb78ce331d962db1a1ccf59f24d0",
+    "rust/crates/minidora-engine/src/text_summary.rs": "083cdbad4a4dfc2bb5b9b1b0426f16c8aa5065634976e6cd0520169492455d0b",
+    "rust/crates/minidora-engine/src/core.rs": "a2ab77c3edfaa90a192e4e0cea8ea465759e534d6a4dea1c1e33bb5790a0c09d",
+    "rust/crates/minidora-engine/src/recovery.rs": "f7f78997697b2e38a8de2f7c0927cf9ab556cb590bdcc6947d6f85ee2b128ca6",
+    "rust/crates/minidora-engine/src/store.rs": "e5d942dfdfcf75c2d9df96ab8313b157fd8d4bb0971a4643df29ed1946e3a11e"
+  },
+  "test_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "d458fb9e38bed28bb455cdc15fb1bdc100213a7d256c2d3166b2e3ec87fa890d"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "4c104f673b5c4f3b05f68033f9ab0b6ff3c54035c60fc813439f96465917aa10",
+    "rust/audit/README.md": "f1c9c7d28b7513cc6b4efcdc2807c35ac93cb73dcb0d62e1e49ba7322cfd563b",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "eb125f9c2203f31f4de0387b896dd866ce3cfd681f9ca95541a1bd176352b357",
+    "rust/audit/requirements.tsv": "774b0de4e2eacf91706ed0eae37dd50cab68c450d3c197aef49eed175cdfd0fe",
+    "rust/audit/rust-requirement-observations.json": "89e639136b0148bddbdec5045e040953d01b0f71ba39ddb039c642554b5f7186"
+  },
+  "execution_mode": "ordinary CLI process against a same-case committed FETCHED_BODY fixture; the fixture is synthetic and no live fetch occurred in this question-consumer test",
+  "producer_consumer": {
+    "producer": "A prior committed source result contains one immutable HTTPS FETCHED_BODY packet. The existing live search-to-body route is separate producer evidence; this focused test seeds an offline fixture.",
+    "consumer": "Japanese and English topic questions -> retained source packet byte/hash check -> bounded exact English-token or Japanese-substring sentence matching -> up to five candidates with packet mode, source URI, packet/body/extracted-text hashes and UTF-8 byte spans -> Core answer artifact/dependency graph -> explicitly granted local file output.",
+    "no_match": "Typed SOURCE_QUESTION_NO_MATCH suspension with no adopted dependencies.",
+    "guarantee": "HYPOTHESIS: lexical source excerpts only. Semantic relevance, completeness, source reliability, license status and factual truth are not verified."
+  },
+  "observed_cli_case": {
+    "japanese_question": "資料では「photosynthesis」について何と述べていますか",
+    "expected_candidate": "Photosynthesis stores light energy.",
+    "same_case_prior": "Committed synthetic fixture result with exact FETCHED_BODY artifact; packet mode is retained as FIXTURE.",
+    "artifact_checks": [
+      "packet artifact digest equals canonical packet bytes",
+      "answer artifact digest equals saved answer bytes",
+      "candidate source byte range selects the exact original text",
+      "packet mode and source/extracted-text/raw-body identities remain visible",
+      "answer dependencies retain prior result, source packet and typed answer",
+      "execution graph links the answer node to the source packet"
+    ],
+    "local_file_receipt": "CONFIRMED under the exact output path grant; file bytes equal rendered answer"
+  },
+  "recovery_revalidation": {
+    "check": "Recovery verifier recomputes candidate answer bytes, source packet dependencies, required output units and guarantee.",
+    "result": "PASS in focused unit test.",
+    "crash_injected_end_to_end_no_resend": "NOT_RUN"
+  },
+  "outcome": "PASS",
+  "focused_validation": {
+    "format_all_check": "PASS",
+    "minidora_cli_all_targets_check_locked": "PASS",
+    "source_question_parser_and_lexical_component_tests": "3 passed, 0 failed",
+    "source_question_recovery_revalidation_test": "1 passed, 0 failed",
+    "source_question_normal_cli_tests": "2 passed, 0 failed: source fixture to authorized local file receipt; missing prior, missing body and unmatched topic typed stops",
+    "full_workspace_tests": "NOT_RUN",
+    "clippy": "NOT_RUN"
+  },
+  "failures_and_corrections": [
+    {
+      "stage": "parser_compilation",
+      "failure": "The first Japanese regex used an ordinary raw-string delimiter while its character class contained a quote; cargo fmt could not parse the module.",
+      "correction": "Changed it to a hash-delimited raw string, then formatting and compilation passed."
+    },
+    {
+      "stage": "all_targets_check",
+      "failure": "The first check found a missing canonical import and a moved fixture graph reference.",
+      "correction": "Imported canonical and cloned the graph reference before reuse; the all-target check passed."
+    },
+    {
+      "stage": "recovery_test_selection",
+      "failure": "An initial --exact filter matched zero tests because the full module-qualified name was not supplied.",
+      "correction": "Reran using the source_question_recovery substring; the intended recovery verifier test passed."
+    }
+  ],
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo check -p minidora-cli --all-targets --locked",
+      "outcome": "PASS"
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib source_question --locked",
+      "outcome": "4 passed, 0 failed (three extraction/parser cases and one recovery verifier case)"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route natural_source_question --locked",
+      "outcome": "2 passed, 0 failed"
+    }
+  ],
+  "not_run": [
+    "Full workspace runtime suite",
+    "Clippy",
+    "Live provider retrieval in this consumer replay",
+    "Crash-injected end-to-end no-resend for this new route",
+    "Full 93-requirement and full C01-C13 acceptance"
+  ],
+  "acceptance_boundary": "One ordinary Japanese/English source-topic question consumes a same-case fetched-body artifact and returns lexical sentence candidates with exact offsets and hashes. It is not semantic question answering, source comparison, source-quality validation or evidence of full successor acceptance. A synthetic committed body fixture exercised the consumer; live acquisition remains separately evidenced."
+}

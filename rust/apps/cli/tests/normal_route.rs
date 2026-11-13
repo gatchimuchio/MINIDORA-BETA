@@ -37,6 +37,111 @@ fn sequence_step(
     }
 }
 
+fn seed_fetched_source_case(directory: &Path, actor: &str) -> (String, String, String) {
+    use minidora_domain::{
+        CaseRevision, EvidencePacket, GoalContract, Guarantee, Lifecycle, RequestEnvelope,
+        ResultRecord, SCHEMA_VERSION, digest, identity,
+    };
+
+    let case = "normal-route";
+    let request = RequestEnvelope::new(case, "source-fixture", actor, "source fixture");
+    let bundle = minidora_engine::input::seal(&request, None).unwrap();
+    let fingerprint = identity(&request).unwrap();
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    store.register_input(actor, &request, &fingerprint).unwrap();
+    let extracted_text = "Energy enters the ecosystem. Photosynthesis stores light energy. Plants use photosynthesis in their leaves.";
+    let raw_body = extracted_text.as_bytes().to_vec();
+    let packet = EvidencePacket {
+        id: identity(&("fetched-body-fixture-v1", extracted_text)).unwrap(),
+        mode: "FIXTURE".into(),
+        packet_kind: "FETCHED_BODY".into(),
+        request_uri: "https://example.test/article".into(),
+        final_uri: "https://example.test/article".into(),
+        redirect_chain: Vec::new(),
+        observed_at_unix_ms: 1,
+        provider_id: "normal-route-test-fixture".into(),
+        http_status: 200,
+        raw_sha256: digest(&raw_body),
+        raw_body,
+        extracted_text: Some(extracted_text.into()),
+        parser_version: "fixture-exact-text-v1".into(),
+        independence_group: "https://example.test/article".into(),
+        failure: None,
+    };
+    let packet_ref = store.put_artifact(actor, case, &packet).unwrap();
+    let graph_ref = store
+        .put_artifact(
+            actor,
+            case,
+            &serde_json::json!({"fixture": "source-producer"}),
+        )
+        .unwrap();
+    let goal = GoalContract {
+        input_fingerprint: fingerprint.clone(),
+        intent: bundle.meaning.intent.clone(),
+        output_path: None,
+        permissions: request.permissions.clone(),
+        budget: request.budget.clone(),
+        required_predicates: vec!["SUPPORTED_CONTENT".into()],
+        required_graph_ref: graph_ref.clone(),
+    };
+    let goal_ref = store.put_artifact(actor, case, &goal).unwrap();
+    let mut result = ResultRecord {
+        id: fingerprint.clone(),
+        input_id: request.input_id.clone(),
+        input_version: request.input_version,
+        lifecycle: Lifecycle::Adopted,
+        text: "Fixture source body retained.".into(),
+        reason: None,
+        guarantee: Guarantee::SourceReport,
+        calculation: None,
+        content_plan: None,
+        render: None,
+        receipts: Vec::new(),
+        evidence: vec![packet],
+        dependencies: vec![packet_ref.clone()],
+        execution_graph_ref: Some(graph_ref),
+    };
+    let mut state = CaseRevision {
+        schema_version: SCHEMA_VERSION.into(),
+        case_id: case.into(),
+        actor_id: actor.into(),
+        revision: 0,
+        parent_revision: None,
+        lifecycle: Lifecycle::Received,
+        goal_sha256: None,
+        input_fingerprint: Some(fingerprint.clone()),
+        bundle: None,
+        result: None,
+        reason: None,
+        prior_results: Default::default(),
+    };
+    store.append_case(actor, &state).unwrap();
+    state.revision = 1;
+    state.parent_revision = Some(0);
+    state.lifecycle = Lifecycle::Sealed;
+    state.bundle = Some(bundle);
+    store.append_case(actor, &state).unwrap();
+    state.revision = 2;
+    state.parent_revision = Some(1);
+    state.lifecycle = Lifecycle::Running;
+    state.goal_sha256 = Some(goal_ref);
+    store.append_case(actor, &state).unwrap();
+    result.lifecycle = Lifecycle::Adopted;
+    state.revision = 3;
+    state.parent_revision = Some(2);
+    state.lifecycle = Lifecycle::Adopted;
+    state.result = Some(result.clone());
+    store.append_case(actor, &state).unwrap();
+    result.lifecycle = Lifecycle::Commit;
+    state.revision = 4;
+    state.parent_revision = Some(3);
+    state.lifecycle = Lifecycle::Commit;
+    state.result = Some(result);
+    store.append_case(actor, &state).unwrap();
+    (fingerprint, packet_ref, extracted_text.into())
+}
+
 fn sequence_artifact(store: &minidora_engine::store::Store, sha: &Value) -> Value {
     let sha = sha.as_str().unwrap();
     let bytes = store.get_bytes("owner", "normal-route", sha).unwrap();
@@ -2895,6 +3000,155 @@ fn natural_group_mean_question_requires_an_actual_prior_statistics_result() {
             .contains("MISSING_GROUP_STATISTICS_CONTEXT")
     );
     assert!(unsupported["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn natural_source_question_consumes_the_actual_prior_fetched_body() {
+    let scratch = Scratch::new();
+    let (source_result_id, packet_ref, source_text) = seed_fetched_source_case(&scratch.0, "owner");
+    let output_path = scratch.0.join("source-answer.txt");
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "source-question",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--allow-write",
+            output_path.to_str().unwrap(),
+            "資料では「photosynthesis」について何と述べていますか",
+        ],
+    ));
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "HYPOTHESIS");
+    let dependencies = answer["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 3);
+    assert_eq!(dependencies[0], source_result_id);
+    assert_eq!(dependencies[1], packet_ref);
+    let answer_ref = answer["dependencies"][2].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let answer_bytes = store
+        .get_bytes("owner", "normal-route", answer_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
+    let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(typed["source_result_id"], source_result_id);
+    assert_eq!(typed["query_terms"], serde_json::json!(["photosynthesis"]));
+    assert_eq!(typed["matched_sentence_count"], 2);
+    assert_eq!(typed["candidates"][0]["source_packet_ref"], packet_ref);
+    assert_eq!(typed["candidates"][0]["source_mode"], "FIXTURE");
+    let span_start = typed["candidates"][0]["source_start"].as_u64().unwrap() as usize;
+    let span_end = typed["candidates"][0]["source_end"].as_u64().unwrap() as usize;
+    assert_eq!(
+        &source_text[span_start..span_end],
+        typed["candidates"][0]["text"].as_str().unwrap()
+    );
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("Photosynthesis stores light energy.")
+    );
+    assert_eq!(
+        std::fs::read(&output_path).unwrap(),
+        answer["text"].as_str().unwrap().as_bytes()
+    );
+    assert_eq!(answer["receipts"][0]["phase"], "CONFIRMED");
+    let graph: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                "owner",
+                "normal-route",
+                answer["execution_graph_ref"].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        graph
+            .to_string()
+            .contains("previous-source-question-answer")
+    );
+    assert!(graph.to_string().contains(&packet_ref));
+}
+
+#[test]
+fn natural_source_question_suspends_without_prior_body_or_topic_match() {
+    let missing = Scratch::new();
+    let no_prior = stopped(
+        &execute(
+            &missing.0,
+            "owner",
+            &[
+                "--input",
+                "source-question",
+                "What does the source say about photosynthesis?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        no_prior["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_ACTUAL_RESULT")
+    );
+
+    let unrelated = Scratch::new();
+    let _ = record(&execute(
+        &unrelated.0,
+        "owner",
+        &["--input", "prior-calculation", "2+3"],
+    ));
+    let no_body = stopped(
+        &execute(
+            &unrelated.0,
+            "owner",
+            &[
+                "--input",
+                "source-question",
+                "What does the source say about photosynthesis?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        no_body["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SOURCE_BODY_UNAVAILABLE")
+    );
+
+    let unmatched = Scratch::new();
+    let _ = seed_fetched_source_case(&unmatched.0, "owner");
+    let no_topic_match = stopped(
+        &execute(
+            &unmatched.0,
+            "owner",
+            &[
+                "--input",
+                "source-question",
+                "What does the source say about volcanos?",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        no_topic_match["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SOURCE_QUESTION_NO_MATCH")
+    );
+    assert!(
+        no_topic_match["dependencies"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

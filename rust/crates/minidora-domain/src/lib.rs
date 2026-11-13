@@ -171,6 +171,9 @@ pub enum Intent {
     },
     ExplainPrevious,
     AskPreviousGroupMean,
+    AskPreviousSourceQuestion {
+        query: String,
+    },
     SummarizePreviousSource,
     GenerateCode {
         document: String,

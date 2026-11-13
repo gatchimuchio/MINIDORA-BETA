@@ -1,7 +1,7 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
-use minidora_domain::{EvidencePacket, Result, digest, failure};
+use minidora_domain::{EvidencePacket, Result, canonical, digest, failure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -85,6 +85,40 @@ pub struct SourceExtractiveSummaryCandidates {
     pub license_status: String,
     pub summary: ExtractiveSummaryCandidates,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceQuestionCandidate {
+    pub rank: usize,
+    pub source_packet_id: String,
+    pub source_packet_ref: String,
+    pub source_mode: String,
+    pub source_final_uri: String,
+    pub raw_body_sha256: String,
+    pub extracted_text_sha256: String,
+    pub source_start: usize,
+    pub source_end: usize,
+    pub source_span_sha256: String,
+    pub text: String,
+    pub matched_query_terms: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceQuestionAnswer {
+    pub operation: String,
+    pub source_result_id: String,
+    pub question_topic: String,
+    pub query_terms: Vec<String>,
+    pub source_packet_count: usize,
+    pub matched_sentence_count: usize,
+    pub candidates: Vec<SourceQuestionCandidate>,
+    pub guarantee: String,
+}
+
+const MAX_QUESTION_SOURCE_PACKETS: usize = 16;
+const MAX_QUESTION_TERMS: usize = 32;
+const MAX_QUESTION_CANDIDATES: usize = 5;
 
 fn sha256_id(value: &str) -> bool {
     value.len() == 64
@@ -344,6 +378,211 @@ fn compare_scores(left: Score, right: Score) -> std::cmp::Ordering {
         .cmp(&(u128::from(right.numerator) * u128::from(left.denominator)))
 }
 
+fn source_question_stop_word(word: &str) -> bool {
+    stop_word(word)
+        || matches!(
+            word,
+            "what"
+                | "does"
+                | "say"
+                | "about"
+                | "source"
+                | "article"
+                | "page"
+                | "the"
+                | "and"
+                | "for"
+                | "with"
+                | "from"
+                | "this"
+                | "that"
+                | "are"
+                | "was"
+                | "were"
+                | "has"
+                | "have"
+                | "which"
+        )
+}
+
+fn has_japanese_query_character(text: &str) -> bool {
+    text.chars().any(|character| {
+        ('一'..='龥').contains(&character)
+            || ('ぁ'..='ん').contains(&character)
+            || ('ァ'..='ヶ').contains(&character)
+    })
+}
+
+fn query_term_matches_sentence(term: &str, sentence: &str, sentence_tokens: &[String]) -> bool {
+    if has_japanese_query_character(term) {
+        sentence.contains(term)
+    } else {
+        sentence_tokens.iter().any(|candidate| candidate == term)
+    }
+}
+
+/// Return bounded exact-source sentence candidates selected by lexical overlap
+/// with a caller-supplied topic. This does not claim semantic question
+/// answering, source reliability, or coverage of the fetched document.
+pub(crate) fn answer_fetched_source_question(
+    source_result_id: &str,
+    question_topic: &str,
+    packets: &[(usize, &EvidencePacket, String)],
+) -> Result<SourceQuestionAnswer> {
+    if !sha256_id(source_result_id)
+        || question_topic.is_empty()
+        || question_topic.len() > 512
+        || packets.is_empty()
+        || packets.len() > MAX_QUESTION_SOURCE_PACKETS
+    {
+        return Err(failure(
+            "SOURCE_QUESTION_INPUT_LIMIT",
+            "expected a committed source result, a topic up to 512 bytes and 1..16 fetched-body packets",
+        ));
+    }
+    let mut query_terms = Vec::new();
+    for term in tokens(question_topic)
+        .into_iter()
+        .filter(|term| !source_question_stop_word(term))
+    {
+        if !query_terms.contains(&term) {
+            query_terms.push(term);
+        }
+    }
+    if query_terms.is_empty() || query_terms.len() > MAX_QUESTION_TERMS {
+        return Err(failure(
+            "SOURCE_QUESTION_TOPIC_UNSUPPORTED",
+            "the topic must contain 1..32 supported Japanese or English terms",
+        ));
+    }
+
+    let mut ordered = Vec::<(usize, usize, usize, SourceQuestionCandidate)>::new();
+    let mut matched_sentence_count = 0usize;
+    for (packet_order, (evidence_index, packet, packet_ref)) in packets.iter().enumerate() {
+        let extracted_text = packet.extracted_text.as_deref().unwrap_or_default();
+        let packet_bytes = canonical(packet)?;
+        if !sha256_id(&packet.id)
+            || !sha256_id(packet_ref)
+            || digest(&packet_bytes) != *packet_ref
+            || packet.packet_kind != "FETCHED_BODY"
+            || packet.failure.is_some()
+            || !packet.request_uri.starts_with("https://")
+            || !packet.final_uri.starts_with("https://")
+            || packet.raw_sha256 != digest(&packet.raw_body)
+            || extracted_text.trim().is_empty()
+            || extracted_text.chars().count() > MAX_TEXT_SCALARS
+        {
+            return Err(failure(
+                "SOURCE_QUESTION_EVIDENCE_INVALID",
+                "each question source must be an intact HTTPS fetched-body packet with bounded extracted text",
+            ));
+        }
+        let extracted_text_sha256 = digest(extracted_text.as_bytes());
+        for sentence in sentence_candidates(extracted_text)? {
+            let sentence_tokens = tokens(&sentence.text);
+            let matched_query_terms: Vec<_> = query_terms
+                .iter()
+                .filter(|term| query_term_matches_sentence(term, &sentence.text, &sentence_tokens))
+                .cloned()
+                .collect();
+            if matched_query_terms.is_empty() {
+                continue;
+            }
+            matched_sentence_count = matched_sentence_count.saturating_add(1);
+            let candidate = SourceQuestionCandidate {
+                rank: 0,
+                source_packet_id: packet.id.clone(),
+                source_packet_ref: packet_ref.clone(),
+                source_mode: packet.mode.clone(),
+                source_final_uri: packet.final_uri.clone(),
+                raw_body_sha256: packet.raw_sha256.clone(),
+                extracted_text_sha256: extracted_text_sha256.clone(),
+                source_start: sentence.start,
+                source_end: sentence.end,
+                source_span_sha256: digest(sentence.text.as_bytes()),
+                text: sentence.text,
+                matched_query_terms,
+            };
+            ordered.push((
+                packet_order,
+                *evidence_index,
+                candidate.source_start,
+                candidate,
+            ));
+        }
+    }
+    if ordered.is_empty() {
+        return Err(failure(
+            "SOURCE_QUESTION_NO_MATCH",
+            "no sentence in the actual fetched body contains a supported topic term",
+        ));
+    }
+    ordered.sort_by(|left, right| {
+        right
+            .3
+            .matched_query_terms
+            .len()
+            .cmp(&left.3.matched_query_terms.len())
+            .then_with(|| left.0.cmp(&right.0))
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    let candidates = ordered
+        .into_iter()
+        .take(MAX_QUESTION_CANDIDATES)
+        .enumerate()
+        .map(|(index, (_, _, _, mut candidate))| {
+            candidate.rank = index + 1;
+            candidate
+        })
+        .collect();
+    Ok(SourceQuestionAnswer {
+        operation: "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1".into(),
+        source_result_id: source_result_id.into(),
+        question_topic: question_topic.into(),
+        query_terms,
+        source_packet_count: packets.len(),
+        matched_sentence_count,
+        candidates,
+        guarantee: "extractive source passages ranked only by exact English token or Japanese substring overlap with the caller-supplied topic; semantic relevance, completeness, source reliability and factual truth are not verified".into(),
+    })
+}
+
+pub(crate) fn source_question_answer_lines(answer: &SourceQuestionAnswer) -> Vec<String> {
+    let mut lines = vec![
+        "前回取得した実本文から、質問語句と一致する原文候補を抽出しました。".into(),
+        format!(
+            "照合topic: {:?}。照合語: {}。候補文: {}件中{}件を表示。",
+            answer.question_topic,
+            answer.query_terms.join("、"),
+            answer.matched_sentence_count,
+            answer.candidates.len()
+        ),
+    ];
+    for candidate in &answer.candidates {
+        lines.push(format!(
+            "候補{} / mode: {} / source: {} / packet: {} / raw-body SHA-256: {} / extracted-text SHA-256: {}",
+            candidate.rank,
+            candidate.source_mode,
+            candidate.source_final_uri,
+            candidate.source_packet_id,
+            candidate.raw_body_sha256,
+            candidate.extracted_text_sha256
+        ));
+        lines.push(format!(
+            "  matched: {} / extracted-text byte[{}..{}) / span SHA-256: {}",
+            candidate.matched_query_terms.join("、"),
+            candidate.source_start,
+            candidate.source_end,
+            candidate.source_span_sha256
+        ));
+        lines.push(format!("  原文候補: {}", candidate.text));
+    }
+    lines.push("出典license情報: packetに記録されていないため未検証です。".into());
+    lines.push(format!("保証範囲: {}。", answer.guarantee));
+    lines
+}
+
 /// Select a bounded set of source sentences by the inspected deterministic
 /// extractive ranking family. This is a candidate operation, not a semantic
 /// summary verifier; every selected sentence remains tied to exact source bytes.
@@ -592,6 +831,84 @@ pub fn summarize_fetched_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_question_packet(text: &str) -> EvidencePacket {
+        let raw_body = text.as_bytes().to_vec();
+        EvidencePacket {
+            id: "b".repeat(64),
+            mode: "LIVE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: "https://example.test/article".into(),
+            final_uri: "https://example.test/article".into(),
+            redirect_chain: Vec::new(),
+            observed_at_unix_ms: 123,
+            provider_id: "https-direct-url-v1".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            extracted_text: Some(text.into()),
+            raw_body,
+            parser_version: "strict-utf8-identity-v1".into(),
+            independence_group: "https://example.test/article".into(),
+            failure: None,
+        }
+    }
+
+    #[test]
+    fn source_question_returns_exact_lexical_matches_with_source_spans() {
+        let text = "Energy enters the ecosystem. Photosynthesis stores light energy. Plants use photosynthesis in their leaves.";
+        let packet = source_question_packet(text);
+        let packet_ref = digest(&canonical(&packet).unwrap());
+        let answer = answer_fetched_source_question(
+            &"a".repeat(64),
+            "photosynthesis",
+            &[(2, &packet, packet_ref.clone())],
+        )
+        .unwrap();
+        assert_eq!(answer.operation, "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1");
+        assert_eq!(answer.query_terms, vec!["photosynthesis"]);
+        assert_eq!(answer.matched_sentence_count, 2);
+        assert_eq!(answer.candidates.len(), 2);
+        assert_eq!(answer.candidates[0].source_packet_ref, packet_ref);
+        assert_eq!(
+            answer.candidates[0].text,
+            "Photosynthesis stores light energy."
+        );
+        assert_eq!(
+            answer.candidates[1].text,
+            "Plants use photosynthesis in their leaves."
+        );
+        for candidate in &answer.candidates {
+            assert_eq!(
+                text.get(candidate.source_start..candidate.source_end),
+                Some(candidate.text.as_str())
+            );
+            assert_eq!(
+                candidate.source_span_sha256,
+                digest(candidate.text.as_bytes())
+            );
+            assert!(
+                candidate
+                    .matched_query_terms
+                    .contains(&"photosynthesis".into())
+            );
+        }
+        assert!(answer.guarantee.contains("semantic relevance"));
+    }
+
+    #[test]
+    fn source_question_supports_japanese_substrings_and_refuses_no_match() {
+        let text = "植物の光合成は光を化学エネルギーへ変える。呼吸は別の過程である。";
+        let packet = source_question_packet(text);
+        let packet_ref = digest(&canonical(&packet).unwrap());
+        let sources = [(0, &packet, packet_ref)];
+        let answer = answer_fetched_source_question(&"a".repeat(64), "光合成", &sources).unwrap();
+        assert_eq!(
+            answer.candidates[0].text,
+            "植物の光合成は光を化学エネルギーへ変える。"
+        );
+        let error = answer_fetched_source_question(&"a".repeat(64), "火山", &sources).unwrap_err();
+        assert!(error.to_string().contains("SOURCE_QUESTION_NO_MATCH"));
+    }
 
     #[test]
     fn fetched_source_followup_retains_packet_identity_and_unobserved_license() {

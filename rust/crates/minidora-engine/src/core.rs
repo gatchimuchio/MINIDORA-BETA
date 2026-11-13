@@ -333,6 +333,81 @@ impl Engine {
             } else {
                 None
             };
+        let previous_source_question_answer =
+            if let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => {
+                        let mut source_packets = Vec::new();
+                        for (index, packet) in
+                            prior.evidence.iter().enumerate().filter(|(_, packet)| {
+                                packet.packet_kind == "FETCHED_BODY"
+                                    && packet.failure.is_none()
+                                    && packet.extracted_text.is_some()
+                            })
+                        {
+                            let packet_bytes = canonical(packet)?;
+                            let packet_ref = digest(&packet_bytes);
+                            match self.store.get_bytes(actor, &request.case_id, &packet_ref) {
+                                Ok(stored) if stored == packet_bytes => {}
+                                Ok(_) => {
+                                    return self.stop(
+                                        &mut state,
+                                        Lifecycle::Fail,
+                                        "SOURCE_QUESTION_PACKET_MISMATCH",
+                                        "前回の取得本文artifactと保存済みpacketが一致しません。",
+                                    );
+                                }
+                                Err(error) => {
+                                    return self.stop(
+                                        &mut state,
+                                        Lifecycle::Suspend,
+                                        "SOURCE_QUESTION_PACKET_UNAVAILABLE",
+                                        &error.to_string(),
+                                    );
+                                }
+                            }
+                            source_packets.push((index, packet, packet_ref));
+                        }
+                        if source_packets.is_empty() {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "SOURCE_BODY_UNAVAILABLE",
+                                "前回の採用結果に再検証できる取得本文がありません。",
+                            );
+                        }
+                        match crate::text_summary::answer_fetched_source_question(
+                            &prior.id,
+                            query,
+                            &source_packets,
+                        ) {
+                            Ok(answer) => Some((
+                                prior.id.clone(),
+                                source_packets
+                                    .iter()
+                                    .map(|(index, _, reference)| (*index, reference.clone()))
+                                    .collect::<Vec<_>>(),
+                                answer,
+                            )),
+                            Err(error) => {
+                                let code = match &error {
+                                    Error::Contract { code, .. } => code.as_str(),
+                                    _ => "SOURCE_QUESTION_FAILED",
+                                };
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    code,
+                                    &error.to_string(),
+                                );
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
         let previous_math_report_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -413,6 +488,25 @@ impl Engine {
                 id: answer_id.clone(),
                 kind: GoalNodeKind::ComputedValue,
                 requires: vec![report_id],
+            });
+            compute_requires.push(answer_id);
+        }
+        if let Some((_, source_packet_refs, _)) = &previous_source_question_answer {
+            let mut source_nodes = Vec::new();
+            for (index, _) in source_packet_refs {
+                let source_id = format!("previous-question-source-{index}");
+                nodes.push(GoalNode {
+                    id: source_id.clone(),
+                    kind: GoalNodeKind::Evidence,
+                    requires: Vec::new(),
+                });
+                source_nodes.push(source_id);
+            }
+            let answer_id = "previous-source-question-answer".to_string();
+            nodes.push(GoalNode {
+                id: answer_id.clone(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: source_nodes,
             });
             compute_requires.push(answer_id);
         }
@@ -1600,6 +1694,70 @@ impl Engine {
                     let report_ref = self.store.put_bytes(actor, &request.case_id, &encoded)?;
                     result.dependencies.push(report_ref);
                 }
+                result.guarantee = Guarantee::Hypothesis;
+            }
+            Intent::AskPreviousSourceQuestion { .. } => {
+                let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "質問対象となる実際の採用済み出典結果がありません。",
+                    );
+                };
+                let Some((prior_id, source_packet_refs, answer)) = &previous_source_question_answer
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SOURCE_BODY_UNAVAILABLE",
+                        "前回の結果に質問照合できる実本文がありません。",
+                    );
+                };
+                if &prior.id != prior_id {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Fail,
+                        "SOURCE_QUESTION_CONTEXT_MISMATCH",
+                        "解釈時に固定した前回結果と質問に使う出典証拠が一致しません。",
+                    );
+                }
+                let answer_bytes = canonical(answer)?;
+                let output_units = crate::text_summary::source_question_answer_lines(answer);
+                let output_bytes = output_units.join("\n").len();
+                if answer_bytes.len() > request.budget.max_evidence_bytes
+                    || output_bytes > request.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "出典質問の回答artifactまたは本文候補が要求の証拠予算を超えました。",
+                    );
+                }
+                let answer_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &answer_bytes)?;
+                let mut answer_inputs = BTreeMap::new();
+                for (index, packet_ref) in source_packet_refs {
+                    let source_id = format!("previous-question-source-{index}");
+                    graph.observe(&source_id, packet_ref, &BTreeMap::new())?;
+                    answer_inputs.insert(source_id, packet_ref.clone());
+                }
+                graph.observe(
+                    "previous-source-question-answer",
+                    &answer_ref,
+                    &answer_inputs,
+                )?;
+                result.dependencies.push(prior_id.clone());
+                result.dependencies.extend(
+                    source_packet_refs
+                        .iter()
+                        .map(|(_, reference)| reference.clone()),
+                );
+                result.dependencies.push(answer_ref);
+                units.extend(output_units);
                 result.guarantee = Guarantee::Hypothesis;
             }
             Intent::Assert { proposition } => {

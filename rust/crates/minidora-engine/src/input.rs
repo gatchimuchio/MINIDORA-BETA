@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v53-group-mean-query";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v54-source-question-followup";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -51,6 +51,11 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     {
         unresolved
             .push("no actual committed previous grouped-statistics result is available".into());
+    }
+    if matches!(intent, Intent::AskPreviousSourceQuestion { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push("no actual committed previous fetched-source result is available".into());
     }
     if matches!(intent, Intent::VerifyPreviousCode { .. })
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -905,6 +910,26 @@ fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn previous_source_question_intent(text: &str) -> Result<Option<Intent>> {
+    let english = regex(r"(?i)^what does (?:the )?(?:source|article|page) say about\s+(.+)$")?;
+    let japanese = regex(
+        r#"^(?:資料|記事|本文)(?:では|に|から)?\s*[「『"']?(.+?)[」』"']?\s*について\s*(?:何|どう)(?:と)?(?:述べていますか|書かれていますか|記載されていますか|説明していますか|述べている|書かれている)$"#,
+    )?;
+    let captured = english
+        .captures(text)
+        .or_else(|| japanese.captures(text))
+        .and_then(|captures| captures.get(1))
+        .map(|value| {
+            value
+                .as_str()
+                .trim()
+                .trim_matches(['「', '」', '『', '』', '\"', '\'', ' ', '　'])
+                .to_string()
+        })
+        .filter(|value| !value.is_empty());
+    Ok(captured.map(|query| Intent::AskPreviousSourceQuestion { query }))
+}
+
 fn why_question_intent(text: &str) -> Result<Option<Intent>> {
     let statement = if let Some(value) = text.strip_prefix("なぜ") {
         Some(value)
@@ -1043,6 +1068,9 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     if let Some(intent) = previous_group_mean_question_intent(body)? {
+        return Ok(intent);
+    }
+    if let Some(intent) = previous_source_question_intent(body)? {
         return Ok(intent);
     }
     if let Some(capture) =
@@ -1962,6 +1990,30 @@ mod tests {
         ));
         assert!(matches!(
             interpret("どのグループの平均が高いですか").unwrap(),
+            Intent::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn previous_source_questions_retain_the_requested_topic() {
+        for (text, expected) in [
+            ("資料では「光合成」について何と述べていますか", "光合成"),
+            ("記事に人工知能についてどう書かれていますか", "人工知能"),
+            (
+                "What does the source say about the carbon cycle?",
+                "the carbon cycle",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::AskPreviousSourceQuestion { query } if query == expected
+                ),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            interpret("What does the source say?").unwrap(),
             Intent::Unknown { .. }
         ));
     }

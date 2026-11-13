@@ -100,9 +100,10 @@
         "crates/minidora-engine/src/recovery.rs",
         "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "`2+3` → `Explain that in detail` explains **the actual 5 and procedure**, not unjustified suspension",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -189,9 +190,10 @@
         "crates/minidora-engine/src/recovery.rs",
         "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Novel independent chat-quality matrix, not greeting/keyword-only matches",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -386,8 +388,16 @@
       "required_observable": "Core alone vs named capability variants, same questions and actual evidence",
       "implementation_disposition": "UNVERIFIED",
       "acceptance_status": "UNVERIFIED",
-      "current_rust_paths": [],
-      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "current_rust_paths": [
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/text_summary.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/recovery.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs"
+      ],
+      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Core alone vs named capability variants, same questions and actual evidence",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -453,9 +463,16 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/ports.rs"
+        "crates/minidora-engine/src/ports.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/text_summary.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/recovery.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Authorized search reaches actual retrieved **body**, not only title/snippet",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -495,9 +512,16 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/search.rs"
+        "crates/minidora-engine/src/search.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/text_summary.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/recovery.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Capture provider/order/status/retry and independently replay both stages",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -583,9 +607,16 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/ports.rs"
+        "crates/minidora-engine/src/ports.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/text_summary.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/recovery.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Each factual sentence or quotation maps to the actually used versioned source",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -609,9 +640,16 @@
       "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
       "current_rust_paths": [
-        "crates/minidora-engine/src/ports.rs"
+        "crates/minidora-engine/src/ports.rs",
+        "crates/minidora-domain/src/lib.rs",
+        "crates/minidora-engine/src/input.rs",
+        "crates/minidora-engine/src/text_summary.rs",
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/recovery.rs",
+        "crates/minidora-engine/src/store.rs",
+        "apps/cli/tests/normal_route.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "A replay pinpoints whether change came from source, code, state or provider",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -848,9 +886,10 @@
         "crates/minidora-engine/src/recovery.rs",
         "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Internal state churn alone cannot mark user goal as achieved",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -900,9 +939,10 @@
         "crates/minidora-engine/src/recovery.rs",
         "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Controlled allow/deny tests; no implicit sending on rendering alone",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -938,9 +978,10 @@
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-engine/src/recovery.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Replay shows actual decision inputs; hash alone never asserted as truth proof",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -961,9 +1002,10 @@
         "crates/minidora-engine/src/recovery.rs",
         "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Complete behavior from real request through terminal rendering and explicit delivery",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"
@@ -1014,9 +1056,10 @@
         "crates/minidora-engine/src/core.rs",
         "crates/minidora-engine/src/store.rs",
         "apps/cli/tests/normal_route.rs",
-        "tools/json_group_mean_query_route_test.py"
+        "tools/json_group_mean_query_route_test.py",
+        "crates/minidora-engine/src/text_summary.rs"
       ],
-      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.",
+      "evidence": "validation.json / executed-tests.json contain scoped component and normal-route observations; not the complete row acceptance; bb-lang-json-group-mean-query-route-validation.json records one bounded normal-route consumer of an actual same-case JSON grouped-statistics result: v53 Japanese/English question parsing, exact rational highest-mean comparison, explicit tied winners, winner source spans, exact-unit-match requirement, actor/case artifact lineage, confirmed local write and no-resend recovery. Scoped parser/math/CLI tests and the fresh-process recovery script passed; broader requirement acceptance remains UNVERIFIED.; bb-lang-source-question-followup-route-validation.json records one bounded source-question consumer over a committed FETCHED_BODY packet: exact source packet/body/extracted-text identity, Japanese substring and English token matching, original span/hash, up to five candidate sentences, typed no-match suspension, same-case Core artifact graph and exact-grant local file receipt. The normal-route producer is an intentionally seeded synthetic fixture; the separate live body producer remains independent evidence. Recovery answer replay was tested directly; route-specific crash/no-resend and full acceptance were not run.",
       "full_acceptance_gap": "Retry consumes existing evidence and budget; does not invent a new goal",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

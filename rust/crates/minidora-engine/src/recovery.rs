@@ -183,6 +183,11 @@ struct SourceSummaryExpectation {
     source_packet_refs: Vec<(usize, String)>,
 }
 
+struct SourceQuestionExpectation {
+    source_packet_refs: Vec<(usize, String)>,
+    answer_ref: String,
+}
+
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
@@ -378,6 +383,91 @@ fn verify_source_summary_context(
     Ok(Some(SourceSummaryExpectation { source_packet_refs }))
 }
 
+fn verify_source_question_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<SourceQuestionExpectation>> {
+    let Intent::AskPreviousSourceQuestion { query } = &goal.intent else {
+        return Ok(None);
+    };
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "source question has no sealed prior-result reference",
+        )
+    })?;
+    let prior = state.prior_results.get(prior_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the exact prior source result is not retained",
+        )
+    })?;
+    if prior.id != *prior_id || prior.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the referenced prior source result is not the same committed result",
+        ));
+    }
+    let mut packets = Vec::new();
+    let mut source_packet_refs = Vec::new();
+    let mut dependencies = vec![prior.id.clone()];
+    for (index, packet) in prior.evidence.iter().enumerate().filter(|(_, packet)| {
+        packet.packet_kind == "FETCHED_BODY"
+            && packet.failure.is_none()
+            && packet.extracted_text.is_some()
+    }) {
+        let encoded = canonical(packet)?;
+        let packet_ref = digest(&encoded);
+        if store.get_bytes(actor, case, &packet_ref)? != encoded {
+            return Err(failure(
+                "RECOVERY_SOURCE_QUESTION_PACKET_MISMATCH",
+                "the original fetched-body packet differs from its retained artifact",
+            ));
+        }
+        packets.push((index, packet, packet_ref.clone()));
+        source_packet_refs.push((index, packet_ref.clone()));
+        dependencies.push(packet_ref);
+    }
+    let answer = crate::text_summary::answer_fetched_source_question(&prior.id, query, &packets)?;
+    let encoded = canonical(&answer)?;
+    let answer_ref = digest(&encoded);
+    let expected_units = crate::text_summary::source_question_answer_lines(&answer);
+    let output_bytes = expected_units.join("\n").len();
+    if encoded.len() > goal.budget.max_evidence_bytes
+        || output_bytes > goal.budget.max_evidence_bytes
+        || store.get_bytes(actor, case, &answer_ref)? != encoded
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the retained answer artifact or output exceeds its exact source-derived identity",
+        ));
+    }
+    dependencies.push(answer_ref.clone());
+    if !result.evidence.is_empty()
+        || dependencies != result.dependencies
+        || expected_units != plan.required_units
+        || result.guarantee != Guarantee::Hypothesis
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "source packet dependencies, answer candidates or guarantee differ from the adopted result",
+        ));
+    }
+    Ok(Some(SourceQuestionExpectation {
+        source_packet_refs,
+        answer_ref,
+    }))
+}
+
 fn inspect(
     store: &Store,
     actor: &str,
@@ -463,7 +553,10 @@ fn inspect(
         || plan.required_units.is_empty()
         || plan.guarantee == Guarantee::Unknown
         || (plan.guarantee == Guarantee::Hypothesis
-            && !matches!(goal.intent, Intent::SummarizePreviousSource))
+            && !matches!(
+                goal.intent,
+                Intent::SummarizePreviousSource | Intent::AskPreviousSourceQuestion { .. }
+            ))
         || !validate_render(plan, render)
     {
         return Err(failure(
@@ -482,6 +575,8 @@ fn inspect(
     }
     let source_summary =
         verify_source_summary_context(store, actor, case, state, &result, plan, &goal)?;
+    let source_question =
+        verify_source_question_context(store, actor, case, state, &result, plan, &goal)?;
     let search_candidate_rank =
         verify_search_candidate_context(store, actor, case, state, &result, plan, &goal)?;
     let previous_csv_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
@@ -577,6 +672,7 @@ fn inspect(
                 | "declarative-ja-en-v51-generated-code-verification"
                 | "declarative-ja-en-v52-search-candidate-body"
                 | "declarative-ja-en-v53-group-mean-query"
+                | "declarative-ja-en-v54-source-question-followup"
         );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
@@ -623,6 +719,7 @@ fn inspect(
             | "declarative-ja-en-v51-generated-code-verification"
             | "declarative-ja-en-v52-search-candidate-body"
             | "declarative-ja-en-v53-group-mean-query"
+            | "declarative-ja-en-v54-source-question-followup"
     ) && matches!(goal.intent, Intent::ExplainPrevious)
         && let Some(previous_id) = bundle.meaning.context_result_ref.as_ref()
         && let Some(previous) = state.prior_results.get(previous_id)
@@ -771,6 +868,7 @@ fn inspect(
         "declarative-ja-en-v51-generated-code-verification"
             | "declarative-ja-en-v52-search-candidate-body"
             | "declarative-ja-en-v53-group-mean-query"
+            | "declarative-ja-en-v54-source-question-followup"
     ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
@@ -959,6 +1057,25 @@ fn inspect(
         });
         sources.push(answer_id);
     }
+    if let Some(question) = &source_question {
+        let mut source_ids = Vec::new();
+        for (index, _) in &question.source_packet_refs {
+            let source_id = format!("previous-question-source-{index}");
+            expected_nodes.push(GoalNode {
+                id: source_id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            source_ids.push(source_id);
+        }
+        let answer_id = "previous-source-question-answer".to_string();
+        expected_nodes.push(GoalNode {
+            id: answer_id.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: source_ids,
+        });
+        sources.push(answer_id);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -1037,6 +1154,17 @@ fn inspect(
             &BTreeMap::from([(report_id.clone(), report_ref.clone())]),
         )?;
         source_refs.insert(answer_id, answer_ref.clone());
+    }
+    if let Some(question) = &source_question {
+        let answer_id = "previous-source-question-answer".to_string();
+        let mut answer_inputs = BTreeMap::new();
+        for (index, reference) in &question.source_packet_refs {
+            let source_id = format!("previous-question-source-{index}");
+            graph.observe(&source_id, reference, &BTreeMap::new())?;
+            answer_inputs.insert(source_id, reference.clone());
+        }
+        graph.observe(&answer_id, &question.answer_ref, &answer_inputs)?;
+        source_refs.insert(answer_id, question.answer_ref.clone());
     }
     let compute = (
         &result.calculation,
@@ -1294,6 +1422,146 @@ mod tests {
             directory,
             token: String::new(),
         }
+    }
+
+    #[test]
+    fn source_question_recovery_revalidates_the_exact_source_answer_artifact() {
+        use minidora_domain::{
+            EvidencePacket, Guarantee, ResultRecord, canonical, digest, identity,
+        };
+
+        let fixture = empty_fixture();
+        let store = Store::open(&fixture.state).unwrap();
+        let source_text =
+            "Photosynthesis stores light energy. Plants use photosynthesis in their leaves.";
+        let raw_body = source_text.as_bytes().to_vec();
+        let packet = EvidencePacket {
+            id: "b".repeat(64),
+            mode: "FIXTURE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: "https://example.test/article".into(),
+            final_uri: "https://example.test/article".into(),
+            redirect_chain: Vec::new(),
+            observed_at_unix_ms: 1,
+            provider_id: "recovery-test-fixture".into(),
+            http_status: 200,
+            raw_sha256: digest(&raw_body),
+            raw_body,
+            extracted_text: Some(source_text.into()),
+            parser_version: "fixture-exact-text-v1".into(),
+            independence_group: "https://example.test/article".into(),
+            failure: None,
+        };
+        let prior = ResultRecord {
+            id: "a".repeat(64),
+            input_id: "source-result".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: "Fetched source retained.".into(),
+            reason: None,
+            guarantee: Guarantee::SourceReport,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: vec![packet.clone()],
+            dependencies: Vec::new(),
+            execution_graph_ref: None,
+        };
+        let mut request = RequestEnvelope::new(
+            "case",
+            "source-question",
+            "alice",
+            "What does the source say about photosynthesis?",
+        );
+        request.context_ref = Some(prior.id.clone());
+        let bundle = crate::input::seal(&request, Some(&prior)).unwrap();
+        let fingerprint = identity(&request).unwrap();
+        store
+            .register_input("alice", &request, &fingerprint)
+            .unwrap();
+        let packet_ref = store.put_artifact("alice", "case", &packet).unwrap();
+        let answer = crate::text_summary::answer_fetched_source_question(
+            &prior.id,
+            "photosynthesis",
+            &[(0, &packet, packet_ref.clone())],
+        )
+        .unwrap();
+        let answer_bytes = canonical(&answer).unwrap();
+        let answer_ref = store.put_bytes("alice", "case", &answer_bytes).unwrap();
+        let expected_units = crate::text_summary::source_question_answer_lines(&answer);
+        let dependencies = vec![prior.id.clone(), packet_ref.clone(), answer_ref.clone()];
+        let plan = ContentPlan {
+            id: "plan-fixture".into(),
+            text: expected_units.join("\n"),
+            locale: "ja".into(),
+            guarantee: Guarantee::Hypothesis,
+            required_units: expected_units.clone(),
+            dependencies: dependencies.clone(),
+            model_revision: "fixture".into(),
+            model_artifact_ref: "fixture".into(),
+            model_observation_ref: "fixture".into(),
+        };
+        let result = ResultRecord {
+            id: fingerprint.clone(),
+            input_id: request.input_id.clone(),
+            input_version: request.input_version,
+            lifecycle: Lifecycle::Adopted,
+            text: plan.text.clone(),
+            reason: None,
+            guarantee: Guarantee::Hypothesis,
+            calculation: None,
+            content_plan: Some(plan.clone()),
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: dependencies.clone(),
+            execution_graph_ref: None,
+        };
+        let goal = GoalContract {
+            input_fingerprint: fingerprint.clone(),
+            intent: bundle.meaning.intent.clone(),
+            output_path: None,
+            permissions: request.permissions.clone(),
+            budget: request.budget.clone(),
+            required_predicates: Vec::new(),
+            required_graph_ref: "fixture".into(),
+        };
+        let state = CaseRevision {
+            schema_version: minidora_domain::SCHEMA_VERSION.into(),
+            case_id: "case".into(),
+            actor_id: "alice".into(),
+            revision: 0,
+            parent_revision: None,
+            lifecycle: Lifecycle::Adopted,
+            goal_sha256: None,
+            input_fingerprint: Some(fingerprint),
+            bundle: Some(bundle),
+            result: Some(result.clone()),
+            reason: None,
+            prior_results: BTreeMap::from([(prior.id.clone(), prior)]),
+        };
+        let verified =
+            verify_source_question_context(&store, "alice", "case", &state, &result, &plan, &goal)
+                .unwrap()
+                .unwrap();
+        assert_eq!(verified.source_packet_refs, vec![(0, packet_ref)]);
+        assert_eq!(verified.answer_ref, answer_ref);
+
+        let mut changed_plan = plan;
+        changed_plan.required_units.push("extra sentence".into());
+        assert!(
+            verify_source_question_context(
+                &store,
+                "alice",
+                "case",
+                &state,
+                &result,
+                &changed_plan,
+                &goal,
+            )
+            .is_err()
+        );
     }
 
     fn attempted_prefix() -> Fixture {
