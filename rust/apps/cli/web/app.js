@@ -7,6 +7,7 @@ const tokenField = document.querySelector("#api-token");
 const requestField = document.querySelector("#request-text");
 const submitButton = document.querySelector("#submit-button");
 const cancelCaseButton = document.querySelector("#cancel-case-button");
+const streamEvents = document.querySelector("#stream-events");
 const connectionStatus = document.querySelector("#connection-status");
 const formError = document.querySelector("#form-error");
 const resultState = document.querySelector("#result-state");
@@ -83,6 +84,104 @@ function showRecord(record) {
   recordJson.textContent = JSON.stringify(record, null, 2);
 }
 
+function appendStreamEvent(label) {
+  const item = document.createElement("li");
+  item.textContent = label;
+  streamEvents.append(item);
+  streamEvents.hidden = false;
+}
+
+async function consumeEventStream(response, expectedInputId) {
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
+  }
+  if (!(response.headers.get("content-type") || "").startsWith("text/event-stream")) {
+    throw new Error("unsupported response content type");
+  }
+  if (!response.body) throw new Error("stream body is unavailable");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let streamId = null;
+  let provisionalSeen = false;
+  let invalidatedSeen = false;
+  let finalSeen = false;
+
+  function receiveFrame(frame) {
+    let eventName = "message";
+    const data = [];
+    for (const line of frame.split("\n")) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    const payload = JSON.parse(data.join("\n"));
+    if (payload.api_version !== "minidora-stream/v1" || typeof payload.stream_id !== "string") {
+      throw new Error("unsupported stream event version");
+    }
+    if (payload.input_id !== expectedInputId && eventName === "provisional") {
+      throw new Error("stream input identity differs from the submitted request");
+    }
+    if (streamId !== null && streamId !== payload.stream_id) {
+      throw new Error("stream identity changed during delivery");
+    }
+    streamId = payload.stream_id;
+
+    if (eventName === "provisional") {
+      if (provisionalSeen || payload.phase !== "PROVISIONAL" || payload.authority !== "NONE" || payload.content !== null) {
+        throw new Error("invalid provisional stream event");
+      }
+      provisionalSeen = true;
+      appendStreamEvent("暫定受付 · 回答内容はまだありません");
+      return;
+    }
+    if (eventName === "invalidated") {
+      if (!provisionalSeen || invalidatedSeen || finalSeen || payload.phase !== "INVALIDATED" || payload.authority !== "NONE") {
+        throw new Error("invalid invalidation stream event");
+      }
+      invalidatedSeen = true;
+      appendStreamEvent("暫定状態を無効化 · Coreの最終結果を待っています");
+      return;
+    }
+    if (eventName === "final") {
+      if (!provisionalSeen || finalSeen || !payload.result || payload.phase !== "FINAL") {
+        throw new Error("invalid final stream event");
+      }
+      if (payload.result.input_id !== expectedInputId
+          || (invalidatedSeen && payload.result.lifecycle === "COMMIT")
+          || (!invalidatedSeen && payload.result.lifecycle !== "COMMIT")) {
+        throw new Error("final result does not match its provisional stream state");
+      }
+      finalSeen = true;
+      appendStreamEvent(`最終結果 · ${payload.result.lifecycle || "不明"}`);
+      showRecord(payload.result);
+      return;
+    }
+    if (eventName === "error") {
+      throw new Error(typeof payload.error === "string" ? payload.error : "Core stream failed");
+    }
+    throw new Error(`unknown stream event: ${eventName}`);
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    buffer = buffer.replace(/\r\n/g, "\n");
+    let separator = buffer.indexOf("\n\n");
+    while (separator >= 0) {
+      receiveFrame(buffer.slice(0, separator));
+      buffer = buffer.slice(separator + 2);
+      separator = buffer.indexOf("\n\n");
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) receiveFrame(buffer);
+  if (!finalSeen) throw new Error("stream ended before a final Core result");
+}
+
 function showTransportError(message) {
   resultState.textContent = "HTTP ERROR";
   resultState.dataset.state = "FAIL";
@@ -138,25 +237,24 @@ form.addEventListener("submit", async (event) => {
   emptyState.hidden = true;
   resultContent.hidden = true;
   loadingState.hidden = false;
+  streamEvents.replaceChildren();
+  streamEvents.hidden = true;
   resultState.textContent = "処理中";
   delete resultState.dataset.state;
   try {
-    const response = await fetch("/v1/execute", {
+    const response = await fetch("/v1/execute/stream", {
       method: "POST",
       cache: "no-store",
       credentials: "omit",
       referrerPolicy: "no-referrer",
       headers: {
         Authorization: `Bearer ${token}`,
+        Accept: "text/event-stream",
         "Content-Type": "application/json",
       },
       body: JSON.stringify(envelope),
     });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`);
-    }
-    showRecord(payload);
+    await consumeEventStream(response, envelope.input_id);
     setConnection(true, "Core 接続中");
   } catch (error) {
     showTransportError(error instanceof Error ? error.message : "通信エラー");

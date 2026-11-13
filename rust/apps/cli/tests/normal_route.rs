@@ -1433,6 +1433,50 @@ fn http_get(address: SocketAddr, target: &str) -> (u16, String, String) {
     (status, headers.to_ascii_lowercase(), body.to_owned())
 }
 
+fn http_stream_with_accept(
+    address: SocketAddr,
+    token: &str,
+    body: &[u8],
+    accept: &str,
+) -> (u16, String, String) {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(stream, "POST /v1/execute/stream HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: {accept}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+    stream.write_all(body).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+    let status = headers.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, headers.to_ascii_lowercase(), body.to_owned())
+}
+
+fn http_stream(address: SocketAddr, token: &str, body: &[u8]) -> (u16, String, String) {
+    http_stream_with_accept(address, token, body, "text/event-stream")
+}
+
+fn sse_events(body: &str) -> Vec<(String, Value)> {
+    body.split("\n\n")
+        .filter(|frame| !frame.trim().is_empty())
+        .map(|frame| {
+            let mut event = None;
+            let mut data = Vec::new();
+            for line in frame.lines() {
+                if let Some(value) = line.strip_prefix("event:") {
+                    event = Some(value.trim().to_owned());
+                } else if let Some(value) = line.strip_prefix("data:") {
+                    data.push(value.trim_start());
+                }
+            }
+            (
+                event.expect("every server event has a name"),
+                serde_json::from_str(&data.join("\n")).expect("event data is JSON"),
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn loopback_browser_assets_are_fixed_and_security_headered() {
     let scratch = Scratch::new();
@@ -1491,7 +1535,7 @@ fn loopback_browser_assets_are_fixed_and_security_headered() {
     let (status, headers, script) = http_get(address, "/app.js");
     assert_eq!(status, 200);
     assert!(headers.contains("content-type: application/javascript; charset=utf-8"));
-    assert!(script.contains("fetch(\"/v1/execute\""));
+    assert!(script.contains("fetch(\"/v1/execute/stream\""));
     assert!(!script.contains("localStorage"));
     assert!(!script.contains("innerHTML"));
 
@@ -1506,6 +1550,141 @@ fn loopback_browser_assets_are_fixed_and_security_headered() {
     assert!(favicon.contains("<svg"));
 
     assert_eq!(http_get(address, "/../Cargo.toml").0, 401);
+}
+
+#[test]
+fn http_streaming_separates_provisional_invalidation_and_final_core_results() {
+    let scratch = Scratch::new();
+    let actor = "stream-profile-owner";
+    let case = "stream-profile-case";
+    let rule = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "stream-rule", "もしXは鳥ならXは動物"],
+    ));
+    let premise = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &["--input", "stream-premise", "ココは鳥"],
+    ));
+    let token = "test-only-constant-not-a-secret-0123456789";
+    let child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args([
+            "serve",
+            "--db",
+            scratch.0.to_str().unwrap(),
+            "--actor",
+            actor,
+            "--bind",
+            "127.0.0.1:0",
+        ])
+        .env("MINIDORA_API_TOKEN", token)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut server = Server(child);
+    let stderr = server.0.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let outcome = BufReader::new(stderr).read_line(&mut line).map(|_| line);
+        let _ = sender.send(outcome);
+    });
+    let line = receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("server startup timeout")
+        .unwrap();
+    let address: SocketAddr = line
+        .split("listening on ")
+        .nth(1)
+        .expect("server readiness line")
+        .split(';')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let profile = minidora_domain::RequestEnvelope::new(
+        case,
+        "stream-profile-result",
+        actor,
+        "ココについて保存されている情報をもとに短い紹介文を書いて",
+    );
+    let profile_body = serde_json::to_vec(&profile).unwrap();
+    assert_eq!(
+        http_stream_with_accept(address, token, &profile_body, "*/*").0,
+        406
+    );
+    let (status, headers, body) = http_stream(address, token, &profile_body);
+    assert_eq!(status, 200);
+    assert!(headers.contains("content-type: text/event-stream; charset=utf-8"));
+    assert!(headers.contains("cache-control: no-store"));
+    let events = sse_events(&body);
+    assert_eq!(
+        events
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["provisional", "final"]
+    );
+    assert_eq!(events[0].1["api_version"], "minidora-stream/v1");
+    assert_eq!(events[0].1["phase"], "PROVISIONAL");
+    assert_eq!(events[0].1["authority"], "NONE");
+    assert!(events[0].1["content"].is_null());
+    let profile_result = &events[1].1["result"];
+    assert_eq!(events[1].1["phase"], "FINAL");
+    assert_eq!(profile_result["lifecycle"], "COMMIT");
+    assert_eq!(profile_result["guarantee"], "HYPOTHESIS");
+    for dependency in [
+        rule["dependencies"][0].as_str().unwrap(),
+        premise["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            profile_result["dependencies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str() == Some(dependency))
+        );
+    }
+
+    let missing = minidora_domain::RequestEnvelope::new(
+        case,
+        "stream-missing-profile",
+        actor,
+        "タクについて保存されている情報をもとに短い紹介文を書いて",
+    );
+    let (status, _, body) = http_stream(address, token, &serde_json::to_vec(&missing).unwrap());
+    assert_eq!(status, 200);
+    let events = sse_events(&body);
+    assert_eq!(
+        events
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["provisional", "invalidated", "final"]
+    );
+    assert_eq!(events[1].1["phase"], "INVALIDATED");
+    assert_eq!(events[1].1["authority"], "NONE");
+    assert_eq!(events[1].1["reason"], "CORE_TERMINAL_RESULT_NOT_COMMIT");
+    assert_eq!(events[2].1["result"]["lifecycle"], "SUSPEND");
+    assert!(events[2].1["result"]["content_plan"].is_null());
+
+    let cancel = minidora_domain::RequestEnvelope::new(case, "stream-cancel", actor, "キャンセル");
+    let (status, _, body) = http_stream(address, token, &serde_json::to_vec(&cancel).unwrap());
+    assert_eq!(status, 200);
+    let events = sse_events(&body);
+    assert_eq!(
+        events
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["provisional", "invalidated", "final"]
+    );
+    assert_eq!(events[2].1["result"]["lifecycle"], "CANCEL");
 }
 
 #[test]

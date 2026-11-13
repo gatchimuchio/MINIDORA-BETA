@@ -81,6 +81,16 @@ def main() -> None:
             "loopback_browser_assets_are_fixed_and_security_headered",
             "--locked",
         ],
+        [
+            cargo,
+            "test",
+            "-p",
+            "minidora-cli",
+            "--test",
+            "normal_route",
+            "http_streaming_separates_provisional_invalidation_and_final_core_results",
+            "--locked",
+        ],
         [cargo, "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"],
         [cargo, "build", "--workspace", "--locked"],
     ]
@@ -235,6 +245,7 @@ def main() -> None:
                 page.locator(".record-details summary").click()
                 result = json.loads(page.locator("#record-json").inner_text())
                 displayed_dependencies = page.locator("#dependency-list li").all_inner_texts()
+                displayed_stream_events = page.locator("#stream-events li").all_inner_texts()
 
                 if result.get("lifecycle") != "COMMIT" or result.get("guarantee") != "HYPOTHESIS":
                     raise AssertionError("browser did not render the committed HYPOTHESIS profile")
@@ -245,6 +256,11 @@ def main() -> None:
                     raise AssertionError("browser profile text lost a claim or its disclaimer")
                 if displayed_dependencies != result.get("dependencies"):
                     raise AssertionError("browser dependency list differs from the Core result")
+                if displayed_stream_events != [
+                    "暫定受付 · 回答内容はまだありません",
+                    "最終結果 · COMMIT",
+                ]:
+                    raise AssertionError(f"unexpected browser stream event order: {displayed_stream_events}")
                 if not {rule["dependencies"][0], premise["dependencies"][0]}.issubset(
                     set(result.get("dependencies", []))
                 ):
@@ -286,6 +302,8 @@ def main() -> None:
                         "text_sha256": digest(result["text"].encode("utf-8")),
                         "dependencies": result["dependencies"],
                         "dependency_list_rendered_exactly": True,
+                        "stream_event_sequence": ["provisional", "final"],
+                        "provisional_content_adopted": False,
                         "security_headers": sorted(
                             key
                             for key in [
@@ -305,12 +323,19 @@ def main() -> None:
                 expect(page.locator("#result-state")).to_have_text("CANCEL", timeout=15_000)
                 page.locator(".record-details summary").click()
                 cancellation = json.loads(page.locator("#record-json").inner_text())
+                cancel_stream_events = page.locator("#stream-events li").all_inner_texts()
                 if cancellation.get("lifecycle") != "CANCEL":
                     raise AssertionError("the browser did not record a Core cancellation result")
                 if "既発生・未確定の作用は消去せず保持" not in page.locator(
                     "#answer-text"
                 ).inner_text():
                     raise AssertionError("the browser did not disclose that cancellation is not undo")
+                if [text.split(" · ")[-1] for text in cancel_stream_events] != [
+                    "回答内容はまだありません",
+                    "Coreの最終結果を待っています",
+                    "CANCEL",
+                ]:
+                    raise AssertionError(f"unexpected cancellation event sequence: {cancel_stream_events}")
 
                 inspected = subprocess.run(
                     [
@@ -348,6 +373,43 @@ def main() -> None:
                         "reason": cancellation["reason"],
                         "previous_profile_result_retained": result["id"] in revision["prior_results"],
                         "past_effects_reversed": False,
+                        "stream_event_sequence": ["provisional", "invalidated", "final"],
+                    }
+                )
+
+                missing_page = browser.new_page()
+                missing_page.goto(base_url + "/", wait_until="networkidle", timeout=15_000)
+                missing_page.locator("#actor-id").fill(actor)
+                missing_page.locator("#case-id").fill("profile-browser-missing-case")
+                missing_page.locator("#api-token").fill(local_token)
+                missing_page.locator("#request-text").fill(
+                    "タクについて保存されている情報をもとに短い紹介文を書いて"
+                )
+                missing_page.locator("#submit-button").click()
+                expect(missing_page.locator("#result-state")).to_have_text("SUSPEND", timeout=15_000)
+                missing_page.locator(".record-details summary").click()
+                missing = json.loads(missing_page.locator("#record-json").inner_text())
+                if missing.get("content_plan") is not None:
+                    raise AssertionError("unsupported profile request adopted provisional content")
+                missing_events = missing_page.locator("#stream-events li").all_inner_texts()
+                if [text.split(" · ")[-1] for text in missing_events] != [
+                    "回答内容はまだありません",
+                    "Coreの最終結果を待っています",
+                    "SUSPEND",
+                ]:
+                    raise AssertionError(f"unexpected missing-support event sequence: {missing_events}")
+                missing_page.locator("#api-token").fill("")
+                observations.append(
+                    {
+                        "operation": "chromium_browser_ui_missing_support",
+                        "actor": actor,
+                        "case": "profile-browser-missing-case",
+                        "input_id": missing["input_id"],
+                        "result_id": missing["id"],
+                        "lifecycle": missing["lifecycle"],
+                        "reason": missing["reason"],
+                        "content_plan_absent": missing.get("content_plan") is None,
+                        "stream_event_sequence": ["provisional", "invalidated", "final"],
                     }
                 )
 
@@ -430,7 +492,7 @@ def main() -> None:
         "audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
     ]
     evidence = {
-        "work_item": "BODY-3 BB-RENDER loopback browser UI consumer for a saved-relation profile",
+        "work_item": "BODY-3 BB-RENDER versioned stream and loopback browser consumer for a saved-relation profile",
         "stage": "BODY-3_EXECUTION",
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "base_commit": base_commit,
@@ -456,15 +518,17 @@ def main() -> None:
         "source_snapshot_sha256": snapshot(source_paths, rust_root),
         "test_and_tool_snapshot_sha256": snapshot(test_paths, rust_root),
         "documentation_snapshot_sha256": snapshot(documentation_paths, rust_root),
-        "execution_mode": "fresh local CLI producer processes -> 127.0.0.1-only authenticated Rust HTTP process -> Chromium Playwright form submission -> same Engine/Core result -> browser rendered result and dependency list; wrong-token request rejected; no external requests or data",
-        "previous_consumer_gap": "The browser rendered the Core profile but had not submitted the Core cancellation intent or checked that the previous result remained in case history.",
-        "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> authenticated POST /v1/execute -> same Engine/Core relation-profile producer -> browser renders HYPOTHESIS result and exact dependencies -> same actor/case Core CANCEL input -> prior profile retained in case history",
-        "scope": "Confirms one local Chromium browser profile submission, same-origin-only resource requests, security headers, exact displayed proof dependencies, a Core cancellation that preserves the prior profile result without undoing past effects, and a wrong-token 401. This does not establish streaming, undo, public deployment, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
+        "execution_mode": "fresh local CLI producer processes -> 127.0.0.1-only authenticated Rust HTTP process -> Chromium Playwright form submission over POST /v1/execute/stream -> flushed versioned provisional/invalidation/final SSE events -> same Engine/Core result -> rendered browser result; wrong-token request rejected; no external requests or data",
+        "previous_consumer_gap": "The browser API returned final JSON directly and had no versioned stream contract separating content-free provisional state, invalidation and the Core terminal result.",
+        "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> versioned minidora-stream/v1 POST /v1/execute/stream -> content-free provisional event -> same Engine/Core relation-profile producer -> invalidation event for non-COMMIT or final event with Core ResultRecord -> browser renders exact dependencies -> same actor/case Core CANCEL input -> prior profile retained in case history",
+        "scope": "Confirms local Chromium handling of provisional/final COMMIT events, provisional/invalidation/final SUSPEND and CANCEL events, exact dependency rendering, same-origin-only resources, security headers, prior result retention after cancellation and a wrong-token 401. The provisional event carries no answer content; the final event is the only semantic Core result. Client disconnect does not cancel synchronous Core execution, and case cancellation does not undo past effects. This does not establish reversible undo, public deployment, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
         "actual_input": {
             "actor": "profile-browser-owner",
             "case": "profile-browser-case",
             "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
             "request_sha256": digest("ココについて保存されている情報をもとに短い紹介文を書いて".encode("utf-8")),
+            "missing_support_request": "タクについて保存されている情報をもとに短い紹介文を書いて",
+            "case_cancel_request": "キャンセル",
             "browser": "Chromium headless via Playwright",
             "server_bind": "127.0.0.1 only; ephemeral port",
             "test_token": "generated randomly in process memory; not recorded or persisted",
@@ -487,7 +551,19 @@ def main() -> None:
                 for item in observations
                 if item["operation"] == "chromium_browser_ui_cancel_case"
             ),
+            "browser_missing_result_id": next(
+                item["result_id"]
+                for item in observations
+                if item["operation"] == "chromium_browser_ui_missing_support"
+            ),
+            "browser_event_sequences": {
+                item["operation"]: item["stream_event_sequence"]
+                for item in observations
+                if "stream_event_sequence" in item
+            },
             "wrong_token_rejected_with_401": True,
+            "wrong_stream_accept_rejected_with_406": True,
+            "stream_requires_text_event_stream_accept": True,
             "browser_requests_same_origin_only": True,
             "browser_console_errors": browser_errors,
             "browser_server_terminated": True,
@@ -496,9 +572,10 @@ def main() -> None:
             "screenshot": screenshot_record,
             "validation_commands": validation_commands,
             "full_workspace_runtime_suite": "NOT_RUN",
-            "streaming_public_deployment_and_broad_browser_matrix": "NOT_RUN",
+            "public_deployment_and_broad_browser_matrix": "NOT_RUN",
+            "reversible_undo_and_in_flight_cancellation": "UNIMPLEMENTED",
             "full_requirement_acceptance": "UNVERIFIED",
-            "next_consumer": "Provisional/final streaming and reversible undo remain unimplemented; broad browser acceptance and general B08 writing quality remain outside this scoped observation.",
+            "next_consumer": "Reversible undo, in-flight cancellation and broad browser acceptance remain unimplemented; general B08 writing quality remains outside this scoped observation.",
         },
         "observations": observations,
     }

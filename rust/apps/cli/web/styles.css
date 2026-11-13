@@ -247,6 +247,8 @@ button:disabled { cursor: wait; opacity: .65; }
 .result-state[data-state="SUSPEND"] { border-color: #ecd7a9; color: #8c641a; background: #fff8e8; }
 .result-state[data-state="REJECT"], .result-state[data-state="FAIL"] { border-color: #e8c5c0; color: var(--danger); background: #fff1ef; }
 
+.stream-events { display: grid; gap: 4px; margin: -5px 0 12px; padding: 10px 13px 10px 27px; border-radius: 7px; color: #5f7075; background: #f4f8f7; font-size: 10px; line-height: 1.45; }
+.stream-events li::marker { color: var(--teal); font-weight: 700; }
 .result-body { min-height: 435px; border-top: 1px solid #edf0ef; }
 .empty-state { max-width: 290px; margin: 97px auto 0; text-align: center; }
 .empty-glyph { color: var(--gold); font-size: 30px; line-height: 1; }

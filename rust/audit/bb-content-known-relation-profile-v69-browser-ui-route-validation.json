@@ -1,8 +1,8 @@
 {
-  "work_item": "BODY-3 BB-RENDER loopback browser UI consumer for a saved-relation profile",
+  "work_item": "BODY-3 BB-RENDER versioned stream and loopback browser consumer for a saved-relation profile",
   "stage": "BODY-3_EXECUTION",
-  "recorded_at": "2026-11-13T10:03:50.200247+00:00",
-  "base_commit": "3155560801303f674fd921676b61fc2896ef505e",
+  "recorded_at": "2026-11-13T10:14:22.380354+00:00",
+  "base_commit": "799f219a015fd46890816edc84f0129835c227db",
   "changed_paths": [
     "rust/README.md",
     "rust/apps/cli/src/main.rs",
@@ -70,48 +70,70 @@
       }
     ]
   },
-  "binary_sha256": "b350ef4660db39a79989b15e177df28a90eed7ae47013d7f6c9ec46e815f0789",
+  "binary_sha256": "5ad5ffa13e07dd49705b030b331cf174e566eb36c615f4ec48135f5970301238",
   "source_snapshot_sha256": {
-    "rust/apps/cli/src/main.rs": "5e45170835f09bdbf8f8e6961650f5003cdccd7268da122890be7b560bab0ec0",
-    "rust/apps/cli/web/index.html": "7bc2b793713f3526ef673f2232c56c6f26baa2103ca771d63e3dd4dc562c7b7f",
-    "rust/apps/cli/web/app.js": "5cdac09e599fcde492a4dcae50dcc59a32919da3bcf6621d2be9d1f336f1dcb3",
-    "rust/apps/cli/web/styles.css": "7e0aec0dc55d0900a87221f90df5e2fad81195fff2f8f4067ddbef426fbebd13",
+    "rust/apps/cli/src/main.rs": "0f60366cabcbc2293ab38fa8cf359b1f1b0dec91bbcd4739ef8bddf92efd9ebc",
+    "rust/apps/cli/web/index.html": "4185a756db074e25bc3fc58d251e454792aa9fdae88f09d3e8cfd51f0ebb71a5",
+    "rust/apps/cli/web/app.js": "72c93bf5bf47afad7284cbd98508ff5a35f19e4c735d24723b74ade2ef6e0b5e",
+    "rust/apps/cli/web/styles.css": "87c55e332531981ee49c91c124a18a71e1af295bc8c3c673eea2ce578528f9e6",
     "rust/apps/cli/web/favicon.svg": "5b89fa9226600709256863d39eac74e83997151cf695876958d69bed01acdda5"
   },
   "test_and_tool_snapshot_sha256": {
-    "rust/apps/cli/tests/normal_route.rs": "2c2977e49c18acf29b069562ee79706e62599381fb5c852d1d1e44866276500d",
-    "rust/tools/known_relation_profile_browser_route_test.py": "f6004b565e09dbfa83b30a274e04a1e045f39e61223941caf711cba506a3a852"
+    "rust/apps/cli/tests/normal_route.rs": "a610d610127b2c31a7e1c370656720e61aaf9cde6c92c2aa87bbafc714821b00",
+    "rust/tools/known_relation_profile_browser_route_test.py": "77c1056ea1bbe7286950610fe9639cf8c16121a7f5b7b9190eb3a70afa4a3042"
   },
   "documentation_snapshot_sha256": {
-    "rust/README.md": "ab0a6c7548ddf763b6fc2662a88578dd2ec2efe5d1d417c78447ac5b60db0031",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "f7e03d95315d652e5a41caa72261d7f04f470fe63fb75a82e3738a2940cafc2a",
-    "rust/audit/requirements.tsv": "36cae9b29e8fd947e2454307c531ba059b7750744bb8ce630325a64f82f76975",
+    "rust/README.md": "7c4bbcf5151761cc13ceaa373978612972c010c7c9580283f673b50138e5ccb5",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "ea30623640978cdde550fe005b9ec8390e7b75523d02008656f6e3ad10b27ff9",
+    "rust/audit/requirements.tsv": "abc535a14e5a25de0e45c6c1ca5ce1dc2e8f87a1e324ffc27bf33ecadb1d5648",
     "rust/docs/IMPLEMENTATION_CHOICES.md": "33eba1505e6a43667b9c112cc9e3c39906742e0bd88a0151a560a4bdcfc7517e",
     "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf"
   },
-  "execution_mode": "fresh local CLI producer processes -> 127.0.0.1-only authenticated Rust HTTP process -> Chromium Playwright form submission -> same Engine/Core result -> browser rendered result and dependency list; wrong-token request rejected; no external requests or data",
-  "previous_consumer_gap": "The browser rendered the Core profile but had not submitted the Core cancellation intent or checked that the previous result remained in case history.",
-  "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> authenticated POST /v1/execute -> same Engine/Core relation-profile producer -> browser renders HYPOTHESIS result and exact dependencies -> same actor/case Core CANCEL input -> prior profile retained in case history",
-  "scope": "Confirms one local Chromium browser profile submission, same-origin-only resource requests, security headers, exact displayed proof dependencies, a Core cancellation that preserves the prior profile result without undoing past effects, and a wrong-token 401. This does not establish streaming, undo, public deployment, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
+  "execution_mode": "fresh local CLI producer processes -> 127.0.0.1-only authenticated Rust HTTP process -> Chromium Playwright form submission over POST /v1/execute/stream -> flushed versioned provisional/invalidation/final SSE events -> same Engine/Core result -> rendered browser result; wrong-token request rejected; no external requests or data",
+  "previous_consumer_gap": "The browser API returned final JSON directly and had no versioned stream contract separating content-free provisional state, invalidation and the Core terminal result.",
+  "producer_consumer": "CLI-saved actor premise/rule -> same-origin static loopback browser UI -> versioned minidora-stream/v1 POST /v1/execute/stream -> content-free provisional event -> same Engine/Core relation-profile producer -> invalidation event for non-COMMIT or final event with Core ResultRecord -> browser renders exact dependencies -> same actor/case Core CANCEL input -> prior profile retained in case history",
+  "scope": "Confirms local Chromium handling of provisional/final COMMIT events, provisional/invalidation/final SUSPEND and CANCEL events, exact dependency rendering, same-origin-only resources, security headers, prior result retention after cancellation and a wrong-token 401. The provisional event carries no answer content; the final event is the only semantic Core result. Client disconnect does not cancel synchronous Core execution, and case cancellation does not undo past effects. This does not establish reversible undo, public deployment, broad browser compatibility, all UI workflows, full workspace runtime regressions or complete requirement acceptance.",
   "actual_input": {
     "actor": "profile-browser-owner",
     "case": "profile-browser-case",
     "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
     "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+    "missing_support_request": "タクについて保存されている情報をもとに短い紹介文を書いて",
+    "case_cancel_request": "キャンセル",
     "browser": "Chromium headless via Playwright",
     "server_bind": "127.0.0.1 only; ephemeral port",
     "test_token": "generated randomly in process memory; not recorded or persisted"
   },
   "summary": {
-    "fresh_client_observation_count": 5,
+    "fresh_client_observation_count": 6,
     "lifecycle_counts": {
       "COMMIT": 3,
       "CANCEL": 1,
+      "SUSPEND": 1,
       "HTTP_ERROR": 1
     },
-    "browser_result_id": "63896f80ef6e28a5d2634a4bec2c9516a15b4b4d47cff323cb38d0f09148b4d9",
-    "browser_cancel_result_id": "177869a087d47966f8380b047d5ed03575db71e3ec34baed799e9118312b5606",
+    "browser_result_id": "6de8c4f7e518f1111746fcee08cb2aeb0b289131090f83103fd439be8d60a9dd",
+    "browser_cancel_result_id": "5915c1589fa9b022d73e32cfed82acf1e714f158ab4126a073094a8885ef38ff",
+    "browser_missing_result_id": "5f996086a99be12aa5a39dfb850c2056540c0cfcddbfff5d1d2c7c1d3900b49f",
+    "browser_event_sequences": {
+      "chromium_browser_ui_request": [
+        "provisional",
+        "final"
+      ],
+      "chromium_browser_ui_cancel_case": [
+        "provisional",
+        "invalidated",
+        "final"
+      ],
+      "chromium_browser_ui_missing_support": [
+        "provisional",
+        "invalidated",
+        "final"
+      ]
+    },
     "wrong_token_rejected_with_401": true,
+    "wrong_stream_accept_rejected_with_406": true,
+    "stream_requires_text_event_stream_accept": true,
     "browser_requests_same_origin_only": true,
     "browser_console_errors": [],
     "browser_server_terminated": true,
@@ -119,8 +141,8 @@
     "external_network_or_messages": "NOT_USED",
     "screenshot": {
       "path": "rust/audit/bb-content-known-relation-profile-v69-browser-ui.png",
-      "bytes": 262479,
-      "sha256": "cc9b33a40d3be46f28b7d0a6526500e1b19ca1a3117cc2ca0a5590d83d6f74a7",
+      "bytes": 268410,
+      "sha256": "66b02b6ba03bd3f2a66b458d30367567ee33b7c28d7915290333b3a5cecd8352",
       "viewport": {
         "width": 1440,
         "height": 1100
@@ -140,6 +162,10 @@
         "exit_code": 0
       },
       {
+        "command": "/workspace/.cargo/bin/cargo test -p minidora-cli --test normal_route http_streaming_separates_provisional_invalidation_and_final_core_results --locked",
+        "exit_code": 0
+      },
+      {
         "command": "/workspace/.cargo/bin/cargo clippy --workspace --all-targets --locked -- -D warnings",
         "exit_code": 0
       },
@@ -149,9 +175,10 @@
       }
     ],
     "full_workspace_runtime_suite": "NOT_RUN",
-    "streaming_public_deployment_and_broad_browser_matrix": "NOT_RUN",
+    "public_deployment_and_broad_browser_matrix": "NOT_RUN",
+    "reversible_undo_and_in_flight_cancellation": "UNIMPLEMENTED",
     "full_requirement_acceptance": "UNVERIFIED",
-    "next_consumer": "Provisional/final streaming and reversible undo remain unimplemented; broad browser acceptance and general B08 writing quality remain outside this scoped observation."
+    "next_consumer": "Reversible undo, in-flight cancellation and broad browser acceptance remain unimplemented; general B08 writing quality remains outside this scoped observation."
   },
   "observations": [
     {
@@ -191,8 +218,8 @@
       "http_status": 200,
       "lifecycle": "COMMIT",
       "guarantee": "HYPOTHESIS",
-      "input_id": "browser-8e2fddb6-a7d1-4d66-8d41-49097b5281e9",
-      "result_id": "63896f80ef6e28a5d2634a4bec2c9516a15b4b4d47cff323cb38d0f09148b4d9",
+      "input_id": "browser-f8b783c4-e499-4d89-9d1f-dfae485b5fc1",
+      "result_id": "6de8c4f7e518f1111746fcee08cb2aeb0b289131090f83103fd439be8d60a9dd",
       "text": "「ココ」の紹介文案です。\n会話に記録された内容から、次の紹介文案をまとめました。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:96611c62abda1a3a2ab892fe03ce941df548c3156e2eaee73f1438b030e7e9e0; 依存ID: fact:15fe8b49307f384a609495d921e20ae0da106fd522ffa2c54e05c1d5cd2ff559, rule:8d160b9250be8f60bc534cd252e40d90be48f8e7181bc69d824b04ae750b75ea）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:15fe8b49307f384a609495d921e20ae0da106fd522ffa2c54e05c1d5cd2ff559）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
       "text_sha256": "68c880626fa04989ccc35cbf8db99680dd518bac75512f79f81da1b175a147b3",
       "dependencies": [
@@ -201,6 +228,11 @@
         "rule:8d160b9250be8f60bc534cd252e40d90be48f8e7181bc69d824b04ae750b75ea"
       ],
       "dependency_list_rendered_exactly": true,
+      "stream_event_sequence": [
+        "provisional",
+        "final"
+      ],
+      "provisional_content_adopted": false,
       "security_headers": [
         "content-security-policy",
         "permissions-policy",
@@ -213,12 +245,32 @@
       "operation": "chromium_browser_ui_cancel_case",
       "actor": "profile-browser-owner",
       "case": "profile-browser-case",
-      "input_id": "browser-d430b9f0-f50d-4cc8-95c0-891a020d9245",
-      "result_id": "177869a087d47966f8380b047d5ed03575db71e3ec34baed799e9118312b5606",
+      "input_id": "browser-a9e0e1c5-51db-4ce4-914b-51dcd06db0e7",
+      "result_id": "5915c1589fa9b022d73e32cfed82acf1e714f158ab4126a073094a8885ef38ff",
       "lifecycle": "CANCEL",
       "reason": "AUTHORIZED_CANCEL: 取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
       "previous_profile_result_retained": true,
-      "past_effects_reversed": false
+      "past_effects_reversed": false,
+      "stream_event_sequence": [
+        "provisional",
+        "invalidated",
+        "final"
+      ]
+    },
+    {
+      "operation": "chromium_browser_ui_missing_support",
+      "actor": "profile-browser-owner",
+      "case": "profile-browser-missing-case",
+      "input_id": "browser-99be9584-8315-4d23-a7e3-eff143dfc6c9",
+      "result_id": "5f996086a99be12aa5a39dfb850c2056540c0cfcddbfff5d1d2c7c1d3900b49f",
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: この対象について紹介文の根拠にできる有効な保存記録がありません。",
+      "content_plan_absent": true,
+      "stream_event_sequence": [
+        "provisional",
+        "invalidated",
+        "final"
+      ]
     },
     {
       "operation": "chromium_browser_ui_wrong_token",

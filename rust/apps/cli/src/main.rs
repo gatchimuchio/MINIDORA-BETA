@@ -61,10 +61,12 @@ all recorded effects are confirmed, failed or cancelled.
 
 Serve binds only a loopback IP and requires MINIDORA_API_TOKEN (at least 32 bytes).
 GET / serves a small same-origin browser workspace; GET /health reports the
-schema. POST /v1/execute requires Authorization: Bearer TOKEN and a full
-RequestEnvelope JSON object. The configured server actor is the only
-authenticated identity. Request permissions must be subsets of --allow-* grants;
-budgets are capped to server limits. HTTP is local plaintext only.
+schema. POST /v1/execute and POST /v1/execute/stream require Authorization:
+Bearer TOKEN and a full RequestEnvelope JSON object. The stream route requires
+Accept: text/event-stream and emits versioned provisional/invalidation/final
+events; only the final Core result carries answer content. The configured server
+actor is the only authenticated identity. Request permissions must be subsets of
+--allow-* grants; budgets are capped to server limits. HTTP is local plaintext only.
 
 Exit: COMMIT 0; SUSPEND 2; REJECT 3; FAIL 4; CANCEL 5; frontend error 1.
 "#;
@@ -466,6 +468,8 @@ impl Read for AdmissionReader<'_> {
 #[derive(Debug)]
 struct HttpError(u16, &'static str);
 
+const STREAM_API_VERSION: &str = "minidora-stream/v1";
+
 fn static_asset(target: &str) -> Option<(&'static str, &'static [u8])> {
     match target {
         "/" => Some((
@@ -612,7 +616,12 @@ fn validate_http(request: &HttpRequest, address: SocketAddr, token: &str) -> Res
     if !constant_time_equal(supplied.as_bytes(), token.as_bytes()) {
         return Err(HttpError(401, "authentication required"));
     }
-    if request.method != "POST" || request.target != "/v1/execute" {
+    if request.method != "POST"
+        || !matches!(
+            request.target.as_str(),
+            "/v1/execute" | "/v1/execute/stream"
+        )
+    {
         return Err(HttpError(404, "route not found"));
     }
     if request.headers.get("content-type").map(String::as_str) != Some("application/json") {
@@ -620,6 +629,11 @@ fn validate_http(request: &HttpRequest, address: SocketAddr, token: &str) -> Res
     }
     if !request.headers.contains_key("content-length") {
         return Err(HttpError(411, "Content-Length is required"));
+    }
+    if request.target == "/v1/execute/stream"
+        && request.headers.get("accept").map(String::as_str) != Some("text/event-stream")
+    {
+        return Err(HttpError(406, "Accept must be text/event-stream"));
     }
     Ok(())
 }
@@ -682,6 +696,7 @@ fn send_http(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()>
         411 => "Length Required",
         413 => "Content Too Large",
         415 => "Unsupported Media Type",
+        406 => "Not Acceptable",
         431 => "Request Header Fields Too Large",
         _ => "Internal Server Error",
     };
@@ -702,6 +717,108 @@ fn send_static_http(stream: &mut TcpStream, content_type: &str, body: &[u8]) -> 
     )?;
     stream.write_all(body)?;
     stream.flush()
+}
+
+fn send_sse_headers(stream: &mut TcpStream) -> io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n\r\n"
+    )?;
+    stream.flush()
+}
+
+fn send_sse_event(
+    stream: &mut TcpStream,
+    event: &'static str,
+    payload: &serde_json::Value,
+) -> io::Result<()> {
+    let data = serde_json::to_string(payload)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    write!(stream, "event: {event}\ndata: {data}\n\n")?;
+    stream.flush()
+}
+
+fn handle_sse(
+    engine: &mut Engine,
+    actor: &str,
+    request: RequestEnvelope,
+    stream: &mut TcpStream,
+) -> Result<(), HttpError> {
+    let input_id = request.input_id.clone();
+    let stream_id = format!("{}:{input_id}", request.case_id);
+    send_sse_headers(stream).map_err(|_| HttpError(500, "cannot write stream headers"))?;
+    send_sse_event(
+        stream,
+        "provisional",
+        &serde_json::json!({
+            "api_version": STREAM_API_VERSION,
+            "stream_id": stream_id,
+            "input_id": input_id,
+            "phase": "PROVISIONAL",
+            "authority": "NONE",
+            "content": null
+        }),
+    )
+    .map_err(|_| HttpError(500, "cannot write provisional stream event"))?;
+
+    match engine.execute(actor, request) {
+        Ok(result) => {
+            if result.lifecycle != Lifecycle::Commit {
+                send_sse_event(
+                    stream,
+                    "invalidated",
+                    &serde_json::json!({
+                        "api_version": STREAM_API_VERSION,
+                        "stream_id": stream_id,
+                        "phase": "INVALIDATED",
+                        "authority": "NONE",
+                        "reason": "CORE_TERMINAL_RESULT_NOT_COMMIT"
+                    }),
+                )
+                .map_err(|_| HttpError(500, "cannot write invalidation stream event"))?;
+            }
+            let result = serde_json::to_value(result)
+                .map_err(|_| HttpError(500, "cannot encode stream result"))?;
+            send_sse_event(
+                stream,
+                "final",
+                &serde_json::json!({
+                    "api_version": STREAM_API_VERSION,
+                    "stream_id": stream_id,
+                    "phase": "FINAL",
+                    "result": result
+                }),
+            )
+            .map_err(|_| HttpError(500, "cannot write final stream event"))?;
+        }
+        Err(_) => {
+            send_sse_event(
+                stream,
+                "invalidated",
+                &serde_json::json!({
+                    "api_version": STREAM_API_VERSION,
+                    "stream_id": stream_id,
+                    "phase": "INVALIDATED",
+                    "authority": "NONE",
+                    "reason": "CORE_EXECUTION_ERROR"
+                }),
+            )
+            .map_err(|_| HttpError(500, "cannot write invalidation stream event"))?;
+            send_sse_event(
+                stream,
+                "error",
+                &serde_json::json!({
+                    "api_version": STREAM_API_VERSION,
+                    "stream_id": stream_id,
+                    "phase": "ERROR",
+                    "status": 409,
+                    "error": "engine rejected request; inspect durable state with the trusted local CLI"
+                }),
+            )
+            .map_err(|_| HttpError(500, "cannot write stream error event"))?;
+        }
+    }
+    Ok(())
 }
 
 fn handle_http(
@@ -729,6 +846,12 @@ fn handle_http(
         send_static_http(stream, content_type, body)
             .map_err(|_| HttpError(500, "cannot write response"))?;
         return Ok(());
+    }
+    if request.method == "POST" && request.target == "/v1/execute/stream" {
+        let envelope = serde_json::from_slice::<RequestEnvelope>(&request.body)
+            .map_err(|_| HttpError(400, "invalid RequestEnvelope JSON"))?;
+        let envelope = constrain_request(envelope, options)?;
+        return handle_sse(engine, &options.actor, envelope, stream);
     }
     let body = if request.method == "GET" {
         serde_json::to_vec(&serde_json::json!({ "status": "ok", "schema_version": SCHEMA_VERSION }))
