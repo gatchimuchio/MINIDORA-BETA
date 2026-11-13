@@ -99,7 +99,7 @@ def main() -> None:
             "rule-origin",
             "japanese-owner",
             "two-premise-rule",
-            "もし[scope=biology]Xは鳥かつXは羽毛持ちなら[scope=biology]Xは温血動物",
+            "もしXは鳥かつ青ならXは動物",
         )
         rule_id = rule["dependencies"][0]
         require(rule["lifecycle"] == "COMMIT", "Japanese two-premise rule was not committed")
@@ -108,13 +108,13 @@ def main() -> None:
             "new-subject",
             "japanese-owner",
             "osprey-bird",
-            "[scope=biology]ミサゴは鳥",
+            "ミサゴは鳥",
         )
         missing = run(
             "new-subject",
             "japanese-owner",
             "one-premise-question",
-            "[scope=biology]ミサゴは温血動物ですか",
+            "ミサゴは動物ですか",
             expected_exit=2,
         )
         require(missing["lifecycle"] == "SUSPEND", "single antecedent was treated as a join")
@@ -123,49 +123,49 @@ def main() -> None:
             "new-subject",
             "japanese-owner",
             "wrong-scope-question",
-            "[scope=ecology]ミサゴは温血動物ですか",
+            "[scope=ecology]ミサゴは動物ですか",
             expected_exit=2,
         )
         require("MISSING_PREMISES" in str(wrong_scope["reason"]), "wrong scope used rule evidence")
 
-        feathered = run(
+        blue = run(
             "new-subject",
             "japanese-owner",
-            "osprey-feathered",
-            "[scope=biology]ミサゴは羽毛持ち",
+            "osprey-blue",
+            "ミサゴは青",
         )
         supported = run(
             "new-subject",
             "japanese-owner",
-            "osprey-warm-blooded",
-            "[scope=biology]ミサゴは温血動物ですか",
+            "osprey-animal",
+            "ミサゴは動物ですか",
         )
         require(supported["lifecycle"] == "COMMIT", "joined Japanese proof did not commit")
         require(supported["guarantee"] == "DERIVED", "joined proof lost derived guarantee")
-        for identity in (rule_id, bird["dependencies"][0], feathered["dependencies"][0]):
+        for identity in (rule_id, bird["dependencies"][0], blue["dependencies"][0]):
             require(identity in supported["dependencies"], f"joined proof omits {identity}")
 
         why = run(
             "new-subject",
             "japanese-owner",
             "osprey-why",
-            "どうして[scope=biology]ミサゴは温血動物ですか",
+            "どうしてミサゴは動物ですか",
         )
         require("ミサゴは鳥である" in why["text"], "AskWhy omitted its first premise")
-        require("ミサゴは羽毛持ちである" in why["text"], "AskWhy omitted its second premise")
+        require("ミサゴは青である" in why["text"], "AskWhy omitted its second premise")
         require("かつ" in why["text"], "AskWhy omitted the conjunctive rule structure")
 
         counterexample = run(
             "new-subject",
             "japanese-owner",
             "osprey-not-bird",
-            "[scope=biology]ミサゴは鳥ではない",
+            "ミサゴは鳥ではない",
         )
         contested = run(
             "new-subject",
             "japanese-owner",
             "osprey-contested-result",
-            "[scope=biology]ミサゴは温血動物ですか",
+            "ミサゴは動物ですか",
             expected_exit=2,
         )
         require(contested["lifecycle"] == "SUSPEND", "contradictory antecedent drove a conclusion")
@@ -179,28 +179,28 @@ def main() -> None:
             "new-subject",
             "japanese-owner",
             "osprey-restored-result",
-            "[scope=biology]ミサゴは温血動物ですか",
+            "ミサゴは動物ですか",
         )
         require(restored["lifecycle"] == "COMMIT", "valid proof did not return after retraction")
         run(
             "new-subject",
             "japanese-owner",
             "invalidate-second-premise",
-            f"{feathered['dependencies'][0]}を無効化して",
+            f"{blue['dependencies'][0]}を無効化して",
         )
         invalidated = run(
             "new-subject",
             "japanese-owner",
             "osprey-after-invalidation",
-            "[scope=biology]ミサゴは温血動物ですか",
+            "ミサゴは動物ですか",
             expected_exit=2,
         )
         require("MISSING_PREMISES" in str(invalidated["reason"]), "invalid proof remained usable")
         replayed = run(
             "new-subject",
             "japanese-owner",
-            "osprey-warm-blooded",
-            "[scope=biology]ミサゴは温血動物ですか",
+            "osprey-animal",
+            "ミサゴは動物ですか",
         )
         require(replayed["text"] == supported["text"], "historical committed answer changed")
         require(replayed["dependencies"] == supported["dependencies"], "historical lineage changed")
@@ -308,7 +308,7 @@ def main() -> None:
         require(too_many["lifecycle"] == "SUSPEND", "three-premise rule was accepted")
 
         report = {
-            "work_item": "BODY-1 BB-LANG ordinary two-premise relation rule",
+            "work_item": "BODY-1 BB-LANG inherited-subject conjunctive rule through ordinary CLI",
             "stage": "BODY-1_EXECUTION",
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "base_commit": command_output(["git", "-C", str(repository_root), "rev-parse", "HEAD"]),
@@ -321,9 +321,15 @@ def main() -> None:
                 "cargo": command_output([cargo, "--version"]),
                 "platform": platform.platform(),
             },
-            "pre_change_probe": {
-                "binary_sha256": "NOT_CAPTURED_BEFORE_SOURCE_EDIT",
-                "reason": "No pre-edit executable hash or route observation was captured.",
+            "implementation_change": "No parser behavior changed in this batch. The v60 bounded parser already accepted the shorthand form; this batch aligns stale negative expectations with that behavior and records its full producer-consumer route.",
+            "pre_correction_observation": {
+                "result": "The focused negative normal-CLI test observed COMMIT/USER_PREMISE and a two-premise rule for the exact input before the expectation was corrected.",
+                "binary_sha256": "NOT_CAPTURED_DURING_THAT_OBSERVATION",
+            },
+            "observed_binary_sha256": hashlib.sha256(arguments.binary.read_bytes()).hexdigest(),
+            "source_behavior_origin": {
+                "commit": "52406f55e00bc3e747f43a5bd7abb64233c6da10",
+                "contract": "A shorthand second Japanese/English proposition inherits the first proposition's subject and scope.",
             },
             "source_snapshot_sha256": hashes(
                 [
@@ -344,42 +350,43 @@ def main() -> None:
             "documentation_snapshot_sha256": {
                 "docs/redesign/01_SYSTEM_SPECIFICATION.md": hashlib.sha256(
                     (repository_root / "docs/redesign/01_SYSTEM_SPECIFICATION.md").read_bytes()
-                ).hexdigest()
+                ).hexdigest(),
+                "rust/README.md": hashlib.sha256(
+                    (rust_root / "README.md").read_bytes()
+                ).hexdigest(),
             },
-            "execution_mode": "fresh CLI process for every request; one temporary SQLite state; Japanese and English rule, premise, query, and AskWhy routes",
-            "scope": "Exactly two explicit same-subject, same-scope copular premises joined by Japanese かつ/且つ or English and; rule conclusions retain both premise lineages.",
+            "execution_mode": "fresh CLI process for every request; one temporary SQLite state; Japanese shorthand and English explicit rule, premise, query, and AskWhy routes",
+            "scope": "Exactly two same-subject, same-scope copular propositions joined by Japanese かつ/且つ or English and. A bounded shorthand second proposition inherits the first subject and scope; the Japanese route uses `もしXは鳥かつ青ならXは動物`. This is a user-premise rule, not an externally verified fact.",
             "producer_consumer": (
-                "ordinary conditional rule -> sealed AddConjunctiveRule -> Core saves both antecedents -> "
+                "ordinary shorthand conditional rule -> sealed AddConjunctiveRule with Xは鳥 and Xは青 -> Core saves both antecedents -> "
                 "two facts for a new subject join through ordinary relation query -> the shared-variable form "
                 "A(x) AND B(x,y) also binds a new conclusion subject -> answer and AskWhy preserve both premise IDs, rule ID, and history"
             ),
             "rule_id": rule_id,
             "english_rule_id": english_rule["dependencies"][0],
             "observations": observations,
+            "terminal_state_counts": {
+                state: sum(1 for observation in observations if observation["lifecycle"] == state)
+                for state in sorted({observation["lifecycle"] for observation in observations})
+            },
             "outcome": "PASS",
             "commands": [
                 "cargo fmt --all -- --check",
-                "cargo test -p minidora-engine conjunctive_rule --locked",
-                "cargo test -p minidora-engine input::tests:: --locked",
-                "cargo test -p minidora-engine relations::tests:: --locked",
+                "cargo test -p minidora-engine --lib --locked",
                 "cargo test -p minidora-cli --test normal_route conjunctive_rule_joins_two_new_subject_premises_and_explains_both --locked",
-                "cargo test -p minidora-cli --test normal_route conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract --locked",
-                "cargo test -p minidora-cli --test normal_route ordinary_question_lists_active_direct_premises_with_provenance_after_restart --locked",
-                "cargo check --workspace --all-targets --locked",
-                "cargo clippy --workspace --all-targets --locked -- -D warnings",
-                "cargo build --workspace --locked",
-                "python3 tools/conjunctive_relation_rule_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-conjunctive-relation-rule-v60-route-validation.json",
+                "cargo test -p minidora-cli --test normal_route compound_conditions_and_extra_deliveries_are_not_partially_committed --locked",
+                "cargo build -p minidora-cli --bin minidora-rust --locked",
+                "python3 tools/conjunctive_relation_rule_route_test.py --binary target/debug/minidora-rust --evidence-output audit/bb-lang-conjunctive-relation-rule-shorthand-v64-route-validation.json",
             ],
             "not_run": [
                 "full workspace runtime suite",
-                "multi-premise proof shortcut composition (query closure retains the complete proof instead)",
                 "unbounded open-domain language, causal explanation, and full A02/A04/A05/A09/B01/A15 acceptance",
             ],
             "acceptance_boundary": (
                 "This is bounded two-premise rule application over explicit caller-provided facts and rules. It does not establish unrestricted "
                 "conjunction, open-domain reasoning, multi-premise proof shortcut composition, causal explanation, or full requirement acceptance."
             ),
-            "next_consumer": "Extend proof-composition shortcuts to preserve all premises and bound joins across more varied shared-variable shapes; broad open-domain Q&A and writing remain BUILD_GAP.",
+            "next_consumer": "Extend the ordinary BB-LANG path to first-seen Japanese Q&A outside this bounded copular relation grammar; broad A13/open-domain Q&A and writing remain BUILD_GAP.",
         }
         arguments.evidence_output.parent.mkdir(parents=True, exist_ok=True)
         arguments.evidence_output.write_text(

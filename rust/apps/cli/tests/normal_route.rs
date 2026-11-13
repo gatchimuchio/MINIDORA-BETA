@@ -2157,7 +2157,7 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
         &[
             "--input",
             "conjunctive-rule",
-            "If [scope=biology]X is a bird and X is feathered then [scope=biology]X is warm-blooded",
+            "If [scope=biology]X is a bird and feathered then [scope=biology]X is warm-blooded",
         ],
     ));
     let rule_id = rule["dependencies"][0].as_str().unwrap();
@@ -4132,7 +4132,7 @@ fn agreeing_examples_do_not_promote_a_universal_empirical_rule() {
 fn compound_conditions_and_extra_deliveries_are_not_partially_committed() {
     let scratch = Scratch::new();
     for text in [
-        "もしXは鳥かつ青ならXは動物",
+        "もしXは鳥または魚ならXは動物",
         "2+3を計算して送信して",
         "統計 [1,2] を計算しないで",
         "連立方程式 [[1]] = [2] を解いて送信して",

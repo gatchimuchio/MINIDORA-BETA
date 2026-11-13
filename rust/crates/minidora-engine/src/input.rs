@@ -1274,10 +1274,10 @@ fn conjunctive_relation_question_intent(text: &str) -> Result<Option<Intent>> {
     Ok(Some(Intent::AskConjunction { propositions }))
 }
 
-/// Parse a rule antecedent containing exactly two explicitly joined copular
-/// clauses. The bounded grammar requires one repeated subject and one scope;
-/// a shorthand second Japanese/English clause inherits the first clause's
-/// subject and scope.
+/// Parse a rule antecedent containing exactly two conjunctively joined
+/// copular propositions. The bounded grammar requires one subject and scope;
+/// a shorthand second Japanese/English proposition inherits both from the
+/// first proposition.
 fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
     let mut connectors: Vec<(usize, usize, bool)> = regex(r"(?i)\band\b")?
         .find_iter(text)
@@ -2401,7 +2401,7 @@ mod tests {
     }
 
     #[test]
-    fn conjunctive_relation_rules_keep_both_explicit_premises() {
+    fn conjunctive_relation_rules_keep_explicit_and_shorthand_premises() {
         for (text, first_object, second_object, conclusion_object) in [
             (
                 "もし[scope=biology]Xは鳥かつXは羽毛持ちなら[scope=biology]Xは温血動物",
@@ -2415,11 +2415,18 @@ mod tests {
                 "哺乳類",
                 "温血動物",
             ),
+            ("もしXは鳥かつ青ならXは動物", "鳥", "青", "動物"),
             (
                 "If [scope=biology]X is a bird and X is feathered then [scope=biology]X is warm-blooded",
                 "bird",
                 "feathered",
                 "warm-blooded",
+            ),
+            (
+                "If X is a bird and blue then X is an animal",
+                "bird",
+                "blue",
+                "animal",
             ),
             (
                 "If X is a bird and a mammal then X is warm-blooded",
@@ -3270,11 +3277,9 @@ mod symbolic_and_clause_tests {
     #[test]
     fn unsupported_clause_qualifiers_remain_unresolved() {
         for text in [
-            "もしXは鳥かつ青ならXは動物",
             "もしXは鳥または魚ならXは動物",
             "太郎と花子は鳥",
             "昨日は太郎は鳥",
-            "if X is a bird and blue then X is an animal",
             "太郎は鳥;花子は動物",
             "if X is a bird then X is an animal?",
             "もしXは鳥ならXは動物ですか",
