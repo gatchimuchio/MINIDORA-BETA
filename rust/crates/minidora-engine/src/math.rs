@@ -957,6 +957,43 @@ fn preview_text(value: &str, limit: usize) -> String {
     preview
 }
 
+fn preview_string_matrix(matrix: &[Vec<String>], max_rows: usize, max_columns: usize) -> String {
+    let mut preview = matrix
+        .iter()
+        .take(max_rows)
+        .map(|row| {
+            let mut cells = row
+                .iter()
+                .take(max_columns)
+                .map(|value| preview_text(value, 128))
+                .collect::<Vec<_>>();
+            if row.len() > max_columns {
+                cells.push(format!(
+                    "… {}列は保存レポートに保持",
+                    row.len() - max_columns
+                ));
+            }
+            format!("[{}]", cells.join(", "))
+        })
+        .collect::<Vec<_>>();
+    if matrix.len() > max_rows {
+        preview.push(format!(
+            "… {}行は保存レポートに保持",
+            matrix.len() - max_rows
+        ));
+    }
+    format!("[{}]", preview.join(", "))
+}
+
+fn preview_math_values(values: &[String]) -> String {
+    values
+        .iter()
+        .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+        .map(|value| preview_text(value, 128))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Recompute bounded native math reports from their retained operands before
 /// a later turn explains them. Large lists and expressions are abbreviated in
 /// the display; the complete exact report remains in the prior result.
@@ -1201,6 +1238,209 @@ pub(crate) fn previous_math_report_explanation(
         lines.push(format!("検証情報: {}", report.verification));
         return Ok(Some(lines));
     }
+    if let Some(report) = parse_previous_math_report::<LinearSolution>(
+        previous,
+        "original_coefficients",
+        &[
+            "status",
+            "variable_count",
+            "rank",
+            "original_coefficients",
+            "original_rhs",
+            "pivot_columns",
+            "free_columns",
+            "solution",
+            "particular",
+            "nullspace_basis",
+            "rref",
+            "row_transform",
+            "operations",
+            "contradiction",
+            "verification",
+        ],
+    )? {
+        let recomputed = solve_linear(
+            report.original_coefficients.clone(),
+            report.original_rhs.clone(),
+        )?;
+        verify_linear(&recomputed)?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        let mut lines = vec![
+            "前回の連立方程式を元の係数行列と右辺から再計算し、保存レポートと照合しました。".into(),
+            format!(
+                "係数行列 ({}行×{}変数): {}",
+                report.original_coefficients.len(),
+                report.variable_count,
+                preview_string_matrix(&report.original_coefficients, 16, 8)
+            ),
+            format!("右辺: [{}]", preview_math_values(&report.original_rhs)),
+            format!(
+                "状態: {:?}; rank: {}; pivot列: {:?}; free列: {:?}",
+                report.status, report.rank, report.pivot_columns, report.free_columns
+            ),
+        ];
+        if let Some(solution) = &report.solution {
+            lines.push(format!("一意解: [{}]", preview_math_values(solution)));
+        }
+        if let Some(particular) = &report.particular {
+            lines.push(format!("特解: [{}]", preview_math_values(particular)));
+        }
+        if !report.nullspace_basis.is_empty() {
+            lines.push(format!(
+                "零空間基底: {}",
+                preview_string_matrix(&report.nullspace_basis, 8, 8)
+            ));
+        }
+        if let Some(contradiction) = &report.contradiction {
+            let certificate = serde_json::to_string(contradiction)?;
+            lines.push(format!("矛盾証明書: {}", preview_text(&certificate, 2048)));
+        }
+        lines.push(format!(
+            "簡約行列のプレビュー: {}",
+            preview_string_matrix(&report.rref, 4, 9)
+        ));
+        lines.push(format!(
+            "元の行に対する変換係数プレビュー: {}",
+            preview_string_matrix(&report.row_transform, 4, 8)
+        ));
+        let operation_preview = serde_json::to_string(
+            &report
+                .operations
+                .iter()
+                .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+                .collect::<Vec<_>>(),
+        )?;
+        lines.push(format!(
+            "行基本変形 ({}件中最大{}件表示): {}",
+            report.operations.len(),
+            MAX_CONTEXT_EXPLANATION_ITEMS,
+            preview_text(&operation_preview, 4096)
+        ));
+        if report.operations.len() > MAX_CONTEXT_EXPLANATION_ITEMS {
+            lines.push(format!(
+                "残りの変形 {}件は保存レポートに保持されています。",
+                report.operations.len() - MAX_CONTEXT_EXPLANATION_ITEMS
+            ));
+        }
+        lines.push(format!("検証情報: {}", report.verification));
+        return Ok(Some(lines));
+    }
+    if let Some(report) = parse_previous_math_report::<QuadraticSolution>(
+        previous,
+        "root_kind",
+        &[
+            "equation_left",
+            "equation_right",
+            "variable",
+            "coefficients",
+            "discriminant",
+            "root_kind",
+            "real_roots",
+            "complex_roots",
+            "sum_of_roots",
+            "product_of_roots",
+            "operations",
+            "verification",
+        ],
+    )? {
+        let recomputed = solve_quadratic(&report.equation_left, &report.equation_right)?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        let roots = report
+            .real_roots
+            .iter()
+            .map(|root| {
+                format!(
+                    "{} ({}; multiplicity={})",
+                    preview_text(&root.exact_value, 512),
+                    root.representation,
+                    root.multiplicity
+                )
+            })
+            .collect::<Vec<_>>();
+        let complex_roots = report
+            .complex_roots
+            .iter()
+            .map(|root| preview_text(root, 512))
+            .collect::<Vec<_>>();
+        return Ok(Some(vec![
+            "前回の二次方程式を元の両辺から再計算し、保存レポートと照合しました。".into(),
+            format!(
+                "方程式: {} = {}",
+                preview_text(&report.equation_left, 512),
+                preview_text(&report.equation_right, 512)
+            ),
+            format!(
+                "係数 [a,b,c]: [{}]; 判別式: {}",
+                report
+                    .coefficients
+                    .iter()
+                    .map(|value| preview_text(value, 128))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                preview_text(&report.discriminant, 128)
+            ),
+            format!(
+                "根の種類: {:?}; 実根: [{}]",
+                report.root_kind,
+                roots.join(", ")
+            ),
+            format!("複素根: [{}]", complex_roots.join(", ")),
+            format!(
+                "根の和: {}; 根の積: {}; 操作数: {}",
+                preview_text(&report.sum_of_roots, 128),
+                preview_text(&report.product_of_roots, 128),
+                report.operations
+            ),
+            format!("検証情報: {}", report.verification),
+        ]));
+    }
+    if let Some(report) = parse_previous_math_report::<LinearEquationSolution>(
+        previous,
+        "equation_left",
+        &[
+            "equation_left",
+            "equation_right",
+            "variable",
+            "coefficients",
+            "kind",
+            "exact_solution",
+            "operations",
+            "verification",
+        ],
+    )? {
+        let recomputed = solve_linear_equation(&report.equation_left, &report.equation_right)?;
+        verify_previous_math_report(previous, &report, &recomputed)?;
+        return Ok(Some(vec![
+            "前回の一次方程式を元の両辺から再計算し、保存レポートと照合しました。".into(),
+            format!(
+                "方程式: {} = {}",
+                preview_text(&report.equation_left, 512),
+                preview_text(&report.equation_right, 512)
+            ),
+            format!(
+                "正規化係数 [a,b] (a*x+b=0): [{}]",
+                report
+                    .coefficients
+                    .iter()
+                    .map(|value| preview_text(value, 128))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            format!(
+                "変数: {}; 分類: {:?}; 解: {}",
+                report.variable,
+                report.kind,
+                report
+                    .exact_solution
+                    .as_deref()
+                    .map_or_else(|| "一意解なし".into(), |value| preview_text(value, 128))
+            ),
+            format!(
+                "操作数: {}; 検証情報: {}",
+                report.operations, report.verification
+            ),
+        ]));
+    }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&previous.text) {
         if value.as_object().is_some_and(|object| {
             [
@@ -1215,10 +1455,18 @@ pub(crate) fn previous_math_report_explanation(
                 "event_values",
                 "event_membership",
                 "original_expression",
+                "original_coefficients",
+                "original_rhs",
+                "equation_left",
+                "equation_right",
+                "root_kind",
             ]
             .iter()
             .any(|field| object.contains_key(*field))
                 || ["bindings", "operations", "terms", "verification"]
+                    .iter()
+                    .all(|field| object.contains_key(*field))
+                || ["coefficients", "variable", "operations", "verification"]
                     .iter()
                     .all(|field| object.contains_key(*field))
         }) {
@@ -1505,6 +1753,68 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("2件は保存レポートに保持"))
         );
+    }
+
+    #[test]
+    fn previous_linear_and_quadratic_reports_are_recomputed() {
+        let reports = vec![
+            (
+                serde_json::to_string_pretty(
+                    &solve_linear(matrix(&[&["2", "1"], &["1", "-1"]]), strings(&["5", "1"]))
+                        .unwrap(),
+                )
+                .unwrap(),
+                "一意解: [2, 1]",
+                "solution",
+                serde_json::json!(["9", "9"]),
+            ),
+            (
+                serde_json::to_string_pretty(&solve_linear_equation("2*x+1", "0").unwrap())
+                    .unwrap(),
+                "分類: UniqueSolution; 解: -1/2",
+                "exact_solution",
+                serde_json::json!("0"),
+            ),
+            (
+                serde_json::to_string_pretty(&solve_quadratic("x^2-3*x+2", "0").unwrap()).unwrap(),
+                "判別式: 1",
+                "discriminant",
+                serde_json::json!("999"),
+            ),
+        ];
+        for (index, (text, expected_line, field, replacement)) in reports.into_iter().enumerate() {
+            let mut previous = ResultRecord {
+                id: format!("prior-equation-{index}"),
+                input_id: "equation".into(),
+                input_version: 1,
+                lifecycle: Lifecycle::Commit,
+                text,
+                reason: None,
+                guarantee: Guarantee::Computed,
+                calculation: None,
+                content_plan: None,
+                render: None,
+                receipts: Vec::new(),
+                evidence: Vec::new(),
+                dependencies: Vec::new(),
+                execution_graph_ref: None,
+            };
+            let lines = previous_math_report_explanation(&previous)
+                .unwrap_or_else(|error| panic!("equation report {index}: {error}"))
+                .unwrap_or_else(|| panic!("equation report {index} was not explained"));
+            assert!(
+                lines.iter().any(|line| line.contains(expected_line)),
+                "{lines:?}"
+            );
+
+            let mut tampered: serde_json::Value = serde_json::from_str(&previous.text).unwrap();
+            tampered
+                .as_object_mut()
+                .unwrap()
+                .insert(field.into(), replacement);
+            previous.text = serde_json::to_string_pretty(&tampered).unwrap();
+            assert!(previous_math_report_explanation(&previous).is_err());
+        }
     }
 
     #[test]

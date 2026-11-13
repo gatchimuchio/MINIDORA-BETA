@@ -3623,6 +3623,67 @@ fn probability_and_polynomial_followups_recompute_the_previous_b03_report() {
     }
 }
 
+#[test]
+fn linear_and_quadratic_followups_recompute_the_previous_b03_report() {
+    let scratch = Scratch::new();
+    let cases: [(&str, &str, &[&str]); 3] = [
+        (
+            "linear-system",
+            "連立方程式 [[2,1],[1,-1]] = [5,1]",
+            &["状態: Unique; rank: 2", "一意解: [2, 1]"],
+        ),
+        (
+            "linear-equation",
+            "一次方程式 2*x+1=0 を解いて",
+            &["分類: UniqueSolution; 解: -1/2"],
+        ),
+        (
+            "quadratic-equation",
+            "二次方程式 x^2-3*x+2=0 を解いて",
+            &[
+                "判別式: 1",
+                "TwoRationalRealRoots",
+                "1 (RATIONAL",
+                "2 (RATIONAL",
+            ],
+        ),
+    ];
+    for (case, request, expected_lines) in cases {
+        let original = record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            case,
+            &["--input", "b03-equation", request],
+        ));
+        assert_eq!(original["lifecycle"], "COMMIT", "{case}");
+        assert_eq!(original["guarantee"], "COMPUTED", "{case}");
+        assert_eq!(original["dependencies"], serde_json::json!([]), "{case}");
+
+        let explained = record(&execute_in_case(
+            &scratch.0,
+            "owner",
+            case,
+            &["--input", "equation-explanation", "詳しく説明して"],
+        ));
+        assert_eq!(explained["lifecycle"], "COMMIT", "{case}");
+        assert_eq!(explained["guarantee"], "COMPUTED", "{case}");
+        assert_eq!(
+            explained["dependencies"],
+            serde_json::json!([original["id"]]),
+            "{case}"
+        );
+        let text = explained["text"].as_str().unwrap();
+        assert!(
+            text.contains("再計算し、保存レポートと照合しました"),
+            "{case}: {text}"
+        );
+        for line in expected_lines {
+            assert!(text.contains(line), "{case}: missing {line:?} in {text}");
+        }
+        assert_ne!(text, original["text"].as_str().unwrap(), "{case}");
+    }
+}
+
 fn assert_basic_json_statistics(report: &Value, source: &str, pointer: &str, singleton: bool) {
     assert_eq!(report["pointer"], pointer);
     let array = if singleton {
