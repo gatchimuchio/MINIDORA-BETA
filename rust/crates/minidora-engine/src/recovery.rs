@@ -866,6 +866,7 @@ fn inspect(
                     | Intent::SummarizePreviousSourceConstrained { .. }
                     | Intent::SummarizePreviousResult { .. }
                     | Intent::AskPreviousSourceQuestion { .. }
+                    | Intent::DraftRelationProfile { .. }
             ))
         || !validate_render(plan, render)
     {
@@ -1021,21 +1022,24 @@ fn inspect(
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
-        let current_inventory =
-            if bundle.meaning.parser_version == "declarative-ja-en-v68-previous-result-summary" {
-                crate::relations::inventory_dependencies_and_guarantee(
-                    &memory,
-                    subject,
-                    goal.budget.max_actions,
-                )
-                .ok()
-            } else {
-                let dependencies = crate::relations::explicit_premises_about(&memory, subject)
-                    .into_iter()
-                    .map(|fact| fact.id)
-                    .collect();
-                Some((dependencies, Guarantee::UserPremise))
-            };
+        let current_inventory = if matches!(
+            bundle.meaning.parser_version.as_str(),
+            "declarative-ja-en-v68-previous-result-summary"
+                | "declarative-ja-en-v69-relation-profile-draft"
+        ) {
+            crate::relations::inventory_dependencies_and_guarantee(
+                &memory,
+                subject,
+                goal.budget.max_actions,
+            )
+            .ok()
+        } else {
+            let dependencies = crate::relations::explicit_premises_about(&memory, subject)
+                .into_iter()
+                .map(|fact| fact.id)
+                .collect();
+            Some((dependencies, Guarantee::UserPremise))
+        };
         let Some((dependencies, guarantee)) = current_inventory else {
             return Err(failure(
                 "RECOVERY_PREMISES_CHANGED",
@@ -1311,6 +1315,31 @@ fn inspect(
                         ));
                     }
                     Some(language::relation_explanation_surfaces(&explanation_units))
+                }
+                (Intent::DraftRelationProfile { subject }, None) => {
+                    let memory = store.load_memory(actor)?;
+                    let inventory = crate::relations::inventory_about(
+                        &memory,
+                        subject,
+                        goal.budget.max_actions,
+                    )
+                    .map_err(|_| {
+                        failure(
+                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                            "the current actor-scoped relation inventory is unavailable",
+                        )
+                    })?;
+                    let profile_units = crate::core::relation_profile_units(subject, &inventory);
+                    if inventory.dependencies != result.dependencies
+                        || result.guarantee != Guarantee::Hypothesis
+                        || profile_units != plan.required_units
+                    {
+                        return Err(failure(
+                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                            "the current relation inventory differs from the adopted profile draft",
+                        ));
+                    }
+                    Some(language::relation_profile_surfaces(&profile_units))
                 }
                 _ => None,
             };

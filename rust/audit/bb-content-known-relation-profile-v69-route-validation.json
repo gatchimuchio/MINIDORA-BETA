@@ -1,0 +1,351 @@
+{
+  "work_item": "BODY-1 BB-CONTENT/BB-CONTEXT saved-relation profile draft",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-13T09:35:36+00:00",
+  "base_commit": "c011cf74b8e9991304963c33bf138e4032141807",
+  "changed_paths": [
+    "rust/README.md",
+    "rust/apps/cli/tests/normal_route.rs",
+    "rust/audit/IMPLEMENTATION_STATUS.md",
+    "rust/audit/requirements.tsv",
+    "rust/audit/bb-content-known-relation-profile-v69-route-validation.json",
+    "rust/crates/minidora-domain/src/lib.rs",
+    "rust/crates/minidora-engine/src/core.rs",
+    "rust/crates/minidora-engine/src/input.rs",
+    "rust/crates/minidora-engine/src/language.rs",
+    "rust/crates/minidora-engine/src/recovery.rs",
+    "rust/crates/minidora-engine/src/relations.rs",
+    "rust/docs/IMPLEMENTATION_CHOICES.md",
+    "rust/tools/known_relation_profile_route_test.py"
+  ],
+  "subject": "MINIDORA Rust successor engine",
+  "requirement_ids": [
+    "A01",
+    "A02",
+    "A07",
+    "A08",
+    "A13",
+    "B08"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v69-relation-profile-draft",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "applied_build_set": {
+    "manifest_path": "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv",
+    "manifest_sha256": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf",
+    "source_artifacts": [
+      {
+        "artifact_name": "MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip",
+        "sha256": "636465eccc7d0e98d274b2b3df78a7135cedca38f18c29e98f2cc9e2b3c3e9fb",
+        "bytes": 31553,
+        "role": "original_user_archive",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/MINIDORA_BETA_全体系BUILD_3点セット_20261113.zip"
+      },
+      {
+        "artifact_name": "01_MINIDORA_BETA_BUILD仕様書_20261113.md",
+        "sha256": "317e309a2aeb26f892f75a90b39b23bfa14b04688874ae72f9b5cfb1bec63474",
+        "bytes": 19617,
+        "role": "build_specification",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/01_MINIDORA_BETA_BUILD仕様書_20261113.md"
+      },
+      {
+        "artifact_name": "02_MINIDORA_BETA_BUILD工程表_20261113.md",
+        "sha256": "cda2fb6aa0dd7d2ea44892e1a60b5d66c2dee07b81bc77fec8979168afcf6fe8",
+        "bytes": 19061,
+        "role": "build_schedule",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/02_MINIDORA_BETA_BUILD工程表_20261113.md"
+      },
+      {
+        "artifact_name": "03_MINIDORA_BETA_Codex施工指示書_20261113.md",
+        "sha256": "a9bf3cd7d467178d8a4c0f481b87e0f9d4a3b1bd322dab83506d410615b0410d",
+        "bytes": 21690,
+        "role": "codex_work_instruction",
+        "repository_path": "rust/audit/construction/MB-BUILD-20261113/03_MINIDORA_BETA_Codex施工指示書_20261113.md"
+      }
+    ]
+  },
+  "binary_sha256": "a61792722bdf52d0698af5c7f44e4056072feeefd52092d0361cfaa9b67ae8f4",
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "d9702217d93e908cebc07a566915140b221881c9dd66e05fe41db553f6a1fe44",
+    "rust/crates/minidora-engine/src/core.rs": "47fccfc37dda4a381e51ee0e9d26be3b08b2fc12e7639b044df7c90dd9da6431",
+    "rust/crates/minidora-engine/src/input.rs": "8dbc2d56324a3735ce856fc23b825f1049a192b07d0a80e82ab91c602b2ccd02",
+    "rust/crates/minidora-engine/src/language.rs": "24abaeb5d7b398740371930bf0599d6fa6b22109801e0ce4a11a0546f7c460f2",
+    "rust/crates/minidora-engine/src/recovery.rs": "f8964d7e810e262f4681d2b4dbdb37db1ccd59cf7bb5ee58838bfa8288238f35",
+    "rust/crates/minidora-engine/src/relations.rs": "ae8df81caa0bbdb254ebd587b8d474b132163db3f7b9ab028a2add66765b7520"
+  },
+  "test_and_tool_snapshot_sha256": {
+    "rust/apps/cli/tests/normal_route.rs": "5f89f7833a451905abc29b52fe38fc5c9091f01f364cde394b9d241f2759250a",
+    "rust/tools/known_relation_profile_route_test.py": "ceaba293ca2977cf0ed3aa0e111cc52d5bfedc90de389ce9ac562118160b07a2"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "bcf917c167cb541a779c6edb115d85c846db276e643e01e89fafcaf2c9fa0381",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "9f106bd44bfd38158947f58bbd00bf55e9988d99e769de09382f1eaddf1e7d64",
+    "rust/audit/requirements.tsv": "e54afcc2e544ba4aa56601db839ef2bc41eb17645ac94daf5ad5edeb450c9da6",
+    "rust/docs/IMPLEMENTATION_CHOICES.md": "33eba1505e6a43667b9c112cc9e3c39906742e0bd88a0151a560a4bdcfc7517e",
+    "rust/audit/construction/MB-BUILD-20261113/MANIFEST.tsv": "6beaa7fae731533c8a2f0347f70a43be1ae1e3c08028d184af3b7f20eee23cdf"
+  },
+  "execution_mode": "fresh CLI process per request with temporary actor-scoped SQLite and content-addressed blobs; the profile is saved as a local file, then one controlled SQLite rollback models a crash after the file attempt and before confirmation",
+  "previous_producer_gap": "Before this batch the parser had no natural saved-relation profile intent; the relation inventory and previous-result summary existed as separate bounded consumers.",
+  "producer_consumer": "ordinary named-subject request -> sealed DraftRelationProfile -> bounded same-actor relation proofs -> Core-authored claims, provenance and disclosure -> two Core-approved transition variants -> native SequenceModel ranking -> Output-rendered local file receipt -> crash reconciliation without resend -> previous-result summary consumer",
+  "scope": "Short Japanese profile drafts from current saved direct and derived relations for one explicit subject. Dependencies include the exact premise, derived fact and rule IDs. The result remains HYPOTHESIS, discloses that outside-world truth and record completeness were not checked, preserves conflicts, stops when no actor-scoped supported facts exist, and never falls back across actors. This does not establish general free-form writing, semantic adequacy across unseen tasks, source-backed open-domain facts or complete B08 acceptance.",
+  "actual_input": {
+    "actor": "profile-owner",
+    "case": "known-profile-case",
+    "input_id": "coco-profile",
+    "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+    "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072"
+  },
+  "producer_output_and_core_state": {
+    "result_id": "7f1127113e73a2e71daaddc2b1a69d3111b221c9d502fe975f6dc05413eb89e9",
+    "lifecycle": "COMMIT",
+    "guarantee": "HYPOTHESIS",
+    "text_sha256": "d0e80486f91bfdc67aa429d9577496287ebde17af17420a0af82e6e5e7816bea",
+    "dependencies": [
+      "fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560",
+      "fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e",
+      "rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815"
+    ],
+    "consumer_result_id": "9c3a13c1e16d6ba3b67c3ce8a94b51fd61d3c2c8cd25b5aea4bf39cc78232a6d",
+    "consumer_contains_profile_dependency": true
+  },
+  "local_effect": {
+    "profile_file_sha256": "d0e80486f91bfdc67aa429d9577496287ebde17af17420a0af82e6e5e7816bea",
+    "profile_file_bytes": 762,
+    "confirmed_receipt_before_recovery": true,
+    "reconciled_without_resend": true
+  },
+  "summary": {
+    "fresh_process_observation_count": 9,
+    "lifecycle_counts": {
+      "COMMIT": 8,
+      "SUSPEND": 1
+    },
+    "native_model_candidate_count": 2,
+    "all_core_required_units_retained_in_each_candidate": true,
+    "direct_derived_rule_lineage_retained": true,
+    "previous_result_summary_consumed_profile_id": true,
+    "actor_isolation_missing_premise_stop": true,
+    "conflicting_supports_retained_without_resolution": true,
+    "crash_reconcile_no_resend_and_file_identity_unchanged": true,
+    "permissions_secret_check": {
+      "local_file_write": "only the exact temporary path granted by this test harness",
+      "external_network_or_messages": "NOT_USED",
+      "other_repository_writes": "NONE",
+      "added_dependencies": "NONE",
+      "secret_pattern_scan": "NO_MATCH",
+      "private_HDS_copied_to_public_evidence": false
+    },
+    "validation_commands": [
+      {
+        "command": "cargo fmt --all -- --check",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo check --workspace --all-targets --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo build --workspace --locked",
+        "exit_code": 0
+      },
+      {
+        "command": "cargo test -p minidora-engine relation_profile --locked",
+        "exit_code": 0,
+        "passed": 2
+      },
+      {
+        "command": "cargo test -p minidora-cli --test normal_route natural_relation_profile_uses_current_proofs_and_feeds_a_follow_up_consumer --locked",
+        "exit_code": 0,
+        "passed": 1
+      },
+      {
+        "command": "python3 rust/tools/known_relation_profile_route_test.py --binary rust/target/debug/minidora-rust --evidence-output rust/audit/bb-content-known-relation-profile-v69-route-validation.json",
+        "exit_code": 0,
+        "fresh_process_observations": 9
+      }
+    ],
+    "known_fail_and_resolution": "The first fresh-process file recovery stopped with RECOVERY_CONTENT_MISMATCH because DraftRelationProfile was absent from the bounded HYPOTHESIS recovery allowlist. Core's result and file were retained; recovery now admits this intent and recomputes its proof inventory/units/candidate set. The repeated route reconciled without resending.",
+    "expected_suspends": [
+      "A separate actor with no saved facts receives MISSING_PREMISES."
+    ],
+    "full_workspace_runtime_suite": "NOT_RUN",
+    "general_free_form_writing_and_full_B08_acceptance": "UNVERIFIED",
+    "next_consumer": "The existing previous-result summary consumer used the profile. The next BUILD gap is general constrained writing quality across the preserved unseen-task population.",
+    "rollback_commit": null
+  },
+  "observations": [
+    {
+      "operation": "normal_input",
+      "actor": "profile-owner",
+      "case": "known-profile-case",
+      "input_id": "bird-animal-rule",
+      "request": "もしXは鳥ならXは動物",
+      "request_sha256": "5af8707ddb3c122841a95fd6affc589446845e9d7ae9ceb2cf433ca6eeddc706",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-owner",
+      "case": "known-profile-case",
+      "input_id": "coco-bird",
+      "request": "ココは鳥",
+      "request_sha256": "2ab163cfac2b22adba11a5f3b49a18b3ffc3c587c4fee07335cb8701876dbd94",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-owner",
+      "case": "known-profile-case",
+      "input_id": "coco-profile",
+      "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+      "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "「ココ」の紹介文案です。\n会話に記録された内容から、次の紹介文案をまとめました。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560; 依存ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e, rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
+      "reason": null,
+      "dependencies": [
+        "fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560",
+        "fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e",
+        "rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815"
+      ],
+      "native_model_selection": {
+        "model_revision": "981ca60b844d0d72155f08a6359ca9ff472a6a87cdcc745cd888c355d64ae6e7",
+        "model_artifact_ref": "6b5cb8f92bb14d74b57ffb599ba16efb25fa7d6a74e769744a00e980d6f3d3b0",
+        "model_observation_ref": "b38a6b86b6eb07e31f349259c3fa8d948f50f6e3d6e4d9566f482b07d24ee520",
+        "candidate_count": 2,
+        "authorized_surfaces": [
+          "「ココ」の紹介文案です。\n保存記録に含まれる関係を、根拠区分を保って紹介します。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560; 依存ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e, rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
+          "「ココ」の紹介文案です。\n会話に記録された内容から、次の紹介文案をまとめました。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560; 依存ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e, rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。"
+        ],
+        "selected_text": "「ココ」の紹介文案です。\n会話に記録された内容から、次の紹介文案をまとめました。\n保存された規則による導出は「ココは動物である」です（範囲: default; 導出ID: fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560; 依存ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e, rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815）。\n会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
+        "decoder_version": "bounded-finite-surface-literal-exact-v1"
+      },
+      "local_file_effect": {
+        "phase": "CONFIRMED",
+        "sha256": "d0e80486f91bfdc67aa429d9577496287ebde17af17420a0af82e6e5e7816bea",
+        "bytes": 762
+      }
+    },
+    {
+      "operation": "reconcile_existing_file_without_resend",
+      "actor": "profile-owner",
+      "case": "known-profile-case",
+      "input_id": "coco-profile",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "reason": "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted",
+      "result_id_unchanged": true,
+      "rollback_stopped_after_attempted_sequence": 3,
+      "file_inode_mtime_size_unchanged": true
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-owner",
+      "case": "known-profile-case",
+      "input_id": "profile-follow-up-summary",
+      "request": "前回の説明を2文以内で要約して",
+      "request_sha256": "f101348207607f862dc70321c9415bc8ce1a2a272fb24492893cf0bb20fd1215",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "前回結果からの抽出候補（結果ID: 7f1127113e73a2e71daaddc2b1a69d3111b221c9d502fe975f6dc05413eb89e9）。\n抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。\n- 「ココ」の紹介文案です。\n- 会話で提示された前提は「ココは鳥である」です（範囲: default; 前提ID: fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e）。",
+      "reason": null,
+      "dependencies": [
+        "b89fbd1dbe6cb24e6fb721663bf6457e84926976fcac83516526cad9f19defcd",
+        "7f1127113e73a2e71daaddc2b1a69d3111b221c9d502fe975f6dc05413eb89e9",
+        "2461bf086afd0dddbdd2c0b4df87191e419fb390f34467506ee33e917806d7f0",
+        "e719591b92a7cf5d11bf1b86c5c8b2a3ac0921194d24e0b32113d2c6e2321c83",
+        "fact:54c4e58b56796ca8ee42e282b88e80c3482a239f4aa67b9e0ab11b9b9cff1560",
+        "fact:7bc6438a547cf0be0a9f72eeff97e9f05f124f49945a2783824f5dbcd439570e",
+        "rule:d58cc0d1a24d81ac39f089d6508274594a64d9509786d306a0915edca3b52815"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-other-actor",
+      "case": "profile-isolation-case",
+      "input_id": "profile-no-cross-actor-fallback",
+      "request": "ココについて保存されている情報をもとに短い紹介文を書いて",
+      "request_sha256": "5c1e15d707ab3aca2376b7af8d784e8780cf8ee92f492048c108d34a75c1b072",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "text": "この対象について紹介文の根拠にできる有効な保存記録がありません。",
+      "reason": "MISSING_PREMISES: この対象について紹介文の根拠にできる有効な保存記録がありません。",
+      "dependencies": []
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-conflict-owner",
+      "case": "profile-conflict-case",
+      "input_id": "mike-positive",
+      "request": "ミケは鳥",
+      "request_sha256": "71927c491be9e02bda228ce9690c4e6732087e43028dfb30ad08aed5fa339343",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥である。\n前提ID: fact:9a3fcbc5fc32844c2e668ae5a38022475ec57ed0f127b0104bf9be4d0560b7c7\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:9a3fcbc5fc32844c2e668ae5a38022475ec57ed0f127b0104bf9be4d0560b7c7"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-conflict-owner",
+      "case": "profile-conflict-case",
+      "input_id": "mike-negative",
+      "request": "ミケは鳥ではない",
+      "request_sha256": "9930b99f98483a5ca039a366f63928e7b0b5b7196b1a941cce9e2e0163d5e1ce",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "text": "前提を保存しました: ミケは鳥ではない。\n前提ID: fact:5d85a271e441f5aa99d34fefd0f4489db578df3f4df49481cd6f0e82defcc375\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5d85a271e441f5aa99d34fefd0f4489db578df3f4df49481cd6f0e82defcc375"
+      ]
+    },
+    {
+      "operation": "normal_input",
+      "actor": "profile-conflict-owner",
+      "case": "profile-conflict-case",
+      "input_id": "mike-conflicted-profile",
+      "request": "ミケについて保存されている情報をもとに短い紹介文を書いて",
+      "request_sha256": "c7da650a6ad34f42cc39ce7b50488a2f018573c6542a5bd66717e56bbf94c5a8",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "HYPOTHESIS",
+      "text": "「ミケ」の紹介文案です。\n保存記録に含まれる関係を、根拠区分を保って紹介します。\n同じ範囲に肯定と否定の根拠があるため、対立する記録を確定せず併記します。\n対立根拠の一方として保存された関係は「ミケは鳥である」です（範囲: default; 記録ID: fact:9a3fcbc5fc32844c2e668ae5a38022475ec57ed0f127b0104bf9be4d0560b7c7; 依存ID: なし）。\n対立根拠の一方として保存された関係は「ミケは鳥ではない」です（範囲: default; 記録ID: fact:5d85a271e441f5aa99d34fefd0f4489db578df3f4df49481cd6f0e82defcc375; 依存ID: なし）。\nこの草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。",
+      "reason": null,
+      "dependencies": [
+        "fact:5d85a271e441f5aa99d34fefd0f4489db578df3f4df49481cd6f0e82defcc375",
+        "fact:9a3fcbc5fc32844c2e668ae5a38022475ec57ed0f127b0104bf9be4d0560b7c7"
+      ]
+    }
+  ]
+}

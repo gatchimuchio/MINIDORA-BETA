@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v68-previous-result-summary";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v69-relation-profile-draft";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1056,6 +1056,42 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     Ok(None)
 }
 
+fn relation_profile_intent(text: &str) -> Result<Option<Intent>> {
+    let japanese = regex(
+        r"^(.+?)(?:について|に関する)(?:保存されている|保存済みの|会話に保存された)?(?:情報|記録)(?:をもとに|から)(?:短い)?(?:紹介文|プロフィール)(?:を)?(?:書いて|作って|作成して)(?:ください)?$",
+    )?;
+    let english = regex(
+        r"(?i)^(?:write|create) (?:a |an )?(?:short )?(?:profile|introduction) of (.+?) (?:from|using) (?:the )?(?:saved|recorded|provided) (?:facts|information)$",
+    )?;
+    let Some(captures) = japanese.captures(text).or_else(|| english.captures(text)) else {
+        return Ok(None);
+    };
+    let subject = captures[1].trim();
+    let lower = subject.to_ascii_lowercase();
+    let only_numeric_expression_chars = subject
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || ". +-*/%^()=".contains(ch));
+    let unresolved_pronoun = matches!(
+        lower.as_str(),
+        "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
+    ) || matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら");
+    if subject.is_empty()
+        || subject.len() > 512
+        || subject.contains([
+            '\n', '\r', '、', '，', ',', ';', '；', '+', '*', '/', '^', '%', '=',
+        ])
+        || only_numeric_expression_chars
+        || unresolved_pronoun
+    {
+        return Ok(Some(Intent::Unknown {
+            reason: "relation profile drafting needs one explicit nonnumeric subject".into(),
+        }));
+    }
+    Ok(Some(Intent::DraftRelationProfile {
+        subject: subject.to_string(),
+    }))
+}
+
 fn common_relations_question_intent(text: &str) -> Result<Option<Intent>> {
     let scoped = regex(r"^\[scope=([^\]]*)\]\s*(.+)$")?.captures(text);
     let scope = scoped
@@ -1498,6 +1534,9 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     if let Some(intent) = common_relations_question_intent(body)? {
+        return Ok(intent);
+    }
+    if let Some(intent) = relation_profile_intent(body)? {
         return Ok(intent);
     }
     if let Some(intent) = inspect_premises_intent(body)? {
@@ -2911,6 +2950,43 @@ mod tests {
             interpret("ココについて何が分かっているか、ミケについても").unwrap(),
             Intent::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn natural_relation_profile_requests_keep_one_explicit_subject() {
+        for (text, expected) in [
+            (
+                "ココについて保存されている情報をもとに短い紹介文を書いて",
+                "ココ",
+            ),
+            ("Write a short profile of Coco from saved facts", "Coco"),
+            (
+                "Create an introduction of Mina using the recorded information",
+                "Mina",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    interpret(text).unwrap(),
+                    Intent::DraftRelationProfile { subject } if subject == expected
+                ),
+                "{text}"
+            );
+        }
+        for text in [
+            "それについて保存されている情報をもとに紹介文を書いて",
+            "Write a profile of it from saved facts",
+            "Write a profile of Coco from external facts",
+            "ココについて保存されている情報をもとに紹介文を書いて、ミケも",
+        ] {
+            assert!(
+                !matches!(
+                    interpret(text).unwrap(),
+                    Intent::DraftRelationProfile { .. }
+                ),
+                "{text}"
+            );
+        }
     }
 
     #[test]

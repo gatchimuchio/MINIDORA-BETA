@@ -3243,6 +3243,167 @@ fn natural_definition_questions_retrieve_only_the_exact_stored_premise() {
 }
 
 #[test]
+fn natural_relation_profile_uses_current_proofs_and_feeds_a_follow_up_consumer() {
+    let scratch = Scratch::new();
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "profile-rule", "もしXは鳥ならXは動物"],
+    ));
+    let bird = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "profile-premise", "ココは鳥"],
+    ));
+    let profile = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "profile-from-records",
+            "ココについて保存されている情報をもとに短い紹介文を書いて",
+        ],
+    ));
+    assert_eq!(profile["lifecycle"], "COMMIT");
+    assert_eq!(profile["guarantee"], "HYPOTHESIS");
+    let text = profile["text"].as_str().unwrap();
+    assert!(text.contains("会話で提示された前提は「ココは鳥である」"));
+    assert!(text.contains("保存された規則による導出は「ココは動物である」"));
+    assert!(text.contains("現実世界の真偽や記録の網羅性は確認していません"));
+    for dependency in [
+        bird["dependencies"][0].as_str().unwrap(),
+        rule["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            profile["dependencies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| { value.as_str().is_some_and(|text| text == dependency) })
+        );
+    }
+
+    let model_observation_ref = profile["content_plan"]["model_observation_ref"]
+        .as_str()
+        .unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let emission: Value = serde_json::from_slice(
+        &store
+            .get_bytes("owner", "normal-route", model_observation_ref)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(emission["text"], profile["text"]);
+    assert_eq!(
+        emission["decoder_version"],
+        "bounded-finite-surface-literal-exact-v1"
+    );
+    let surfaces = emission["authorized_surfaces"].as_array().unwrap();
+    assert_eq!(surfaces.len(), 2);
+    for surface in surfaces {
+        let surface = surface.as_str().unwrap();
+        assert!(surface.contains("ココは鳥である"));
+        assert!(surface.contains("ココは動物である"));
+        assert!(surface.contains("現実世界の真偽や記録の網羅性は確認していません"));
+    }
+    drop(store);
+
+    let recovered = minidora_engine::Engine::open(&scratch.0)
+        .unwrap()
+        .reconcile("owner", "normal-route")
+        .unwrap();
+    assert_eq!(recovered.id, profile["id"]);
+    assert_eq!(recovered.text, text);
+
+    let summary = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "profile-follow-up-summary",
+            "前回の説明を2文以内で要約して",
+        ],
+    ));
+    assert_eq!(summary["lifecycle"], "COMMIT");
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    assert!(
+        summary["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&profile["id"])
+    );
+
+    let missing = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "other-actor",
+            "profile-other-actor",
+            &[
+                "--input",
+                "profile-no-cross-actor-fallback",
+                "ココについて保存されている情報をもとに短い紹介文を書いて",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+
+    record(&execute_in_case(
+        &scratch.0,
+        "conflict-owner",
+        "profile-conflict-case",
+        &["--input", "profile-conflict-positive", "ミケは鳥"],
+    ));
+    record(&execute_in_case(
+        &scratch.0,
+        "conflict-owner",
+        "profile-conflict-case",
+        &["--input", "profile-conflict-negative", "ミケは鳥ではない"],
+    ));
+    let conflicted = record(&execute_in_case(
+        &scratch.0,
+        "conflict-owner",
+        "profile-conflict-case",
+        &[
+            "--input",
+            "profile-conflict-draft",
+            "ミケについて保存されている情報をもとに短い紹介文を書いて",
+        ],
+    ));
+    assert_eq!(conflicted["lifecycle"], "COMMIT");
+    assert!(
+        conflicted["text"]
+            .as_str()
+            .unwrap()
+            .contains("肯定と否定の根拠")
+    );
+    assert!(
+        conflicted["text"]
+            .as_str()
+            .unwrap()
+            .contains("対立根拠の一方")
+    );
+    assert!(
+        conflicted["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミケは鳥である")
+    );
+    assert!(
+        conflicted["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミケは鳥ではない")
+    );
+}
+
+#[test]
 fn natural_premise_correction_invalidates_only_exact_scope_and_dependents() {
     let scratch = Scratch::new();
     let mammal = record(&execute(

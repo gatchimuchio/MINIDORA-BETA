@@ -405,6 +405,9 @@ pub enum Intent {
     InspectPremises {
         subject: String,
     },
+    DraftRelationProfile {
+        subject: String,
+    },
     Invalidate {
         id: String,
     },

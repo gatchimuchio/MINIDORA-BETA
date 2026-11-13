@@ -3904,6 +3904,56 @@ impl Engine {
                     Guarantee::Unknown
                 };
             }
+            Intent::DraftRelationProfile { subject } => {
+                let memory = self.store.load_memory(actor)?;
+                let inventory = match relations::inventory_about(
+                    &memory,
+                    subject,
+                    request.budget.max_actions,
+                ) {
+                    Ok(inventory) => inventory,
+                    Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "保存済み関係を紹介文へまとめる走査・推論予算が不足しています。",
+                        );
+                    }
+                    Err(Error::Contract { code, .. }) if code == "MISSING_PREMISES" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_PREMISES",
+                            "この対象について紹介文の根拠にできる有効な保存記録がありません。",
+                        );
+                    }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let profile_units = relation_profile_units(subject, &inventory);
+                let profile_bytes = profile_units.iter().try_fold(0usize, |total, unit| {
+                    total
+                        .checked_add(unit.len())
+                        .and_then(|size| size.checked_add(1))
+                });
+                if profile_bytes.is_none_or(|size| size > request.budget.max_evidence_bytes) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "根拠付き紹介文案が要求の証拠予算を超えています。",
+                    );
+                }
+                approved_surfaces = Some(language::relation_profile_surfaces(&profile_units));
+                units.extend(profile_units);
+                result.dependencies = inventory.dependencies;
+                // The proof lineage remains attached, while completeness and
+                // outside-world truth of a requested profile are unverified.
+                result.guarantee = Guarantee::Hypothesis;
+            }
             Intent::Invalidate { id } => {
                 let mut memory = self.store.load_memory(actor)?;
                 let affected = relations::invalidate(&mut memory, id)?;
@@ -4916,6 +4966,63 @@ pub(crate) fn relation_why_explanation_units(
         "提示された証拠が支える結論",
     ));
     Ok(units)
+}
+
+pub(crate) fn relation_profile_units(
+    subject: &str,
+    inventory: &relations::RelationInventory,
+) -> Vec<String> {
+    let mut units = vec![format!("「{subject}」の紹介文案です。")];
+    if inventory.has_conflict {
+        units.push(
+            "同じ範囲に肯定と否定の根拠があるため、対立する記録を確定せず併記します。".into(),
+        );
+    }
+    for fact in &inventory.facts {
+        let proposition = describe(&fact.proposition);
+        let scope = &fact.proposition.scope;
+        let origin = if inventory.contested_fact_ids.contains(&fact.id) {
+            format!(
+                "対立根拠の一方として保存された関係は「{proposition}」です（範囲: {scope}; 記録ID: {}; 依存ID: {}）。",
+                fact.id,
+                if fact.dependencies.is_empty() {
+                    "なし".to_string()
+                } else {
+                    fact.dependencies.join(", ")
+                }
+            )
+        } else {
+            match &fact.guarantee {
+                Guarantee::UserPremise => format!(
+                    "会話で提示された前提は「{proposition}」です（範囲: {scope}; 前提ID: {}）。",
+                    fact.id
+                ),
+                Guarantee::Derived => format!(
+                    "保存された規則による導出は「{proposition}」です（範囲: {scope}; 導出ID: {}; 依存ID: {}）。",
+                    fact.id,
+                    fact.dependencies.join(", ")
+                ),
+                Guarantee::Computed => format!(
+                    "保存された計算記録は「{proposition}」を示します（範囲: {scope}; 記録ID: {}）。",
+                    fact.id
+                ),
+                Guarantee::SourceReport => format!(
+                    "保存された出典報告には「{proposition}」が記録されています（範囲: {scope}; 報告ID: {}）。",
+                    fact.id
+                ),
+                Guarantee::Hypothesis | Guarantee::Unknown => format!(
+                    "未確定の記録には「{proposition}」が含まれています（範囲: {scope}; 記録ID: {}）。",
+                    fact.id
+                ),
+            }
+        };
+        units.push(origin);
+    }
+    units.push(
+        "この草稿はこの利用者の保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。"
+            .into(),
+    );
+    units
 }
 
 fn relation_explanation_lines(

@@ -161,6 +161,30 @@ pub(crate) fn relation_explanation_surfaces(units: &[String]) -> Vec<String> {
     ]
 }
 
+/// Compose a source-grounded profile from Core-approved relation units. The
+/// model may rank only two nonfactual transitions; every claim, provenance
+/// unit and disclosure remains byte-for-byte present in either surface.
+pub(crate) fn relation_profile_surfaces(units: &[String]) -> Vec<String> {
+    let exact = units.join("\n");
+    if units.len() < 3 {
+        return vec![exact];
+    }
+    let claims = units[1..units.len() - 1].join("\n");
+    if claims.is_empty() {
+        return vec![exact];
+    }
+    let opening = &units[0];
+    let disclosure = &units[units.len() - 1];
+    vec![
+        format!(
+            "{opening}\n保存記録に含まれる関係を、根拠区分を保って紹介します。\n{claims}\n{disclosure}"
+        ),
+        format!(
+            "{opening}\n会話に記録された内容から、次の紹介文案をまとめました。\n{claims}\n{disclosure}"
+        ),
+    ]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SequenceValue {
     pub exact_value: String,
@@ -1860,6 +1884,24 @@ mod tests {
             "この説明は保存された前提・規則に基づきます。".into(),
         ];
         let surfaces = relation_explanation_surfaces(&units);
+        assert_eq!(surfaces.len(), 2);
+        assert_ne!(surfaces[0], surfaces[1]);
+        for surface in &surfaces {
+            for unit in &units {
+                assert!(surface.contains(unit));
+            }
+        }
+    }
+
+    #[test]
+    fn relation_profile_surfaces_preserve_all_claim_and_provenance_units() {
+        let units = vec![
+            "「ココ」の紹介文案です。".into(),
+            "会話で提示された前提では、ココは鳥である（前提ID: fact:bird）。".into(),
+            "保存された規則から、ココは動物であると導かれます（導出ID: fact:animal）。".into(),
+            "この案は保存記録の範囲に限り、現実世界の真偽は確認していません。".into(),
+        ];
+        let surfaces = relation_profile_surfaces(&units);
         assert_eq!(surfaces.len(), 2);
         assert_ne!(surfaces[0], surfaces[1]);
         for surface in &surfaces {

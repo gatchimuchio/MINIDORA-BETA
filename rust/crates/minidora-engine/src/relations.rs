@@ -13,6 +13,15 @@ pub struct QueryOutcome {
     pub steps: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelationInventory {
+    pub facts: Vec<Fact>,
+    pub contested_fact_ids: BTreeSet<String>,
+    pub has_conflict: bool,
+    pub dependencies: Vec<String>,
+    pub guarantee: Guarantee,
+}
+
 /// Return active, directly supplied premises for one subject. Derived facts
 /// are deliberately excluded: callers can present exactly what entered memory
 /// without describing inference as an observation.
@@ -112,14 +121,14 @@ pub fn query_shapes_about(
     Ok(shapes)
 }
 
-/// Recompute the exact lineage and guarantee for a bounded subject inventory.
-/// Recovery uses this to ensure an adopted listing still describes the same
-/// actor memory before confirming its original local effect.
-pub fn inventory_dependencies_and_guarantee(
+/// Build the current actor-scoped, bounded supported relation inventory for a
+/// subject. Consumers retain exact facts, conflicts, dependencies and the
+/// strongest guarantee found; no relation is promoted to outside-world truth.
+pub fn inventory_about(
     memory: &MemoryState,
     subject: &str,
     max_actions: u32,
-) -> Result<(Vec<String>, Guarantee)> {
+) -> Result<RelationInventory> {
     let scanned_records = memory
         .facts
         .len()
@@ -162,10 +171,16 @@ pub fn inventory_dependencies_and_guarantee(
 
     let mut dependencies = BTreeSet::new();
     let mut reported_facts = BTreeMap::new();
+    let mut contested_fact_ids = BTreeSet::new();
+    let mut has_conflict = false;
     for shape in query_shapes {
         let answer = query(memory, &shape, per_query_budget)?;
         match answer.status.as_str() {
-            "SUPPORTED" | "CONTRADICTED" | "CONFLICT" => {}
+            "SUPPORTED" | "CONTRADICTED" => {}
+            "CONFLICT" => {
+                has_conflict = true;
+                contested_fact_ids.extend(answer.facts.iter().map(|fact| fact.id.clone()));
+            }
             "UNKNOWN" | "MISSING_PREMISES" => continue,
             _ => {
                 return Err(failure(
@@ -208,7 +223,30 @@ pub fn inventory_dependencies_and_guarantee(
     } else {
         Guarantee::Unknown
     };
-    Ok((dependencies.into_iter().collect(), guarantee))
+    let mut facts: Vec<_> = reported_facts.into_values().collect();
+    facts.sort_by(|left, right| {
+        left.proposition
+            .cmp(&right.proposition)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(RelationInventory {
+        facts,
+        contested_fact_ids,
+        has_conflict,
+        dependencies: dependencies.into_iter().collect(),
+        guarantee,
+    })
+}
+
+/// Recovery uses the same inventory computation to ensure an adopted listing
+/// still describes the actor memory that originally supported it.
+pub fn inventory_dependencies_and_guarantee(
+    memory: &MemoryState,
+    subject: &str,
+    max_actions: u32,
+) -> Result<(Vec<String>, Guarantee)> {
+    let inventory = inventory_about(memory, subject, max_actions)?;
+    Ok((inventory.dependencies, inventory.guarantee))
 }
 
 fn insert_query_shape(
