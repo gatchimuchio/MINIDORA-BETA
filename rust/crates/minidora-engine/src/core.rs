@@ -5443,7 +5443,8 @@ pub(crate) fn relation_why_explanation_units(
             let mut opposite = proposition.clone();
             opposite.negative = !opposite.negative;
             units.push(format!(
-                "提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
+                "範囲「{}」では、提示された根拠は問いの関係を支持せず、反対に「{}」を支持します。",
+                proposition.scope,
                 describe(&opposite)
             ));
             opposite
@@ -5733,7 +5734,11 @@ fn relation_explanation_lines(
     answer: &relations::QueryOutcome,
     heading: &str,
 ) -> Vec<String> {
-    let mut lines = vec![format!("{heading}: {}。", describe(proposition))];
+    let mut lines = vec![format!(
+        "{heading}: {}（範囲: {}）。",
+        describe(proposition),
+        proposition.scope
+    )];
     let proof_dependencies = relations::answer_dependencies(answer);
     let mut displayed_fact_ids = Vec::new();
     for id in &proof_dependencies {
@@ -5744,8 +5749,9 @@ fn relation_explanation_lines(
                 && fact.dependencies.is_empty()
         }) {
             lines.push(format!(
-                "直接提示された前提: {}（根拠ID: {}）",
+                "直接提示された前提: {}（範囲: {}; 根拠ID: {}）",
                 describe(&fact.proposition),
+                fact.proposition.scope,
                 fact.id
             ));
             displayed_fact_ids.push(fact.id.clone());
@@ -5770,8 +5776,9 @@ fn relation_explanation_lines(
             )
         };
         lines.push(format!(
-            "{label}: {}（{lineage}）",
-            describe(&fact.proposition)
+            "{label}: {}（範囲: {}; {lineage}）",
+            describe(&fact.proposition),
+            fact.proposition.scope,
         ));
     }
     for id in &answer.used_rules {
@@ -5782,16 +5789,18 @@ fn relation_explanation_lines(
                 .collect::<Vec<_>>()
                 .join(" かつ ");
             lines.push(format!(
-                "適用規則: {} ならば {}（規則ID: {}）",
+                "適用規則（範囲: {}）: {} ならば {}（規則ID: {}）",
+                rule.conclusion.scope,
                 premises,
                 describe(&rule.conclusion),
                 rule.id
             ));
         }
     }
-    lines.push(
-        "この説明は有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。".into(),
-    );
+    lines.push(format!(
+        "この説明は範囲「{}」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。",
+        proposition.scope
+    ));
     lines
 }
 fn guarantee_label(guarantee: &Guarantee) -> &'static str {
