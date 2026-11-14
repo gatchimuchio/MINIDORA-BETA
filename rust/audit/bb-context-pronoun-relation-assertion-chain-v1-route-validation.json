@@ -1,0 +1,300 @@
+{
+  "work_item": "BODY-1 Core exact fact continuity across one chained contextual relation assertion",
+  "stage": "BODY-1_EXECUTION",
+  "recorded_at": "2026-11-14T02:48:12+00:00",
+  "base_commit": "1e84a3e83a2d9a76f30e067ca433b203d35570d5",
+  "requirement_ids": [
+    "A04",
+    "A07",
+    "A08",
+    "A15",
+    "CAP-D04",
+    "CAP-D11"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+  "binary_sha256": "60bf06d4755823509cf402514a7c60ae45b2fa5de56f8f695cd3113b43d7491c",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-domain/src/lib.rs": "4d1090af004ad0e15fd89c1f544c66c91b25e28cfaf27447a3fe054eb1020545",
+    "rust/crates/minidora-engine/src/input.rs": "3ed966ece89b96ce21131c271cc98d75b2834f716ddea10bbcf3401aa81ab214",
+    "rust/crates/minidora-engine/src/core.rs": "4d6804f964ac2bef0f4ec42a999589f4ca175de91d9e8553a1ffc1e6c682473d",
+    "rust/crates/minidora-engine/src/relations.rs": "8ccaa29d8b18c7fb52484113c43ebc7f95cd9222f1d8f63e9219a6154d9706f2",
+    "rust/crates/minidora-engine/src/store.rs": "7df8a6753bd467c4482a3525bb7908dfab3901f6bf580d8464d3b3ddc8a92865",
+    "rust/tools/contextual_relation_assertion_chain_test.py": "611a9b7aa973e33f475e5c534dae0c22be0d63110695e39d9ef33ce4cdb552bb"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/README.md": "857d3dde4f888adac4a3fbf2abbe5e76294f70c9cad233b26aaabdfccf0bbc29",
+    "rust/audit/README.md": "96301c55b9f35f9796d9aea75f4c9d1effddf1b5c7512eb6a72ea60ac5e051a8",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "dba2796700b77acfccbc9ad60506322c9517a9897a1670b000d6424c40d5c63f",
+    "rust/audit/requirements.tsv": "2fbc6fbf942acf6735f78214db155ae478a8e18449c24f045dc68a4aa098ef37",
+    "rust/audit/rust-requirement-observations.json": "2e0e8041f7fe7cf7ee47b50d0e793ecf6934b2817f0a7e81999374f217e0b6ad"
+  },
+  "execution_mode": "fresh CLI process per request; one temporary SQLite state; direct actor memory revision inspection",
+  "scope": "One immediate chained singular-pronoun relation assertion consumes the prior contextual assertion's exact active USER_PREMISE fact, rechecks that fact through the current relation proof, and is consumed by one following ordinary relation question. A corrected/inactivated prior fact suspends the chain without a ContentPlan.",
+  "producer_consumer": "typed relation answer -> first sealed AssertPreviousRelation -> resolved USER_PREMISE fact -> second sealed AssertPreviousRelation -> exact source-input fact lookup and current proof revalidation -> second USER_PREMISE fact -> next AskPreviousRelation consumes only the second fact; a correction that invalidates the first fact blocks the second assertion",
+  "targeted_checks": {
+    "chained_assertion_reuses_previous_typed_subject_and_scope": "PASS",
+    "sealed_source_keeps_unresolved_pronoun_and_exact_context_result": "PASS",
+    "following_query_consumes_only_second_assertion_fact": "PASS",
+    "cross_case_correction_invalidates_exact_source_fact": "PASS",
+    "invalidated_source_fact_suspends_without_content_plan": "PASS",
+    "failed_second_assertion_is_not_stored": "PASS"
+  },
+  "summary": {
+    "fresh_process_observations": 13,
+    "positive_chain_observations": 6,
+    "invalidated_chain_observations": 7
+  },
+  "first_assertion_fact_id": "fact:6c1574e97e4c675161625769198ecf9451bd011d36c7286cd207d8a176dc63e8",
+  "second_assertion_fact_id": "fact:e82ca4fb0c3eb2278e3e786f14a93e8590d701e877582fb6eb33c25a32b77dba",
+  "invalidated_source_fact_id": "fact:089324662804d2a2ccaae9e12baec6dd22cd57b60c1eb9ea4cda663eea0f011a",
+  "observations": [
+    {
+      "case_id": "typed-pronoun-assertion-chain-case",
+      "actor_id": "typed-pronoun-assertion-chain",
+      "input_id": "chain-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "input_sha256": "36b16ee060703093bbe2930dbc901fcc5ce9602b2f09ab3bc3d1ad6dc1a54fd7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "111f477ca481e7f7f51296eab1bc0645e0ca8ca22d0043c402c7df9df6a96ede",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:1b82e6565fb735d56b3b0528a88367749659f59201681c117bc8780ac020f615\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:1b82e6565fb735d56b3b0528a88367749659f59201681c117bc8780ac020f615"
+      ],
+      "content_plan_id": "f3daef5d22f5923ea3bf8f5bfc24eec7a5957d5e5664d0550cb32a81837297f5"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-case",
+      "actor_id": "typed-pronoun-assertion-chain",
+      "input_id": "chain-bird",
+      "request": "[scope=biology]ココは鳥",
+      "input_sha256": "27b4b08ccca4dfe17c9928b55245e49183d8adef9768a42682f38ff3aaa17fb5",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "a136604c9a3b2d794633d8d098cfb08b948cc8cc1a387f825d295f45458c9478",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:af35ba9d192d65246bbfbd34f05897602f46426a03ff8f0bb49a8f55da9cecdc\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:af35ba9d192d65246bbfbd34f05897602f46426a03ff8f0bb49a8f55da9cecdc"
+      ],
+      "content_plan_id": "898ddb976df895d5d429f24b3f9d2bfa3f3e1e98f65cfcfcfeb87b90101b87b7"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-case",
+      "actor_id": "typed-pronoun-assertion-chain",
+      "input_id": "chain-anchor",
+      "request": "それは動物ですか",
+      "input_sha256": "2b1b6170d1bad4ecdb1f053b73fb48720f6ac432dcec5feb4c535cd53cf3ad3b",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "result_id": "f653feaa5864753af629d2df4fa653d638c7c2bc511a148351045bb955d7e153",
+      "text": "提示された前提の範囲では、ココは動物である（範囲: biology）。",
+      "reason": null,
+      "dependencies": [
+        "fact:af35ba9d192d65246bbfbd34f05897602f46426a03ff8f0bb49a8f55da9cecdc",
+        "fact:c9c5188e4b14fb74ae06ec530233d06ac8d8450975bfbc5cb15b30fde9eaaa7e",
+        "rule:1b82e6565fb735d56b3b0528a88367749659f59201681c117bc8780ac020f615"
+      ],
+      "content_plan_id": "95566628e01887942d7571b5e2b8048a4467d42a38397e1bf8dd7708cbdd6732"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-case",
+      "actor_id": "typed-pronoun-assertion-chain",
+      "input_id": "chain-assertion-one",
+      "request": "それは温血動物です",
+      "input_sha256": "1ea3e860f570834cbbd0f6dd475b6c773ff3f14e7a2ad152d47d2586931e95a7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "ed8dc5fb1e67f59e289af3eeb365c6305e378717cfec29718618827d555a4e76",
+      "text": "直前結果 f653feaa5864753af629d2df4fa653d638c7c2bc511a148351045bb955d7e153 の関係根拠を再確認し、主語「ココ」とscope「biology」を復元しました。\n前提を保存しました: ココは温血動物である。\n前提ID: fact:6c1574e97e4c675161625769198ecf9451bd011d36c7286cd207d8a176dc63e8\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "f653feaa5864753af629d2df4fa653d638c7c2bc511a148351045bb955d7e153",
+        "fact:6c1574e97e4c675161625769198ecf9451bd011d36c7286cd207d8a176dc63e8"
+      ],
+      "content_plan_id": "1cda9a2153518988ac679c6a0e4f3c7af373aa7f13b0ecda69d2c95d736ae50e"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-case",
+      "actor_id": "typed-pronoun-assertion-chain",
+      "input_id": "chain-assertion-two",
+      "request": "それは哺乳類です",
+      "input_sha256": "8f6ef57e7987127df9b483a87513049265746c517ef79e5e79d0b6153b95c048",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "d08a324e0567f9bbb697d2fa5ebb9c3afd6c4a842603fd3bd5f64d4592a4a7ae",
+      "text": "直前結果 ed8dc5fb1e67f59e289af3eeb365c6305e378717cfec29718618827d555a4e76 の関係根拠を再確認し、主語「ココ」とscope「biology」を復元しました。\n前提を保存しました: ココは哺乳類である。\n前提ID: fact:e82ca4fb0c3eb2278e3e786f14a93e8590d701e877582fb6eb33c25a32b77dba\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "ed8dc5fb1e67f59e289af3eeb365c6305e378717cfec29718618827d555a4e76",
+        "fact:e82ca4fb0c3eb2278e3e786f14a93e8590d701e877582fb6eb33c25a32b77dba"
+      ],
+      "content_plan_id": "e8d9a24a191fc1ab666ac160219ac6a1508ab498b28473fefa4a0eb003736b11"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-case",
+      "actor_id": "typed-pronoun-assertion-chain",
+      "input_id": "chain-next-query",
+      "request": "それは哺乳類ですか",
+      "input_sha256": "2bb445edd4185cf33b35dacbb2426868dc80212307e360f81702dcdd0ae4358a",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "4a5191ee1cbdb0bd1bc65e718f7e3bb0138757aca484e8328750aa580c134c3c",
+      "text": "提示された前提の範囲では、ココは哺乳類である（範囲: biology）。",
+      "reason": null,
+      "dependencies": [
+        "fact:e82ca4fb0c3eb2278e3e786f14a93e8590d701e877582fb6eb33c25a32b77dba"
+      ],
+      "content_plan_id": "f061451c642827d99a8b0231b61d97c123550c9c22bf8667f1d76400c3ff73e5"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-stale-case",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "stale-chain-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "input_sha256": "36b16ee060703093bbe2930dbc901fcc5ce9602b2f09ab3bc3d1ad6dc1a54fd7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "f332f91ca8bc8e4c20b7750ff47b88e122ab9ce424b0b6bf97370924b59e0967",
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:a70aaa9b5dd3c7f621e36c52298ea974408063b8c6b77daa4930dff31e5477bc\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "reason": null,
+      "dependencies": [
+        "rule:a70aaa9b5dd3c7f621e36c52298ea974408063b8c6b77daa4930dff31e5477bc"
+      ],
+      "content_plan_id": "c806d756d94841d7a82b99ff73f8c9eb1715fa0fe70eb21187c261b526ce22a3"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-stale-case",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "stale-chain-bird",
+      "request": "[scope=biology]ココは鳥",
+      "input_sha256": "27b4b08ccca4dfe17c9928b55245e49183d8adef9768a42682f38ff3aaa17fb5",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "13a47e9962f17865ce5cf77d1f237ab3be4ca6caec325efc2c2382f270b6f4c9",
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:ab0ce3eda845578cedcdd692498eb1a7ee7336bf63225193d3bc99d94f8877db\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:ab0ce3eda845578cedcdd692498eb1a7ee7336bf63225193d3bc99d94f8877db"
+      ],
+      "content_plan_id": "06a815556824d2a2e99cd38a2aec7bfcc73f96f95dbc7cdec7566fcc5bfc7ef5"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-stale-case",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "stale-chain-anchor",
+      "request": "それは動物ですか",
+      "input_sha256": "2b1b6170d1bad4ecdb1f053b73fb48720f6ac432dcec5feb4c535cd53cf3ad3b",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "result_id": "39099c7373d657ace639a432bac330e3f4c371be83dcc32b592bb8861a6b054c",
+      "text": "提示された前提の範囲では、ココは動物である（範囲: biology）。",
+      "reason": null,
+      "dependencies": [
+        "fact:ab0ce3eda845578cedcdd692498eb1a7ee7336bf63225193d3bc99d94f8877db",
+        "fact:d53703935000a40519b2e79db4c42dd696f32bc5c267deb9aefc4ad2ce437597",
+        "rule:a70aaa9b5dd3c7f621e36c52298ea974408063b8c6b77daa4930dff31e5477bc"
+      ],
+      "content_plan_id": "7b647c93589b3a04257a0b0227e71ee9e89580253711c7847582e87727859699"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-stale-case",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "stale-chain-assertion-one",
+      "request": "それは温血動物です",
+      "input_sha256": "1ea3e860f570834cbbd0f6dd475b6c773ff3f14e7a2ad152d47d2586931e95a7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "7cd1c45e56c85517929018b72cf0dc11c038f1528a41e11495afbb36085c89f9",
+      "text": "直前結果 39099c7373d657ace639a432bac330e3f4c371be83dcc32b592bb8861a6b054c の関係根拠を再確認し、主語「ココ」とscope「biology」を復元しました。\n前提を保存しました: ココは温血動物である。\n前提ID: fact:089324662804d2a2ccaae9e12baec6dd22cd57b60c1eb9ea4cda663eea0f011a\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "39099c7373d657ace639a432bac330e3f4c371be83dcc32b592bb8861a6b054c",
+        "fact:089324662804d2a2ccaae9e12baec6dd22cd57b60c1eb9ea4cda663eea0f011a"
+      ],
+      "content_plan_id": "f292b5bf2c3d19c86c46853f18c744ae0a73e29e0ef6ceca0ab53499032642ff"
+    },
+    {
+      "case_id": "stale-chain-correction-case",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "stale-chain-correction",
+      "request": "[scope=biology]訂正: ココは温血動物ではなく哺乳類です",
+      "input_sha256": "f3088e3a9962580faf39372d5370ce33e8c98c248357a727f88404770a7e548a",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "result_id": "85e11bb35a308e52b099ab4502b18a59962f0f9c9d5dc4c425ea03358db29838",
+      "text": "訂正を会話内の提示前提として記録しました: ココは温血動物ではない。\n置き換え後の提示前提: ココは哺乳類である。\n以前の前提とその依存記録を1件失効させ、元の記録は保持しました。\n現実世界の真偽を検証したものではありません。",
+      "reason": null,
+      "dependencies": [
+        "fact:089324662804d2a2ccaae9e12baec6dd22cd57b60c1eb9ea4cda663eea0f011a",
+        "fact:1eb63e764ed4c9634e559fe838f9d13eb20cd94e432b5ca58ba556143e0e00c3",
+        "fact:19bc3d62345922e398251fcafdedb23066af86873edc3d08014e771d2628d68b"
+      ],
+      "content_plan_id": "d540f2eeea3c7d2d026c37eee52c10accfc379af2c1f051b1b4932d7637b8c5f"
+    },
+    {
+      "case_id": "typed-pronoun-assertion-chain-stale-case",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "assert-after-prior-fact-invalidation",
+      "request": "それは魚です",
+      "input_sha256": "2e5f7f532dd11249a1ada331dd6fc3970e67f642283a6b5bda1fd51e0cbf1cc6",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "result_id": "b1ee12494384a2f239e44bad1f9d0db06c2e9772ce2280d8574ed5640139c92a",
+      "text": "直前の代名詞前提が現在の記憶で無効です。新しい関係結果を確認してください。",
+      "reason": "CONTEXT_PROOF_CHANGED: 直前の代名詞前提が現在の記憶で無効です。新しい関係結果を確認してください。",
+      "dependencies": [],
+      "content_plan_id": null
+    },
+    {
+      "case_id": "stale-chain-no-new-fact-probe",
+      "actor_id": "typed-pronoun-assertion-chain-stale",
+      "input_id": "stale-chain-fish-was-not-stored",
+      "request": "[scope=biology]ココは魚ですか",
+      "input_sha256": "85b2a014cd355c17d508119937bba6c1a2e7020a93d1cae02a20f9e7efd2687b",
+      "exit_code": 2,
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "result_id": "c77e1e6cfbd6f8832544cf895927e5bebcba4b010d2401b7e7686d948247a0be",
+      "text": "範囲「biology」の「ココは魚である」を判定する有効な前提または導出経路がありません。",
+      "reason": "MISSING_PREMISES: 範囲「biology」の「ココは魚である」を判定する有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "content_plan_id": null
+    }
+  ],
+  "outcome": "PASS",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo check --workspace --all-targets --locked",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo build --workspace --locked",
+    "python3 tools/contextual_relation_assertion_chain_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output audit/bb-context-pronoun-relation-assertion-chain-v1-route-validation.json",
+    "git diff --check"
+  ],
+  "not_run": [
+    "full workspace runtime suite",
+    "arbitrary multi-turn and multi-clause co-reference",
+    "full A04/A07/A08/A15/CAP-D04/CAP-D11 acceptance"
+  ],
+  "acceptance_boundary": "This verifies one same-case consecutive assertion chain over an exact active direct premise, plus one subsequent relation query and an invalidation denial. It does not establish arbitrary Japanese/English co-reference, unbounded assertion chains, general discourse resolution, truth verification, or full requirement acceptance."
+}

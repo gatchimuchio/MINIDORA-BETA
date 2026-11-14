@@ -1287,7 +1287,7 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
     }
 }
 
-fn singular_previous_subject(subject: &str) -> bool {
+pub(crate) fn singular_previous_subject(subject: &str) -> bool {
     matches!(
         subject.to_ascii_lowercase().as_str(),
         "it" | "this" | "that"

@@ -3559,38 +3559,75 @@ impl Engine {
                         "前提追加の文脈参照が直前の同一ケース確定結果と一致しません。",
                     );
                 }
-                let Some(prior_meaning) =
-                    previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
-                else {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "MISSING_RELATION_CONTEXT",
-                        "直前の確定結果に一意の型付き関係主語がありません。記憶から主語を推測しません。",
-                    );
-                };
-                let (anchor, expected_proof_dependencies, adopted_conclusion) = match prior_meaning
-                {
-                    PriorRelationMeaning::OriginalQuestion(proposition) => {
-                        (proposition, prior.dependencies.clone(), false)
-                    }
-                    PriorRelationMeaning::AdoptedConclusion {
-                        proposition,
-                        proof_dependencies,
-                    } => (proposition, proof_dependencies, true),
-                };
                 let mut memory = self.store.load_memory(actor)?;
+                let previous_assertion_fact = previous_contextual_assertion_fact(
+                    &self.store,
+                    actor,
+                    &request.case_id,
+                    prior,
+                    &memory,
+                )?;
+                let (anchor, expected_proof_dependencies, adopted_conclusion, assertion_fact_id) =
+                    if let Some(fact) = previous_assertion_fact {
+                        if !fact.valid {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTEXT_PROOF_CHANGED",
+                                "直前の代名詞前提が現在の記憶で無効です。新しい関係結果を確認してください。",
+                            );
+                        }
+                        if input::singular_previous_subject(&fact.proposition.subject) {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "MISSING_RELATION_CONTEXT",
+                                "直前の前提自体に未解決の代名詞主語が残っています。主語を推測しません。",
+                            );
+                        }
+                        (
+                            fact.proposition.clone(),
+                            vec![fact.id.clone()],
+                            false,
+                            Some(fact.id),
+                        )
+                    } else {
+                        let Some(prior_meaning) =
+                            previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
+                        else {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "MISSING_RELATION_CONTEXT",
+                                "直前の確定結果に一意の型付き関係主語がありません。記憶から主語を推測しません。",
+                            );
+                        };
+                        match prior_meaning {
+                            PriorRelationMeaning::OriginalQuestion(proposition) => {
+                                (proposition, prior.dependencies.clone(), false, None)
+                            }
+                            PriorRelationMeaning::AdoptedConclusion {
+                                proposition,
+                                proof_dependencies,
+                            } => (proposition, proof_dependencies, true, None),
+                        }
+                    };
                 let answer = relations::query(&memory, &anchor, request.budget.max_actions)?;
                 let proof_dependencies = relations::answer_dependencies(&answer);
                 let answer_guarantee = relations::answer_guarantee(&answer);
                 let relation_still_has_a_result =
                     relation_explanation_target(&anchor, &answer).is_some();
-                if !relation_still_has_a_result
-                    || proof_dependencies != expected_proof_dependencies
-                    || proof_dependencies != prior.dependencies
-                    || answer_guarantee != prior.guarantee
-                    || (adopted_conclusion && answer.status != "SUPPORTED")
-                {
+                let proof_lineage_matches = if let Some(fact_id) = assertion_fact_id {
+                    answer.status == "SUPPORTED"
+                        && proof_dependencies == [fact_id]
+                        && answer_guarantee == Guarantee::UserPremise
+                } else {
+                    proof_dependencies == expected_proof_dependencies
+                        && proof_dependencies == prior.dependencies
+                        && answer_guarantee == prior.guarantee
+                        && (!adopted_conclusion || answer.status == "SUPPORTED")
+                };
+                if !relation_still_has_a_result || !proof_lineage_matches {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -5665,6 +5702,55 @@ pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposit
         Intent::Ask { proposition } | Intent::AskWhy { proposition } => Some(proposition),
         _ => None,
     }
+}
+
+fn previous_contextual_assertion_fact(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+) -> Result<Option<Fact>> {
+    let Some((_, bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        return Ok(None);
+    };
+    if identity(&bundle.request)? != previous.id {
+        return Err(failure(
+            "PRIOR_INPUT_RESULT_MISMATCH",
+            "the sealed prior assertion and committed result identities differ",
+        ));
+    }
+    if !matches!(
+        &bundle.meaning.intent,
+        Intent::AssertPreviousRelation { .. }
+    ) {
+        return Ok(None);
+    }
+
+    let facts: Vec<_> = memory
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.source_input == previous.id
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+        })
+        .collect();
+    let [fact] = facts.as_slice() else {
+        return Ok(None);
+    };
+    let Some(context_result_ref) = bundle.meaning.context_result_ref.as_ref() else {
+        return Ok(None);
+    };
+    let expected_dependencies = vec![context_result_ref.clone(), fact.id.clone()];
+    if previous.guarantee != Guarantee::UserPremise
+        || previous.dependencies != expected_dependencies
+    {
+        return Ok(None);
+    }
+    Ok(Some((*fact).clone()))
 }
 
 pub(crate) fn previous_relation_meaning(
