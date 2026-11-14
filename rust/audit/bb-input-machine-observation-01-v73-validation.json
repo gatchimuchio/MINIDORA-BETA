@@ -1,0 +1,149 @@
+{
+  "evidence_schema": "minidora-direct-core-observation-v1",
+  "observation_id": "MB-BUILD-20261114-INPUT-01",
+  "base_commit": "d14fbaed6f1bb4958b56af48ad04d5bf88bd5fec",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "host": "x86_64-unknown-linux-gnu"
+  },
+  "command": "cargo test -p minidora-engine --test input_machine_observation_01 --locked -- --nocapture",
+  "test_result": "PASS: 1 passed, 0 failed",
+  "test_log_sha256": "a9035a4c43f1635c5f4757fc7ad2d8ce8689a2126eb88575cb8b637c6fd8c1ba",
+  "test_sources": [
+    {
+      "path": "rust/crates/minidora-engine/src/input.rs",
+      "sha256": "0ea15e80ea5c48e9dab55a398b78bfcf26b8cafb26867586d973533bfaf78fda"
+    },
+    {
+      "path": "rust/crates/minidora-engine/tests/input_machine_observation_01.rs",
+      "sha256": "1bc8087f5332b7721c46d343049ad723aa42b53088c15708ee50bafb59569469"
+    }
+  ],
+  "three_point_set_manifest_checks": [
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+      "expected_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "actual_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "expected_bytes": 28807,
+      "actual_bytes": 28807,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_01_施工仕様書_20261114.md",
+      "expected_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "actual_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "expected_bytes": 23191,
+      "actual_bytes": 23191,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_02_施工工程表_20261114.md",
+      "expected_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "actual_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "expected_bytes": 21474,
+      "actual_bytes": 21474,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_03_Codex施工指示書_20261114.md",
+      "expected_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "actual_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "expected_bytes": 23396,
+      "actual_bytes": 23396,
+      "matches": true
+    }
+  ],
+  "parser_version": "declarative-ja-en-v73-arithmetic-topic-question",
+  "scope": "bounded ordinary Japanese calculator question through input::seal and minidora_engine::Engine::execute; versioned request persisted and exactly replayed after Engine reopen; no external model, network or side effect",
+  "observation": {
+    "actor": "b17-input-machine-observation",
+    "calculation": {
+      "exact_value": "13",
+      "expression": "6+7",
+      "steps": [
+        "6 + 7 = 13"
+      ]
+    },
+    "case_id": "input-machine-observation-one",
+    "case_revision_unchanged_on_replay": true,
+    "entry": "in-process minidora_engine::Engine::execute",
+    "external_network_or_side_effects": false,
+    "external_semantic_generation": false,
+    "guarantee": "COMPUTED",
+    "input_version": 1,
+    "interpretation_scope": "exact arithmetic expression followed by Japanese topic particle は and a terminal question mark",
+    "lifecycle": "COMMIT",
+    "limitations": [
+      "one bounded Japanese input form and one exact Core arithmetic route",
+      "not broad Japanese language or open-domain question acceptance",
+      "not full workspace runtime acceptance"
+    ],
+    "model_revision": "56d7a0aeee81c21ea5b70028c2330cbf2a0066e4433ec064237b24ac80751ca3",
+    "observation": "MB-BUILD-20261114 sixth instruction; input-machine observation 01",
+    "parser_version": "declarative-ja-en-v73-arithmetic-topic-question",
+    "render_sha256": "c812f2da3785792ff107d0b5d3b3e109709a1380fddd111897239c0448c72a72",
+    "result_id": "bd7204339610aaae41c4f3cb3af7777de2e6cf7d48052f63628e8fe18ca30a3d",
+    "same_input_version_replayed_exact_saved_result": true,
+    "semantic_intent": {
+      "expression": "6+7",
+      "kind": "CALCULATE"
+    },
+    "source_hash": "f1e2f371acf1e2cfc4effc1a3b61fb9d95b07cab2a45a85163b1f188d3869583",
+    "source_text": "６＋７は？",
+    "whole_source_utf8_byte_span": {
+      "end": 15,
+      "start": 0,
+      "text": "６＋７は？"
+    }
+  },
+  "claims_not_established": [
+    "broad Japanese language understanding, open-domain Q&A or unconstrained arithmetic wording",
+    "full requirement acceptance for A02/A04/A12/A15/E08 or all 93 requirements",
+    "full workspace runtime acceptance",
+    "release or deployment"
+  ],
+  "verification_results": [
+    {
+      "command": "cargo test -p minidora-engine --test input_machine_observation_01 --locked -- --nocapture",
+      "status": "PASS",
+      "summary": "1 passed, 0 failed",
+      "log_sha256": "a9035a4c43f1635c5f4757fc7ad2d8ce8689a2126eb88575cb8b637c6fd8c1ba"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "status": "PASS",
+      "summary": "233 unit tests; eight bounded integration tests across B11-B17; 0 doc tests",
+      "log_sha256": "9e4fed7b99bbdd86ea9f4bac15bf8b4417c4702afc94856289865c19f3f274d0"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "PASS",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "status": "PASS",
+      "log_sha256": "9f8ecfba9f2d93d234cbf3a1461296517a6e6027d86cc829f95153c715e72bc4"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "status": "PASS",
+      "log_sha256": "e0249f4ae552bcf286df98ec702d97539775862cbe740ae720b54755091a42c4"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "status": "PASS",
+      "log_sha256": "b3ba1daa535593110fc00b6c092926f2eeb22dcbd181067604916ffac92d63a0"
+    },
+    {
+      "command": "cargo test --workspace --locked",
+      "status": "NOT_RUN",
+      "summary": "full workspace runtime acceptance was not exercised"
+    },
+    {
+      "command": "git diff --cached --check",
+      "status": "PASS"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v72-contextual-relation-assertion";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v73-arithmetic-topic-question";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -1744,6 +1744,11 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(expression) = arithmetic_expression(body)? {
         return Ok(Intent::Calculate { expression });
     }
+    if text.trim_end().ends_with(['?', '？'])
+        && let Some(expression) = trailing_topic_arithmetic_question(body)?
+    {
+        return Ok(Intent::Calculate { expression });
+    }
     if regex(r"(?i)^(?:which|what|who|where|when|how)\b")?.is_match(body)
         || regex(r"^(?:どの|どれ|何|なに|誰|だれ|どこ|いつ|どう|いくら|いくつ)")?.is_match(body)
     {
@@ -2456,6 +2461,17 @@ fn arithmetic_expression(text: &str) -> Result<Option<String>> {
         }
     }
     Ok(None)
+}
+
+/// Accept the concise Japanese topic-question form only when the preceding
+/// text is a complete expression in the existing arithmetic grammar. An
+/// actual question mark is required at the call site, so an incomplete
+/// assertion such as `6+7は` remains unresolved.
+fn trailing_topic_arithmetic_question(text: &str) -> Result<Option<String>> {
+    let Some(expression) = text.trim().strip_suffix('は') else {
+        return Ok(None);
+    };
+    arithmetic_expression(expression.trim())
 }
 
 fn japanese_transitive_verb(surface: &str) -> Option<(String, bool)> {
@@ -3627,6 +3643,32 @@ mod tests {
             bundle.fingerprint,
             seal(&request, None).unwrap().fingerprint
         );
+    }
+    #[test]
+    fn concise_japanese_arithmetic_topic_question_uses_the_core_calculator() {
+        let mut request = RequestEnvelope::new("c", "i", "actor", "６＋７は？");
+        request.input_version = 3;
+        let bundle = seal(&request, None).unwrap();
+        assert!(matches!(
+            &bundle.meaning.intent,
+            Intent::Calculate { expression } if expression == "6+7"
+        ));
+        assert_eq!(bundle.request.input_version, 3);
+        assert_eq!(
+            bundle.meaning.parser_version,
+            "declarative-ja-en-v73-arithmetic-topic-question"
+        );
+        assert_eq!(bundle.meaning.spans[0].start, 0);
+        assert_eq!(bundle.meaning.spans[0].end, request.text.len());
+        assert_eq!(bundle.meaning.spans[0].text, request.text);
+
+        for text in ["6+7は", "謎語は？", "6+7は？保存して"] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert!(
+                !matches!(bundle.meaning.intent, Intent::Calculate { .. }),
+                "must not adopt a partial, unknown, or compound request: {text}"
+            );
+        }
     }
     #[test]
     fn unit_arithmetic_input_requires_a_complete_two_quantity_expression() {
