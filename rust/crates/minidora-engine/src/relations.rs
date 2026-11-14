@@ -386,13 +386,21 @@ pub(crate) fn assert_fact_with_source_evidence(
     if let Some(evidence) = &source_evidence {
         let valid_digest =
             |value: &str| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
-        let spans_are_well_formed = evidence.source_roles.iter().all(|(role, spans)| {
-            role.starts_with("/Assert/proposition/")
-                && !spans.is_empty()
-                && spans
-                    .iter()
-                    .all(|span| span.start < span.end && span.end - span.start == span.text.len())
-        });
+        let one_assertion_family = evidence
+            .source_roles
+            .keys()
+            .all(|role| role.starts_with("/Assert/proposition/"))
+            || evidence
+                .source_roles
+                .keys()
+                .all(|role| role.starts_with("/AssertPreviousRelation/proposition/"));
+        let spans_are_well_formed = one_assertion_family
+            && evidence.source_roles.iter().all(|(_, spans)| {
+                !spans.is_empty()
+                    && spans.iter().all(|span| {
+                        span.start < span.end && span.end - span.start == span.text.len()
+                    })
+            });
         if evidence.evidence_version != "minidora.sealed-source-evidence.v1"
             || evidence.input_fingerprint != source_input
             || !valid_digest(&evidence.bundle_fingerprint)
@@ -405,7 +413,7 @@ pub(crate) fn assert_fact_with_source_evidence(
         {
             return Err(failure(
                 "INVALID_SOURCE_EVIDENCE",
-                "direct-premise source evidence is not bound to a valid sealed input",
+                "premise source evidence is not bound to one valid sealed assertion input",
             ));
         }
     }

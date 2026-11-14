@@ -3962,7 +3962,13 @@ impl Engine {
                         .unwrap_or_else(|| anchor.scope.clone()),
                     ..proposition.clone()
                 };
-                let fact = relations::assert_fact(&mut memory, resolved.clone(), &fingerprint)?;
+                let source_evidence = input::assertion_source_evidence(&bundle)?;
+                let fact = relations::assert_fact_with_source_evidence(
+                    &mut memory,
+                    resolved.clone(),
+                    &fingerprint,
+                    source_evidence,
+                )?;
                 self.store.save_memory(actor, &memory)?;
                 units.push(format!(
                     "直前結果 {} の関係根拠を再確認し、主語「{}」とscope「{}」を復元しました。",
@@ -7180,6 +7186,334 @@ mod core_construction_observation_tests {
         );
         drop(reopened);
         fs::remove_dir_all(directory).expect("remove isolated transitive-source state");
+    }
+
+    #[test]
+    fn contextual_japanese_assertion_source_roles_follow_the_fact_into_reopened_proofs() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-core-contextual-assertion-source-proof-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("unique contextual-source state directory");
+        let actor = "contextual-source-proof-actor";
+        let case = "contextual-source-proof-case";
+        let mut engine = Engine::open(&directory).expect("open Core");
+
+        let assertion_request = RequestEnvelope::new(
+            case,
+            "context-anchor",
+            actor,
+            "[scope=biology]ミナは毒を食べません。",
+        );
+        let assertion = engine
+            .execute(actor, assertion_request)
+            .expect("execute direct Japanese relation assertion");
+        assert_eq!(assertion.lifecycle, Lifecycle::Commit, "{assertion:?}");
+
+        let anchor_request = RequestEnvelope::new(
+            case,
+            "context-anchor-query",
+            actor,
+            "[scope=biology]ミナは毒を食べませんか",
+        );
+        let anchor = engine
+            .execute(actor, anchor_request)
+            .expect("execute actual relation query used as the contextual anchor");
+        assert_eq!(anchor.lifecycle, Lifecycle::Commit, "{anchor:?}");
+        assert!(
+            assertion
+                .dependencies
+                .iter()
+                .any(|dependency| anchor.dependencies.contains(dependency))
+        );
+
+        let contextual_request = RequestEnvelope::new(
+            case,
+            "contextual-assertion",
+            actor,
+            "[scope=biology]それは水を使う。",
+        );
+        let contextual = engine
+            .execute(actor, contextual_request.clone())
+            .expect("execute context-restored Japanese assertion");
+        assert_eq!(contextual.lifecycle, Lifecycle::Commit, "{contextual:?}");
+        assert_eq!(contextual.guarantee, Guarantee::UserPremise);
+        assert!(contextual.dependencies.contains(&anchor.id));
+
+        let contextual_state = engine
+            .latest(actor, case)
+            .expect("read contextual assertion case")
+            .expect("contextual assertion state exists");
+        let contextual_bundle = contextual_state
+            .bundle
+            .as_ref()
+            .expect("contextual assertion bundle is sealed");
+        assert_eq!(
+            contextual_bundle.meaning.context_result_ref.as_deref(),
+            Some(anchor.id.as_str()),
+            "the source bundle binds the pronoun to the actual preceding result"
+        );
+        assert!(matches!(
+            contextual_bundle.meaning.intent,
+            Intent::AssertPreviousRelation { .. }
+        ));
+        let expected_evidence = input::assertion_source_evidence(contextual_bundle)
+            .expect("validate contextual source evidence")
+            .expect("supported Japanese contextual assertion has exact source roles");
+        assert_eq!(expected_evidence.raw_sha256, contextual_bundle.raw_sha256);
+        assert_eq!(
+            expected_evidence.bundle_fingerprint,
+            contextual_bundle.fingerprint
+        );
+        assert_eq!(
+            expected_evidence.input_fingerprint,
+            identity(&contextual_bundle.request).expect("context request fingerprint")
+        );
+
+        let contextual_fact_id = contextual
+            .dependencies
+            .iter()
+            .find(|dependency| *dependency != &anchor.id)
+            .expect("contextual assertion fact dependency")
+            .clone();
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("load Core memory after contextual assertion");
+        let premise = memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == contextual_fact_id)
+            .expect("contextual USER_PREMISE fact is in Core memory");
+        assert_eq!(premise.proposition.subject, "ミナ");
+        assert_eq!(premise.proposition.object, "水");
+        assert_eq!(premise.proposition.scope, "biology");
+        assert_eq!(premise.source_evidence, Some(expected_evidence.clone()));
+        for (role, expected) in [
+            ("/AssertPreviousRelation/proposition/subject", "それ"),
+            ("/AssertPreviousRelation/proposition/subject_particle", "は"),
+            ("/AssertPreviousRelation/proposition/object", "水"),
+            ("/AssertPreviousRelation/proposition/object_particle", "を"),
+            ("/AssertPreviousRelation/proposition/predicate", "使う"),
+            ("/AssertPreviousRelation/proposition/scope", "biology"),
+        ] {
+            let spans = expected_evidence
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing contextual source role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous contextual source role {role}");
+            assert_eq!(spans[0].text, expected, "wrong source role {role}");
+            assert_eq!(
+                contextual_request.text.get(spans[0].start..spans[0].end),
+                Some(expected),
+                "contextual role {role} does not point into original UTF-8 bytes"
+            );
+        }
+
+        let mut ambiguous_bundle = contextual_bundle.clone();
+        let duplicate_predicate_span =
+            ambiguous_bundle.meaning.source_roles["/AssertPreviousRelation/proposition/predicate"]
+                [0]
+            .clone();
+        let predicate_spans = ambiguous_bundle
+            .meaning
+            .source_roles
+            .get_mut("/AssertPreviousRelation/proposition/predicate")
+            .expect("contextual predicate role exists");
+        predicate_spans.push(duplicate_predicate_span);
+        assert!(
+            input::assertion_source_evidence(&ambiguous_bundle)
+                .expect("validate duplicated contextual role")
+                .is_none(),
+            "a duplicated contextual role is not promoted into fact evidence"
+        );
+
+        drop(engine);
+        let mut reopened = Engine::open(&directory).expect("reopen Core state");
+        let restored_memory = reopened
+            .store
+            .load_memory(actor)
+            .expect("restore actor memory and revalidate sealed provenance");
+        let restored_premise = restored_memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == contextual_fact_id)
+            .expect("restore contextual source-backed premise");
+        assert_eq!(
+            restored_premise.source_evidence,
+            Some(expected_evidence.clone()),
+            "the source bundle and context result link remain after reopen"
+        );
+        let proof = relations::query(&restored_memory, &restored_premise.proposition, 32)
+            .expect("query the contextual source-backed premise");
+        assert_eq!(proof.status, "SUPPORTED");
+        assert_eq!(proof.facts.len(), 1);
+        assert_eq!(
+            proof.facts[0].source_evidence,
+            Some(expected_evidence.clone())
+        );
+        assert!(relations::answer_dependencies(&proof).contains(&contextual_fact_id));
+
+        let followup = RequestEnvelope::new(
+            case,
+            "contextual-followup",
+            actor,
+            "[scope=biology]ミナは水を使う?",
+        );
+        let answer = reopened
+            .execute(actor, followup)
+            .expect("normal Core query consumes the reopened contextual premise");
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert_eq!(answer.guarantee, Guarantee::UserPremise);
+        assert!(answer.dependencies.contains(&contextual_fact_id));
+
+        let copular_case = "contextual-copular-source-proof-case";
+        let copular_seed = reopened
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    copular_case,
+                    "copular-context-seed",
+                    actor,
+                    "[scope=biology]ミナは鳥です。",
+                ),
+            )
+            .expect("execute separate copular context seed");
+        assert_eq!(copular_seed.lifecycle, Lifecycle::Commit);
+        let copular_anchor = reopened
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    copular_case,
+                    "copular-context-anchor",
+                    actor,
+                    "[scope=biology]ミナは鳥ですか",
+                ),
+            )
+            .expect("execute copular relation query");
+        assert_eq!(copular_anchor.lifecycle, Lifecycle::Commit);
+        let copular_request = RequestEnvelope::new(
+            copular_case,
+            "copular-context-assertion",
+            actor,
+            "[scope=biology]それは動物です。",
+        );
+        let copular_assertion = reopened
+            .execute(actor, copular_request.clone())
+            .expect("execute contextual Japanese copular assertion");
+        assert_eq!(copular_assertion.lifecycle, Lifecycle::Commit);
+        assert!(copular_assertion.dependencies.contains(&copular_anchor.id));
+        let copular_state = reopened
+            .latest(actor, copular_case)
+            .expect("read contextual copular state")
+            .expect("contextual copular state exists");
+        let copular_bundle = copular_state
+            .bundle
+            .as_ref()
+            .expect("contextual copular input is sealed");
+        let copular_evidence = input::assertion_source_evidence(copular_bundle)
+            .expect("validate contextual copular source evidence")
+            .expect("contextual copular source roles are complete");
+        let copular_fact_id = copular_assertion
+            .dependencies
+            .iter()
+            .find(|dependency| *dependency != &copular_anchor.id)
+            .expect("contextual copular fact dependency");
+        let copular_fact = reopened
+            .store
+            .load_memory(actor)
+            .expect("load memory after contextual copular assertion")
+            .facts
+            .into_iter()
+            .find(|fact| fact.id == *copular_fact_id)
+            .expect("contextual copular fact is persisted");
+        assert_eq!(copular_fact.proposition.subject, "ミナ");
+        assert_eq!(copular_fact.source_evidence, Some(copular_evidence.clone()));
+        assert_eq!(
+            copular_evidence.source_roles["/AssertPreviousRelation/proposition/subject"][0].text,
+            "それ"
+        );
+        assert_eq!(
+            copular_evidence.source_roles["/AssertPreviousRelation/proposition/predicate"][0].text,
+            "は"
+        );
+        let copular_followup = reopened
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    copular_case,
+                    "copular-context-followup",
+                    actor,
+                    "[scope=biology]ミナは動物ですか",
+                ),
+            )
+            .expect("normal Core query consumes the contextual copular fact");
+        assert_eq!(copular_followup.lifecycle, Lifecycle::Commit);
+        assert!(copular_followup.dependencies.contains(copular_fact_id));
+
+        let missing_context = reopened
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    "contextual-assertion-without-anchor",
+                    "missing-context-assertion",
+                    actor,
+                    "[scope=biology]それは水を使う。",
+                ),
+            )
+            .expect("missing-context assertion returns a typed result");
+        assert_eq!(missing_context.lifecycle, Lifecycle::Suspend);
+        assert!(missing_context.dependencies.is_empty());
+        let missing_context_state = reopened
+            .latest(actor, "contextual-assertion-without-anchor")
+            .expect("read missing-context state")
+            .expect("missing-context request is retained");
+        let missing_context_bundle = missing_context_state
+            .bundle
+            .as_ref()
+            .expect("missing-context input is sealed with unresolved context");
+        assert!(missing_context_bundle.meaning.context_result_ref.is_none());
+        assert!(
+            input::assertion_source_evidence(missing_context_bundle)
+                .expect("validate absent contextual source authority")
+                .is_none()
+        );
+
+        println!(
+            "B25_CONTEXTUAL_ASSERTION_SOURCE_PROOF={}",
+            serde_json::to_string(&serde_json::json!({
+                "anchor_result_id": anchor.id,
+                "contextual_source": contextual_request.text,
+                "context_result_ref": contextual_bundle.meaning.context_result_ref,
+                "resolved_fact_subject": restored_premise.proposition.subject,
+                "source_pronoun": expected_evidence.source_roles["/AssertPreviousRelation/proposition/subject"][0].text,
+                "parser_version": expected_evidence.parser_version,
+                "bundle_fingerprint": expected_evidence.bundle_fingerprint,
+                "raw_sha256": expected_evidence.raw_sha256,
+                "semantic_signature": expected_evidence.semantic_signature,
+                "source_roles": expected_evidence.source_roles,
+                "fact_id": contextual_fact_id,
+                "reopened_proof_status": proof.status,
+                "follow_up_result": answer.text,
+                "follow_up_dependencies": answer.dependencies,
+                "duplicated_contextual_role_not_projected": true,
+                "memory_reopened_with_source_and_context_link": true,
+                "query_proof_returns_source_evidence": true,
+                "normal_core_followup_consumes_fact": answer.dependencies.contains(&contextual_fact_id),
+                "copular_context_source": copular_request.text,
+                "copular_context_source_roles": copular_evidence.source_roles,
+                "copular_fact_id": copular_fact_id,
+                "copular_followup_dependencies": copular_followup.dependencies,
+                "missing_context_lifecycle": missing_context.lifecycle,
+                "missing_context_has_no_proof_fact": missing_context.dependencies.is_empty(),
+                "source_roles_are_themselves_world_truth": false,
+                "external_network_or_effects": false
+            }))
+            .expect("serialize B25 contextual source proof observation")
+        );
+        drop(reopened);
+        fs::remove_dir_all(directory).expect("remove isolated contextual source state");
     }
 
     #[test]

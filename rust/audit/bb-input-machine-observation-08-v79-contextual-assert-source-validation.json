@@ -1,0 +1,134 @@
+{
+  "observation_id": "B25_CONTEXTUAL_ASSERTION_SOURCE_ROLE_TO_FACT_PROOF_AFTER_REOPEN",
+  "status": "PASS",
+  "scope": "Supported Japanese singular-pronoun AssertPreviousRelation copular and transitive forms through Core memory reopen and follow-up proof.",
+  "core_route": {
+    "anchor_result_id": "1e0467992f38f6b1a2ed293a46898f5b84a80704e27221890789ab10e0aef40f",
+    "bundle_fingerprint": "f652cde22fef6981537cbb0419f3a6bec1ca7ab5693f4ba6ca2dc80bc3e52f38",
+    "context_result_ref": "1e0467992f38f6b1a2ed293a46898f5b84a80704e27221890789ab10e0aef40f",
+    "contextual_source": "[scope=biology]それは水を使う。",
+    "copular_context_source": "[scope=biology]それは動物です。",
+    "copular_context_source_roles": {
+      "/AssertPreviousRelation/proposition/object": [
+        {
+          "end": 30,
+          "start": 24,
+          "text": "動物"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/predicate": [
+        {
+          "end": 24,
+          "start": 21,
+          "text": "は"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/scope": [
+        {
+          "end": 14,
+          "start": 7,
+          "text": "biology"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/subject": [
+        {
+          "end": 21,
+          "start": 15,
+          "text": "それ"
+        }
+      ]
+    },
+    "copular_fact_id": "fact:a362472413d07aea02ea2f4ddde93489a54f18edc228712837924039eead994f",
+    "copular_followup_dependencies": [
+      "fact:a362472413d07aea02ea2f4ddde93489a54f18edc228712837924039eead994f"
+    ],
+    "duplicated_contextual_role_not_projected": true,
+    "external_network_or_effects": false,
+    "fact_id": "fact:fb44e1a328c1a7cce72b012ee33517c862b5607a0bf5fd4798ca5c3dfa6a868c",
+    "follow_up_dependencies": [
+      "fact:fb44e1a328c1a7cce72b012ee33517c862b5607a0bf5fd4798ca5c3dfa6a868c"
+    ],
+    "follow_up_result": "提示された前提の範囲では、ミナは水を使う（範囲: biology）。",
+    "memory_reopened_with_source_and_context_link": true,
+    "missing_context_has_no_proof_fact": true,
+    "missing_context_lifecycle": "SUSPEND",
+    "normal_core_followup_consumes_fact": true,
+    "parser_version": "declarative-ja-en-v79-contextual-assertion-source-ranges",
+    "query_proof_returns_source_evidence": true,
+    "raw_sha256": "503993221d084c755ade212d4d794f9572454cad97c5ae6174d565080972f965",
+    "reopened_proof_status": "SUPPORTED",
+    "resolved_fact_subject": "ミナ",
+    "semantic_signature": "b8606504d39a8e3418f7c1aee6b7b1669faa4f5e19f603680bfc9e4c8712209c",
+    "source_pronoun": "それ",
+    "source_roles": {
+      "/AssertPreviousRelation/proposition/object": [
+        {
+          "end": 27,
+          "start": 24,
+          "text": "水"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/object_particle": [
+        {
+          "end": 30,
+          "start": 27,
+          "text": "を"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/predicate": [
+        {
+          "end": 36,
+          "start": 30,
+          "text": "使う"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/scope": [
+        {
+          "end": 14,
+          "start": 7,
+          "text": "biology"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/subject": [
+        {
+          "end": 21,
+          "start": 15,
+          "text": "それ"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/subject_particle": [
+        {
+          "end": 24,
+          "start": 21,
+          "text": "は"
+        }
+      ]
+    },
+    "source_roles_are_themselves_world_truth": false
+  },
+  "engine_package_tests": {
+    "command": "cargo test -p minidora-engine --locked",
+    "passed": 267,
+    "failed": 0,
+    "ignored": 0,
+    "unit_tests": 241,
+    "integration_tests": 26,
+    "doc_tests": 0,
+    "log": "isolated evidence log 11-engine-package-tests.log"
+  },
+  "workspace_gates": {
+    "cargo_fmt_all_check": "PASS",
+    "cargo_check_workspace_all_targets_locked": "PASS",
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": "PASS",
+    "cargo_build_workspace_locked": "PASS",
+    "git_diff_check": "PASS",
+    "platform": "Linux x86_64-unknown-linux-gnu; Rust/Cargo 1.99.1",
+    "full_workspace_runtime_all_features": "NOT_RUN"
+  },
+  "identity_note": "Parser v79 participates in sealed-input fingerprints. Existing v78 bundles remain versioned; callers reusing an already-registered (case_id, input_id, input_version) tuple after upgrading may need to increment input_version.",
+  "limits": [
+    "Source spans and hashes link the assertion to its supplied input; they do not establish outside-world truth.",
+    "Only the supported singular-pronoun Japanese copular and transitive contextual assertion subset was observed.",
+    "CLI/UI/output delivery, independent QA, other operating systems, and full A04/A15/E08 acceptance were not run."
+  ]
+}

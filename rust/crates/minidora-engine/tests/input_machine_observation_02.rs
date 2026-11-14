@@ -63,7 +63,7 @@ fn parsed_relation_roles_keep_exact_source_ranges_across_persisted_input_replay(
     ));
     assert_eq!(
         bundle.meaning.parser_version,
-        "declarative-ja-en-v78-japanese-transitive-assertion-source-ranges"
+        "declarative-ja-en-v79-contextual-assertion-source-ranges"
     );
     let source = &bundle.request.text;
     let roles = &bundle.meaning.source_roles;

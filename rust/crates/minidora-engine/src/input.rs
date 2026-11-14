@@ -7,8 +7,7 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str =
-    "declarative-ja-en-v78-japanese-transitive-assertion-source-ranges";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v79-contextual-assertion-source-ranges";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -355,6 +354,14 @@ fn japanese_assertion_source_roles(
     text: &str,
     proposition: &Proposition,
 ) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    japanese_assertion_source_roles_with_root(text, proposition, "/Assert/proposition")
+}
+
+fn japanese_assertion_source_roles_with_root(
+    text: &str,
+    proposition: &Proposition,
+    role_root: &str,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
     if proposition.predicate != "is" {
         return Ok(None);
     }
@@ -455,24 +462,15 @@ fn japanese_assertion_source_roles(
     };
 
     let mut roles = BTreeMap::from([
-        (
-            "/Assert/proposition/subject".to_string(),
-            vec![subject_span],
-        ),
-        (
-            "/Assert/proposition/predicate".to_string(),
-            vec![predicate_span],
-        ),
-        ("/Assert/proposition/object".to_string(), vec![object_span]),
+        (format!("{role_root}/subject"), vec![subject_span]),
+        (format!("{role_root}/predicate"), vec![predicate_span]),
+        (format!("{role_root}/object"), vec![object_span]),
     ]);
     if let Some(scope_span) = scope_span {
-        roles.insert("/Assert/proposition/scope".to_string(), vec![scope_span]);
+        roles.insert(format!("{role_root}/scope"), vec![scope_span]);
     }
     if let Some(negation_span) = negation_span {
-        roles.insert(
-            "/Assert/proposition/negation".to_string(),
-            vec![negation_span],
-        );
+        roles.insert(format!("{role_root}/negation"), vec![negation_span]);
     }
     Ok(Some(roles))
 }
@@ -488,6 +486,14 @@ fn source_span_at(text: &str, start: usize, end: usize) -> Option<SourceSpan> {
 fn japanese_transitive_assertion_source_roles(
     text: &str,
     proposition: &Proposition,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    japanese_transitive_assertion_source_roles_with_root(text, proposition, "/Assert/proposition")
+}
+
+fn japanese_transitive_assertion_source_roles_with_root(
+    text: &str,
+    proposition: &Proposition,
+    role_root: &str,
 ) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
     let trimmed = text.trim();
     let source_offset = text.len() - text.trim_start().len();
@@ -601,43 +607,50 @@ fn japanese_transitive_assertion_source_roles(
     }
 
     let mut roles = BTreeMap::from([
+        (format!("{role_root}/subject"), vec![subject_span]),
         (
-            "/Assert/proposition/subject".to_string(),
-            vec![subject_span],
-        ),
-        (
-            "/Assert/proposition/subject_particle".to_string(),
+            format!("{role_root}/subject_particle"),
             vec![subject_particle_span],
         ),
-        ("/Assert/proposition/object".to_string(), vec![object_span]),
+        (format!("{role_root}/object"), vec![object_span]),
         (
-            "/Assert/proposition/object_particle".to_string(),
+            format!("{role_root}/object_particle"),
             vec![object_particle_span],
         ),
-        (
-            "/Assert/proposition/predicate".to_string(),
-            vec![predicate_span],
-        ),
+        (format!("{role_root}/predicate"), vec![predicate_span]),
     ]);
     if let Some(scope_span) = scope_span {
-        roles.insert("/Assert/proposition/scope".to_string(), vec![scope_span]);
+        roles.insert(format!("{role_root}/scope"), vec![scope_span]);
     }
     Ok(Some(roles))
 }
 
-/// Project only a complete, unambiguous supported direct Japanese assertion
-/// role map into a direct-premise evidence record. This validates the already
-/// sealed interpretation and its original byte ranges; contextual assertions
-/// and other input families keep their existing bundle only.
+/// Project only a complete, unambiguous supported Japanese assertion role map
+/// into a direct-premise evidence record. A contextual assertion records its
+/// source pronoun here; the sealed bundle links that pronoun to the actual
+/// preceding result used by Core to restore the proposition subject.
 pub(crate) fn assertion_source_evidence(
     bundle: &InputBundle,
 ) -> Result<Option<SealedSourceEvidence>> {
-    let Intent::Assert { proposition } = &bundle.meaning.intent else {
-        return Ok(None);
+    let (proposition, role_root, contextual) = match &bundle.meaning.intent {
+        Intent::Assert { proposition } => (proposition, "/Assert/proposition", false),
+        Intent::AssertPreviousRelation { proposition, .. }
+            if singular_previous_subject(&proposition.subject) =>
+        {
+            (proposition, "/AssertPreviousRelation/proposition", true)
+        }
+        _ => return Ok(None),
     };
+    if contextual && bundle.meaning.context_result_ref.is_none() {
+        return Ok(None);
+    }
+
     if proposition.predicate != "is" {
-        let Some(source_roles) =
-            japanese_transitive_assertion_source_roles(&bundle.request.text, proposition)?
+        let Some(source_roles) = japanese_transitive_assertion_source_roles_with_root(
+            &bundle.request.text,
+            proposition,
+            role_root,
+        )?
         else {
             return Ok(None);
         };
@@ -656,46 +669,47 @@ pub(crate) fn assertion_source_evidence(
     }
 
     let roles = &bundle.meaning.source_roles;
-    let subject_role = "/Assert/proposition/subject";
-    let predicate_role = "/Assert/proposition/predicate";
-    let object_role = "/Assert/proposition/object";
-    let scope_role = "/Assert/proposition/scope";
-    let negation_role = "/Assert/proposition/negation";
-    if roles.keys().any(|role| {
-        !matches!(
-            role.as_str(),
-            "/Assert/proposition/subject"
-                | "/Assert/proposition/predicate"
-                | "/Assert/proposition/object"
-                | "/Assert/proposition/scope"
-                | "/Assert/proposition/negation"
-        )
-    }) {
+    let subject_role = format!("{role_root}/subject");
+    let predicate_role = format!("{role_root}/predicate");
+    let object_role = format!("{role_root}/object");
+    let scope_role = format!("{role_root}/scope");
+    let negation_role = format!("{role_root}/negation");
+    let allowed_roles = [
+        subject_role.as_str(),
+        predicate_role.as_str(),
+        object_role.as_str(),
+        scope_role.as_str(),
+        negation_role.as_str(),
+    ];
+    if roles
+        .keys()
+        .any(|role| !allowed_roles.contains(&role.as_str()))
+    {
         return Ok(None);
     }
     let single = |role: &str| -> Option<&SourceSpan> {
         let spans = roles.get(role)?;
         (spans.len() == 1).then(|| &spans[0])
     };
-    let Some(subject) = single(subject_role) else {
+    let Some(subject) = single(&subject_role) else {
         return Ok(None);
     };
-    let Some(predicate) = single(predicate_role) else {
+    let Some(predicate) = single(&predicate_role) else {
         return Ok(None);
     };
-    let Some(object) = single(object_role) else {
+    let Some(object) = single(&object_role) else {
         return Ok(None);
     };
-    let scope = if roles.contains_key(scope_role) {
-        let Some(scope) = single(scope_role) else {
+    let scope = if roles.contains_key(&scope_role) {
+        let Some(scope) = single(&scope_role) else {
             return Ok(None);
         };
         Some(scope)
     } else {
         None
     };
-    let negation = if roles.contains_key(negation_role) {
-        let Some(negation) = single(negation_role) else {
+    let negation = if roles.contains_key(&negation_role) {
+        let Some(negation) = single(&negation_role) else {
             return Ok(None);
         };
         Some(negation)
@@ -810,6 +824,26 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     }
     if let Intent::Assert { proposition } = intent
         && let Some(source_roles) = japanese_transitive_assertion_source_roles(text, proposition)?
+    {
+        return Ok(source_roles);
+    }
+    if let Intent::AssertPreviousRelation { proposition, .. } = intent
+        && singular_previous_subject(&proposition.subject)
+        && let Some(source_roles) = japanese_assertion_source_roles_with_root(
+            text,
+            proposition,
+            "/AssertPreviousRelation/proposition",
+        )?
+    {
+        return Ok(source_roles);
+    }
+    if let Intent::AssertPreviousRelation { proposition, .. } = intent
+        && singular_previous_subject(&proposition.subject)
+        && let Some(source_roles) = japanese_transitive_assertion_source_roles_with_root(
+            text,
+            proposition,
+            "/AssertPreviousRelation/proposition",
+        )?
     {
         return Ok(source_roles);
     }
@@ -4567,7 +4601,7 @@ mod tests {
         assert_eq!(bundle.request.input_version, 3);
         assert_eq!(
             bundle.meaning.parser_version,
-            "declarative-ja-en-v78-japanese-transitive-assertion-source-ranges"
+            "declarative-ja-en-v79-contextual-assertion-source-ranges"
         );
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());
