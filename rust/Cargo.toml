@@ -9,6 +9,7 @@ license = "Apache-2.0"
 rust-version = "1.99"
 
 [workspace.dependencies]
+aho-corasick = "1.1"
 minidora-domain = { path = "crates/minidora-domain" }
 minidora-engine = { path = "crates/minidora-engine" }
 serde = { version = "1.0", features = ["derive"] }

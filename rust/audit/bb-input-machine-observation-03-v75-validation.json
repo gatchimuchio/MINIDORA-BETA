@@ -1,0 +1,81 @@
+{
+  "evidence_schema": "minidora-construction-change-record-v1",
+  "observation_id": "MB-BUILD-20261114-INPUT-03",
+  "base_commit": "81a6f3c23c51a1f30d26bfab5c6dac10e03d9632",
+  "parser_version": "declarative-ja-en-v75-all-intent-source-spans",
+  "implementation_scope": {
+    "entry": "minidora_engine::input::seal",
+    "source_map": "all serialized Intent string leaves under /Variant/field/index role paths",
+    "matching": "Aho-Corasick over NFKC-normalized candidate strings and source; returned ranges and text refer to untouched UTF-8 request bytes",
+    "guards": [
+      "Unknown intent and reason text are excluded",
+      "ASCII word and numeric token boundaries reject common substring matches",
+      "at most 32 distinct spans are retained per role",
+      "existing Japanese は/が predicate fallback and negative-marker aliases are preserved"
+    ],
+    "compatibility": "MeaningIR.source_roles wire contract remains optional and empty-map-omitted; database schema unchanged; parser revision and input fingerprint change",
+    "known_limits": [
+      "lexical matching does not establish semantic correctness",
+      "multiple occurrences of an identical string can map to multiple candidate spans",
+      "matches past the per-role cap are omitted",
+      "runtime mapping and saved replay on v75 are not verified"
+    ]
+  },
+  "change_files_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "12c5fd3836347881fc2977b04e5d14722393775cd4507d6e660fd52a0e6da5ee",
+    "rust/crates/minidora-engine/tests/input_machine_observation_01.rs": "2b66cbd6f775126de9e1f510cddf61cd9b4161481a5c24e2e62ce033ed2fcd93",
+    "rust/crates/minidora-engine/tests/input_machine_observation_02.rs": "d034c2b3937a1dc43be8c6ecdfa6388f531ccba5a4d3b9831eb8b2f87e2dfdfa",
+    "rust/Cargo.toml": "c11178237c88b3b237856e52838ee8361bd6062b9d3a362412112b4b4f58cc2b",
+    "rust/crates/minidora-engine/Cargo.toml": "146f27d07f10a806d0ca4e14ee86d07a34aa5204e13b5c439b3ba6890c9d7c9b",
+    "rust/Cargo.lock": "90e0859f4274cb9c2e067e24ecc684f9738d3c04ae796bc72f6f40fe039767a1",
+    "rust/audit/requirements.tsv": "fd005aa3b123637088ddc93c41f434e346f5ee27a3336c09ea8b733c9d368cd6",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "551a89cb596c80a5c0b3e22e8deb0d439fd221ca924231e20dd16e7f507137ab",
+    "rust/audit/construction/MB-BUILD-20261114/BUILD_BATCH_19.md": "bdf7cf3b3e41bb13bfb9d170af6fb38d87f78fd5964c56b4107064422d7c0153"
+  },
+  "three_point_set_archive": {
+    "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+    "expected_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "actual_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "expected_bytes": 28807,
+    "actual_bytes": 28807,
+    "matches": true
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all",
+      "result": "PASS; formatting only"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "NOT_RUN"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "result": "NOT_RUN"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "NOT_RUN"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "NOT_RUN"
+    },
+    {
+      "command": "normal Engine runtime and saved-store replay on parser v75",
+      "result": "NOT_RUN"
+    }
+  ],
+  "requirements": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_requirement_acceptance": "UNVERIFIED"
+  },
+  "runtime_observation": "NOT_RUN",
+  "release": "NOT_RELEASED"
+}

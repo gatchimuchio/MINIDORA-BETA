@@ -577,6 +577,7 @@ dependencies = [
 name = "minidora-engine"
 version = "0.7.0-alpha.8"
 dependencies = [
+ "aho-corasick",
  "minidora-domain",
  "num-bigint",
  "num-rational",

@@ -1,11 +1,12 @@
 //! One-time, source-preserving interpretation for an explicitly limited grammar.
 //! Unrecognized language is retained as an unresolved intent, never guessed.
+use aho_corasick::AhoCorasick;
 use minidora_domain::*;
 use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v74-role-source-spans";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v75-all-intent-source-spans";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -114,7 +115,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         unresolved.push("no actual committed calculation is available to correct".into());
     }
     let context_sha256 = identity(&previous)?;
-    let source_roles = source_role_spans(&request.text, &intent);
+    let source_roles = source_role_spans(&request.text, &intent)?;
     let meaning = MeaningIR {
         parser_version: PARSER_VERSION.into(),
         intent,
@@ -163,193 +164,169 @@ fn add_source_candidate(candidates: &mut SourceRoleCandidates, role: &str, value
     }
 }
 
-fn add_proposition_source_candidates(
+fn escape_role_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
+fn serde_tag_role(tag: &str) -> String {
+    tag.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            characters
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string())
+                .unwrap_or_default()
+                + &characters.as_str().to_ascii_lowercase()
+        })
+        .collect()
+}
+
+fn collect_string_leaf_candidates(
+    value: &serde_json::Value,
+    role: &str,
     candidates: &mut SourceRoleCandidates,
-    prefix: &str,
-    proposition: &Proposition,
 ) {
-    add_source_candidate(
-        candidates,
-        &format!("{prefix}/subject"),
-        &proposition.subject,
-    );
-    let predicate_role = format!("{prefix}/predicate");
-    add_source_candidate(candidates, &predicate_role, &proposition.predicate);
-    if proposition.predicate == "is" {
-        for verb in ["is", "are"] {
-            add_source_candidate(candidates, &predicate_role, verb);
+    match value {
+        serde_json::Value::String(value) => add_source_candidate(candidates, role, value),
+        serde_json::Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                collect_string_leaf_candidates(value, &format!("{role}/{index}"), candidates);
+            }
         }
-    }
-    add_source_candidate(candidates, &format!("{prefix}/object"), &proposition.object);
-    add_source_candidate(candidates, &format!("{prefix}/scope"), &proposition.scope);
-    if proposition.negative {
-        let role = format!("{prefix}/negation");
-        for marker in [
-            "not",
-            "ではありません",
-            "ではない",
-            "じゃない",
-            "でありません",
-            "でない",
-        ] {
-            add_source_candidate(candidates, &role, marker);
+        serde_json::Value::Object(values) => {
+            for (key, value) in values {
+                if matches!(key.as_str(), "kind" | "reason") {
+                    continue;
+                }
+                collect_string_leaf_candidates(
+                    value,
+                    &format!("{role}/{}", escape_role_segment(key)),
+                    candidates,
+                );
+            }
         }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
     }
 }
 
-/// Build a bounded, versioned index from selected sealed meaning roles back to
-/// exact UTF-8 ranges in the original request. Matching uses the parser's
-/// NFKC view, while every returned span slices the untouched source bytes.
-fn source_role_spans(text: &str, intent: &Intent) -> BTreeMap<String, Vec<SourceSpan>> {
+fn collect_semantic_aliases(
+    value: &serde_json::Value,
+    role: &str,
+    candidates: &mut SourceRoleCandidates,
+    japanese_predicate_roles: &mut Vec<String>,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                collect_semantic_aliases(
+                    value,
+                    &format!("{role}/{index}"),
+                    candidates,
+                    japanese_predicate_roles,
+                );
+            }
+        }
+        serde_json::Value::Object(values) => {
+            if values.get("predicate").and_then(serde_json::Value::as_str) == Some("is") {
+                let predicate_role = format!("{role}/predicate");
+                add_source_candidate(candidates, &predicate_role, "are");
+                japanese_predicate_roles.push(predicate_role);
+            }
+            if values.get("negative").and_then(serde_json::Value::as_bool) == Some(true) {
+                let role = format!("{role}/negation");
+                for marker in [
+                    "not",
+                    "ではありません",
+                    "ではない",
+                    "じゃない",
+                    "でありません",
+                    "でない",
+                ] {
+                    add_source_candidate(candidates, &role, marker);
+                }
+            }
+            for (key, value) in values {
+                if matches!(key.as_str(), "kind" | "reason") {
+                    continue;
+                }
+                collect_semantic_aliases(
+                    value,
+                    &format!("{role}/{}", escape_role_segment(key)),
+                    candidates,
+                    japanese_predicate_roles,
+                );
+            }
+        }
+        serde_json::Value::String(_)
+        | serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn ascii_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn numeric_token_byte(byte: u8) -> bool {
+    byte.is_ascii_digit() || matches!(byte, b'.' | b'/' | b'+' | b'-' | b'e' | b'E')
+}
+
+fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let needle = needle.as_bytes();
+    let starts_word = needle.first().is_some_and(|byte| ascii_word_byte(*byte));
+    let ends_word = needle.last().is_some_and(|byte| ascii_word_byte(*byte));
+    if starts_word && start > 0 && ascii_word_byte(bytes[start - 1]) {
+        return false;
+    }
+    if ends_word && end < bytes.len() && ascii_word_byte(bytes[end]) {
+        return false;
+    }
+    let numeric = needle.iter().any(u8::is_ascii_digit)
+        && needle.iter().all(|byte| numeric_token_byte(*byte));
+    if numeric
+        && ((start > 0 && numeric_token_byte(bytes[start - 1]))
+            || (end < bytes.len() && numeric_token_byte(bytes[end])))
+    {
+        return false;
+    }
+    true
+}
+
+/// Build a versioned index from every string leaf in the sealed Intent back
+/// to exact UTF-8 ranges in the original request. Intent's serde tag supplies
+/// the stable role root; matching uses an NFKC view and returned text always
+/// comes from the untouched original byte slice. Unknown's generated reason
+/// is deliberately excluded from source evidence.
+fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    let intent_value = serde_json::to_value(intent)?;
+    let Some(intent_object) = intent_value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(tag) = intent_object
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(BTreeMap::new());
+    };
+    if tag == "UNKNOWN" {
+        return Ok(BTreeMap::new());
+    }
+    let intent_role = format!("/{}", serde_tag_role(tag));
     let mut candidates = SourceRoleCandidates::new();
-    match intent {
-        Intent::Calculate { expression } => {
-            add_source_candidate(&mut candidates, "/Calculate/expression", expression);
+    let mut japanese_predicate_roles = Vec::new();
+    for (key, value) in intent_object {
+        if key == "kind" {
+            continue;
         }
-        Intent::CorrectCalculation { replacement, .. } => {
-            add_source_candidate(
-                &mut candidates,
-                "/CorrectCalculation/replacement",
-                replacement,
-            );
-        }
-        Intent::CalculateSequence { steps } => {
-            for (index, step) in steps.iter().enumerate() {
-                add_source_candidate(
-                    &mut candidates,
-                    &format!("/CalculateSequence/steps/{index}/expression"),
-                    &step.expression.text,
-                );
-            }
-        }
-        Intent::Assert { proposition }
-        | Intent::Ask { proposition }
-        | Intent::AskWhy { proposition } => {
-            let prefix = match intent {
-                Intent::Assert { .. } => "/Assert/proposition",
-                Intent::Ask { .. } => "/Ask/proposition",
-                _ => "/AskWhy/proposition",
-            };
-            add_proposition_source_candidates(&mut candidates, prefix, proposition);
-        }
-        Intent::AssertPreviousRelation { proposition, .. } => {
-            add_proposition_source_candidates(
-                &mut candidates,
-                "/AssertPreviousRelation/proposition",
-                proposition,
-            );
-        }
-        Intent::AskPreviousRelation { proposition, .. } => {
-            add_proposition_source_candidates(
-                &mut candidates,
-                "/AskPreviousRelation/proposition",
-                proposition,
-            );
-        }
-        Intent::CorrectPremise {
-            superseded,
-            replacement,
-        } => {
-            add_proposition_source_candidates(
-                &mut candidates,
-                "/CorrectPremise/superseded",
-                superseded,
-            );
-            add_proposition_source_candidates(
-                &mut candidates,
-                "/CorrectPremise/replacement",
-                replacement,
-            );
-        }
-        Intent::AddRule {
-            premise,
-            conclusion,
-        } => {
-            add_proposition_source_candidates(&mut candidates, "/AddRule/premise", premise);
-            add_proposition_source_candidates(&mut candidates, "/AddRule/conclusion", conclusion);
-        }
-        Intent::AddConjunctiveRule {
-            premises,
-            conclusion,
-        } => {
-            for (index, premise) in premises.iter().enumerate() {
-                add_proposition_source_candidates(
-                    &mut candidates,
-                    &format!("/AddConjunctiveRule/premises/{index}"),
-                    premise,
-                );
-            }
-            add_proposition_source_candidates(
-                &mut candidates,
-                "/AddConjunctiveRule/conclusion",
-                conclusion,
-            );
-        }
-        Intent::AskConjunction { propositions } => {
-            for (index, proposition) in propositions.iter().enumerate() {
-                add_proposition_source_candidates(
-                    &mut candidates,
-                    &format!("/AskConjunction/propositions/{index}"),
-                    proposition,
-                );
-            }
-        }
-        Intent::CorrectPreviousPremise {
-            predicate,
-            superseded_object,
-            replacement_object,
-            scope,
-        } => {
-            add_source_candidate(
-                &mut candidates,
-                "/CorrectPreviousPremise/predicate",
-                predicate,
-            );
-            add_source_candidate(
-                &mut candidates,
-                "/CorrectPreviousPremise/superseded_object",
-                superseded_object,
-            );
-            add_source_candidate(
-                &mut candidates,
-                "/CorrectPreviousPremise/replacement_object",
-                replacement_object,
-            );
-            if let Some(scope) = scope {
-                add_source_candidate(&mut candidates, "/CorrectPreviousPremise/scope", scope);
-            }
-        }
-        Intent::LinearEquation { left, right } => {
-            add_source_candidate(&mut candidates, "/LinearEquation/left", left);
-            add_source_candidate(&mut candidates, "/LinearEquation/right", right);
-        }
-        Intent::QuadraticEquation { left, right } => {
-            add_source_candidate(&mut candidates, "/QuadraticEquation/left", left);
-            add_source_candidate(&mut candidates, "/QuadraticEquation/right", right);
-        }
-        Intent::Symbolic {
-            expression,
-            variable,
-            ..
-        } => {
-            add_source_candidate(&mut candidates, "/Symbolic/expression", expression);
-            add_source_candidate(&mut candidates, "/Symbolic/variable", variable);
-        }
-        Intent::JsonPointer { document, pointer }
-        | Intent::JsonStatistics { document, pointer } => {
-            add_source_candidate(&mut candidates, "/document", document);
-            add_source_candidate(&mut candidates, "/pointer", pointer);
-        }
-        Intent::JsonObjectProject { document, fields } => {
-            add_source_candidate(&mut candidates, "/document", document);
-            for (index, field) in fields.iter().take(32).enumerate() {
-                add_source_candidate(&mut candidates, &format!("/fields/{index}"), field);
-            }
-        }
-        _ => {}
+        let role = format!("{intent_role}/{}", escape_role_segment(key));
+        collect_string_leaf_candidates(value, &role, &mut candidates);
+        collect_semantic_aliases(value, &role, &mut candidates, &mut japanese_predicate_roles);
     }
     if candidates.is_empty() {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     }
 
     let mut normalized_source = String::new();
@@ -364,54 +341,84 @@ fn source_role_spans(text: &str, intent: &Intent) -> BTreeMap<String, Vec<Source
         ));
     }
 
-    let japanese_predicate_roles = candidates
-        .iter()
-        .filter(|(role, values)| {
-            role.ends_with("/predicate") && values.iter().any(|value| value == "is")
-        })
-        .map(|(role, _)| role.clone())
-        .collect::<Vec<_>>();
-    let mut result = BTreeMap::new();
+    let mut pattern_roles = BTreeMap::<String, Vec<String>>::new();
     for (role, values) in candidates {
-        let mut spans = Vec::new();
         for value in values {
             let normalized_value: String = value.nfkc().collect();
-            if normalized_value.is_empty() {
+            if normalized_value.is_empty() || normalized_value.len() > normalized_source.len() {
                 continue;
             }
-            let mut offset = 0;
-            while spans.len() < 32
-                && let Some(relative_start) = normalized_source[offset..].find(&normalized_value)
-            {
-                let start = offset + relative_start;
-                let end = start + normalized_value.len();
-                let source_start = source_ranges[start].0;
-                let source_end = source_ranges[end - 1].1;
-                spans.push(SourceSpan {
-                    start: source_start,
-                    end: source_end,
-                    text: text[source_start..source_end].to_string(),
-                });
-                offset = end;
+            let roles = pattern_roles.entry(normalized_value).or_default();
+            if !roles.iter().any(|existing| existing == &role) {
+                roles.push(role.clone());
             }
         }
-        spans.sort_by_key(|span| (span.start, span.end));
-        spans.dedup_by(|left, right| left.start == right.start && left.end == right.end);
-        if !spans.is_empty() {
-            result.insert(role, spans);
+    }
+    if pattern_roles.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let patterns = pattern_roles.keys().map(String::as_str).collect::<Vec<_>>();
+    let automaton = AhoCorasick::new(&patterns).map_err(|error| {
+        failure(
+            "PARSER_CONFIGURATION",
+            format!("source role index: {error}"),
+        )
+    })?;
+    let mut pattern_spans = vec![Vec::<SourceSpan>::new(); patterns.len()];
+    for matched in automaton.find_overlapping_iter(&normalized_source) {
+        let pattern_index = matched.pattern().as_usize();
+        let pattern = patterns[pattern_index];
+        if !has_token_boundaries(&normalized_source, matched.start(), matched.end(), pattern) {
+            continue;
+        }
+        let source_start = source_ranges[matched.start()].0;
+        let source_end = source_ranges[matched.end() - 1].1;
+        let span = SourceSpan {
+            start: source_start,
+            end: source_end,
+            text: text[source_start..source_end].to_string(),
+        };
+        let spans = &mut pattern_spans[pattern_index];
+        if spans.len() < 32
+            && !spans
+                .iter()
+                .any(|existing| existing.start == span.start && existing.end == span.end)
+        {
+            spans.push(span);
         }
     }
+    for spans in &mut pattern_spans {
+        spans.sort_by_key(|span| (span.start, span.end));
+    }
+    let mut result = BTreeMap::<String, Vec<SourceSpan>>::new();
+    for (pattern_index, pattern) in patterns.iter().enumerate() {
+        let Some(spans) = pattern_roles.get(*pattern) else {
+            continue;
+        };
+        for role in spans {
+            let role_spans = result.entry(role.clone()).or_default();
+            role_spans.extend(pattern_spans[pattern_index].iter().cloned());
+        }
+    }
+    for spans in result.values_mut() {
+        spans.sort_by_key(|span| (span.start, span.end));
+        spans.dedup_by(|left, right| left.start == right.start && left.end == right.end);
+        spans.truncate(32);
+    }
     for predicate_role in japanese_predicate_roles {
-        if result.contains_key(&predicate_role) {
+        if result
+            .get(&predicate_role)
+            .is_some_and(|spans| !spans.is_empty())
+        {
             continue;
         }
-        let Some(role_prefix) = predicate_role.strip_suffix("predicate") else {
+        let Some(role_prefix) = predicate_role.strip_suffix("/predicate") else {
             continue;
         };
-        let Some(subjects) = result.get(&format!("{role_prefix}subject")) else {
+        let Some(subjects) = result.get(&format!("{role_prefix}/subject")) else {
             continue;
         };
-        let Some(objects) = result.get(&format!("{role_prefix}object")) else {
+        let Some(objects) = result.get(&format!("{role_prefix}/object")) else {
             continue;
         };
         let mut markers = Vec::new();
@@ -424,21 +431,28 @@ fn source_role_spans(text: &str, intent: &Intent) -> BTreeMap<String, Vec<Source
                     .min_by_key(|(index, _)| *index)
                 {
                     let start = subject.end + index;
-                    markers.push(SourceSpan {
+                    let span = SourceSpan {
                         start,
                         end: start + marker.len(),
                         text: marker.to_string(),
-                    });
+                    };
+                    if markers.len() < 32
+                        && !markers.iter().any(|existing: &SourceSpan| {
+                            existing.start == span.start && existing.end == span.end
+                        })
+                    {
+                        markers.push(span);
+                    }
                 }
             }
         }
         markers.sort_by_key(|span| (span.start, span.end));
-        markers.dedup_by(|left, right| left.start == right.start && left.end == right.end);
         if !markers.is_empty() {
             result.insert(predicate_role, markers);
         }
     }
-    result
+    result.retain(|_, spans| !spans.is_empty());
+    Ok(result)
 }
 
 fn regex(pattern: &str) -> Result<Regex> {
@@ -3956,7 +3970,7 @@ mod tests {
         assert_eq!(bundle.request.input_version, 3);
         assert_eq!(
             bundle.meaning.parser_version,
-            "declarative-ja-en-v74-role-source-spans"
+            "declarative-ja-en-v75-all-intent-source-spans"
         );
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());

@@ -63,7 +63,7 @@ fn parsed_relation_roles_keep_exact_source_ranges_across_persisted_input_replay(
     ));
     assert_eq!(
         bundle.meaning.parser_version,
-        "declarative-ja-en-v74-role-source-spans"
+        "declarative-ja-en-v75-all-intent-source-spans"
     );
     let source = &bundle.request.text;
     let roles = &bundle.meaning.source_roles;
@@ -114,9 +114,9 @@ fn parsed_relation_roles_keep_exact_source_ranges_across_persisted_input_replay(
         "external_semantic_generation": false,
         "external_network_or_side_effects": false,
         "limitations": [
-            "role spans are emitted only for currently mapped bounded Intent families",
-            "a role without an exact raw lexical match has no span entry",
-            "this does not establish complete language or document provenance coverage"
+            "string-valued Intent leaves are indexed when an exact lexical match is present",
+            "each role retains at most 32 source matches and lexical matching does not prove semantic correctness",
+            "unknown-intent reason text is excluded from source evidence"
         ]
     });
     println!(
