@@ -1,0 +1,443 @@
+{
+  "evidence_schema": "minidora-direct-core-observation-v1",
+  "observation_id": "MB-BUILD-20261114-CORE-07",
+  "base_commit": "6ec880c402948f6e58e136dca34c0614a223e2b0",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "host": "x86_64-unknown-linux-gnu"
+  },
+  "command": "cargo test -p minidora-engine --test core_construction_observation_07 --locked -- --nocapture",
+  "test_result": "PASS: 1 passed, 0 failed",
+  "test_log_sha256": "d0e8913f69c72d99e16b2c622192775010612e2b63aad00596d582190c05b912",
+  "test_source": {
+    "path": "rust/crates/minidora-engine/tests/core_construction_observation_07.rs",
+    "sha256": "1a062b8d536c71988a94fdb4e83520e1a5cbb32db2e7c559bae9b6929d41dbaf"
+  },
+  "three_point_set_manifest_checks": [
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+      "expected_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "actual_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "expected_bytes": 28807,
+      "actual_bytes": 28807,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_01_施工仕様書_20261114.md",
+      "expected_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "actual_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "expected_bytes": 23191,
+      "actual_bytes": 23191,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_02_施工工程表_20261114.md",
+      "expected_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "actual_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "expected_bytes": 21474,
+      "actual_bytes": 21474,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_03_Codex施工指示書_20261114.md",
+      "expected_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "actual_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "expected_bytes": 23396,
+      "actual_bytes": 23396,
+      "matches": true
+    }
+  ],
+  "scope": "two independently initialized temporary SQLite snapshots on one x86_64 Linux host; same sealed actor/input sequence and initial state; no external model, network, document input or external effect; engine reopened between the initial query and version-2 correction",
+  "observation": {
+    "actor": "b16-deterministic-core-observation",
+    "case_id": "core-observation-seven",
+    "changed_outcome_cause": "The same exact relation question changes from DERIVED/COMMIT to SUSPEND/MISSING_PREMISES after input_id sensor-observation advances from version 1 (sensor) to version 2 (polymer); the source fact is invalidated and the actor memory revision increments by one.",
+    "changed_source_v2_input": {
+      "context_result_ref": "77d862ff847b271827b381487049ac049f185df6bdd0bcb244938b40f9e2c67b",
+      "input_id": "sensor-observation",
+      "input_version": 2,
+      "intent": {
+        "kind": "CORRECT_PREMISE",
+        "replacement": {
+          "negative": false,
+          "object": "polymer",
+          "predicate": "is",
+          "scope": "repeatability-lab",
+          "subject": "Nera"
+        },
+        "superseded": {
+          "negative": false,
+          "object": "sensor",
+          "predicate": "is",
+          "scope": "repeatability-lab",
+          "subject": "Nera"
+        }
+      },
+      "original_text": "[scope=repeatability-lab]Correction: Nera is a polymer, not a sensor.",
+      "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+      "raw_sha256": "0b42016b4c884c8572b253458c101797c8d64948562a4acaad05d98c1b971acf",
+      "semantic_signature": "1a02bc8cce50e4a12b019f6fd15e5a7b24526d529375f2f4cf71b6ef8fa34490"
+    },
+    "changed_source_v2_result": {
+      "calculation": null,
+      "content_plan": {
+        "dependencies": [
+          "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+          "fact:f27b32f4cdaa7ff4235212eb52bcc8636c299a8ab8623756dfab704377b690b5",
+          "fact:c898dee2e3066019a763aebd8b84a5c1a81f199c916bee921009b80bd17083a6",
+          "daa30f68dda1b694ee28f5da2f5812fbce004e75cf33f76013d8645aee67ea58"
+        ],
+        "guarantee": "USER_PREMISE",
+        "id": "2327a5b4f0aba5f248f3c13d9da52843b5795368b6c8a069303c516d4955416f",
+        "model_artifact_ref": "8eb61691b907815c723247d2f1c49c558c14f9e075eb590400898075bc7a0d29",
+        "model_observation_ref": "05e10b1e21eb32755cd12835219c0b04fd802ec1c9c9941c096d4b885eec2361",
+        "model_revision": "2b2d65944c544ddba3a2d30d6b94db0187038a3ae471b7c77bfee932884bc994",
+        "required_units": [
+          "訂正を会話内の提示前提として記録しました: Neraはsensorではない。",
+          "置き換え後の提示前提: Neraはpolymerである。",
+          "以前の前提とその依存記録を1件失効させ、元の記録は保持しました。",
+          "現実世界の真偽を検証したものではありません。"
+        ],
+        "text": "訂正を会話内の提示前提として記録しました: Neraはsensorではない。\n置き換え後の提示前提: Neraはpolymerである。\n以前の前提とその依存記録を1件失効させ、元の記録は保持しました。\n現実世界の真偽を検証したものではありません。"
+      },
+      "dependencies": [
+        "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+        "fact:f27b32f4cdaa7ff4235212eb52bcc8636c299a8ab8623756dfab704377b690b5",
+        "fact:c898dee2e3066019a763aebd8b84a5c1a81f199c916bee921009b80bd17083a6"
+      ],
+      "execution_graph_ref": "433bcc104b32b2417ce748327e203d34abb86f1bacd571d54e8cc1ae36ddba9e",
+      "guarantee": "USER_PREMISE",
+      "id": "154175717a9784a9c02f2a51e8c594336c4bfc9324a61f8ce713b2d1d4537044",
+      "input_id": "sensor-observation",
+      "input_version": 2,
+      "lifecycle": "COMMIT",
+      "reason": null,
+      "render": {
+        "actual_sha256": "8efe0818dbe45d1cde906a39daacb7219e5ef7abcd3023d87e20f612dde2612b",
+        "byte_length": 311,
+        "plan_id": "2327a5b4f0aba5f248f3c13d9da52843b5795368b6c8a069303c516d4955416f",
+        "renderer_version": "utf8-bytes-v1",
+        "status": "RENDERED"
+      },
+      "text": "訂正を会話内の提示前提として記録しました: Neraはsensorではない。\n置き換え後の提示前提: Neraはpolymerである。\n以前の前提とその依存記録を1件失効させ、元の記録は保持しました。\n現実世界の真偽を検証したものではありません。"
+    },
+    "corrected_input_model_revision": "2b2d65944c544ddba3a2d30d6b94db0187038a3ae471b7c77bfee932884bc994",
+    "document_version": "NOT_APPLICABLE_NO_DOCUMENT_INPUT",
+    "entry": "in-process minidora_engine::Engine::execute; two independently initialized identical local SQLite snapshots; Engine reopened before changed input version",
+    "exact_corrected_input_equal": true,
+    "exact_correction_result_equal": true,
+    "exact_final_case_equal": true,
+    "exact_final_memory_equal": true,
+    "exact_initial_records_equal": true,
+    "exact_post_change_query_equal": true,
+    "execution_environment": {
+      "architecture": "x86_64",
+      "os": "linux"
+    },
+    "external_network_or_side_effects": false,
+    "external_semantic_generation": false,
+    "final_case_revision": 43,
+    "historical_supported_result_retained": {
+      "calculation": null,
+      "content_plan": {
+        "dependencies": [
+          "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+          "fact:82fccf6d474174120fda9f3feabe3dca47884d61dd3dcc59619086ba6ccebfc6",
+          "fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579",
+          "rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4",
+          "c11fd0fdcce5161f207ca40fcb2b5dfeacb7d28cd18cdaafddcf6e3534abd682"
+        ],
+        "guarantee": "DERIVED",
+        "id": "5aac32821454e0eb0a5b2b59486ebfebca63d0c8b40e822d6900d5cf984b29a8",
+        "model_artifact_ref": "d9659d18542290297c6c06a0ca1eefa7a23317e34f195a458a9b08691a38074d",
+        "model_observation_ref": "b19aad439bd5e9e9e71f0b4df5b98babbc0e5e5f97bb515ae1af1bc2de4f8f03",
+        "model_revision": "65647f41f778e8f32f42e0f7f00e3fe4f1ecbf51f19623c18a1082653e7570ad",
+        "required_units": [
+          "提示された前提の範囲では、Neraはreliableである（範囲: repeatability-lab）。"
+        ],
+        "text": "提示された前提の範囲では、Neraはreliableである（範囲: repeatability-lab）。"
+      },
+      "dependencies": [
+        "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+        "fact:82fccf6d474174120fda9f3feabe3dca47884d61dd3dcc59619086ba6ccebfc6",
+        "fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579",
+        "rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4"
+      ],
+      "execution_graph_ref": "6f8863711ec625000dd06517f1c57abad919f4ed45ef734806ea4c9346f0cbe2",
+      "guarantee": "DERIVED",
+      "id": "77d862ff847b271827b381487049ac049f185df6bdd0bcb244938b40f9e2c67b",
+      "input_id": "reliability-query",
+      "input_version": 1,
+      "lifecycle": "COMMIT",
+      "reason": null,
+      "render": {
+        "actual_sha256": "e9b243e93f38cbbe36bcb35ae1abb5c806f4f06e63618eed60e25023cdefd9bb",
+        "byte_length": 97,
+        "plan_id": "5aac32821454e0eb0a5b2b59486ebfebca63d0c8b40e822d6900d5cf984b29a8",
+        "renderer_version": "utf8-bytes-v1",
+        "status": "RENDERED"
+      },
+      "text": "提示された前提の範囲では、Neraはreliableである（範囲: repeatability-lab）。"
+    },
+    "initial_case_revision_equal": true,
+    "initial_memory_equal": true,
+    "initial_model_revisions": [
+      "1a40b01cf317c14ef944bedcd5eb68033dc74d4031b38d373eb6449f22bbc8c6",
+      "1a2b28b4fd5e7b2fb07d64cd1caf19e4ecfd3f5f7305ae3d1609671a4147b6b4",
+      "bc92b5b0dcf029804a602d3aeda66268f577383ff64d2b91f1312936c112e29c",
+      "65647f41f778e8f32f42e0f7f00e3fe4f1ecbf51f19623c18a1082653e7570ad"
+    ],
+    "initial_query_input": {
+      "context_result_ref": "4b7efa5b67f2abb9ce1feb919a8d93d79c0afa6222b16f8c60d921dab0ded3bd",
+      "input_id": "reliability-query",
+      "input_version": 1,
+      "intent": {
+        "kind": "ASK",
+        "proposition": {
+          "negative": false,
+          "object": "reliable",
+          "predicate": "is",
+          "scope": "repeatability-lab",
+          "subject": "Nera"
+        }
+      },
+      "original_text": "[scope=repeatability-lab]Nera is reliable?",
+      "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+      "raw_sha256": "4a96b7dbc134658f16a3d6c6650bb370b3726ad400fadf977ee0bcee7850a50b",
+      "semantic_signature": "04e0b2f1af59a3f0112b8d846919c127d0e06385fba51ec23daa2eb2af5a910a"
+    },
+    "initial_result_traces": [
+      {
+        "calculation": null,
+        "content_plan": {
+          "dependencies": [
+            "rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4",
+            "4de1997ed9f7bae61ad6fd3da171af568e2bbcf13f2354770e4d10f8fd5ab592"
+          ],
+          "guarantee": "USER_PREMISE",
+          "id": "f09ed9a0f8a2fa558813a59a23628e590d3c6461b5714469b9175d97da4c5e40",
+          "model_artifact_ref": "ee994b078a925b55bc811f9067b09312845be96a3b9d0852adac46c2d8e970c5",
+          "model_observation_ref": "5fe5a2b7b151f54119256d4159e36b0ac68ac81022eeaa8073f0c549a4ea6ccb",
+          "model_revision": "1a40b01cf317c14ef944bedcd5eb68033dc74d4031b38d373eb6449f22bbc8c6",
+          "required_units": [
+            "二つの条件付き前提を保存しました: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである。",
+            "規則ID: rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4",
+            "保証範囲: 提示された二条件の組み合わせの中でのみ利用します。普遍的事実として学習しません。"
+          ],
+          "text": "二つの条件付き前提を保存しました: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである。\n規則ID: rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4\n保証範囲: 提示された二条件の組み合わせの中でのみ利用します。普遍的事実として学習しません。"
+        },
+        "dependencies": [
+          "rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4"
+        ],
+        "execution_graph_ref": "0f80c21fe3c5aa875f6234f57e62f2e9d2b201576bc1087e71c24c3258cb2ecc",
+        "guarantee": "USER_PREMISE",
+        "id": "9e42837c7c445fb7ed1893a3f3e512c8729ff89da265e23890201f0bb07983b3",
+        "input_id": "rule",
+        "input_version": 1,
+        "lifecycle": "COMMIT",
+        "reason": null,
+        "render": {
+          "actual_sha256": "728a8a54d73de3324f1a5ec3e9fc0a26d440745c68564f0646f3f73d0f7101bf",
+          "byte_length": 353,
+          "plan_id": "f09ed9a0f8a2fa558813a59a23628e590d3c6461b5714469b9175d97da4c5e40",
+          "renderer_version": "utf8-bytes-v1",
+          "status": "RENDERED"
+        },
+        "text": "二つの条件付き前提を保存しました: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである。\n規則ID: rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4\n保証範囲: 提示された二条件の組み合わせの中でのみ利用します。普遍的事実として学習しません。"
+      },
+      {
+        "calculation": null,
+        "content_plan": {
+          "dependencies": [
+            "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+            "46e1fb8302b84fd3eea330e0da64d121fcb1cd48d55048d25604b39e47d85925"
+          ],
+          "guarantee": "USER_PREMISE",
+          "id": "e1ee78c5114a37770057521726645de0efb34d2635772d4e7c2a2b2ccda904df",
+          "model_artifact_ref": "41026d843690bb60c0f22318fbd6047708d6105396426b445191a5b5f6e377e6",
+          "model_observation_ref": "b72ab9f548a77d98ef12394f1161d2ca44204136a7629292b50eca30cb23c208",
+          "model_revision": "1a2b28b4fd5e7b2fb07d64cd1caf19e4ecfd3f5f7305ae3d1609671a4147b6b4",
+          "required_units": [
+            "前提を保存しました: Neraはsensorである。",
+            "前提ID: fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+            "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+          ],
+          "text": "前提を保存しました: Neraはsensorである。\n前提ID: fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+        },
+        "dependencies": [
+          "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b"
+        ],
+        "execution_graph_ref": "fa7bcf711aad78e9769d18c2632be1158afa48332cc6e803b605646d2d8a7c35",
+        "guarantee": "USER_PREMISE",
+        "id": "98109a506de6f57fc89dacca72fc3173ec7c653aed465923d00eb32dadb04903",
+        "input_id": "sensor-observation",
+        "input_version": 1,
+        "lifecycle": "COMMIT",
+        "reason": null,
+        "render": {
+          "actual_sha256": "727e77c81dc55dc71e8e3350e5f475d43fd993b6000de480ae5956faac7be3db",
+          "byte_length": 248,
+          "plan_id": "e1ee78c5114a37770057521726645de0efb34d2635772d4e7c2a2b2ccda904df",
+          "renderer_version": "utf8-bytes-v1",
+          "status": "RENDERED"
+        },
+        "text": "前提を保存しました: Neraはsensorである。\n前提ID: fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+      },
+      {
+        "calculation": null,
+        "content_plan": {
+          "dependencies": [
+            "fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579",
+            "ec0136c30b518eb277ba53fe4118d53682ea16aa65d9efcaa0068289e41850ec"
+          ],
+          "guarantee": "USER_PREMISE",
+          "id": "2e3deebe2b58db2d3f03477d3b99567ea4760a8423d554380a3dbc8fe738cea5",
+          "model_artifact_ref": "2ea89aa6624c6e3a9734976016bde7a06f3e3f184d2b17074c430761c5ce29ae",
+          "model_observation_ref": "bd9f75e903182c13b38dabc4115efa80f8ab26f9a0451d7a393c05aa735d9ab1",
+          "model_revision": "bc92b5b0dcf029804a602d3aeda66268f577383ff64d2b91f1312936c112e29c",
+          "required_units": [
+            "前提を保存しました: Neraはcalibratedである。",
+            "前提ID: fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579",
+            "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+          ],
+          "text": "前提を保存しました: Neraはcalibratedである。\n前提ID: fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+        },
+        "dependencies": [
+          "fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579"
+        ],
+        "execution_graph_ref": "c61c216b983fa1e156c23f2deee8f5c6f85df0905677782fe7458553c60fde63",
+        "guarantee": "USER_PREMISE",
+        "id": "4b7efa5b67f2abb9ce1feb919a8d93d79c0afa6222b16f8c60d921dab0ded3bd",
+        "input_id": "calibrated-observation",
+        "input_version": 1,
+        "lifecycle": "COMMIT",
+        "reason": null,
+        "render": {
+          "actual_sha256": "60859c32630b47ff16694ca74ea9958130acced6c9acc7257d67d9cf44865833",
+          "byte_length": 252,
+          "plan_id": "2e3deebe2b58db2d3f03477d3b99567ea4760a8423d554380a3dbc8fe738cea5",
+          "renderer_version": "utf8-bytes-v1",
+          "status": "RENDERED"
+        },
+        "text": "前提を保存しました: Neraはcalibratedである。\n前提ID: fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+      },
+      {
+        "calculation": null,
+        "content_plan": {
+          "dependencies": [
+            "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+            "fact:82fccf6d474174120fda9f3feabe3dca47884d61dd3dcc59619086ba6ccebfc6",
+            "fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579",
+            "rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4",
+            "c11fd0fdcce5161f207ca40fcb2b5dfeacb7d28cd18cdaafddcf6e3534abd682"
+          ],
+          "guarantee": "DERIVED",
+          "id": "5aac32821454e0eb0a5b2b59486ebfebca63d0c8b40e822d6900d5cf984b29a8",
+          "model_artifact_ref": "d9659d18542290297c6c06a0ca1eefa7a23317e34f195a458a9b08691a38074d",
+          "model_observation_ref": "b19aad439bd5e9e9e71f0b4df5b98babbc0e5e5f97bb515ae1af1bc2de4f8f03",
+          "model_revision": "65647f41f778e8f32f42e0f7f00e3fe4f1ecbf51f19623c18a1082653e7570ad",
+          "required_units": [
+            "提示された前提の範囲では、Neraはreliableである（範囲: repeatability-lab）。"
+          ],
+          "text": "提示された前提の範囲では、Neraはreliableである（範囲: repeatability-lab）。"
+        },
+        "dependencies": [
+          "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+          "fact:82fccf6d474174120fda9f3feabe3dca47884d61dd3dcc59619086ba6ccebfc6",
+          "fact:8b75d1d39a352ca5688ac57573137b79e893586a899a23fde6b004884064f579",
+          "rule:157fb28e3e2e5cec03552f9bd56e452c828aabbe52a18a35e422b48b05ba15b4"
+        ],
+        "execution_graph_ref": "6f8863711ec625000dd06517f1c57abad919f4ed45ef734806ea4c9346f0cbe2",
+        "guarantee": "DERIVED",
+        "id": "77d862ff847b271827b381487049ac049f185df6bdd0bcb244938b40f9e2c67b",
+        "input_id": "reliability-query",
+        "input_version": 1,
+        "lifecycle": "COMMIT",
+        "reason": null,
+        "render": {
+          "actual_sha256": "e9b243e93f38cbbe36bcb35ae1abb5c806f4f06e63618eed60e25023cdefd9bb",
+          "byte_length": 97,
+          "plan_id": "5aac32821454e0eb0a5b2b59486ebfebca63d0c8b40e822d6900d5cf984b29a8",
+          "renderer_version": "utf8-bytes-v1",
+          "status": "RENDERED"
+        },
+        "text": "提示された前提の範囲では、Neraはreliableである（範囲: repeatability-lab）。"
+      }
+    ],
+    "invalidated_source_fact_id": "fact:60d663ac417f6f1dc0b8923096166e3ac2c8d480645b652f92399911d5e4937b",
+    "limitations": [
+      "two deterministic isolated local snapshots on one host and toolchain",
+      "not cross-platform, cross-process timing, full workspace runtime, or broad requirement acceptance"
+    ],
+    "memory_revision_after_change": 4,
+    "memory_revision_before_change": 3,
+    "observation": "MB-BUILD-20261114 core construction observation seven",
+    "same_input_and_data_reproduction": true,
+    "same_question_after_changed_memory": {
+      "calculation": null,
+      "content_plan": null,
+      "dependencies": [],
+      "execution_graph_ref": null,
+      "guarantee": "UNKNOWN",
+      "id": "a3359fdd42e825e0c05ada8bbfbfb009271f97258ef06cd518e48e6279c89229",
+      "input_id": "reliability-query-after-v2",
+      "input_version": 1,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: 範囲「repeatability-lab」の「Neraはreliableである」を判定する有効な前提または導出経路がありません。",
+      "render": null,
+      "text": "範囲「repeatability-lab」の「Neraはreliableである」を判定する有効な前提または導出経路がありません。"
+    }
+  },
+  "claims_not_established": [
+    "document-version repeatability or divergence; this observation contains no document input",
+    "cross-process scheduling, cross-platform, or cross-toolchain determinism",
+    "determinism of an external semantic model or provider",
+    "full workspace runtime acceptance",
+    "complete acceptance of A03/A15/CAP-D01/CAP-D04/E08/G08 or all 93 requirements",
+    "release or deployment"
+  ],
+  "verification_results": [
+    {
+      "command": "cargo test -p minidora-engine --test core_construction_observation_07 --locked -- --nocapture",
+      "status": "PASS",
+      "summary": "1 passed, 0 failed",
+      "log_sha256": "d0e8913f69c72d99e16b2c622192775010612e2b63aad00596d582190c05b912"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "status": "PASS",
+      "summary": "232 unit tests; B11/B13/B14/B15/B16 direct observations 1/1/1/1/1; B12 meaning-composition integration tests 2; 0 doc tests",
+      "log_sha256": "abb5f3117869cae107eb8fc71c366d9c03b6548376aa79e95c6604f4554a29c6"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "PASS",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "status": "PASS",
+      "log_sha256": "be87c741147ed201e26872fe5fabb593ccfdcb493fe06b96210ad7f851714fe3"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "status": "PASS",
+      "log_sha256": "a53ddc1671a76783ed1089961f8188b9e5dd1bd87e0f2b23b421832a58dcb09a"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "status": "PASS",
+      "log_sha256": "8c233a54790c4800d3dd585436af679aa838da259bfdb129412e2d51cdb75cdc"
+    },
+    {
+      "command": "cargo test --workspace --locked",
+      "status": "NOT_RUN",
+      "summary": "full workspace runtime acceptance was not exercised"
+    },
+    {
+      "command": "git diff --cached --check",
+      "status": "PASS"
+    }
+  ]
+}
