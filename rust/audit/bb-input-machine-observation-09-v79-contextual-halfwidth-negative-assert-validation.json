@@ -1,0 +1,127 @@
+{
+  "observation_id": "MB-BUILD-20261114-INPUT-06-B26_CONTEXTUAL_HALF_WIDTH_NEGATIVE_ASSERTION_SOURCE_TO_REOPENED_PROOF",
+  "status": "PASS",
+  "base_commit": "1b17fb0fe7e551ecafded58be3e69ab25f8b706e",
+  "target": "MINIDORA-BETA Rust Core contextual Japanese assertion path",
+  "scope": "One in-process Engine::execute route for a same-case contextual negative transitive assertion with the literal subject pronoun, が particle, half-width Katakana object, polite negative verb, and explicit scope.",
+  "route": "sealed v79 InputBundle -> actual same-case prior ResultRecord context_result_ref -> Core relation proof validation and subject restoration -> USER_PREMISE Fact with source evidence -> Store memory reopen revalidation -> SUPPORTED relation proof -> ordinary Core Ask consumes the same Fact ID",
+  "core_route_observation": {
+    "anchor_result_id": "1771f6fd6385ddf4ed69bc568b72106738b8c81d7db08d9bf916dff4eb8c08fd",
+    "bundle_fingerprint": "24cab721662a61740476d045130609164e456ca6236e455e8115eae9be82379e",
+    "context_result_ref": "1771f6fd6385ddf4ed69bc568b72106738b8c81d7db08d9bf916dff4eb8c08fd",
+    "external_network_or_effects": false,
+    "fact_id": "fact:6c35490da17ede6c23ff652112a72a80b015ab276a5ccdb4f1501fca9dde3bd3",
+    "fact_object_surface": "ﾐｽﾞ",
+    "followup_dependencies": [
+      "fact:6c35490da17ede6c23ff652112a72a80b015ab276a5ccdb4f1501fca9dde3bd3"
+    ],
+    "followup_result": "提示された前提の範囲では、ミナはﾐｽﾞを使わない（範囲: biology）。",
+    "half_width_object_original_bytes_match": true,
+    "negative_polarity_preserved": true,
+    "normal_core_followup_consumes_fact": true,
+    "parser_version": "declarative-ja-en-v79-contextual-assertion-source-ranges",
+    "raw_sha256": "051e7f0df0167c55a33330564364834869967b633676985ecd62f7583058854f",
+    "reopened_proof_status": "SUPPORTED",
+    "resolved_fact_subject": "ミナ",
+    "same_fact_evidence_survives_reopen": true,
+    "semantic_signature": "06d127686060b42d7e6de79f6dce01593022a48009a18612dc45b64bae61d986",
+    "source": "[scope=biology]それがﾐｽﾞを使いません。",
+    "source_roles": {
+      "/AssertPreviousRelation/proposition/object": [
+        {
+          "end": 33,
+          "start": 24,
+          "text": "ﾐｽﾞ"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/object_particle": [
+        {
+          "end": 36,
+          "start": 33,
+          "text": "を"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/predicate": [
+        {
+          "end": 51,
+          "start": 36,
+          "text": "使いません"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/scope": [
+        {
+          "end": 14,
+          "start": 7,
+          "text": "biology"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/subject": [
+        {
+          "end": 21,
+          "start": 15,
+          "text": "それ"
+        }
+      ],
+      "/AssertPreviousRelation/proposition/subject_particle": [
+        {
+          "end": 24,
+          "start": 21,
+          "text": "が"
+        }
+      ]
+    },
+    "source_roles_are_themselves_world_truth": false
+  },
+  "engine_package_tests": {
+    "command": "cargo test -p minidora-engine --locked",
+    "unit_tests_passed": 242,
+    "integration_test_cases_passed": 26,
+    "total_passed": 268,
+    "failed": 0,
+    "ignored": 0,
+    "doc_tests": 0,
+    "log": "02-engine-package-tests.log"
+  },
+  "workspace_gates": {
+    "cargo_fmt_all_check": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "cargo_check_workspace_all_targets_locked": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "cargo_build_workspace_locked": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "git_diff_check": {
+      "status": "PASS",
+      "exit_code": 0
+    },
+    "environment": "Linux x86_64-unknown-linux-gnu, Rust/Cargo 1.99.1"
+  },
+  "change_boundary": {
+    "production_behavior_changed": false,
+    "parser_version_changed": false,
+    "database_schema_changed": false,
+    "dependency_or_lockfile_changed": false,
+    "changed_scope": "Added one bounded Core execution observation and retained its evidence/status."
+  },
+  "not_established": [
+    "General Japanese language coverage or arbitrary omitted-subject resolution.",
+    "NFKC normalization of the stored proposition: the half-width surface spelling remains the observed object value; this observation checks its original UTF-8 source range.",
+    "Outside-world truth of the supplied premise.",
+    "CLI/UI/output delivery, full workspace all-features runtime, other operating systems, independent QA, or complete A04/A15/E08 acceptance."
+  ],
+  "acceptance_status": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_93_requirements": "UNVERIFIED"
+  }
+}

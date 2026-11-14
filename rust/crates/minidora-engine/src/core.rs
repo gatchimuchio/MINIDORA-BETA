@@ -7517,6 +7517,211 @@ mod core_construction_observation_tests {
     }
 
     #[test]
+    fn contextual_negative_japanese_transitive_assertion_preserves_halfwidth_surface_roles_after_reopen()
+     {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-core-contextual-negative-transitive-source-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("unique contextual negative-source state directory");
+        let actor = "contextual-negative-source-actor";
+        let case = "contextual-negative-source-case";
+        let mut engine = Engine::open(&directory).expect("open Core");
+
+        let seed = engine
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    case,
+                    "negative-source-seed",
+                    actor,
+                    "[scope=biology]ミナは鳥です。",
+                ),
+            )
+            .expect("commit the same-case context premise");
+        assert_eq!(seed.lifecycle, Lifecycle::Commit, "{seed:?}");
+        let anchor = engine
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    case,
+                    "negative-source-anchor",
+                    actor,
+                    "[scope=biology]ミナは鳥ですか",
+                ),
+            )
+            .expect("commit the actual relation result used as the context anchor");
+        assert_eq!(anchor.lifecycle, Lifecycle::Commit, "{anchor:?}");
+        assert!(
+            seed.dependencies
+                .iter()
+                .any(|dependency| { anchor.dependencies.contains(dependency) })
+        );
+
+        let request = RequestEnvelope::new(
+            case,
+            "negative-contextual-assertion",
+            actor,
+            "[scope=biology]それがﾐｽﾞを使いません。",
+        );
+        let result = engine
+            .execute(actor, request.clone())
+            .expect("execute a negative contextual Japanese transitive assertion");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.guarantee, Guarantee::UserPremise);
+        assert!(result.dependencies.contains(&anchor.id));
+
+        let state = engine
+            .latest(actor, case)
+            .expect("read contextual negative assertion state")
+            .expect("contextual negative assertion exists");
+        let bundle = state.bundle.as_ref().expect("input is sealed");
+        assert_eq!(
+            bundle.meaning.context_result_ref.as_deref(),
+            Some(anchor.id.as_str())
+        );
+        assert_eq!(
+            bundle.meaning.parser_version,
+            "declarative-ja-en-v79-contextual-assertion-source-ranges"
+        );
+        assert!(matches!(
+            &bundle.meaning.intent,
+            Intent::AssertPreviousRelation { proposition, .. }
+                if proposition.subject == "それ"
+                    && proposition.predicate == "use"
+                    && proposition.object == "ﾐｽﾞ"
+                    && proposition.negative
+                    && proposition.scope == "biology"
+        ));
+
+        let evidence = input::assertion_source_evidence(bundle)
+            .expect("validate the contextual source role map")
+            .expect("supported contextual negative assertion retains source evidence");
+        assert_eq!(evidence.raw_sha256, bundle.raw_sha256);
+        assert_eq!(evidence.bundle_fingerprint, bundle.fingerprint);
+        assert_eq!(
+            evidence.input_fingerprint,
+            identity(&bundle.request).expect("context request identity")
+        );
+        assert_eq!(evidence.source_roles.len(), 6);
+        for (role, expected) in [
+            ("/AssertPreviousRelation/proposition/subject", "それ"),
+            ("/AssertPreviousRelation/proposition/subject_particle", "が"),
+            ("/AssertPreviousRelation/proposition/object", "ﾐｽﾞ"),
+            ("/AssertPreviousRelation/proposition/object_particle", "を"),
+            (
+                "/AssertPreviousRelation/proposition/predicate",
+                "使いません",
+            ),
+            ("/AssertPreviousRelation/proposition/scope", "biology"),
+        ] {
+            let spans = evidence
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing source role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous source role {role}");
+            let span = &spans[0];
+            assert_eq!(span.text, expected, "wrong surface value for {role}");
+            assert_eq!(
+                request.text.get(span.start..span.end),
+                Some(expected),
+                "role {role} is not mapped to the original UTF-8 bytes"
+            );
+        }
+        let object_span = &evidence.source_roles["/AssertPreviousRelation/proposition/object"][0];
+        assert_eq!(
+            object_span.end - object_span.start,
+            "ﾐｽﾞ".len(),
+            "the half-width source spelling keeps its original byte width"
+        );
+
+        let fact_id = result
+            .dependencies
+            .iter()
+            .find(|dependency| *dependency != &anchor.id)
+            .expect("contextual negative premise Fact dependency")
+            .clone();
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("load memory with the contextual negative Fact");
+        let fact = memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("contextual Fact exists in Core memory");
+        assert_eq!(fact.proposition.subject, "ミナ");
+        assert_eq!(fact.proposition.object, "ﾐｽﾞ");
+        assert!(fact.proposition.negative);
+        assert_eq!(fact.source_evidence, Some(evidence.clone()));
+
+        drop(engine);
+        let mut reopened = Engine::open(&directory).expect("reopen Core state");
+        let restored_memory = reopened
+            .store
+            .load_memory(actor)
+            .expect("revalidate sealed input evidence after reopen");
+        let restored_fact = restored_memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("restore the contextual negative Fact");
+        assert_eq!(restored_fact.source_evidence, Some(evidence.clone()));
+        assert!(restored_fact.proposition.negative);
+        let proof = relations::query(&restored_memory, &restored_fact.proposition, 32)
+            .expect("query the reopened contextual negative Fact");
+        assert_eq!(proof.status, "SUPPORTED");
+        assert_eq!(proof.facts.len(), 1);
+        assert_eq!(proof.facts[0].source_evidence, Some(evidence.clone()));
+        assert!(relations::answer_dependencies(&proof).contains(&fact_id));
+
+        let followup = reopened
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    case,
+                    "negative-contextual-followup",
+                    actor,
+                    "[scope=biology]ミナはﾐｽﾞを使いませんか",
+                ),
+            )
+            .expect("normal Core question consumes the reopened negative premise");
+        assert_eq!(followup.lifecycle, Lifecycle::Commit, "{followup:?}");
+        assert_eq!(followup.guarantee, Guarantee::UserPremise);
+        assert!(followup.dependencies.contains(&fact_id));
+
+        println!(
+            "B26_CONTEXTUAL_HALF_WIDTH_NEGATIVE_TRANSITIVE_SOURCE_PROOF={}",
+            serde_json::to_string(&serde_json::json!({
+                "anchor_result_id": anchor.id,
+                "context_result_ref": bundle.meaning.context_result_ref,
+                "source": request.text,
+                "parser_version": evidence.parser_version,
+                "source_roles": evidence.source_roles,
+                "half_width_object_original_bytes_match": true,
+                "resolved_fact_subject": restored_fact.proposition.subject,
+                "fact_object_surface": restored_fact.proposition.object,
+                "negative_polarity_preserved": restored_fact.proposition.negative,
+                "raw_sha256": evidence.raw_sha256,
+                "bundle_fingerprint": evidence.bundle_fingerprint,
+                "semantic_signature": evidence.semantic_signature,
+                "fact_id": fact_id,
+                "reopened_proof_status": proof.status,
+                "followup_result": followup.text,
+                "followup_dependencies": followup.dependencies,
+                "same_fact_evidence_survives_reopen": true,
+                "normal_core_followup_consumes_fact": followup.dependencies.contains(&fact_id),
+                "source_roles_are_themselves_world_truth": false,
+                "external_network_or_effects": false
+            }))
+            .expect("serialize B26 contextual negative-source observation")
+        );
+        drop(reopened);
+        fs::remove_dir_all(directory).expect("remove isolated contextual negative-source state");
+    }
+
+    #[test]
     fn direct_core_observation_preserves_relation_conditions_subject_scope_and_negation() {
         let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(
