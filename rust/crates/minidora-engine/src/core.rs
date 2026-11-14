@@ -7903,6 +7903,182 @@ mod core_construction_observation_tests {
     }
 
     #[test]
+    fn english_premise_correction_source_roles_follow_both_facts_into_reopened_proofs() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-core-english-correction-source-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("unique English correction state directory");
+        let actor = "english-correction-source-actor";
+        let case = "english-correction-source-case";
+        let mut engine = Engine::open(&directory).expect("open Core");
+
+        let seed = engine
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    case,
+                    "english-correction-seed",
+                    actor,
+                    "[scope=biology]Coco is a mammal.",
+                ),
+            )
+            .expect("commit the English premise that will be corrected");
+        assert_eq!(seed.lifecycle, Lifecycle::Commit, "{seed:?}");
+
+        let request = RequestEnvelope::new(
+            case,
+            "english-correction-input",
+            actor,
+            "[scope=biology]Correction: Coco is a bird, not a mammal.",
+        );
+        let correction = engine
+            .execute(actor, request.clone())
+            .expect("execute a scoped English premise correction");
+        assert_eq!(correction.lifecycle, Lifecycle::Commit, "{correction:?}");
+        assert_eq!(correction.guarantee, Guarantee::UserPremise);
+
+        let state = engine
+            .latest(actor, case)
+            .expect("read English correction state")
+            .expect("English correction result exists");
+        let bundle = state.bundle.as_ref().expect("correction input is sealed");
+        assert_eq!(bundle.meaning.parser_version, input::PARSER_VERSION);
+        assert!(matches!(
+            &bundle.meaning.intent,
+            Intent::CorrectPremise { superseded, replacement }
+                if superseded.subject == "Coco"
+                    && superseded.object == "mammal"
+                    && replacement.subject == "Coco"
+                    && replacement.object == "bird"
+                    && superseded.scope == "biology"
+                    && replacement.scope == "biology"
+        ));
+        let evidence = input::assertion_source_evidence(bundle)
+            .expect("validate the English correction source roles")
+            .expect("supported English correction retains source evidence");
+        assert_eq!(evidence.raw_sha256, bundle.raw_sha256);
+        assert_eq!(evidence.bundle_fingerprint, bundle.fingerprint);
+        assert_eq!(
+            evidence.input_fingerprint,
+            identity(&bundle.request).unwrap()
+        );
+        for (role, expected) in [
+            ("/CorrectPremise/subject", "Coco"),
+            ("/CorrectPremise/copula", "is"),
+            ("/CorrectPremise/superseded_article", "a"),
+            ("/CorrectPremise/superseded_object", "mammal"),
+            ("/CorrectPremise/correction_marker", "not"),
+            ("/CorrectPremise/replacement_article", "a"),
+            ("/CorrectPremise/replacement_object", "bird"),
+            ("/CorrectPremise/scope", "biology"),
+        ] {
+            let spans = evidence
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing English correction role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous English correction role {role}");
+            assert_eq!(
+                spans[0].text, expected,
+                "incorrect English correction role {role}"
+            );
+            assert_eq!(
+                request.text.get(spans[0].start..spans[0].end),
+                Some(expected)
+            );
+        }
+
+        let corrected_old = Proposition {
+            subject: "Coco".into(),
+            predicate: "is".into(),
+            object: "mammal".into(),
+            scope: "biology".into(),
+            negative: true,
+        };
+        let replacement = Proposition {
+            subject: "Coco".into(),
+            predicate: "is".into(),
+            object: "bird".into(),
+            scope: "biology".into(),
+            negative: false,
+        };
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("load corrected English premises with provenance");
+        let corrected_old_fact = memory
+            .facts
+            .iter()
+            .find(|fact| fact.valid && fact.proposition == corrected_old)
+            .expect("negative superseded English premise is recorded");
+        let replacement_fact = memory
+            .facts
+            .iter()
+            .find(|fact| fact.valid && fact.proposition == replacement)
+            .expect("English replacement premise is recorded");
+        assert_eq!(corrected_old_fact.source_evidence, Some(evidence.clone()));
+        assert_eq!(replacement_fact.source_evidence, Some(evidence.clone()));
+        let corrected_old_id = corrected_old_fact.id.clone();
+        let replacement_id = replacement_fact.id.clone();
+
+        drop(engine);
+        let mut reopened = Engine::open(&directory).expect("reopen English Core state");
+        let restored_memory = reopened
+            .store
+            .load_memory(actor)
+            .expect("revalidate English correction evidence after reopen");
+        for (proposition, fact_id) in [
+            (&corrected_old, &corrected_old_id),
+            (&replacement, &replacement_id),
+        ] {
+            let proof = relations::query(&restored_memory, proposition, 32)
+                .expect("query a reopened English correction premise");
+            assert_eq!(proof.status, "SUPPORTED");
+            assert!(relations::answer_dependencies(&proof).contains(fact_id));
+            assert_eq!(proof.facts[0].source_evidence, Some(evidence.clone()));
+        }
+
+        let followup = reopened
+            .execute(
+                actor,
+                RequestEnvelope::new(
+                    case,
+                    "english-correction-followup",
+                    actor,
+                    "[scope=biology]Coco is a bird?",
+                ),
+            )
+            .expect("ordinary Core query consumes the English replacement fact");
+        assert_eq!(followup.lifecycle, Lifecycle::Commit, "{followup:?}");
+        assert!(followup.dependencies.contains(&replacement_id));
+        println!(
+            "B28_ENGLISH_CORRECTION_SOURCE_ROLES_REOPENED_PROOF={}",
+            serde_json::to_string(&serde_json::json!({
+                "input": request.text,
+                "parser_version": evidence.parser_version,
+                "input_fingerprint": evidence.input_fingerprint,
+                "raw_sha256": evidence.raw_sha256,
+                "bundle_fingerprint": evidence.bundle_fingerprint,
+                "semantic_signature": evidence.semantic_signature,
+                "source_roles": evidence.source_roles,
+                "corrected_old_fact": corrected_old_id,
+                "replacement_fact": replacement_id,
+                "both_facts_link_same_source_evidence": true,
+                "reopened_negative_proof": "SUPPORTED",
+                "reopened_replacement_proof": "SUPPORTED",
+                "followup_dependencies": followup.dependencies,
+                "followup_consumes_replacement_fact": followup.dependencies.contains(&replacement_id),
+                "source_roles_are_themselves_world_truth": false,
+                "external_network_or_effects": false
+            }))
+            .expect("serialize B28 English correction source observation")
+        );
+        drop(reopened);
+        fs::remove_dir_all(directory).expect("remove isolated English correction state");
+    }
+
+    #[test]
     fn direct_core_observation_preserves_relation_conditions_subject_scope_and_negation() {
         let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(

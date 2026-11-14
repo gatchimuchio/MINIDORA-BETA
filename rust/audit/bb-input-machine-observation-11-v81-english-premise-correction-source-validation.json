@@ -1,0 +1,108 @@
+{
+  "observation_id": "MB-BUILD-20261114-INPUT-08-B28_ENGLISH_CORRECTION_SOURCE_TO_BOTH_FACTS",
+  "status": "PASS",
+  "base_commit": "7e4fc78a7535541779607baacdaf5456ee51988a",
+  "target": "MINIDORA-BETA Rust Core English premise-correction input path",
+  "scope": "One in-process Engine::execute route for an explicitly scoped English copular correction using the supported is/are, comma-not construction, with explicit subject and article-marked old and replacement nouns.",
+  "route": "original English correction -> sealed v81 CorrectPremise and exact role spans -> Core validates an existing same-scope premise target -> one memory CAS writes the negative superseded Fact and replacement Fact with shared sealed source evidence -> Store revalidates the retained source after Engine reopen -> SUPPORTED proofs for both facts -> ordinary Core Ask consumes the replacement Fact ID",
+  "core_route_observation": {
+    "input": "[scope=biology]Correction: Coco is a bird, not a mammal.",
+    "parser_version": "declarative-ja-en-v81-english-correction-source-ranges",
+    "intent": "CorrectPremise",
+    "superseded_relation": {
+      "subject": "Coco",
+      "predicate": "is",
+      "object": "mammal",
+      "scope": "biology",
+      "negative": false
+    },
+    "replacement_relation": {
+      "subject": "Coco",
+      "predicate": "is",
+      "object": "bird",
+      "scope": "biology",
+      "negative": false
+    },
+    "corrected_negative_fact_id": "fact:5da16cde99c3fba02de5ee486358bf48060a6503c1c95a3ee01c60675965634d",
+    "replacement_fact_id": "fact:5fe2e2a43fa19fbc106910f946f806159c65da9a77c2cfb31ff2025b72f2393b",
+    "both_facts_link_same_source_evidence": true,
+    "input_fingerprint": "c6b58462c90eaa3b9866e1ff28ee82ffecae0f62f6acc8b680f8e6ccb15f32a6",
+    "raw_sha256": "dacce627d0a64407a09ba992d2aecacc143fc6e8911b1515c79f14b0af732066",
+    "bundle_fingerprint": "65f93317b6a11b747b2194a845301bc656c4705d2b69fd7d9d224bec8d960ddd",
+    "semantic_signature": "62c872b3ceacebf910dcc56cb2b1e09836286de705c503f119525d2e8150e3bb",
+    "source_roles": {
+      "/CorrectPremise/copula": [
+        {"start": 32, "end": 34, "text": "is"}
+      ],
+      "/CorrectPremise/correction_marker": [
+        {"start": 43, "end": 46, "text": "not"}
+      ],
+      "/CorrectPremise/replacement_article": [
+        {"start": 35, "end": 36, "text": "a"}
+      ],
+      "/CorrectPremise/replacement_object": [
+        {"start": 37, "end": 41, "text": "bird"}
+      ],
+      "/CorrectPremise/scope": [
+        {"start": 7, "end": 14, "text": "biology"}
+      ],
+      "/CorrectPremise/subject": [
+        {"start": 27, "end": 31, "text": "Coco"}
+      ],
+      "/CorrectPremise/superseded_article": [
+        {"start": 47, "end": 48, "text": "a"}
+      ],
+      "/CorrectPremise/superseded_object": [
+        {"start": 49, "end": 55, "text": "mammal"}
+      ]
+    },
+    "reopened_negative_proof": "SUPPORTED",
+    "reopened_replacement_proof": "SUPPORTED",
+    "normal_followup_consumes_replacement_fact": true,
+    "source_roles_are_themselves_world_truth": false,
+    "external_network_or_effects": false
+  },
+  "focused_tests": {
+    "command": "cargo test -p minidora-engine --locked --lib english_premise_correction -- --nocapture",
+    "passed": 2,
+    "failed": 0,
+    "log": "01-focused-english-correction.log"
+  },
+  "engine_package_tests": {
+    "command": "cargo test -p minidora-engine --locked",
+    "unit_tests_passed": 246,
+    "integration_test_cases_passed": 12,
+    "total_passed": 258,
+    "failed": 0,
+    "ignored": 0,
+    "doc_tests": 0,
+    "log": "02-engine-package-tests.log"
+  },
+  "workspace_gates": {
+    "cargo_fmt_all_check": {"status": "PASS", "exit_code": 0, "log": "03-fmt-check.log"},
+    "cargo_check_workspace_all_targets_locked": {"status": "PASS", "exit_code": 0, "log": "04-workspace-check.log"},
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": {"status": "PASS", "exit_code": 0, "log": "05-clippy.log"},
+    "cargo_build_workspace_locked": {"status": "PASS", "exit_code": 0, "log": "06-workspace-build.log"},
+    "git_diff_check": {"status": "PASS", "exit_code": 0, "log": "07-diff-check.log"},
+    "environment": "Linux x86_64-unknown-linux-gnu, Rust/Cargo 1.99.1"
+  },
+  "change_boundary": {
+    "production_behavior_changed": true,
+    "parser_version_changed": true,
+    "database_schema_changed": false,
+    "dependency_or_lockfile_changed": false,
+    "changed_scope": "Added exact English source roles for the bounded direct copular correction grammar; both correction Facts retain the shared evidence and Store revalidates it after reopen."
+  },
+  "acceptance_status": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_93_requirements": "UNVERIFIED"
+  },
+  "not_established": [
+    "General English correction grammar, arbitrary clauses, quotations, multiple corrections, or every article/noun construction.",
+    "General Japanese or English subject attribution outside this explicit correction form.",
+    "Outside-world truth of the user-provided superseded or replacement premise.",
+    "Full workspace all-features runtime, CLI/UI/output delivery, other operating systems, independent QA, or full A04/A15/E08 acceptance."
+  ]
+}

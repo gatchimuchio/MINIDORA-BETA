@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v80-correction-source-ranges";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v81-english-correction-source-ranges";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -759,6 +759,178 @@ fn japanese_premise_correction_source_roles(
     Ok(Some(roles))
 }
 
+fn english_correction_object_source_spans(
+    text: &str,
+    source_offset: usize,
+    capture: regex::Match<'_>,
+    expected: &str,
+) -> Option<(Option<SourceSpan>, SourceSpan)> {
+    let captured = capture.as_str();
+    let leading = captured.len() - captured.trim_start().len();
+    let value = captured.trim();
+    let start = source_offset + capture.start() + leading;
+    let end = start + value.len();
+    let (article, object_start) = ["a", "an", "the"]
+        .iter()
+        .find_map(|article| {
+            let source_article = value.get(..article.len())?;
+            let rest = value.get(article.len()..)?;
+            if !source_article.eq_ignore_ascii_case(article) {
+                return None;
+            }
+            let whitespace = rest.chars().next()?;
+            if !whitespace.is_whitespace() {
+                return None;
+            }
+            let whitespace_bytes = rest.len() - rest.trim_start().len();
+            let article_span = source_span_at(text, start, start + article.len())?;
+            Some((Some(article_span), start + article.len() + whitespace_bytes))
+        })
+        .unwrap_or((None, start));
+    if object_start >= end {
+        return None;
+    }
+    let object_span = source_span_at(text, object_start, end)?;
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    (normalized(&object_span.text) == normalized(expected)).then_some((article, object_span))
+}
+
+fn english_premise_correction_source_roles(
+    text: &str,
+    expected: &Intent,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    let Intent::CorrectPremise {
+        superseded,
+        replacement,
+    } = expected
+    else {
+        return Ok(None);
+    };
+    if superseded.predicate != "is"
+        || replacement.predicate != "is"
+        || superseded.negative
+        || replacement.negative
+        || superseded.subject != replacement.subject
+        || superseded.scope != replacement.scope
+        || superseded.object == replacement.object
+    {
+        return Ok(None);
+    }
+
+    let trimmed = text.trim();
+    let source_offset = text.len() - text.trim_start().len();
+    let statement = terminal_trim(trimmed);
+    let (body, body_offset, scope_span) =
+        if let Some(scoped) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(statement) {
+            let scope_capture = scoped.get(1).expect("scope capture group exists");
+            let body_capture = scoped.get(2).expect("statement capture group exists");
+            let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
+                return Ok(None);
+            };
+            if scope_span.text != superseded.scope {
+                return Ok(None);
+            }
+            (
+                body_capture.as_str(),
+                source_offset + body_capture.start(),
+                Some(scope_span),
+            )
+        } else {
+            if superseded.scope != "default" {
+                return Ok(None);
+            }
+            (statement, source_offset, None)
+        };
+
+    let Some(correction) =
+        regex(r"(?i)^(?:correction:\s*)?(.+?)\s+(is|are)\s+(.+?),\s+(not)\s+(.+)$")?.captures(body)
+    else {
+        return Ok(None);
+    };
+    let subject_capture = correction.get(1).expect("subject capture group exists");
+    let copula_capture = correction.get(2).expect("copula capture group exists");
+    let replacement_capture = correction
+        .get(3)
+        .expect("replacement-object capture group exists");
+    let marker_capture = correction
+        .get(4)
+        .expect("correction-marker capture group exists");
+    let superseded_capture = correction
+        .get(5)
+        .expect("superseded-object capture group exists");
+    let Some(subject_span) = captured_source_span(text, body_offset, subject_capture) else {
+        return Ok(None);
+    };
+    let Some(copula_span) = captured_source_span(text, body_offset, copula_capture) else {
+        return Ok(None);
+    };
+    let Some(marker_span) = captured_source_span(text, body_offset, marker_capture) else {
+        return Ok(None);
+    };
+    let Some((superseded_article, superseded_object)) = english_correction_object_source_spans(
+        text,
+        body_offset,
+        superseded_capture,
+        &superseded.object,
+    ) else {
+        return Ok(None);
+    };
+    let Some((replacement_article, replacement_object)) = english_correction_object_source_spans(
+        text,
+        body_offset,
+        replacement_capture,
+        &replacement.object,
+    ) else {
+        return Ok(None);
+    };
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    if !matches!(copula_span.text.to_ascii_lowercase().as_str(), "is" | "are")
+        || !marker_span.text.eq_ignore_ascii_case("not")
+        || normalized(&subject_span.text) != normalized(&superseded.subject)
+        || normalized(&subject_span.text) != normalized(&replacement.subject)
+        || premise_correction_intent(text)?.as_ref() != Some(expected)
+    {
+        return Ok(None);
+    }
+
+    let mut roles = BTreeMap::from([
+        ("/CorrectPremise/subject".into(), vec![subject_span]),
+        ("/CorrectPremise/copula".into(), vec![copula_span]),
+        (
+            "/CorrectPremise/superseded_object".into(),
+            vec![superseded_object],
+        ),
+        (
+            "/CorrectPremise/correction_marker".into(),
+            vec![marker_span],
+        ),
+        (
+            "/CorrectPremise/replacement_object".into(),
+            vec![replacement_object],
+        ),
+    ]);
+    if let Some(article) = superseded_article {
+        roles.insert("/CorrectPremise/superseded_article".into(), vec![article]);
+    }
+    if let Some(article) = replacement_article {
+        roles.insert("/CorrectPremise/replacement_article".into(), vec![article]);
+    }
+    if let Some(scope_span) = scope_span {
+        roles.insert("/CorrectPremise/scope".into(), vec![scope_span]);
+    }
+    Ok(Some(roles))
+}
+
+fn premise_correction_source_roles(
+    text: &str,
+    expected: &Intent,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    if let Some(roles) = japanese_premise_correction_source_roles(text, expected)? {
+        return Ok(Some(roles));
+    }
+    english_premise_correction_source_roles(text, expected)
+}
+
 /// Project only a complete, unambiguous supported Japanese direct-premise role
 /// map into evidence. A contextual assertion records its source pronoun here;
 /// the sealed bundle links that pronoun to the prior result used by Core.
@@ -769,7 +941,7 @@ pub(crate) fn assertion_source_evidence(
 ) -> Result<Option<SealedSourceEvidence>> {
     if let Intent::CorrectPremise { .. } = &bundle.meaning.intent {
         let Some(source_roles) =
-            japanese_premise_correction_source_roles(&bundle.request.text, &bundle.meaning.intent)?
+            premise_correction_source_roles(&bundle.request.text, &bundle.meaning.intent)?
         else {
             return Ok(None);
         };
@@ -1003,7 +1175,7 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
         return Ok(source_roles);
     }
     if let Intent::CorrectPremise { .. } = intent
-        && let Some(source_roles) = japanese_premise_correction_source_roles(text, intent)?
+        && let Some(source_roles) = premise_correction_source_roles(text, intent)?
     {
         return Ok(source_roles);
     }
@@ -4887,6 +5059,53 @@ mod tests {
             .unwrap()[0]
             .text = "哺乳類".into();
         assert!(assertion_source_evidence(&tampered).unwrap().is_none());
+    }
+
+    #[test]
+    fn english_premise_correction_roles_keep_articles_and_nouns_separate() {
+        let text = "[scope=biology]Correction: Coco is a bird, not a mammal.";
+        let request = RequestEnvelope::new("c", "i", "actor", text);
+        let bundle = seal(&request, None).unwrap();
+        assert!(matches!(
+            &bundle.meaning.intent,
+            Intent::CorrectPremise { superseded, replacement }
+                if superseded.subject == "Coco"
+                    && superseded.object == "mammal"
+                    && replacement.subject == "Coco"
+                    && replacement.object == "bird"
+                    && superseded.scope == "biology"
+                    && replacement.scope == "biology"
+        ));
+        assert_eq!(bundle.meaning.parser_version, PARSER_VERSION);
+        let expected = [
+            ("/CorrectPremise/subject", "Coco"),
+            ("/CorrectPremise/copula", "is"),
+            ("/CorrectPremise/superseded_article", "a"),
+            ("/CorrectPremise/superseded_object", "mammal"),
+            ("/CorrectPremise/correction_marker", "not"),
+            ("/CorrectPremise/replacement_article", "a"),
+            ("/CorrectPremise/replacement_object", "bird"),
+            ("/CorrectPremise/scope", "biology"),
+        ];
+        assert_eq!(bundle.meaning.source_roles.len(), expected.len());
+        for (role, value) in expected {
+            let spans = bundle
+                .meaning
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing English correction role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous English correction role {role}");
+            assert_eq!(
+                spans[0].text, value,
+                "incorrect English correction role {role}"
+            );
+            assert_eq!(text.get(spans[0].start..spans[0].end), Some(value));
+        }
+        assert!(
+            assertion_source_evidence(&bundle)
+                .unwrap()
+                .is_some_and(|evidence| evidence.source_roles == bundle.meaning.source_roles)
+        );
     }
 
     #[test]
