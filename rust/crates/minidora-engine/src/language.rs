@@ -1,6 +1,6 @@
 //! Exact arithmetic and an inherited non-neural character sequence model.
 //! Model probabilities rank surface candidates; they never establish facts.
-use minidora_domain::{Calculation, Result, failure, identity};
+use minidora_domain::{Calculation, Guarantee, Result, failure, identity};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Signed, Zero};
@@ -939,6 +939,909 @@ pub struct ModelEmission {
     pub context_hashes: Vec<String>,
     pub lossless_projection: LosslessTokenProjection,
 }
+
+/// A construction-only semantic purpose. This typed API is not a natural
+/// language parser and does not verify the truth of supplied content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeaningCompositionPurpose {
+    Explain,
+    Compare,
+    ShortComposition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeaningRole {
+    Opening,
+    Claim,
+    Evidence,
+    Rule,
+    Detail,
+    Example,
+    SubjectA,
+    SubjectB,
+    Commonality,
+    Difference,
+    Body,
+    Conclusion,
+    Limitation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeaningCompositionFormat {
+    Paragraph,
+    Bullets,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeaningCompositionStyle {
+    Neutral,
+    Concise,
+}
+
+/// Caller-provided, already typed semantic material. `evidence_ids` are
+/// provenance labels only; this construction API does not resolve or verify
+/// them. `dependencies` constrain sequence order inside this request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypedMeaningUnit {
+    pub id: String,
+    pub role: MeaningRole,
+    pub text: String,
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+}
+
+/// Direct typed input to Core's bounded non-neural meaning composer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningCompositionRequest {
+    pub purpose: MeaningCompositionPurpose,
+    pub format: MeaningCompositionFormat,
+    pub style: MeaningCompositionStyle,
+    pub units: Vec<TypedMeaningUnit>,
+    /// Explicit prior emitted unit IDs, constrained to a prefix of this output.
+    #[serde(default)]
+    pub prior_sequence: Vec<String>,
+    pub max_output_bytes: usize,
+    pub max_tokens: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningCompositionStep {
+    pub unit_id: String,
+    pub role: MeaningRole,
+    pub evidence_ids: Vec<String>,
+    pub connector: String,
+    pub admissible_continuations: Vec<MeaningContinuationOption>,
+    /// Exact probability under the finite next-token support for this step.
+    pub selected_probability: String,
+    pub context_state_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningContinuationOption {
+    pub unit_id: String,
+    pub connector: String,
+}
+
+/// Actual text assembled by Core from typed semantic units, role-conditioned
+/// connective tokens, and a bounded sequence objective.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningCompositionReport {
+    pub purpose: MeaningCompositionPurpose,
+    pub format: MeaningCompositionFormat,
+    pub style: MeaningCompositionStyle,
+    pub text: String,
+    pub steps: Vec<MeaningCompositionStep>,
+    pub required_unit_ids: Vec<String>,
+    pub evidence_ids: Vec<String>,
+    pub context_state_sha256: String,
+    pub token_space_version: String,
+    pub conditional_distribution_version: String,
+    pub model_revision: String,
+    pub model_training_lineage: String,
+    pub training_corpus_revision: String,
+    pub transform_version: String,
+    pub transform_order: usize,
+    pub transform_smoothing: u64,
+    pub model_document_count: u64,
+    pub model_vocabulary_size: usize,
+    pub model_context_count: usize,
+    pub model_transition_count: usize,
+    pub sequence_token_count: usize,
+    pub literal_fallback_version: String,
+    pub composition_grammar_version: String,
+    pub objective: String,
+    pub decoder_version: String,
+    pub tie_policy: String,
+    /// Supplied propositions and evidence references were not independently
+    /// verified by this compositional API.
+    pub guarantee: Guarantee,
+    pub factual_status: String,
+}
+
+const MEANING_CONTEXT_VERSION: &str = "typed-meaning-context-v1";
+const MEANING_GRAMMAR_VERSION: &str = "typed-role-single-sentence-boundary-v1";
+const MEANING_DISTRIBUTION_VERSION: &str = "exact-rational-support-backoff-char-trie-v2";
+const MEANING_DECODER_VERSION: &str = "finite-role-trie-exact-v1";
+const MAX_MEANING_UNITS: usize = 16;
+const MAX_MEANING_UNIT_BYTES: usize = 384;
+const MAX_MEANING_INPUT_BYTES: usize = 8192;
+const MAX_MEANING_OUTPUT_BYTES: usize = 8192;
+const MAX_MEANING_TOKENS: usize = 8192;
+
+#[derive(Clone)]
+struct MeaningCandidate {
+    unit_index: usize,
+    connector: String,
+    segment: String,
+}
+
+fn valid_meaning_id(value: &str, max_length: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'))
+}
+
+fn role_rank(purpose: MeaningCompositionPurpose, role: MeaningRole) -> usize {
+    use MeaningCompositionPurpose::{Compare, Explain, ShortComposition};
+    use MeaningRole::{
+        Body, Claim, Commonality, Conclusion, Detail, Difference, Evidence, Example, Limitation,
+        Opening, Rule, SubjectA, SubjectB,
+    };
+    match purpose {
+        Explain => match role {
+            Opening => 0,
+            Claim => 1,
+            Evidence | Rule | Example => 2,
+            Detail => 3,
+            Conclusion => 4,
+            Limitation => 5,
+            _ => usize::MAX,
+        },
+        Compare => match role {
+            Opening => 0,
+            SubjectA => 1,
+            SubjectB => 2,
+            Commonality | Difference => 3,
+            Evidence | Example => 4,
+            Conclusion => 5,
+            Limitation => 6,
+            _ => usize::MAX,
+        },
+        ShortComposition => match role {
+            Opening => 0,
+            Body => 1,
+            Detail | Evidence | Example => 2,
+            Conclusion => 3,
+            Limitation => 4,
+            _ => usize::MAX,
+        },
+    }
+}
+
+fn validate_meaning_request(
+    request: &MeaningCompositionRequest,
+) -> Result<BTreeMap<String, usize>> {
+    if request.units.is_empty() || request.units.len() > MAX_MEANING_UNITS {
+        return Err(failure(
+            "MEANING_UNIT_LIMIT",
+            "typed meaning composition requires one to sixteen semantic units",
+        ));
+    }
+    if request.max_output_bytes == 0
+        || request.max_output_bytes > MAX_MEANING_OUTPUT_BYTES
+        || request.max_tokens == 0
+        || request.max_tokens > MAX_MEANING_TOKENS
+    {
+        return Err(failure(
+            "MEANING_BUDGET",
+            "output byte and token budgets must each be in 1..=8192",
+        ));
+    }
+
+    let mut by_id = BTreeMap::new();
+    let mut input_bytes = 0usize;
+    let mut role_counts = BTreeMap::<MeaningRole, usize>::new();
+    for (index, unit) in request.units.iter().enumerate() {
+        if !valid_meaning_id(&unit.id, 64) || by_id.insert(unit.id.clone(), index).is_some() {
+            return Err(failure(
+                "MEANING_UNIT_ID",
+                "unit IDs must be unique bounded ASCII identifiers",
+            ));
+        }
+        let rank = role_rank(request.purpose, unit.role);
+        if rank == usize::MAX {
+            return Err(failure(
+                "MEANING_ROLE_PURPOSE_MISMATCH",
+                format!(
+                    "role {:?} is not admitted for {:?}",
+                    unit.role, request.purpose
+                ),
+            ));
+        }
+        *role_counts.entry(unit.role).or_default() += 1;
+        if unit.text.is_empty()
+            || unit.text.len() > MAX_MEANING_UNIT_BYTES
+            || unit.text.trim() != unit.text
+            || unit.text.chars().any(char::is_control)
+        {
+            return Err(failure(
+                "MEANING_UNIT_TEXT",
+                "each semantic unit must be non-empty, trimmed, control-free, and at most 384 bytes",
+            ));
+        }
+        let terminals = unit
+            .text
+            .chars()
+            .filter(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
+            .count();
+        if terminals != 1
+            || !unit
+                .text
+                .chars()
+                .last()
+                .is_some_and(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
+        {
+            return Err(failure(
+                "MEANING_UNIT_SENTENCE",
+                "each semantic unit must contain one sentence ending at its final character",
+            ));
+        }
+        input_bytes = input_bytes
+            .checked_add(unit.text.len())
+            .ok_or_else(|| failure("MEANING_INPUT_LIMIT", "semantic input byte count overflow"))?;
+        if unit.evidence_ids.len() > 16
+            || unit
+                .evidence_ids
+                .iter()
+                .any(|id| !valid_meaning_id(id, 128))
+        {
+            return Err(failure(
+                "MEANING_EVIDENCE_ID",
+                "evidence labels must be bounded ASCII identifiers",
+            ));
+        }
+        let evidence_set: BTreeSet<_> = unit.evidence_ids.iter().collect();
+        if evidence_set.len() != unit.evidence_ids.len() {
+            return Err(failure(
+                "MEANING_EVIDENCE_ID",
+                "evidence labels within one unit must be unique",
+            ));
+        }
+        if unit.dependencies.len() > MAX_MEANING_UNITS
+            || unit
+                .dependencies
+                .iter()
+                .any(|dependency| !valid_meaning_id(dependency, 64) || dependency == &unit.id)
+        {
+            return Err(failure(
+                "MEANING_DEPENDENCY",
+                "dependencies must be distinct bounded unit IDs and cannot reference self",
+            ));
+        }
+        let dependency_set: BTreeSet<_> = unit.dependencies.iter().collect();
+        if dependency_set.len() != unit.dependencies.len() {
+            return Err(failure(
+                "MEANING_DEPENDENCY",
+                "dependencies within one unit must be unique",
+            ));
+        }
+    }
+    if input_bytes > MAX_MEANING_INPUT_BYTES {
+        return Err(failure(
+            "MEANING_INPUT_LIMIT",
+            "typed semantic text exceeds the 8192-byte input envelope",
+        ));
+    }
+    for unit in &request.units {
+        for dependency in &unit.dependencies {
+            let Some(&dependency_index) = by_id.get(dependency) else {
+                return Err(failure(
+                    "MEANING_DEPENDENCY",
+                    format!(
+                        "unit {} references unknown dependency {dependency}",
+                        unit.id
+                    ),
+                ));
+            };
+            if role_rank(request.purpose, request.units[dependency_index].role)
+                > role_rank(request.purpose, unit.role)
+            {
+                return Err(failure(
+                    "MEANING_ORDER_CONFLICT",
+                    "a unit cannot depend on a later semantic-role stage",
+                ));
+            }
+        }
+    }
+
+    use MeaningCompositionPurpose::{Compare, Explain, ShortComposition};
+    use MeaningRole::{Body, Claim, Commonality, Difference, Evidence, Rule, SubjectA, SubjectB};
+    let covers_purpose = match request.purpose {
+        Explain => {
+            role_counts.get(&Claim).copied().unwrap_or(0) > 0
+                && (role_counts.get(&Evidence).copied().unwrap_or(0) > 0
+                    || role_counts.get(&Rule).copied().unwrap_or(0) > 0)
+        }
+        Compare => {
+            role_counts.get(&SubjectA).copied().unwrap_or(0) > 0
+                && role_counts.get(&SubjectB).copied().unwrap_or(0) > 0
+                && (role_counts.get(&Commonality).copied().unwrap_or(0) > 0
+                    || role_counts.get(&Difference).copied().unwrap_or(0) > 0)
+        }
+        ShortComposition => role_counts.get(&Body).copied().unwrap_or(0) > 0,
+    };
+    if !covers_purpose {
+        return Err(failure(
+            "MEANING_ROLE_COVERAGE",
+            "typed roles do not contain the minimum semantic structure for the requested purpose",
+        ));
+    }
+
+    if request.prior_sequence.len() > request.units.len() {
+        return Err(failure(
+            "MEANING_PRIOR_SEQUENCE",
+            "prior sequence cannot exceed the supplied unit set",
+        ));
+    }
+    let mut prior_seen = BTreeSet::new();
+    let mut prior_rank = None;
+    for id in &request.prior_sequence {
+        let Some(&index) = by_id.get(id) else {
+            return Err(failure(
+                "MEANING_PRIOR_SEQUENCE",
+                format!("prior sequence references unknown unit {id}"),
+            ));
+        };
+        if !prior_seen.insert(id) {
+            return Err(failure(
+                "MEANING_PRIOR_SEQUENCE",
+                "prior sequence unit IDs must be unique",
+            ));
+        }
+        let rank = role_rank(request.purpose, request.units[index].role);
+        if prior_rank.is_some_and(|previous| rank < previous) {
+            return Err(failure(
+                "MEANING_PRIOR_SEQUENCE",
+                "prior sequence conflicts with the semantic-role ordering",
+            ));
+        }
+        if request.units[index]
+            .dependencies
+            .iter()
+            .any(|dependency| !prior_seen.contains(dependency))
+        {
+            return Err(failure(
+                "MEANING_PRIOR_SEQUENCE",
+                "prior sequence must emit every dependency before its dependent unit",
+            ));
+        }
+        prior_rank = Some(rank);
+    }
+    Ok(by_id)
+}
+
+fn meaning_connectors(
+    role: MeaningRole,
+    style: MeaningCompositionStyle,
+) -> &'static [&'static str] {
+    use MeaningRole::{
+        Body, Claim, Commonality, Conclusion, Detail, Difference, Evidence, Example, Limitation,
+        Opening, Rule, SubjectA, SubjectB,
+    };
+    match (style, role) {
+        (MeaningCompositionStyle::Concise, Opening) => &["まず、"],
+        (MeaningCompositionStyle::Concise, Claim) => &["要点として、"],
+        (MeaningCompositionStyle::Concise, Evidence) => &["根拠として、"],
+        (MeaningCompositionStyle::Concise, Rule) => &["規則上、"],
+        (MeaningCompositionStyle::Concise, Detail) => &["具体的には、"],
+        (MeaningCompositionStyle::Concise, Example) => &["例えば、"],
+        (MeaningCompositionStyle::Concise, SubjectA) => &["まず、"],
+        (MeaningCompositionStyle::Concise, SubjectB) => &["一方、"],
+        (MeaningCompositionStyle::Concise, Commonality) => &["同じく、"],
+        (MeaningCompositionStyle::Concise, Difference) => &["比較では、"],
+        (MeaningCompositionStyle::Concise, Body) => &["また、"],
+        (MeaningCompositionStyle::Concise, Conclusion) => &["まとめると、"],
+        (MeaningCompositionStyle::Concise, Limitation) => &["なお、"],
+        (MeaningCompositionStyle::Neutral, Opening) => &["はじめに、", "まず、"],
+        (MeaningCompositionStyle::Neutral, Claim) => &["要点として、", "主張として、"],
+        (MeaningCompositionStyle::Neutral, Evidence) => &["根拠として、", "資料からは、"],
+        (MeaningCompositionStyle::Neutral, Rule) => &["規則に照らすと、", "規則を適用すると、"],
+        (MeaningCompositionStyle::Neutral, Detail) => &["詳しく見ると、", "具体的には、"],
+        (MeaningCompositionStyle::Neutral, Example) => &["例えば、", "例として、"],
+        (MeaningCompositionStyle::Neutral, SubjectA) => &["まず、", "はじめに、"],
+        (MeaningCompositionStyle::Neutral, SubjectB) => &["一方、", "これに対して、"],
+        (MeaningCompositionStyle::Neutral, Commonality) => &["同じく、", "共通して、"],
+        (MeaningCompositionStyle::Neutral, Difference) => {
+            &["この比較では、", "比較に目を向けると、"]
+        }
+        (MeaningCompositionStyle::Neutral, Body) => &["また、", "さらに、"],
+        (MeaningCompositionStyle::Neutral, Conclusion) => &["まとめると、", "全体をまとめると、"],
+        (MeaningCompositionStyle::Neutral, Limitation) => &["なお、", "ただし、"],
+    }
+}
+
+fn meaning_role_sequence(request: &MeaningCompositionRequest) -> Vec<MeaningRole> {
+    request.units.iter().map(|unit| unit.role).collect()
+}
+
+fn meaning_next_token_distribution(
+    model: &SequenceModel,
+    history: &[String],
+    allowed: &BTreeSet<String>,
+    deadline: Instant,
+) -> Result<BTreeMap<String, BigRational>> {
+    poll_model(deadline)?;
+    if allowed.is_empty() {
+        return Err(failure(
+            "EMPTY_TOKEN_SUPPORT",
+            "meaning decoder has no admissible next token",
+        ));
+    }
+    let width = model.order - 1;
+    let tail = &history[history.len().saturating_sub(width)..];
+    let mut padded = vec![BOS.to_owned(); width.saturating_sub(tail.len())];
+    padded.extend_from_slice(tail);
+    let mut selected_counts = None;
+    for length in (0..=width).rev() {
+        let context = &padded[padded.len().saturating_sub(length)..];
+        let key = serde_json::to_string(context)?;
+        let counts = model.counts.get(&key);
+        if allowed.iter().any(|token| {
+            counts
+                .and_then(|row| row.get(token))
+                .is_some_and(|count| *count > 0)
+        }) {
+            selected_counts = counts;
+            break;
+        }
+    }
+    let mut total = BigInt::zero();
+    for token in allowed {
+        poll_model(deadline)?;
+        total += BigInt::from(
+            selected_counts
+                .and_then(|counts| counts.get(token))
+                .copied()
+                .unwrap_or(0),
+        );
+    }
+    let denominator = total + BigInt::from(model.smoothing) * BigInt::from(allowed.len());
+    if denominator.is_zero() {
+        return Err(failure(
+            "EMPTY_TOKEN_SUPPORT",
+            "meaning decoder's finite support has zero probability mass",
+        ));
+    }
+    let mut distribution = BTreeMap::new();
+    for token in allowed {
+        poll_model(deadline)?;
+        let count = selected_counts
+            .and_then(|counts| counts.get(token))
+            .copied()
+            .unwrap_or(0);
+        distribution.insert(
+            token.clone(),
+            BigRational::new(
+                BigInt::from(count) + BigInt::from(model.smoothing),
+                denominator.clone(),
+            ),
+        );
+    }
+    Ok(distribution)
+}
+
+struct MeaningTrieWalk<'a> {
+    model: &'a SequenceModel,
+    sequences: &'a [Vec<String>],
+    probabilities: &'a mut [Option<BigRational>],
+    deadline: Instant,
+}
+
+impl MeaningTrieWalk<'_> {
+    fn visit(
+        &mut self,
+        active: &[usize],
+        position: usize,
+        history: &[String],
+        mass: BigRational,
+    ) -> Result<()> {
+        poll_model(self.deadline)?;
+        let allowed = active
+            .iter()
+            .map(|index| self.sequences[*index][position].clone())
+            .collect::<BTreeSet<_>>();
+        let distribution =
+            meaning_next_token_distribution(self.model, history, &allowed, self.deadline)?;
+        for token in allowed {
+            let branch_mass = probability_product(
+                mass.clone(),
+                distribution
+                    .get(&token)
+                    .cloned()
+                    .ok_or_else(|| failure("EMPTY_TOKEN_SUPPORT", "missing trie probability"))?,
+                self.deadline,
+            )?;
+            let matching = active
+                .iter()
+                .copied()
+                .filter(|index| self.sequences[*index][position] == token)
+                .collect::<Vec<_>>();
+            if token == EOS {
+                for index in matching {
+                    self.probabilities[index] = Some(branch_mass.clone());
+                }
+            } else {
+                let mut child_history = history.to_vec();
+                child_history.push(token);
+                if child_history.len() > self.model.order - 1 {
+                    child_history.remove(0);
+                }
+                self.visit(&matching, position + 1, &child_history, branch_mass)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Return the exact probability of each finite candidate under a normalized
+/// character-next-token distribution restricted at every trie node to tokens
+/// that can still complete one of the supplied segments. EOS is an explicit
+/// branch when a candidate ends at that node.
+fn restricted_segment_probabilities(
+    model: &SequenceModel,
+    prefix: &str,
+    candidates: &[String],
+    deadline: Instant,
+) -> Result<Vec<BigRational>> {
+    if candidates.is_empty() {
+        return Err(failure(
+            "EMPTY_TOKEN_SUPPORT",
+            "no semantically admissible continuation segment remains",
+        ));
+    }
+    let mut unique = BTreeMap::<Vec<String>, usize>::new();
+    let mut candidate_groups = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        model_bytes(candidate.len())?;
+        let mut tokens = model.encode(candidate);
+        tokens.push(EOS.into());
+        let group = if let Some(group) = unique.get(&tokens) {
+            *group
+        } else {
+            let group = unique.len();
+            unique.insert(tokens, group);
+            group
+        };
+        candidate_groups.push(group);
+    }
+    let mut indexed_sequences = vec![None; unique.len()];
+    for (tokens, group) in unique {
+        indexed_sequences[group] = Some(tokens);
+    }
+    let sequences = indexed_sequences
+        .into_iter()
+        .map(|tokens| tokens.ok_or_else(|| failure("MODEL_CONTEXT", "invalid sequence trie")))
+        .collect::<Result<Vec<_>>>()?;
+    let mut group_probabilities = vec![None; sequences.len()];
+    if model.encode(prefix).len() > MAX_MODEL_TOKENS {
+        return Err(failure(
+            "MODEL_RESOURCE_LIMIT",
+            "composition context exceeds the model token envelope",
+        ));
+    }
+    let mut trie = MeaningTrieWalk {
+        model,
+        sequences: &sequences,
+        probabilities: &mut group_probabilities,
+        deadline,
+    };
+    trie.visit(
+        &(0..sequences.len()).collect::<Vec<_>>(),
+        0,
+        &model.encode(prefix),
+        BigRational::one(),
+    )?;
+    let group_probabilities = group_probabilities
+        .into_iter()
+        .map(|probability| {
+            probability.ok_or_else(|| {
+                failure(
+                    "EMPTY_TOKEN_SUPPORT",
+                    "finite sequence decoder did not terminate a candidate",
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(candidate_groups
+        .into_iter()
+        .map(|group| group_probabilities[group].clone())
+        .collect())
+}
+
+/// Compose caller-supplied typed meaning units with a bounded, deterministic
+/// non-neural sequence decoder. The exact unit text is retained; only unit
+/// order and role-conditioned connective tokens are selected. This does not
+/// parse user language, verify evidence labels, infer new factual claims, or
+/// persist memory or content.
+pub fn compose_typed_meaning(
+    request: &MeaningCompositionRequest,
+) -> Result<MeaningCompositionReport> {
+    let deadline = model_deadline();
+    validate_meaning_request(request)?;
+    let role_sequence = meaning_role_sequence(request);
+    let context_state_sha256 = identity(&(
+        MEANING_CONTEXT_VERSION,
+        request.purpose,
+        request.format,
+        request.style,
+        &request.prior_sequence,
+        &request.units,
+        request.max_output_bytes,
+        request.max_tokens,
+    ))?;
+
+    let mut training_documents = request
+        .units
+        .iter()
+        .map(|unit| unit.text.clone())
+        .collect::<Vec<_>>();
+    let lexicon_roles = [
+        MeaningRole::Opening,
+        MeaningRole::Claim,
+        MeaningRole::Evidence,
+        MeaningRole::Rule,
+        MeaningRole::Detail,
+        MeaningRole::Example,
+        MeaningRole::SubjectA,
+        MeaningRole::SubjectB,
+        MeaningRole::Commonality,
+        MeaningRole::Difference,
+        MeaningRole::Body,
+        MeaningRole::Conclusion,
+        MeaningRole::Limitation,
+    ];
+    for style in [
+        MeaningCompositionStyle::Neutral,
+        MeaningCompositionStyle::Concise,
+    ] {
+        for role in lexicon_roles {
+            training_documents.extend(
+                meaning_connectors(role, style)
+                    .iter()
+                    .map(|value| (*value).to_owned()),
+            );
+        }
+    }
+    if request.format == MeaningCompositionFormat::Bullets {
+        training_documents.extend(["・".to_owned(), "\n".to_owned()]);
+    }
+    let model = SequenceModel::train_until(&training_documents, 3, 1, deadline)?;
+    let model_transition_count = model
+        .counts
+        .values()
+        .try_fold(0usize, |total, row| total.checked_add(row.len()))
+        .ok_or_else(|| {
+            failure(
+                "MODEL_RESOURCE_LIMIT",
+                "transition count overflow in the composition model",
+            )
+        })?;
+    let training_corpus_revision = identity(&training_documents)?;
+
+    let mut emitted = BTreeSet::new();
+    let mut steps = Vec::with_capacity(request.units.len());
+    let mut output = String::new();
+    let mut selected_ids = Vec::with_capacity(request.units.len());
+    let mut evidence_ids = Vec::new();
+    let mut seen_evidence = BTreeSet::new();
+    while emitted.len() < request.units.len() {
+        poll_model(deadline)?;
+        let prior_index = steps.len();
+        let remaining = request
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| !emitted.contains(&unit.id))
+            .collect::<Vec<_>>();
+        let min_rank = remaining
+            .iter()
+            .map(|(_, unit)| role_rank(request.purpose, unit.role))
+            .min()
+            .ok_or_else(|| failure("MEANING_ORDER_CONFLICT", "no remaining semantic unit"))?;
+        let eligible = remaining
+            .into_iter()
+            .filter(|(_, unit)| {
+                role_rank(request.purpose, unit.role) == min_rank
+                    && unit
+                        .dependencies
+                        .iter()
+                        .all(|dependency| emitted.contains(dependency))
+            })
+            .collect::<Vec<_>>();
+        if eligible.is_empty() {
+            return Err(failure(
+                "MEANING_ORDER_CONFLICT",
+                "role ordering and declared dependencies have no admissible next unit",
+            ));
+        }
+        let candidates_for_step = if let Some(prior_id) = request.prior_sequence.get(prior_index) {
+            let candidate = eligible
+                .iter()
+                .copied()
+                .filter(|(_, unit)| &unit.id == prior_id)
+                .collect::<Vec<_>>();
+            if candidate.is_empty() {
+                return Err(failure(
+                    "MEANING_PRIOR_SEQUENCE",
+                    "prior sequence cannot be emitted under current role/dependency constraints",
+                ));
+            }
+            candidate
+        } else if prior_index < request.prior_sequence.len() {
+            unreachable!("prior sequence index is bounded by emitted step count")
+        } else {
+            eligible
+        };
+
+        let previous_role = steps.last().map(|step: &MeaningCompositionStep| step.role);
+        let mut candidates = Vec::new();
+        let mut candidate_segments = Vec::new();
+        for (unit_index, unit) in &candidates_for_step {
+            let connectors =
+                if request.format == MeaningCompositionFormat::Bullets || steps.is_empty() {
+                    vec![String::new()]
+                } else {
+                    meaning_connectors(unit.role, request.style)
+                        .iter()
+                        .map(|connector| (*connector).to_owned())
+                        .collect()
+                };
+            for connector in connectors {
+                let segment = match request.format {
+                    MeaningCompositionFormat::Paragraph => {
+                        format!("{connector}{}", unit.text)
+                    }
+                    MeaningCompositionFormat::Bullets if steps.is_empty() => {
+                        format!("・{}", unit.text)
+                    }
+                    MeaningCompositionFormat::Bullets => format!("\n・{}", unit.text),
+                };
+                candidates.push(MeaningCandidate {
+                    unit_index: *unit_index,
+                    connector,
+                    segment: segment.clone(),
+                });
+                candidate_segments.push(segment);
+            }
+        }
+        let probabilities =
+            restricted_segment_probabilities(&model, &output, &candidate_segments, deadline)?;
+        let best_index = (0..candidates.len())
+            .max_by(|left, right| {
+                probabilities[*left]
+                    .cmp(&probabilities[*right])
+                    .then_with(|| candidates[*right].segment.cmp(&candidates[*left].segment))
+                    .then_with(|| {
+                        request.units[candidates[*right].unit_index]
+                            .id
+                            .cmp(&request.units[candidates[*left].unit_index].id)
+                    })
+            })
+            .ok_or_else(|| failure("EMPTY_TOKEN_SUPPORT", "no candidate unit can be selected"))?;
+        let candidate = &candidates[best_index];
+        let unit = &request.units[candidate.unit_index];
+        let mut admissible_continuations = candidates
+            .iter()
+            .map(|candidate| MeaningContinuationOption {
+                unit_id: request.units[candidate.unit_index].id.clone(),
+                connector: candidate.connector.clone(),
+            })
+            .collect::<Vec<_>>();
+        admissible_continuations.sort_by(|left, right| {
+            (&left.unit_id, &left.connector).cmp(&(&right.unit_id, &right.connector))
+        });
+        let step_context_sha256 = identity(&(
+            MEANING_CONTEXT_VERSION,
+            context_state_sha256.as_str(),
+            request.purpose,
+            request.format,
+            request.style,
+            previous_role,
+            &selected_ids,
+            &output,
+            &candidate_segments,
+            &role_sequence,
+        ))?;
+        output.push_str(&candidate.segment);
+        selected_ids.push(unit.id.clone());
+        emitted.insert(unit.id.clone());
+        for evidence_id in &unit.evidence_ids {
+            if seen_evidence.insert(evidence_id.clone()) {
+                evidence_ids.push(evidence_id.clone());
+            }
+        }
+        steps.push(MeaningCompositionStep {
+            unit_id: unit.id.clone(),
+            role: unit.role,
+            evidence_ids: unit.evidence_ids.clone(),
+            connector: candidate.connector.clone(),
+            admissible_continuations,
+            selected_probability: rational_text(&probabilities[best_index]),
+            context_state_sha256: step_context_sha256,
+        });
+    }
+
+    let projection = model.project_bytes(output.as_bytes())?;
+    if projection.recover_bytes()? != output.as_bytes() {
+        return Err(failure(
+            "TOKEN_PROJECTION_INTEGRITY",
+            "generated meaning sequence did not survive its lossless token projection",
+        ));
+    }
+    if output.len() > request.max_output_bytes || projection.tokens.len() > request.max_tokens {
+        return Err(failure(
+            "MEANING_BUDGET",
+            "composed sequence exceeds the declared byte or token budget",
+        ));
+    }
+    let expected_ids = request
+        .units
+        .iter()
+        .map(|unit| unit.id.clone())
+        .collect::<BTreeSet<_>>();
+    if selected_ids.iter().cloned().collect::<BTreeSet<_>>() != expected_ids
+        || selected_ids.len() != request.units.len()
+    {
+        return Err(failure(
+            "MEANING_OBJECTIVE_UNSATISFIED",
+            "the decoder failed exact once-only coverage of all supplied semantic units",
+        ));
+    }
+    Ok(MeaningCompositionReport {
+        purpose: request.purpose,
+        format: request.format,
+        style: request.style,
+        text: output,
+        steps,
+        required_unit_ids: selected_ids,
+        evidence_ids,
+        context_state_sha256,
+        token_space_version: "typed-japanese-character-space-v1".into(),
+        conditional_distribution_version: MEANING_DISTRIBUTION_VERSION.into(),
+        model_revision: model.revision()?,
+        model_training_lineage: "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning".into(),
+        training_corpus_revision,
+        transform_version: model.version.clone(),
+        transform_order: model.order,
+        transform_smoothing: model.smoothing,
+        model_document_count: model.document_count,
+        model_vocabulary_size: model.vocabulary.len(),
+        model_context_count: model.counts.len(),
+        model_transition_count,
+        sequence_token_count: projection.tokens.len(),
+        literal_fallback_version: LOSSLESS_TOKEN_ADAPTER.into(),
+        composition_grammar_version: MEANING_GRAMMAR_VERSION.into(),
+        objective: "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets".into(),
+        decoder_version: MEANING_DECODER_VERSION.into(),
+        tie_policy: "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID".into(),
+        guarantee: Guarantee::Unknown,
+        factual_status: "TYPED_INPUT_UNVERIFIED".into(),
+    })
+}
+
 impl SequenceModel {
     /// A versioned successor projection. The inherited NFKC/UNK methods remain
     /// unchanged and their existing comparison vectors still apply only there.
@@ -1909,6 +2812,35 @@ mod tests {
                 assert!(surface.contains(unit));
             }
         }
+    }
+
+    #[test]
+    fn meaning_distribution_backs_off_to_observed_admissible_support_and_normalizes() {
+        let documents = [
+            "X!red".to_owned(),
+            "X!red".to_owned(),
+            "X!blue".to_owned(),
+            "Y!stop".to_owned(),
+        ];
+        let model = SequenceModel::train(&documents, 3, 1).unwrap();
+        let probabilities = restricted_segment_probabilities(
+            &model,
+            "Y!",
+            &["red".into(), "blue".into()],
+            model_deadline(),
+        )
+        .unwrap();
+        assert_eq!(
+            probabilities,
+            vec![
+                BigRational::new(BigInt::from(3), BigInt::from(5)),
+                BigRational::new(BigInt::from(2), BigInt::from(5)),
+            ]
+        );
+        assert_eq!(
+            probabilities.iter().cloned().sum::<BigRational>(),
+            BigRational::one()
+        );
     }
 }
 

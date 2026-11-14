@@ -1,0 +1,870 @@
+{
+  "case_state_after": null,
+  "case_state_before": null,
+  "construction_boundary": {
+    "owner": "MINIDORA Core",
+    "purpose": "初見の説明・比較・短文の意味単位を役割・根拠ラベル・条件・形式付きで受け取り、Core内の非ニューラル演算で実際の内容列を構成する",
+    "producer_to_consumer": "typed MeaningCompositionRequest -> Engine::compose_typed_meaning -> purpose/role/dependency eligibility -> per-request SequenceModel -> support-aware exact rational finite trie -> MeaningCompositionReport.text",
+    "authorization": "User adopted the three-document BUILD set and directed implementation and repository preservation",
+    "input_boundary": "Direct typed semantic injection; no natural-language parser, answer-key route, external specialist or neural provider",
+    "effect_boundary": "read-only Engine API; no persistent memory write, ContentPlan adoption, renderer, file effect, network or external provider",
+    "factual_boundary": "caller evidence IDs and supplied propositions are not independently verified; report guarantee is UNKNOWN",
+    "learning_boundary": "per-request fit over supplied typed unit text and versioned role/style connective lexicon; no cross-request learning",
+    "ordinary_language_limit": "normal Engine::execute/CLI natural-language writing route not added or claimed",
+    "grammar_boundary": "one terminated sentence per typed unit; connector and bullet boundary grammar only, not general Japanese grammar validation"
+  },
+  "entry": "in-process Engine::compose_typed_meaning",
+  "observations": [
+    {
+      "report": {
+        "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+        "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+        "context_state_sha256": "ce954bc5c6d9847cfca4d383bddc597a3600b8d7aeb75bd145ca6ee8d461e476",
+        "decoder_version": "finite-role-trie-exact-v1",
+        "evidence_ids": [
+          "packet:weather-7",
+          "procedure:classification"
+        ],
+        "factual_status": "TYPED_INPUT_UNVERIFIED",
+        "format": "PARAGRAPH",
+        "guarantee": "UNKNOWN",
+        "literal_fallback_version": "literal-raw-byte-fallback-v1",
+        "model_context_count": 269,
+        "model_document_count": 43,
+        "model_revision": "0f664312bc9895c51bd7389d45c2a22d2c698bd0842d860a9a0782628cbdb52a",
+        "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+        "model_transition_count": 480,
+        "model_vocabulary_size": 98,
+        "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+        "purpose": "EXPLAIN",
+        "required_unit_ids": [
+          "rain-claim",
+          "weather-record",
+          "application-rule",
+          "closing-note"
+        ],
+        "sequence_token_count": 113,
+        "steps": [
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "rain-claim"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "7c14f4ddeb4ac08e23566c757354fa78a5f14a0358edd9b519da05f6cfa8abd7",
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "role": "CLAIM",
+            "selected_probability": "1",
+            "unit_id": "rain-claim"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "規則に照らすと、",
+                "unit_id": "application-rule"
+              },
+              {
+                "connector": "規則を適用すると、",
+                "unit_id": "application-rule"
+              },
+              {
+                "connector": "根拠として、",
+                "unit_id": "weather-record"
+              },
+              {
+                "connector": "資料からは、",
+                "unit_id": "weather-record"
+              }
+            ],
+            "connector": "根拠として、",
+            "context_state_sha256": "46116308de2aa74b56ac47c9bc13d5aa3d075e094019ef00b271598d9c79e978",
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "role": "EVIDENCE",
+            "selected_probability": "1/3",
+            "unit_id": "weather-record"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "規則に照らすと、",
+                "unit_id": "application-rule"
+              },
+              {
+                "connector": "規則を適用すると、",
+                "unit_id": "application-rule"
+              }
+            ],
+            "connector": "規則に照らすと、",
+            "context_state_sha256": "b80300c7c2a90071c03a600dbdcce169a1f6da95868e085c153acf0597023717",
+            "evidence_ids": [
+              "procedure:classification"
+            ],
+            "role": "RULE",
+            "selected_probability": "1/2",
+            "unit_id": "application-rule"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "ただし、",
+                "unit_id": "closing-note"
+              },
+              {
+                "connector": "なお、",
+                "unit_id": "closing-note"
+              }
+            ],
+            "connector": "ただし、",
+            "context_state_sha256": "70db31c117deade7b1a62042ec1a419a21b8a9d1fd579229c32cd14a41879822",
+            "evidence_ids": [],
+            "role": "LIMITATION",
+            "selected_probability": "2/3",
+            "unit_id": "closing-note"
+          }
+        ],
+        "style": "NEUTRAL",
+        "text": "北側地点では、対象日の降水量が確認できる。根拠として、観測票には、北側地点の降水量が十二ミリと記録されている。規則に照らすと、分類処理では、観測票に記載された対象日を使う。ただし、この説明は、提示された観測票の範囲に限られる。",
+        "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+        "token_space_version": "typed-japanese-character-space-v1",
+        "training_corpus_revision": "e401e9919143abd0641be4155761679a96d27c8a4fc49691c7e837dc92c89115",
+        "transform_order": 3,
+        "transform_smoothing": 1,
+        "transform_version": "inherited-char-ngram-v1"
+      },
+      "request": {
+        "format": "PARAGRAPH",
+        "max_output_bytes": 4096,
+        "max_tokens": 4096,
+        "prior_sequence": [],
+        "purpose": "EXPLAIN",
+        "style": "NEUTRAL",
+        "units": [
+          {
+            "dependencies": [
+              "rain-claim"
+            ],
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "id": "weather-record",
+            "role": "EVIDENCE",
+            "text": "観測票には、北側地点の降水量が十二ミリと記録されている。"
+          },
+          {
+            "dependencies": [
+              "weather-record",
+              "application-rule"
+            ],
+            "evidence_ids": [],
+            "id": "closing-note",
+            "role": "LIMITATION",
+            "text": "この説明は、提示された観測票の範囲に限られる。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "id": "rain-claim",
+            "role": "CLAIM",
+            "text": "北側地点では、対象日の降水量が確認できる。"
+          },
+          {
+            "dependencies": [
+              "rain-claim"
+            ],
+            "evidence_ids": [
+              "procedure:classification"
+            ],
+            "id": "application-rule",
+            "role": "RULE",
+            "text": "分類処理では、観測票に記載された対象日を使う。"
+          }
+        ]
+      }
+    },
+    {
+      "report": {
+        "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+        "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+        "context_state_sha256": "f755874dab79ef8dff366392ac8752aaa439dd3a0668a81c1f34a97e6d307680",
+        "decoder_version": "finite-role-trie-exact-v1",
+        "evidence_ids": [
+          "packet:weather-7",
+          "procedure:classification"
+        ],
+        "factual_status": "TYPED_INPUT_UNVERIFIED",
+        "format": "PARAGRAPH",
+        "guarantee": "UNKNOWN",
+        "literal_fallback_version": "literal-raw-byte-fallback-v1",
+        "model_context_count": 269,
+        "model_document_count": 43,
+        "model_revision": "0f664312bc9895c51bd7389d45c2a22d2c698bd0842d860a9a0782628cbdb52a",
+        "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+        "model_transition_count": 480,
+        "model_vocabulary_size": 98,
+        "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+        "purpose": "EXPLAIN",
+        "required_unit_ids": [
+          "rain-claim",
+          "application-rule",
+          "weather-record",
+          "closing-note"
+        ],
+        "sequence_token_count": 108,
+        "steps": [
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "rain-claim"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "bb85c0fe5479c77f423ef1be3dad1f8a4f621a434c7f55526c082e7df6f76020",
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "role": "CLAIM",
+            "selected_probability": "1",
+            "unit_id": "rain-claim"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "規則上、",
+                "unit_id": "application-rule"
+              },
+              {
+                "connector": "根拠として、",
+                "unit_id": "weather-record"
+              }
+            ],
+            "connector": "規則上、",
+            "context_state_sha256": "8741dd54c30cb946924eb42041719959fbc183320b9bc78170cf0af64e423844",
+            "evidence_ids": [
+              "procedure:classification"
+            ],
+            "role": "RULE",
+            "selected_probability": "4/7",
+            "unit_id": "application-rule"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "根拠として、",
+                "unit_id": "weather-record"
+              }
+            ],
+            "connector": "根拠として、",
+            "context_state_sha256": "3c1f7f518629561c45e75b575923da293818fd6d5f193a7fe8d4d0df70e07b38",
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "role": "EVIDENCE",
+            "selected_probability": "1",
+            "unit_id": "weather-record"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "なお、",
+                "unit_id": "closing-note"
+              }
+            ],
+            "connector": "なお、",
+            "context_state_sha256": "173ab5e6e624b197bc7ac573860123c29a1671ab4f751dc8e9e13a18130927a1",
+            "evidence_ids": [],
+            "role": "LIMITATION",
+            "selected_probability": "1",
+            "unit_id": "closing-note"
+          }
+        ],
+        "style": "CONCISE",
+        "text": "北側地点では、対象日の降水量が確認できる。規則上、分類処理では、観測票に記載された対象日を使う。根拠として、観測票には、北側地点の降水量が十二ミリと記録されている。なお、この説明は、提示された観測票の範囲に限られる。",
+        "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+        "token_space_version": "typed-japanese-character-space-v1",
+        "training_corpus_revision": "e401e9919143abd0641be4155761679a96d27c8a4fc49691c7e837dc92c89115",
+        "transform_order": 3,
+        "transform_smoothing": 1,
+        "transform_version": "inherited-char-ngram-v1"
+      },
+      "request": {
+        "format": "PARAGRAPH",
+        "max_output_bytes": 4096,
+        "max_tokens": 4096,
+        "prior_sequence": [],
+        "purpose": "EXPLAIN",
+        "style": "CONCISE",
+        "units": [
+          {
+            "dependencies": [
+              "rain-claim"
+            ],
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "id": "weather-record",
+            "role": "EVIDENCE",
+            "text": "観測票には、北側地点の降水量が十二ミリと記録されている。"
+          },
+          {
+            "dependencies": [
+              "weather-record",
+              "application-rule"
+            ],
+            "evidence_ids": [],
+            "id": "closing-note",
+            "role": "LIMITATION",
+            "text": "この説明は、提示された観測票の範囲に限られる。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "packet:weather-7"
+            ],
+            "id": "rain-claim",
+            "role": "CLAIM",
+            "text": "北側地点では、対象日の降水量が確認できる。"
+          },
+          {
+            "dependencies": [
+              "rain-claim"
+            ],
+            "evidence_ids": [
+              "procedure:classification"
+            ],
+            "id": "application-rule",
+            "role": "RULE",
+            "text": "分類処理では、観測票に記載された対象日を使う。"
+          }
+        ]
+      }
+    },
+    {
+      "report": {
+        "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+        "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+        "context_state_sha256": "bebe57208809b02a781eb491e87c5bd8df01992b171644f0071c7e1450b4d6ce",
+        "decoder_version": "finite-role-trie-exact-v1",
+        "evidence_ids": [
+          "lab:delta"
+        ],
+        "factual_status": "TYPED_INPUT_UNVERIFIED",
+        "format": "PARAGRAPH",
+        "guarantee": "UNKNOWN",
+        "literal_fallback_version": "literal-raw-byte-fallback-v1",
+        "model_context_count": 229,
+        "model_document_count": 42,
+        "model_revision": "6355b35a6d5fb61dcc160caa918950c62a75580d336f03a942263d8a5179098c",
+        "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+        "model_transition_count": 408,
+        "model_vocabulary_size": 83,
+        "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+        "purpose": "COMPARE",
+        "required_unit_ids": [
+          "sample-a",
+          "sample-b",
+          "delta-difference"
+        ],
+        "sequence_token_count": 73,
+        "steps": [
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "sample-a"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "983091a8b2977b9e65a671543fce2330014494b8d37f596c2d4a870b3d7ed59a",
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "role": "SUBJECT_A",
+            "selected_probability": "1",
+            "unit_id": "sample-a"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "これに対して、",
+                "unit_id": "sample-b"
+              },
+              {
+                "connector": "一方、",
+                "unit_id": "sample-b"
+              }
+            ],
+            "connector": "一方、",
+            "context_state_sha256": "ebe245b3b1c55e83c1a5a4979c98aac900e572adfa5f9158acc2f04e7e0297e9",
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "role": "SUBJECT_B",
+            "selected_probability": "4/7",
+            "unit_id": "sample-b"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "この比較では、",
+                "unit_id": "delta-difference"
+              },
+              {
+                "connector": "比較に目を向けると、",
+                "unit_id": "delta-difference"
+              }
+            ],
+            "connector": "比較に目を向けると、",
+            "context_state_sha256": "75a42b69fae97017050aa36cd51ff90e28b50d9797059ced5db886c2dff78dd4",
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "role": "DIFFERENCE",
+            "selected_probability": "4/7",
+            "unit_id": "delta-difference"
+          }
+        ],
+        "style": "NEUTRAL",
+        "text": "試料Aは測定前より一グラム重くなった。一方、試料Bは測定前より三グラム軽くなった。比較に目を向けると、質量の変化方向は、試料Aと試料Bで逆である。",
+        "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+        "token_space_version": "typed-japanese-character-space-v1",
+        "training_corpus_revision": "5973b7f7bd3431c361101756e639599b43b83e50adfea9db2dfa2566bd8cc037",
+        "transform_order": 3,
+        "transform_smoothing": 1,
+        "transform_version": "inherited-char-ngram-v1"
+      },
+      "request": {
+        "format": "PARAGRAPH",
+        "max_output_bytes": 4096,
+        "max_tokens": 4096,
+        "prior_sequence": [],
+        "purpose": "COMPARE",
+        "style": "NEUTRAL",
+        "units": [
+          {
+            "dependencies": [
+              "sample-a",
+              "sample-b"
+            ],
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "id": "delta-difference",
+            "role": "DIFFERENCE",
+            "text": "質量の変化方向は、試料Aと試料Bで逆である。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "id": "sample-b",
+            "role": "SUBJECT_B",
+            "text": "試料Bは測定前より三グラム軽くなった。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "id": "sample-a",
+            "role": "SUBJECT_A",
+            "text": "試料Aは測定前より一グラム重くなった。"
+          }
+        ]
+      }
+    },
+    {
+      "report": {
+        "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+        "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+        "context_state_sha256": "f6a4771c6c7773db0fda2caf1a104837e305a4119bee885487764e3bd6977c5d",
+        "decoder_version": "finite-role-trie-exact-v1",
+        "evidence_ids": [
+          "lab:delta"
+        ],
+        "factual_status": "TYPED_INPUT_UNVERIFIED",
+        "format": "PARAGRAPH",
+        "guarantee": "UNKNOWN",
+        "literal_fallback_version": "literal-raw-byte-fallback-v1",
+        "model_context_count": 229,
+        "model_document_count": 42,
+        "model_revision": "9354eb52f2bb915174eb167c9d1656a983b2aeb0d68185c604ed6c602fef5bbc",
+        "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+        "model_transition_count": 408,
+        "model_vocabulary_size": 83,
+        "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+        "purpose": "COMPARE",
+        "required_unit_ids": [
+          "sample-a",
+          "sample-b",
+          "delta-difference"
+        ],
+        "sequence_token_count": 73,
+        "steps": [
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "sample-a"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "0f23290fa0d6b50b5e6e949f57e69ea363d04bf5952b98ba3dce3ad0e8328d53",
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "role": "SUBJECT_A",
+            "selected_probability": "1",
+            "unit_id": "sample-a"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "これに対して、",
+                "unit_id": "sample-b"
+              },
+              {
+                "connector": "一方、",
+                "unit_id": "sample-b"
+              }
+            ],
+            "connector": "一方、",
+            "context_state_sha256": "2ff4c2da3413b0119ad9d619c07eedfb1c52d74bbe14784f7a969284d9ad0aad",
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "role": "SUBJECT_B",
+            "selected_probability": "4/7",
+            "unit_id": "sample-b"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "この比較では、",
+                "unit_id": "delta-difference"
+              },
+              {
+                "connector": "比較に目を向けると、",
+                "unit_id": "delta-difference"
+              }
+            ],
+            "connector": "比較に目を向けると、",
+            "context_state_sha256": "955df9a30757920bdbe98fe1aaa07d4739fb431d888a2cd5eb26ccca52c4b8a4",
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "role": "DIFFERENCE",
+            "selected_probability": "4/7",
+            "unit_id": "delta-difference"
+          }
+        ],
+        "style": "NEUTRAL",
+        "text": "試料Aは測定前より一グラム重くなった。一方、試料Bは測定前より五グラム軽くなった。比較に目を向けると、質量の変化方向は、試料Aと試料Bで逆である。",
+        "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+        "token_space_version": "typed-japanese-character-space-v1",
+        "training_corpus_revision": "809a90b6957099e11d0063ac05db6e898a5cc31f1d8f9b5b8f231b3ed2e0b126",
+        "transform_order": 3,
+        "transform_smoothing": 1,
+        "transform_version": "inherited-char-ngram-v1"
+      },
+      "request": {
+        "format": "PARAGRAPH",
+        "max_output_bytes": 4096,
+        "max_tokens": 4096,
+        "prior_sequence": [],
+        "purpose": "COMPARE",
+        "style": "NEUTRAL",
+        "units": [
+          {
+            "dependencies": [
+              "sample-a",
+              "sample-b"
+            ],
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "id": "delta-difference",
+            "role": "DIFFERENCE",
+            "text": "質量の変化方向は、試料Aと試料Bで逆である。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "id": "sample-b",
+            "role": "SUBJECT_B",
+            "text": "試料Bは測定前より五グラム軽くなった。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "lab:delta"
+            ],
+            "id": "sample-a",
+            "role": "SUBJECT_A",
+            "text": "試料Aは測定前より一グラム重くなった。"
+          }
+        ]
+      }
+    },
+    {
+      "report": {
+        "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+        "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+        "context_state_sha256": "9d99619e6c65718a76e39bde9c5c5e372ce2140b50981401f6ba0cb99a66d659",
+        "decoder_version": "finite-role-trie-exact-v1",
+        "evidence_ids": [
+          "application:field-guide"
+        ],
+        "factual_status": "TYPED_INPUT_UNVERIFIED",
+        "format": "BULLETS",
+        "guarantee": "UNKNOWN",
+        "literal_fallback_version": "literal-raw-byte-fallback-v1",
+        "model_context_count": 252,
+        "model_document_count": 45,
+        "model_revision": "b1bc7d4468da485355e190038932ad2c1975a290b91174f2fa3b8e5b238ef31c",
+        "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+        "model_transition_count": 449,
+        "model_vocabulary_size": 96,
+        "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+        "purpose": "SHORT_COMPOSITION",
+        "required_unit_ids": [
+          "name-field",
+          "date-field",
+          "email-field",
+          "submission-check"
+        ],
+        "sequence_token_count": 77,
+        "steps": [
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "name-field"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "578de169e2d199c8ded5c9ef29ae74bdb3d35bc267bb6a3faeeb7dc62c33587f",
+            "evidence_ids": [
+              "application:field-guide"
+            ],
+            "role": "BODY",
+            "selected_probability": "1",
+            "unit_id": "name-field"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "date-field"
+              },
+              {
+                "connector": "",
+                "unit_id": "email-field"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "5e18ee24a90dec4ed550557a58ef8c40a59738d3fddea32e93a64b039583cd46",
+            "evidence_ids": [
+              "application:field-guide"
+            ],
+            "role": "BODY",
+            "selected_probability": "3/5",
+            "unit_id": "date-field"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "email-field"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "7c5bf5445fa69bcb8a59b5bb1b7da9ba3d03a70cd0592aace8c8b126ccb56464",
+            "evidence_ids": [
+              "application:field-guide"
+            ],
+            "role": "BODY",
+            "selected_probability": "1",
+            "unit_id": "email-field"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "submission-check"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "e5cf89b3e31680720571e973587c202a90b0697a9c6c1787261108638ca9af89",
+            "evidence_ids": [],
+            "role": "CONCLUSION",
+            "selected_probability": "1",
+            "unit_id": "submission-check"
+          }
+        ],
+        "style": "NEUTRAL",
+        "text": "・申請書には、担当者名を記入する。\n・日付欄には、申請日を記入する。\n・連絡先には、返信用メールアドレスを記載する。\n・記入した三項目を提出前に確認する。",
+        "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+        "token_space_version": "typed-japanese-character-space-v1",
+        "training_corpus_revision": "aab02d3b458a009b97da9f084d1aefb66a196ddba9ab8a6241658591941661fe",
+        "transform_order": 3,
+        "transform_smoothing": 1,
+        "transform_version": "inherited-char-ngram-v1"
+      },
+      "request": {
+        "format": "BULLETS",
+        "max_output_bytes": 4096,
+        "max_tokens": 4096,
+        "prior_sequence": [
+          "name-field"
+        ],
+        "purpose": "SHORT_COMPOSITION",
+        "style": "NEUTRAL",
+        "units": [
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "application:field-guide"
+            ],
+            "id": "email-field",
+            "role": "BODY",
+            "text": "連絡先には、返信用メールアドレスを記載する。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "application:field-guide"
+            ],
+            "id": "name-field",
+            "role": "BODY",
+            "text": "申請書には、担当者名を記入する。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "application:field-guide"
+            ],
+            "id": "date-field",
+            "role": "BODY",
+            "text": "日付欄には、申請日を記入する。"
+          },
+          {
+            "dependencies": [
+              "name-field",
+              "email-field",
+              "date-field"
+            ],
+            "evidence_ids": [],
+            "id": "submission-check",
+            "role": "CONCLUSION",
+            "text": "記入した三項目を提出前に確認する。"
+          }
+        ]
+      }
+    }
+  ],
+  "record_type": "MINIDORA_BB_CORE_MEANING_COMPOSITION_OBSERVATION_03_V1",
+  "repeat_comparison_identical": true,
+  "work_item": "BODY-1 BB_CORE_MEANING_COMPOSITION_03 direct typed Core construction",
+  "recorded_at": "2026-11-14T05:04:53Z",
+  "base_commit": "48b3affe1f07909b0a31fb0437bbaf0279760bab",
+  "branch": "main",
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/core.rs": "9334f5fb29164bca28960e44b47abb55a62aa600b72aac7b7bdac312f9d9714e",
+    "rust/crates/minidora-engine/src/language.rs": "6315c7edfeae24612a8af641a5520abd8696647ba183d34e7f57d4c337d503bc",
+    "rust/crates/minidora-engine/tests/core_meaning_composition_03.rs": "e5969f5ca54d2aa9a312c9504171ecc780419e2fc97609ddafb6be1681f040c6"
+  },
+  "documentation_snapshot_sha256": {
+    "rust/audit/requirements.tsv": "807662b5604ed3e0dbfd72c47f94e126fef841ed5fbefae40201ee0348886165",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "0460693dd21f1d02b5db26d9245b51532559aae1742505f6f8e5fb4b4b25ffcb",
+    "rust/docs/IMPLEMENTATION_CHOICES.md": "cf6bb0cf1efaaa2964615137f9f3215bca38919863c450f440412dd9c3f66c85",
+    "rust/audit/construction/MB-BUILD-20261114/BUILD_BATCH_12.md": "c0e08ab4fb06547aacfafb99fde7af1dcbfbf27745ced18a1194d96e63062c4a",
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec"
+  },
+  "verification": {
+    "cargo_test_engine_locked": {
+      "exit_code": 0,
+      "unit_tests": "232 passed",
+      "core_construction_observation_02": "1 passed",
+      "core_meaning_composition_03": "2 passed",
+      "doc_tests": "0"
+    },
+    "support_backoff_exact_distribution_unit_test": {
+      "exit_code": 0,
+      "candidate_probabilities": [
+        "3/5",
+        "2/5"
+      ],
+      "sum": "1"
+    },
+    "cargo_check_workspace_all_targets_locked": {
+      "exit_code": 0
+    },
+    "cargo_clippy_workspace_all_targets_warnings_denied": {
+      "exit_code": 0
+    },
+    "cargo_build_workspace_locked": {
+      "exit_code": 0
+    },
+    "cargo_fmt_all_check": {
+      "exit_code": 0
+    },
+    "git_diff_check": {
+      "exit_code": 0
+    },
+    "cargo_test_workspace_locked": {
+      "status": "NOT_RUN",
+      "reason": "B12 evidence scope was the new Core API plus the complete engine crate suite; no workspace runtime acceptance is claimed"
+    }
+  },
+  "acceptance_boundary": "One bounded direct typed-Core construction observation. A01, A03, R2-17 and all 93 requirement acceptance statuses remain UNVERIFIED. No normal natural-language route, broad unseen-language quality, cross-request learning or release acceptance is established.",
+  "release_state": "NOT_RELEASED",
+  "user_original_assets": {
+    "count": 4,
+    "verified_assets": [
+      {
+        "path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+        "bytes": 28807,
+        "sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+        "verified": "PASS"
+      },
+      {
+        "path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_01_施工仕様書_20261114.md",
+        "bytes": 23191,
+        "sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+        "verified": "PASS"
+      },
+      {
+        "path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_02_施工工程表_20261114.md",
+        "bytes": 21474,
+        "sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+        "verified": "PASS"
+      },
+      {
+        "path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_03_Codex施工指示書_20261114.md",
+        "bytes": 23396,
+        "sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+        "verified": "PASS"
+      }
+    ],
+    "status": "ALL_MATCH"
+  }
+}

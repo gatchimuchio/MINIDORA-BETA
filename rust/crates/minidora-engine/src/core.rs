@@ -300,6 +300,16 @@ impl Engine {
         self.store.load_case(actor, case)
     }
 
+    /// Build a bounded sequence from directly supplied typed semantic units.
+    /// The API belongs to Core but deliberately does not parse natural language,
+    /// verify the supplied evidence labels, mutate a case, or adopt content.
+    pub fn compose_typed_meaning(
+        &self,
+        request: &language::MeaningCompositionRequest,
+    ) -> Result<language::MeaningCompositionReport> {
+        language::compose_typed_meaning(request)
+    }
+
     /// Evaluate a bounded counterfactual relation in a disposable clone of
     /// actor memory. Only exact, active USER_PREMISE opposites explicitly
     /// named by `superseded_fact_ids` may be invalidated in that clone. The
