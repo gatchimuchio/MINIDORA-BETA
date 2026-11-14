@@ -6459,3 +6459,270 @@ mod previous_relation_meaning_tests {
         fs::remove_dir_all(directory).expect("remove isolated legacy relation store");
     }
 }
+
+#[cfg(test)]
+mod core_construction_observation_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    fn execute_observation(
+        engine: &mut Engine,
+        actor: &str,
+        case: &str,
+        input: &str,
+        text: &str,
+    ) -> ResultRecord {
+        engine
+            .execute(actor, RequestEnvelope::new(case, input, actor, text))
+            .unwrap_or_else(|error| panic!("Engine::execute failed for {input}: {error}"))
+    }
+
+    #[test]
+    fn direct_core_observation_preserves_relation_conditions_subject_scope_and_negation() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-core-construction-observation-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("unique core observation state directory");
+        let mut engine = Engine::open(&directory).expect("open isolated Core state");
+        let actor = "core-observation-actor";
+        let case = "core-observation-case";
+        let mut observations = Vec::new();
+
+        let rule = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "rule",
+            "If [scope=virtual-lab]X is a ceramic and heated then [scope=virtual-lab]X is conductive",
+        );
+        assert_eq!(rule.lifecycle, Lifecycle::Commit);
+        assert_eq!(rule.guarantee, Guarantee::UserPremise);
+        let rule_id = rule.dependencies[0].clone();
+        observations.push(serde_json::json!({
+            "input_id": "rule",
+            "input": "If [scope=virtual-lab]X is a ceramic and heated then [scope=virtual-lab]X is conductive",
+            "result": rule,
+        }));
+
+        let ceramic = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "pico-ceramic",
+            "[scope=virtual-lab]Pico is a ceramic",
+        );
+        assert_eq!(ceramic.lifecycle, Lifecycle::Commit);
+        let ceramic_id = ceramic.dependencies[0].clone();
+        observations.push(serde_json::json!({
+            "input_id": "pico-ceramic",
+            "input": "[scope=virtual-lab]Pico is a ceramic",
+            "result": ceramic,
+        }));
+
+        let missing_condition = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "pico-conductive-before-heating",
+            "[scope=virtual-lab]Pico is conductive?",
+        );
+        assert_eq!(missing_condition.lifecycle, Lifecycle::Suspend);
+        assert!(
+            missing_condition
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("MISSING_PREMISES")
+        );
+        observations.push(serde_json::json!({
+            "input_id": "pico-conductive-before-heating",
+            "input": "[scope=virtual-lab]Pico is conductive?",
+            "result": missing_condition,
+        }));
+
+        let heated = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "pico-heated",
+            "[scope=virtual-lab]Pico is heated",
+        );
+        assert_eq!(heated.lifecycle, Lifecycle::Commit);
+        let heated_id = heated.dependencies[0].clone();
+        observations.push(serde_json::json!({
+            "input_id": "pico-heated",
+            "input": "[scope=virtual-lab]Pico is heated",
+            "result": heated,
+        }));
+
+        let supported = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "pico-conductive-after-heating",
+            "[scope=virtual-lab]Pico is conductive?",
+        );
+        assert_eq!(supported.lifecycle, Lifecycle::Commit);
+        assert_eq!(supported.guarantee, Guarantee::Derived);
+        let memory_after_derivation = engine
+            .store
+            .load_memory(actor)
+            .expect("read Core memory after relation derivation");
+        assert_eq!(memory_after_derivation.rules.len(), 1);
+        assert_eq!(memory_after_derivation.facts.len(), 2);
+        assert!(memory_after_derivation.facts.iter().all(|fact| {
+            fact.guarantee == Guarantee::UserPremise && fact.dependencies.is_empty()
+        }));
+        let derived_ids: Vec<_> = supported
+            .dependencies
+            .iter()
+            .filter(|id| id.starts_with("fact:") && *id != &ceramic_id && *id != &heated_id)
+            .cloned()
+            .collect();
+        assert_eq!(
+            derived_ids.len(),
+            1,
+            "one derived proof identity is reported"
+        );
+        let derived_id = derived_ids[0].clone();
+        assert_eq!(
+            supported
+                .dependencies
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            [
+                rule_id.clone(),
+                ceramic_id.clone(),
+                heated_id.clone(),
+                derived_id,
+            ]
+            .into_iter()
+            .collect()
+        );
+        observations.push(serde_json::json!({
+            "input_id": "pico-conductive-after-heating",
+            "input": "[scope=virtual-lab]Pico is conductive?",
+            "result": supported,
+        }));
+
+        for (input_id, input) in [
+            ("luma-conductive", "[scope=virtual-lab]Luma is conductive?"),
+            ("pico-default-scope", "[scope=default]Pico is conductive?"),
+        ] {
+            let result = execute_observation(&mut engine, actor, case, input_id, input);
+            assert_eq!(result.lifecycle, Lifecycle::Suspend, "{input_id}");
+            assert!(
+                result
+                    .reason
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("MISSING_PREMISES"),
+                "{input_id}: {:?}",
+                result.reason
+            );
+            observations.push(serde_json::json!({
+                "input_id": input_id,
+                "input": input,
+                "result": result,
+            }));
+        }
+
+        let fenn_ceramic = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "fenn-ceramic",
+            "[scope=virtual-lab]Fenn is a ceramic",
+        );
+        assert_eq!(fenn_ceramic.lifecycle, Lifecycle::Commit);
+        assert_eq!(fenn_ceramic.guarantee, Guarantee::UserPremise);
+        observations.push(serde_json::json!({
+            "input_id": "fenn-ceramic",
+            "input": "[scope=virtual-lab]Fenn is a ceramic",
+            "result": fenn_ceramic,
+        }));
+        let fenn_not_heated = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "fenn-not-heated",
+            "[scope=virtual-lab]Fenn is not heated",
+        );
+        assert_eq!(fenn_not_heated.lifecycle, Lifecycle::Commit);
+        let negative_id = fenn_not_heated.dependencies[0].clone();
+        observations.push(serde_json::json!({
+            "input_id": "fenn-not-heated",
+            "input": "[scope=virtual-lab]Fenn is not heated",
+            "result": fenn_not_heated,
+        }));
+
+        let heated_query = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "fenn-heated-query",
+            "[scope=virtual-lab]Fenn is heated?",
+        );
+        assert_eq!(heated_query.lifecycle, Lifecycle::Commit);
+        assert_eq!(heated_query.guarantee, Guarantee::UserPremise);
+        assert!(heated_query.text.contains("Fennはheatedではない"));
+        assert!(heated_query.dependencies.contains(&negative_id));
+        observations.push(serde_json::json!({
+            "input_id": "fenn-heated-query",
+            "input": "[scope=virtual-lab]Fenn is heated?",
+            "result": heated_query,
+        }));
+
+        let negative_condition = execute_observation(
+            &mut engine,
+            actor,
+            case,
+            "fenn-conductive",
+            "[scope=virtual-lab]Fenn is conductive?",
+        );
+        assert_eq!(negative_condition.lifecycle, Lifecycle::Suspend);
+        assert!(
+            negative_condition
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("MISSING_PREMISES")
+        );
+        observations.push(serde_json::json!({
+            "input_id": "fenn-conductive",
+            "input": "[scope=virtual-lab]Fenn is conductive?",
+            "result": negative_condition,
+        }));
+
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("read Core actor memory");
+        assert_eq!(memory.facts.len(), 4);
+        assert_eq!(memory.rules.len(), 1);
+        assert!(memory.facts.iter().all(|fact| {
+            fact.guarantee == Guarantee::UserPremise && fact.dependencies.is_empty()
+        }));
+        let evidence = serde_json::json!({
+            "entry": "in-process minidora_engine::Engine::execute",
+            "actor_id": actor,
+            "case_id": case,
+            "observations": observations,
+            "memory": memory,
+        });
+        println!(
+            "B10_CORE_OBSERVATION_01={}",
+            serde_json::to_string(&evidence).expect("serialize Core observation evidence")
+        );
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated Core observation state");
+    }
+}
