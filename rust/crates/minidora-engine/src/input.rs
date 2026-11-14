@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v71-saved-relation-comparison";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v72-contextual-relation-assertion";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -62,6 +62,14 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     {
         unresolved.push(
             "no actual committed same-case result is available to resolve the relation subject"
+                .into(),
+        );
+    }
+    if matches!(intent, Intent::AssertPreviousRelation { .. })
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push(
+            "no actual committed same-case relation result is available to resolve the assertion subject"
                 .into(),
         );
     }
@@ -1762,19 +1770,24 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     if let Some(proposition) = parse_proposition(query_body, false)? {
-        return Ok(
-            if question && singular_previous_subject(&proposition.subject) {
+        return Ok(if singular_previous_subject(&proposition.subject) {
+            if question {
                 Intent::AskPreviousRelation {
                     proposition,
                     explain: false,
                     explicit_scope: explicit_scope_prefix(query_body)?,
                 }
-            } else if question {
-                Intent::Ask { proposition }
             } else {
-                Intent::Assert { proposition }
-            },
-        );
+                Intent::AssertPreviousRelation {
+                    proposition,
+                    explicit_scope: explicit_scope_prefix(query_body)?,
+                }
+            }
+        } else if question {
+            Intent::Ask { proposition }
+        } else {
+            Intent::Assert { proposition }
+        });
     }
     Ok(Intent::Unknown { reason: "no unambiguous interpretation in the supported arithmetic, copular relation, context, source or JSON grammar".into() })
 }
@@ -2955,6 +2968,40 @@ mod tests {
         assert!(matches!(
             interpret("それらは動物ですか").unwrap(),
             Intent::Ask { proposition } if proposition.subject == "それら"
+        ));
+    }
+
+    #[test]
+    fn singular_pronoun_relation_assertions_keep_subject_unresolved_until_core() {
+        assert!(matches!(
+            interpret("それは温血動物です").unwrap(),
+            Intent::AssertPreviousRelation {
+                proposition,
+                explicit_scope: None,
+            } if proposition.subject == "それ"
+                && proposition.object == "温血動物"
+                && !proposition.negative
+        ));
+        assert!(matches!(
+            interpret("[scope=biology]that is not a mammal").unwrap(),
+            Intent::AssertPreviousRelation {
+                proposition,
+                explicit_scope: Some(scope),
+            } if proposition.subject.eq_ignore_ascii_case("that")
+                && proposition.object == "mammal"
+                && proposition.negative
+                && scope == "biology"
+        ));
+        assert!(matches!(
+            interpret("それは哺乳類ではない").unwrap(),
+            Intent::AssertPreviousRelation {
+                proposition,
+                explicit_scope: None,
+            } if proposition.subject == "それ" && proposition.negative
+        ));
+        assert!(matches!(
+            interpret("それらは温血動物です").unwrap(),
+            Intent::Assert { proposition } if proposition.subject == "それら"
         ));
     }
 

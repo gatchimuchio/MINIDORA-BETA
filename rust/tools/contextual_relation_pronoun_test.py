@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 
-PARSER_VERSION = "declarative-ja-en-v58-prior-result-pronoun-query"
+PARSER_VERSION = "declarative-ja-en-v72-contextual-relation-assertion"
 
 
 def main() -> None:
@@ -513,8 +513,162 @@ def main() -> None:
         assert changed_proof["reason"].startswith("CONTEXT_PROOF_CHANGED:")
         assert changed_proof.get("content_plan") is None
 
+        assertion_actor = "typed-pronoun-assertion"
+        assertion_case = "typed-pronoun-assertion-case"
+        run(
+            assertion_case,
+            assertion_actor,
+            "assertion-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        )
+        run(
+            assertion_case,
+            assertion_actor,
+            "assertion-bird",
+            "[scope=biology]ココは鳥",
+        )
+        assertion_anchor = run(
+            assertion_case,
+            assertion_actor,
+            "assertion-anchor-question",
+            "それは動物ですか",
+        )
+        assert assertion_anchor["lifecycle"] == "COMMIT"
+        assert_typed_relation_artifact(assertion_anchor, "ココ", "動物", False)
+        contextual_assertion = run(
+            assertion_case,
+            assertion_actor,
+            "contextual-assertion",
+            "それは温血動物です",
+        )
+        assert contextual_assertion["lifecycle"] == "COMMIT"
+        assert contextual_assertion["guarantee"] == "USER_PREMISE"
+        assert contextual_assertion["dependencies"][0] == assertion_anchor["id"]
+        assert len(contextual_assertion["dependencies"]) == 2
+        assertion_fact_id = contextual_assertion["dependencies"][1]
+        assert "主語「ココ」とscope「biology」" in contextual_assertion["text"]
+        assert "ココは温血動物" in contextual_assertion["text"]
+
+        with sqlite3.connect(database / "state.sqlite3") as connection:
+            revision_number, state_sha = connection.execute(
+                "SELECT revision,state_sha256 FROM case_revision "
+                "WHERE case_id=? ORDER BY revision DESC LIMIT 1",
+                (assertion_case,),
+            ).fetchone()
+            saved_state = json.loads(
+                (database / "blobs" / state_sha).read_text(encoding="utf-8")
+            )
+            saved_bundle = saved_state["bundle"]
+            saved_intent = saved_bundle["meaning"]["intent"]
+            assert saved_state["revision"] == revision_number
+            assert saved_bundle["meaning"]["parser_version"] == PARSER_VERSION
+            assert saved_bundle["meaning"]["context_result_ref"] == assertion_anchor["id"]
+            assert saved_intent["kind"] == "ASSERT_PREVIOUS_RELATION"
+            assert saved_intent["proposition"]["subject"] == "それ"
+            assert saved_intent["explicit_scope"] is None
+
+        assertion_consumer = run(
+            assertion_case,
+            assertion_actor,
+            "query-contextual-assertion",
+            "それは温血動物ですか",
+        )
+        assert assertion_consumer["lifecycle"] == "COMMIT"
+        assert assertion_consumer["guarantee"] == "USER_PREMISE"
+        assert assertion_consumer["dependencies"] == [assertion_fact_id]
+        assert "ココは温血動物である（範囲: biology）" in assertion_consumer["text"]
+
+        cross_case_assertion = run(
+            "typed-pronoun-assertion-cross-case",
+            assertion_actor,
+            "cross-case-contextual-assertion",
+            "それは哺乳類です",
+            expected_exit=2,
+        )
+        assert cross_case_assertion["lifecycle"] == "SUSPEND"
+        assert cross_case_assertion["reason"].startswith("MISSING_RELATION_CONTEXT:")
+        assert cross_case_assertion.get("content_plan") is None
+
+        missing_actor = "typed-pronoun-assertion-missing"
+        missing_assertion = run(
+            "typed-pronoun-assertion-no-prior",
+            missing_actor,
+            "assertion-without-context",
+            "それは温血動物です",
+            expected_exit=2,
+        )
+        assert missing_assertion["lifecycle"] == "SUSPEND"
+        assert missing_assertion["reason"].startswith("MISSING_RELATION_CONTEXT:")
+        assert missing_assertion.get("content_plan") is None
+        missing_actor_probe = run(
+            "typed-pronoun-assertion-no-fact-probe",
+            missing_actor,
+            "assertion-was-not-stored",
+            "ココは温血動物ですか",
+            expected_exit=2,
+        )
+        assert missing_actor_probe["reason"].startswith("MISSING_PREMISES:")
+        assert missing_actor_probe.get("content_plan") is None
+
+        stale_assertion_actor = "typed-pronoun-assertion-stale-proof"
+        stale_assertion_case = "typed-pronoun-assertion-stale-case"
+        run(
+            stale_assertion_case,
+            stale_assertion_actor,
+            "stale-assertion-rule",
+            "もしXは鳥ならXは動物",
+        )
+        run(
+            stale_assertion_case,
+            stale_assertion_actor,
+            "stale-assertion-bird",
+            "ココは鳥",
+        )
+        stale_assertion_anchor = run(
+            stale_assertion_case,
+            stale_assertion_actor,
+            "stale-assertion-anchor",
+            "それは動物ですか",
+        )
+        assert stale_assertion_anchor["lifecycle"] == "COMMIT"
+        run(
+            "stale-assertion-changed-proof-case",
+            stale_assertion_actor,
+            "stale-assertion-counterexample",
+            "ココは動物ではない",
+        )
+        stale_assertion = run(
+            stale_assertion_case,
+            stale_assertion_actor,
+            "assert-after-stale-proof",
+            "それは哺乳類です",
+            expected_exit=2,
+        )
+        assert stale_assertion["lifecycle"] == "SUSPEND"
+        assert stale_assertion["reason"].startswith("CONTEXT_PROOF_CHANGED:")
+        assert stale_assertion.get("content_plan") is None
+        stale_assertion_probe = run(
+            "stale-assertion-no-fact-probe",
+            stale_assertion_actor,
+            "stale-assertion-was-not-stored",
+            "ココは哺乳類ですか",
+            expected_exit=2,
+        )
+        assert stale_assertion_probe["reason"].startswith("MISSING_PREMISES:")
+        assert stale_assertion_probe.get("content_plan") is None
+
+        other_actor_assertion = run(
+            assertion_case,
+            "unrelated-actor",
+            "cross-actor-contextual-assertion",
+            "それは哺乳類です",
+            expected_exit=3,
+        )
+        assert other_actor_assertion["lifecycle"] == "REJECT"
+        assert other_actor_assertion["reason"].startswith("CASE_ACCESS_DENIED:")
+
         report = {
-            "work_item": "BODY-1 Core typed prior relation meaning across AskPreviousRelation, ExplainPrevious and recovery",
+            "work_item": "BODY-1 Core contextual relation assertion from a revalidated typed prior result",
             "stage": "BODY-1_EXECUTION",
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "base_commit": command_output(
@@ -558,11 +712,11 @@ def main() -> None:
                 ]
             ),
             "execution_mode": "fresh CLI process per request; one temporary SQLite state; actual temporary local file output and crash-state reconciliation",
-            "scope": "Bounded singular pronoun relation queries; Core-retained proposition consumption; relation-proof change stop; recovery of an authorized temporary file without resending.",
+            "scope": "Bounded immediate singular-pronoun relation assertion after a committed same-case relation result; Core proof revalidation, subject/scope restoration, USER_PREMISE adoption, and a following relation query that consumes the exact new fact; missing/cross-case/actor and stale-proof denial. Existing typed explanation/recovery route remains replayed as regression coverage.",
             "producer_consumer": (
-                "same-case direct premise/rule -> sealed AskPreviousRelation -> Core resolves and adopts the final typed proposition -> "
-                "versioned computation artifact -> later sealed ExplainPrevious -> Core revalidates the exact proposition and proof dependencies -> "
-                "render/local file -> crash-state reconcile revalidates the same typed relation without resending"
+                "same-case direct premise/rule -> sealed AskPreviousRelation -> typed proposition and proof dependencies -> "
+                "new sealed singular-pronoun assertion retains unresolved source subject plus exact prior result ID -> Core revalidates current proof and restores subject/scope -> "
+                "USER_PREMISE fact -> later AskPreviousRelation consumes that exact fact; missing, cross-case/actor or changed-proof contexts stop without adoption"
             ),
             "targeted_checks": {
                 "supported_pronoun_answer_persists_typed_proposition_and_proof_ids": "PASS",
@@ -572,8 +726,14 @@ def main() -> None:
                 "changed_current_proof_suspends_without_content_plan": "PASS",
                 "recovery_revalidates_typed_context_and_does_not_rewrite_file": "PASS",
                 "legacy_unversioned_computation_artifact_uses_text_compatibility": "PASS",
+                "same_case_assertion_inherits_typed_subject_and_scope": "PASS",
+                "following_question_consumes_new_assertion_fact": "PASS",
+                "missing_and_cross_case_contexts_suspend_without_adoption": "PASS",
+                "changed_proof_blocks_assertion_without_adoption": "PASS",
+                "cross_actor_case_access_is_rejected": "PASS",
             },
             "focused_tests": {
+                "singular_pronoun_relation_assertions_keep_subject_unresolved_until_core": "PASS",
                 "previous_relation_meaning_reads_legacy_computation_artifact": "PASS",
             },
             "summary": {
@@ -588,11 +748,12 @@ def main() -> None:
             "outcome": "PASS",
             "commands": [
                 "cargo fmt --all -- --check",
+                "cargo test -p minidora-engine singular_pronoun_relation_assertions_keep_subject_unresolved_until_core --locked",
                 "cargo test -p minidora-engine previous_relation_meaning_reads_legacy_computation_artifact --locked",
                 "cargo check --workspace --all-targets --locked",
                 "cargo clippy --workspace --all-targets --locked -- -D warnings",
                 "CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target cargo build --workspace --locked",
-                "python3 tools/contextual_relation_pronoun_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output audit/bb-context-pronoun-relation-followup-v1-route-validation.json",
+                "python3 tools/contextual_relation_pronoun_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output audit/bb-context-pronoun-relation-assertion-v1-route-validation.json",
                 "git diff --check",
             ],
             "not_run": [
@@ -601,11 +762,10 @@ def main() -> None:
                 "full A04/A07/A08/A15/E08/E12/CAP-D04/CAP-D11 acceptance",
             ],
             "acceptance_boundary": (
-                "This route establishes only a bounded singular-pronoun relation answer and its immediate typed explanation/recovery consumer. "
-                "It does not establish broad semantic representation across every capability, general Japanese/English co-reference, learning quality, "
-                "all failure recovery, or full A04/A07/A15/BB-CONTEXT acceptance."
+                "This route establishes only one bounded same-case relation-answer-to-pronoun-assertion path and its next explicit typed query consumer, plus replay of the preceding explanation/recovery route. "
+                "It does not establish general Japanese/English co-reference, repeated arbitrary assertion chains, broad semantic representation, learning quality, all failure recovery, or full A04/A07/A08/A15/CAP-D04/CAP-D11 acceptance."
             ),
-            "next_consumer": "The retained proposition now reaches one relation-explanation consumer; other intent families and wider meaning changes still need their own typed lineage and observation.",
+            "next_consumer": "The resolved relation now supports one contextual assertion and one following query; other omitted-subject intent families and multi-turn meaning changes still need their own consumer paths.",
         }
         arguments.evidence_output.parent.mkdir(parents=True, exist_ok=True)
         arguments.evidence_output.write_text(

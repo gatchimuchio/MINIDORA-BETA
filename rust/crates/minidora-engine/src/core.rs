@@ -3538,6 +3538,92 @@ impl Engine {
                 result.dependencies.push(fact.id);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::AssertPreviousRelation {
+                proposition,
+                explicit_scope,
+            } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_RELATION_CONTEXT",
+                        "代名詞主語を解決できる直前の同一ケース確定関係結果がありません。",
+                    );
+                };
+                if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_RELATION_CONTEXT",
+                        "前提追加の文脈参照が直前の同一ケース確定結果と一致しません。",
+                    );
+                }
+                let Some(prior_meaning) =
+                    previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_RELATION_CONTEXT",
+                        "直前の確定結果に一意の型付き関係主語がありません。記憶から主語を推測しません。",
+                    );
+                };
+                let (anchor, expected_proof_dependencies, adopted_conclusion) = match prior_meaning
+                {
+                    PriorRelationMeaning::OriginalQuestion(proposition) => {
+                        (proposition, prior.dependencies.clone(), false)
+                    }
+                    PriorRelationMeaning::AdoptedConclusion {
+                        proposition,
+                        proof_dependencies,
+                    } => (proposition, proof_dependencies, true),
+                };
+                let mut memory = self.store.load_memory(actor)?;
+                let answer = relations::query(&memory, &anchor, request.budget.max_actions)?;
+                let proof_dependencies = relations::answer_dependencies(&answer);
+                let answer_guarantee = relations::answer_guarantee(&answer);
+                let relation_still_has_a_result =
+                    relation_explanation_target(&anchor, &answer).is_some();
+                if !relation_still_has_a_result
+                    || proof_dependencies != expected_proof_dependencies
+                    || proof_dependencies != prior.dependencies
+                    || answer_guarantee != prior.guarantee
+                    || (adopted_conclusion && answer.status != "SUPPORTED")
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "CONTEXT_PROOF_CHANGED",
+                        "直前の関係結果を現在有効な根拠で再確認できません。新しい関係結果を確認してください。",
+                    );
+                }
+                let resolved = Proposition {
+                    subject: anchor.subject.clone(),
+                    scope: explicit_scope
+                        .clone()
+                        .unwrap_or_else(|| anchor.scope.clone()),
+                    ..proposition.clone()
+                };
+                let fact = relations::assert_fact(&mut memory, resolved.clone(), &fingerprint)?;
+                self.store.save_memory(actor, &memory)?;
+                units.push(format!(
+                    "直前結果 {} の関係根拠を再確認し、主語「{}」とscope「{}」を復元しました。",
+                    prior.id, resolved.subject, resolved.scope
+                ));
+                units.push(format!(
+                    "前提を保存しました: {}。",
+                    describe(&fact.proposition)
+                ));
+                units.push(format!("前提ID: {}", fact.id));
+                units.push(
+                    "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
+                        .into(),
+                );
+                result.dependencies.push(prior.id.clone());
+                result.dependencies.push(fact.id);
+                result.guarantee = Guarantee::UserPremise;
+            }
             Intent::AddRule {
                 premise,
                 conclusion,

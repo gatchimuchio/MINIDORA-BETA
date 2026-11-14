@@ -359,6 +359,10 @@ pub enum Intent {
     Assert {
         proposition: Proposition,
     },
+    AssertPreviousRelation {
+        proposition: Proposition,
+        explicit_scope: Option<String>,
+    },
     CorrectPremise {
         superseded: Proposition,
         replacement: Proposition,
