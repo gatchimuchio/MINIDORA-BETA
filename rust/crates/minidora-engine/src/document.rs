@@ -873,6 +873,17 @@ pub(crate) fn previous_json_table_operation_explanation(
                 "the prior table operation has no retained sealed input bundle",
             )
         })?;
+    if !matches!(
+        &bundle.meaning.intent,
+        Intent::JsonTableCompare { .. }
+            | Intent::JsonTableInnerJoin { .. }
+            | Intent::JsonTableFilter { .. }
+            | Intent::JsonTableSort { .. }
+            | Intent::JsonTableSelect { .. }
+            | Intent::JsonTableProject { .. }
+    ) {
+        return Ok(None);
+    }
     if operation == "comparison"
         && !matches!(bundle.meaning.intent, Intent::JsonTableCompare { .. })
     {

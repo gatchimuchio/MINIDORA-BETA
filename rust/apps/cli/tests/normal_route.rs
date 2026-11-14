@@ -2390,7 +2390,7 @@ fn declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage() {
     assert_eq!(why["guarantee"], "DERIVED");
     let why_text = why["text"].as_str().unwrap();
     assert!(why_text.contains("直接提示された前提: ミサゴは鳥である"));
-    assert!(why_text.contains("適用規則: $xは鳥である ならば $xは動物である"));
+    assert!(why_text.contains("適用規則（範囲: biology）: $xは鳥である ならば $xは動物である"));
     assert_eq!(why["dependencies"], new_answer["dependencies"]);
 
     record(&execute_in_case(
@@ -2636,7 +2636,9 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
     let explanation = why["text"].as_str().unwrap();
     assert!(explanation.contains("Miraはbirdである"));
     assert!(explanation.contains("Miraはfeatheredである"));
-    assert!(explanation.contains("適用規則: $xはbirdである かつ $xはfeatheredである"));
+    assert!(
+        explanation.contains("適用規則（範囲: biology）: $xはbirdである かつ $xはfeatheredである")
+    );
     assert_eq!(why["dependencies"], answer["dependencies"]);
 
     let followup_rule = record(&execute_in_case(
@@ -4414,7 +4416,9 @@ fn relation_answer_follow_up_explains_the_same_current_proof_after_restart() {
     let explanation_text = explanation["text"].as_str().unwrap();
     assert!(explanation_text.contains("前回の結論: ココは動物である"));
     assert!(explanation_text.contains("直接提示された前提: ココは鳥である"));
-    assert!(explanation_text.contains("適用規則: $xは鳥である ならば $xは動物である"));
+    assert!(
+        explanation_text.contains("適用規則（範囲: default）: $xは鳥である ならば $xは動物である")
+    );
     assert!(explanation_text.contains("現実世界での真偽確認ではありません"));
     assert!(
         explanation["dependencies"]
@@ -4543,7 +4547,7 @@ fn natural_why_question_explains_only_current_relation_proofs() {
     let why_text = why["text"].as_str().unwrap();
     assert!(why_text.contains("提示された証拠が支える結論: ココは動物である"));
     assert!(why_text.contains("直接提示された前提: ココは鳥である"));
-    assert!(why_text.contains("適用規則: $xは鳥である ならば $xは動物である"));
+    assert!(why_text.contains("適用規則（範囲: default）: $xは鳥である ならば $xは動物である"));
     assert!(
         why["dependencies"]
             .as_array()
@@ -4578,7 +4582,7 @@ fn natural_why_question_explains_only_current_relation_proofs() {
     for surface in approved_surfaces {
         let surface = surface.as_str().unwrap();
         assert!(surface.contains("直接提示された前提: ココは鳥である"));
-        assert!(surface.contains("適用規則: $xは鳥である ならば $xは動物である"));
+        assert!(surface.contains("適用規則（範囲: default）: $xは鳥である ならば $xは動物である"));
         assert!(surface.contains("現実世界での真偽確認ではありません。"));
     }
 
@@ -4602,7 +4606,12 @@ fn natural_why_question_explains_only_current_relation_proofs() {
         &["--input", "why-coco-animal-en", "Why is Coco an animal?"],
     ));
     assert_eq!(english["guarantee"], "DERIVED");
-    assert!(english["text"].as_str().unwrap().contains("適用規則:"));
+    assert!(
+        english["text"]
+            .as_str()
+            .unwrap()
+            .contains("適用規則（範囲: default）:")
+    );
 
     let missing = stopped(
         &execute(
@@ -4636,7 +4645,7 @@ fn natural_why_question_explains_only_current_relation_proofs() {
         refuted_why["text"]
             .as_str()
             .unwrap()
-            .contains("問いの関係を支持せず")
+            .contains("問われた関係「ミケは鳥である」は支持されず")
     );
     assert!(
         refuted_why["text"]
@@ -4781,7 +4790,12 @@ fn elliptical_why_questions_explain_the_previous_committed_result() {
             .unwrap()
             .contains("直接提示された前提: ロボットはノートを使う")
     );
-    assert!(derived_why["text"].as_str().unwrap().contains("適用規則:"));
+    assert!(
+        derived_why["text"]
+            .as_str()
+            .unwrap()
+            .contains("適用規則（範囲: default）:")
+    );
     assert!(
         derived_why["dependencies"]
             .as_array()
@@ -5029,7 +5043,7 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
     let derived_text = derived_common["text"].as_str().unwrap();
     assert!(derived_text.contains("ココは動物である"));
     assert!(derived_text.contains("ミケは動物である"));
-    assert!(derived_text.contains("適用規則:"));
+    assert!(derived_text.contains("適用規則（範囲: default）:"));
     for dependency in [
         &rule["dependencies"][0],
         &derived_coco["dependencies"][0],
@@ -5055,7 +5069,7 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
     for marker in [
         "ココ側の証明: ココは動物である",
         "ミケ側の証明: ミケは動物である",
-        "適用規則:",
+        "適用規則（範囲: default）:",
         rule["dependencies"][0].as_str().unwrap(),
         derived_coco["dependencies"][0].as_str().unwrap(),
         derived_mike["dependencies"][0].as_str().unwrap(),

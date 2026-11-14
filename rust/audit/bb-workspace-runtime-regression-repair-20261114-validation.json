@@ -1,0 +1,116 @@
+{
+  "record_type": "SCOPED_WORKSPACE_REGRESSION_REPAIR",
+  "work_item": "BODY-1 CSV statistics follow-up dispatch and current scoped relation explanation tests",
+  "recorded_at": "2026-11-14T03:28:27+00:00",
+  "base_commit": "05aa22f529fd69d1ee54134e43852acc92585207",
+  "requirement_ids": [
+    "E08"
+  ],
+  "software_version": "0.7.0-alpha.8",
+  "schema_version": "minidora-rust/0.7.0-alpha.8",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41"
+  },
+  "source_snapshot_sha256": {
+    "rust/crates/minidora-engine/src/document.rs": "7742f20670714081e861e5cfd9b653fb2d0ee191cbb59ebbfe7790ffaf8945a6",
+    "rust/apps/cli/tests/normal_route.rs": "9f7029c915100d6cb8d210251316a439c8f5d072f4844d25ece9aacfd48286dc",
+    "rust/crates/minidora-engine/src/core.rs": "a16de962bc83e48e5145775c0aba0d7b7501fd19839e7f780adbe1c9b8c4585e"
+  },
+  "binary_sha256": "671bd86c65d34e47a55f51b556118c439c522f46b68c3c481fc32b51b11ce80f",
+  "documentation_snapshot_sha256": {
+    "rust/audit/IMPLEMENTATION_STATUS.md": "c2475a845622e7add3dcedf9e9823fa782317590de4b940dd05a13e78b3373cd",
+    "rust/audit/requirements.tsv": "43f95161770f732834c0a685b6471f8b66a0975bc6bc89c5cf8210cc113056a3"
+  },
+  "scope": "The same-case CSV statistics ExplainPrevious consumer remains responsible for a committed CSV statistics result even when its JSON report fields resemble a JSON table operation. The JSON operation consumer must require the sealed prior input intent to be one of its supported JSON-table operations. Existing relation explanation tests assert the current scope-bearing output without changing product text.",
+  "changed_behavior": {
+    "json_table_operation_consumer": "After identifying a JSON-table report shape and loading the exact prior sealed input bundle, it returns None for non-JSON-table intents; valid JSON-table intents keep their existing operation-specific recomputation and error handling.",
+    "csv_statistics_consumer": "CSV statistics follows its existing report/source revalidation path and no longer suspends with JSON_TABLE_CONTEXT_INVALID due to JSON-table shape dispatch.",
+    "relation_explanation_assertions": "Nine stale scope-less rule-display assertions now check the actual default or biology scope. The refuted relation assertion checks the current AskWhy phrase while retaining premise and dependency assertions."
+  },
+  "checks": {
+    "cargo_fmt_all_check": "PASS",
+    "previously_failing_normal_route_tests": [
+      {
+        "test": "conjunctive_rule_joins_two_new_subject_premises_and_explains_both",
+        "result": "PASS",
+        "log_sha256": "7264f35d07b1eec8b2d2316301e36166f7ff554d900da112770e74e64aae9bf8"
+      },
+      {
+        "test": "csv_statistics_followup_explains_revalidated_source_cells",
+        "result": "PASS",
+        "log_sha256": "ab80cbde8fbe2dc16f426a1aa6b8e587ecb9bb26437a786586f1fb7228cc9ea7"
+      },
+      {
+        "test": "declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage",
+        "result": "PASS",
+        "log_sha256": "7774224b014e04e865cf472d30e17a355a16785a7cc439c573fede8f9ee0e312"
+      },
+      {
+        "test": "elliptical_why_questions_explain_the_previous_committed_result",
+        "result": "PASS",
+        "log_sha256": "d4674e67c558cdeb4ff9bc9e7d0f167e514fb0eb8978da5d2f2e6bebb8c04802"
+      },
+      {
+        "test": "natural_common_relation_questions_compare_two_subjects_using_shared_proofs",
+        "result": "PASS",
+        "log_sha256": "aaa2545032a6600d9fee2e1019222a2904218195a9b83f493c76f4f1a436539e"
+      },
+      {
+        "test": "natural_why_question_explains_only_current_relation_proofs",
+        "result": "PASS",
+        "log_sha256": "48983e85e80bec9d2331850bfc6cbdb9f7ea29406de58cdd329f3c94e9b19386"
+      },
+      {
+        "test": "relation_answer_follow_up_explains_the_same_current_proof_after_restart",
+        "result": "PASS",
+        "log_sha256": "7a2ccec71e33abe3261622109c4c38e0f3ec5e49a6b743f78e84efc8c6217a35"
+      }
+    ],
+    "cargo_check_workspace_all_targets_locked": "PASS",
+    "cargo_clippy_workspace_all_targets_locked_warnings_denied": "PASS",
+    "cargo_build_workspace_locked": "PASS",
+    "cargo_test_workspace_locked": {
+      "exit_code": 0,
+      "targets": [
+        {
+          "target": "minidora-cli unit tests",
+          "passed": 10,
+          "failed": 0
+        },
+        {
+          "target": "minidora-cli normal_route integration tests",
+          "passed": 141,
+          "failed": 0
+        },
+        {
+          "target": "minidora-domain unit tests",
+          "passed": 4,
+          "failed": 0
+        },
+        {
+          "target": "minidora-engine unit tests",
+          "passed": 230,
+          "failed": 0
+        }
+      ],
+      "doc_tests": "PASS; zero tests in the domain and engine doc-test targets",
+      "elapsed_seconds": 67.64,
+      "log_sha256": "cad1c12a41fd6ccda01090a3a352f1959cb54b7ce94648f24c0d91bf7959db34"
+    },
+    "git_diff_check": "PASS"
+  },
+  "prior_failure_record": "rust/audit/bb-workspace-test-full-20261114-failure-baseline-comparison.json",
+  "outcome": "PASS",
+  "acceptance_boundary": "This repairs the CSV statistics previous-result dispatch collision and aligns covered normal-route assertions with current scoped Core explanations. Full E08 and general requirement acceptance remain UNVERIFIED; this is not a product release or full-system acceptance.",
+  "commands": [
+    "cargo fmt --all -- --check",
+    "cargo test -p minidora-cli --test normal_route --locked <one of the seven previously failing test names> -- --exact (run once per name)",
+    "cargo check --workspace --all-targets --locked",
+    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "cargo build --workspace --locked",
+    "cargo test --workspace --locked",
+    "git diff --check"
+  ]
+}

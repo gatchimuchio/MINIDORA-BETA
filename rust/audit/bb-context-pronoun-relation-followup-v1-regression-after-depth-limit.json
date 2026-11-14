@@ -1,8 +1,8 @@
 {
   "work_item": "BODY-1 Core contextual relation assertion from a revalidated typed prior result",
   "stage": "BODY-1_EXECUTION",
-  "recorded_at": "2026-11-14T03:15:18+00:00",
-  "base_commit": "c820916a78f3564f2fec518cb2b2f68787426204",
+  "recorded_at": "2026-11-14T03:29:38+00:00",
+  "base_commit": "05aa22f529fd69d1ee54134e43852acc92585207",
   "requirement_ids": [
     "A04",
     "A07",
@@ -17,7 +17,7 @@
   "schema_version": "minidora-rust/0.7.0-alpha.8",
   "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
   "core_computation_artifact_kind": "minidora.core-computation.relation-meaning.v1",
-  "binary_sha256": "e0fbaccd48847f40bdcb7d4064088a226c814a4266b9604623d94488d2974548",
+  "binary_sha256": "671bd86c65d34e47a55f51b556118c439c522f46b68c3c481fc32b51b11ce80f",
   "toolchain": {
     "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
     "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
@@ -33,14 +33,14 @@
   },
   "test_and_tool_snapshot_sha256": {
     "rust/crates/minidora-engine/src/input.rs": "3ed966ece89b96ce21131c271cc98d75b2834f716ddea10bbcf3401aa81ab214",
-    "rust/apps/cli/tests/normal_route.rs": "98796dc829c99d82eb29384977625380f99b26b6489bd18adc8aa5462887f016",
+    "rust/apps/cli/tests/normal_route.rs": "9f7029c915100d6cb8d210251316a439c8f5d072f4844d25ece9aacfd48286dc",
     "rust/tools/contextual_relation_pronoun_test.py": "4d32946daa05081ecdab179e8da9a3713a9ea278c15e14a7c39ddb5f7e59f375"
   },
   "documentation_snapshot_sha256": {
     "rust/README.md": "857d3dde4f888adac4a3fbf2abbe5e76294f70c9cad233b26aaabdfccf0bbc29",
     "rust/audit/README.md": "96301c55b9f35f9796d9aea75f4c9d1effddf1b5c7512eb6a72ea60ac5e051a8",
-    "rust/audit/IMPLEMENTATION_STATUS.md": "112fb5e83b2ea91cc65b1fff9ab9e02bbe5861d5ddc56616871da09948158479",
-    "rust/audit/requirements.tsv": "4f5bf59d42c4439b141f2dba678e5a958401e4477f0b5e9f47e2f464e61989b3",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "c2475a845622e7add3dcedf9e9823fa782317590de4b940dd05a13e78b3373cd",
+    "rust/audit/requirements.tsv": "43f95161770f732834c0a685b6471f8b66a0975bc6bc89c5cf8210cc113056a3",
     "rust/audit/rust-requirement-observations.json": "2e0e8041f7fe7cf7ee47b50d0e793ecf6934b2817f0a7e81999374f217e0b6ad"
   },
   "execution_mode": "fresh CLI process per request; one temporary SQLite state; actual temporary local file output and crash-state reconciliation",
