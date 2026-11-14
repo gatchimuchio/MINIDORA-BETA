@@ -115,7 +115,14 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         unresolved.push("no actual committed calculation is available to correct".into());
     }
     let context_sha256 = identity(&previous)?;
-    let source_roles = source_role_spans(&request.text, &intent)?;
+    let source_roles = match source_role_spans(&request.text, &intent) {
+        Ok(source_roles) => source_roles,
+        Err(Error::Contract { code, message }) if code == "SOURCE_SPAN_INDEX_LIMIT" => {
+            unresolved.push(format!("source role indexing stopped: {message}"));
+            BTreeMap::new()
+        }
+        Err(error) => return Err(error),
+    };
     let meaning = MeaningIR {
         parser_version: PARSER_VERSION.into(),
         intent,
@@ -271,6 +278,8 @@ fn numeric_token_byte(byte: u8) -> bool {
     byte.is_ascii_digit() || matches!(byte, b'.' | b'/' | b'+' | b'-' | b'e' | b'E')
 }
 
+const MAX_SOURCE_SPAN_MATCH_EVENTS: usize = 1_000_000;
+
 fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) -> bool {
     let bytes = haystack.as_bytes();
     let needle = needle.as_bytes();
@@ -363,7 +372,17 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
         )
     })?;
     let mut pattern_spans = vec![Vec::<SourceSpan>::new(); patterns.len()];
+    let mut match_events = 0;
     for matched in automaton.find_overlapping_iter(normalized_source.as_str()) {
+        match_events += 1;
+        if match_events > MAX_SOURCE_SPAN_MATCH_EVENTS {
+            return Err(failure(
+                "SOURCE_SPAN_INDEX_LIMIT",
+                format!(
+                    "source role matching exceeded {MAX_SOURCE_SPAN_MATCH_EVENTS} overlapping candidates"
+                ),
+            ));
+        }
         let pattern_index = matched.pattern().as_usize();
         let pattern = patterns[pattern_index];
         if !has_token_boundaries(&normalized_source, matched.start(), matched.end(), pattern) {

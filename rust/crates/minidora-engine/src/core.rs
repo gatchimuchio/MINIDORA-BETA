@@ -772,6 +772,19 @@ impl Engine {
         };
         state.bundle = Some(bundle.clone());
         self.advance(&mut state, Lifecycle::Sealed, None)?;
+        if let Some(reason) = bundle
+            .meaning
+            .unresolved
+            .iter()
+            .find(|reason| reason.starts_with("source role indexing stopped:"))
+        {
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "SOURCE_SPAN_INDEX_LIMIT",
+                reason,
+            );
+        }
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
         let source_followup_indices = if matches!(

@@ -1,0 +1,165 @@
+{
+  "evidence_schema": "minidora-construction-change-record-v1",
+  "observation_id": "MB-BUILD-20261114-INPUT-03-B20-RUNTIME",
+  "base_commit": "14072894f418c2bc5a49d284642b6c0ce947a6c1",
+  "parser_version": "declarative-ja-en-v75-all-intent-source-spans",
+  "scope": {
+    "entry": "minidora_engine::Engine::execute -> input::seal -> Core lifecycle",
+    "resource_guard": {
+      "max_overlapping_match_events": 1000000,
+      "on_limit": "seal original input and typed Intent, store empty source_roles and unresolved marker, then transition SEALED -> SUSPEND with SOURCE_SPAN_INDEX_LIMIT"
+    },
+    "routes": [
+      {
+        "case": "statistics-source-map",
+        "outcome": "COMMIT",
+        "observation": "values 1, 10 and 3 map to exact original UTF-8 byte ranges; 1 does not match inside 10"
+      },
+      {
+        "case": "json-document-source-map",
+        "outcome": "COMMIT",
+        "observation": "JSON document and /numbers pointer map to exact original byte ranges"
+      },
+      {
+        "case": "unknown-source-map",
+        "outcome": "SUSPEND",
+        "observation": "generated Unknown.reason identical to request text has an empty source_roles map"
+      },
+      {
+        "case": "overlap-source-map-limit",
+        "outcome": "SUSPEND",
+        "observation": "350 numeric strings of lengths 1 through 350 exceed 1,000,000 overlap events; sealed map is empty and unresolved marker retained"
+      }
+    ],
+    "replay": "all four saved ResultRecords and CaseRevisions match after closing and reopening the SQLite-backed Engine",
+    "external_network_or_side_effects": false,
+    "source_role_claim_limit": 32,
+    "known_limits": [
+      "lexical matching does not prove semantic attribution",
+      "the route sample is bounded and does not establish general Japanese/English parser quality",
+      "no broad ambiguity population or cross-platform run",
+      "A04/A15/E08 and all-requirement acceptance remain UNVERIFIED"
+    ]
+  },
+  "diagnostics_and_corrections": [
+    {
+      "observed": "initially propagated SOURCE_SPAN_INDEX_LIMIT was stored as FAIL/INPUT_FAILURE",
+      "resolution": "preserve a sealed MeaningIR with unresolved marker and empty source_roles; Core emits typed SUSPEND only after SEALED"
+    },
+    {
+      "observed": "direct pre-seal RECEIVED -> SUSPEND attempt returned INVALID_TRANSITION",
+      "resolution": "reverted; use valid SEALED -> SUSPEND transition"
+    },
+    {
+      "observed": "first passing stop reason contained duplicate SOURCE_SPAN_INDEX_LIMIT prefix",
+      "resolution": "remove code prefix from internal unresolved marker; final ResultRecord has one code prefix"
+    }
+  ],
+  "environment": {
+    "host": "Linux c11e90bda0c3 6.18.57 #1 SMP Tue Oct 20 21:56:04 UTC 2026 x86_64 GNU/Linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "CARGO_HOME": "/workspace/.cargo",
+    "RUSTUP_HOME": "/workspace/.rustup",
+    "CARGO_TARGET_DIR": "/workspace/.minidora-cloud/rust-target"
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test -p minidora-engine --test input_machine_observation_03 --locked -- --nocapture",
+      "result": "PASS; 1 passed"
+    },
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "result": "PASS; 400 passed, 0 failed, 0 ignored; 0 doc tests"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "workspace_test_breakdown": {
+    "cli_unit": 10,
+    "normal_cli_route": 141,
+    "domain_unit": 4,
+    "engine_unit": 235,
+    "core_construction_integration": 5,
+    "core_meaning_composition_integration": 2,
+    "input_machine_integration": 3,
+    "total": 400
+  },
+  "local_verification_logs": {
+    "fmt_check": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/fmt-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "workspace_check": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/workspace-check.log",
+      "bytes": 253,
+      "sha256": "696885b8eabb411612e08355215d33658c713cc6e9a8cb21de56a5541c9bab55"
+    },
+    "workspace_clippy": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/workspace-clippy.log",
+      "bytes": 253,
+      "sha256": "53edf51f66fe7291e00a03428318177b87b96865d5ecc4f7ab49b6c8171be778"
+    },
+    "workspace_all_features_tests": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/workspace-all-features-tests.log",
+      "bytes": 41057,
+      "sha256": "35f2a1a27f6d8da4e84f273bffd05a396e77987bbe10c3dfab0dbcc8b30a049e"
+    },
+    "workspace_build": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/workspace-build.log",
+      "bytes": 72,
+      "sha256": "8c233a54790c4800d3dd585436af679aa838da259bfdb129412e2d51cdb75cdc"
+    },
+    "engine_route_test": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/engine-route-test.log",
+      "bytes": 1348,
+      "sha256": "102c8e8ae1d0b52c762a6b8e223e334f60d8c12bea918d95d132c6eb36d5a3bd"
+    },
+    "initial_resource_limit_failure": {
+      "path": "/workspace/.minidora-cloud/b20-input-span-verification/initial-resource-limit-failure.log",
+      "bytes": 1554,
+      "sha256": "4e2800d02e239230349fd9f9084470b826a030ca62636b3aef55022ce66bec68"
+    }
+  },
+  "three_point_set_archive": {
+    "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+    "sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "bytes": 28807,
+    "matches_expected": true
+  },
+  "change_files_sha256": {
+    "rust/crates/minidora-engine/src/core.rs": "615ce23e0d6604687eb4025bcc0f5cecf323a5043f2f9d816fc18cf2292a5a30",
+    "rust/crates/minidora-engine/src/input.rs": "5abb99188dc61d2caff454bb5d4547337518ecf5115cddc7c74636a90d9ee886",
+    "rust/crates/minidora-engine/tests/input_machine_observation_03.rs": "561e233d54618dbc2210209ac109cd244b81e3d04df21835ea26ec5b008312dd",
+    "rust/audit/requirements.tsv": "7de858ac468e3186d3ac2d79b8a49652c85d414bdaf76dd11b11bddbe7cca0f0",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "9187174dd6635b1ccd7ffeb01fd319c0a634d2538435491c47fe814da716e827",
+    "rust/audit/construction/MB-BUILD-20261114/BUILD_BATCH_20.md": "251cb313a95515f281a75e1a1700e4c5274fe2859121591648f19a31abd5906d"
+  },
+  "requirements": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_requirement_acceptance": "UNVERIFIED"
+  },
+  "runtime_observation": "BOUNDED_ROUTES_AND_REOPEN_REPLAY_PASS",
+  "release": "NOT_RELEASED"
+}
