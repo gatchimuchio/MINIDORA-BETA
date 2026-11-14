@@ -45,7 +45,7 @@ fn concise_arithmetic_question_reaches_core_once_and_replays_its_versioned_resul
     ));
     assert_eq!(
         bundle.meaning.parser_version,
-        "declarative-ja-en-v76-nfkc-source-span-boundaries"
+        "declarative-ja-en-v77-japanese-assertion-source-ranges"
     );
     assert_eq!(bundle.request.input_version, 1);
     assert_eq!(bundle.request.text, "６＋７は？");

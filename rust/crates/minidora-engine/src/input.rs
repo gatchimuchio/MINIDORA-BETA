@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v76-nfkc-source-span-boundaries";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v77-japanese-assertion-source-ranges";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -332,6 +332,149 @@ fn normalized_source_with_ranges(text: &str) -> (String, Vec<(usize, usize)>) {
     (normalized_source, source_ranges)
 }
 
+fn captured_source_span(
+    text: &str,
+    source_offset: usize,
+    capture: regex::Match<'_>,
+) -> Option<SourceSpan> {
+    let captured = capture.as_str();
+    let leading_bytes = captured.len() - captured.trim_start().len();
+    let value = captured.trim();
+    let start = source_offset + capture.start() + leading_bytes;
+    let end = start + value.len();
+    Some(SourceSpan {
+        start,
+        end,
+        text: text.get(start..end)?.to_string(),
+    })
+}
+
+fn japanese_assertion_source_roles(
+    text: &str,
+    proposition: &Proposition,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    if proposition.predicate != "is" {
+        return Ok(None);
+    }
+
+    let trimmed = text.trim();
+    let source_offset = text.len() - text.trim_start().len();
+    let statement = terminal_trim(trimmed);
+    let (body, body_offset, scope_span) =
+        if let Some(scoped) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(statement) {
+            let scope_capture = scoped.get(1).expect("scope capture group exists");
+            let body_capture = scoped.get(2).expect("statement capture group exists");
+            let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
+                return Ok(None);
+            };
+            if scope_span.text != proposition.scope {
+                return Ok(None);
+            }
+            (
+                body_capture.as_str(),
+                source_offset + body_capture.start(),
+                Some(scope_span),
+            )
+        } else {
+            if proposition.scope != "default" {
+                return Ok(None);
+            }
+            (statement, source_offset, None)
+        };
+
+    let Some(relation) = regex(r"^([^はが]+?)(は|が)(.+)$")?.captures(body) else {
+        return Ok(None);
+    };
+    let subject_capture = relation.get(1).expect("subject capture group exists");
+    let predicate_capture = relation.get(2).expect("particle capture group exists");
+    let object_capture = relation.get(3).expect("object capture group exists");
+    let Some(subject_span) = captured_source_span(text, body_offset, subject_capture) else {
+        return Ok(None);
+    };
+    let Some(predicate_span) = captured_source_span(text, body_offset, predicate_capture) else {
+        return Ok(None);
+    };
+    if subject_span.text != proposition.subject {
+        return Ok(None);
+    }
+
+    let raw_object = object_capture.as_str().trim();
+    let raw_object_leading =
+        object_capture.as_str().len() - object_capture.as_str().trim_start().len();
+    let object_start = body_offset + object_capture.start() + raw_object_leading;
+    let mut object_value = raw_object;
+    let mut negative = false;
+    let mut negation_span = None;
+    for suffix in [
+        "ではありません",
+        "ではない",
+        "じゃない",
+        "でありません",
+        "でない",
+    ] {
+        if let Some(prefix) = object_value.strip_suffix(suffix) {
+            let marker_start = object_start + raw_object.len() - suffix.len();
+            let marker_end = object_start + raw_object.len();
+            let Some(marker_text) = text.get(marker_start..marker_end) else {
+                return Ok(None);
+            };
+            negation_span = Some(SourceSpan {
+                start: marker_start,
+                end: marker_end,
+                text: marker_text.to_string(),
+            });
+            object_value = prefix.trim_end();
+            negative = true;
+            break;
+        }
+    }
+    if !negative {
+        for suffix in ["である", "です", "だ"] {
+            if let Some(prefix) = object_value.strip_suffix(suffix) {
+                object_value = prefix.trim_end();
+                break;
+            }
+        }
+    }
+    if object_value.is_empty()
+        || object_value != proposition.object
+        || negative != proposition.negative
+    {
+        return Ok(None);
+    }
+    let object_end = object_start + object_value.len();
+    let Some(object_text) = text.get(object_start..object_end) else {
+        return Ok(None);
+    };
+    let object_span = SourceSpan {
+        start: object_start,
+        end: object_end,
+        text: object_text.to_string(),
+    };
+
+    let mut roles = BTreeMap::from([
+        (
+            "/Assert/proposition/subject".to_string(),
+            vec![subject_span],
+        ),
+        (
+            "/Assert/proposition/predicate".to_string(),
+            vec![predicate_span],
+        ),
+        ("/Assert/proposition/object".to_string(), vec![object_span]),
+    ]);
+    if let Some(scope_span) = scope_span {
+        roles.insert("/Assert/proposition/scope".to_string(), vec![scope_span]);
+    }
+    if let Some(negation_span) = negation_span {
+        roles.insert(
+            "/Assert/proposition/negation".to_string(),
+            vec![negation_span],
+        );
+    }
+    Ok(Some(roles))
+}
+
 fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) -> bool {
     let bytes = haystack.as_bytes();
     let needle = needle.as_bytes();
@@ -374,6 +517,11 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
         return Ok(BTreeMap::new());
     }
     let intent_role = format!("/{}", serde_tag_role(tag));
+    if let Intent::Assert { proposition } = intent
+        && let Some(source_roles) = japanese_assertion_source_roles(text, proposition)?
+    {
+        return Ok(source_roles);
+    }
     let mut candidates = SourceRoleCandidates::new();
     let mut japanese_predicate_roles = Vec::new();
     for (key, value) in intent_object {
@@ -4029,7 +4177,7 @@ mod tests {
         assert_eq!(bundle.request.input_version, 3);
         assert_eq!(
             bundle.meaning.parser_version,
-            "declarative-ja-en-v76-nfkc-source-span-boundaries"
+            "declarative-ja-en-v77-japanese-assertion-source-ranges"
         );
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());
