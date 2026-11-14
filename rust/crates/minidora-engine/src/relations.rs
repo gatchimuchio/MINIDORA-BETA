@@ -278,7 +278,7 @@ fn variables(proposition: &Proposition) -> BTreeSet<String> {
         .cloned()
         .collect()
 }
-fn validate(proposition: &Proposition) -> Result<()> {
+pub(crate) fn validate(proposition: &Proposition) -> Result<()> {
     if [
         &proposition.subject,
         &proposition.predicate,
@@ -301,12 +301,58 @@ fn validate(proposition: &Proposition) -> Result<()> {
     }
     Ok(())
 }
+pub(crate) fn is_ground(proposition: &Proposition) -> bool {
+    variables(proposition).is_empty()
+}
 fn bump(memory: &mut MemoryState) -> Result<()> {
     memory.revision = memory
         .revision
         .checked_add(1)
         .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))?;
     Ok(())
+}
+
+/// Add a scenario-only assumption to a cloned memory projection. The caller
+/// must never persist this projection; the stable ID binds the actor/case,
+/// source revision, ordinal and proposition.
+pub(crate) fn add_hypothesis(
+    memory: &mut MemoryState,
+    proposition: Proposition,
+    scenario_identity: &str,
+    ordinal: usize,
+) -> Result<Fact> {
+    validate(&proposition)?;
+    if !is_ground(&proposition) {
+        return Err(failure(
+            "UNBOUND_VARIABLE",
+            "a counterfactual assumption requires bound subject and object",
+        ));
+    }
+    let id = format!(
+        "hypothesis:{}",
+        identity(&(
+            "counterfactual-assumption-v1",
+            scenario_identity,
+            memory.revision,
+            ordinal,
+            &proposition,
+        ))?
+    );
+    let source_input = format!("counterfactual:{scenario_identity}");
+    if let Some(old) = memory.facts.iter().find(|fact| fact.id == id) {
+        return Ok(old.clone());
+    }
+    let fact = Fact {
+        id,
+        proposition,
+        guarantee: Guarantee::Hypothesis,
+        source_input,
+        dependencies: Vec::new(),
+        valid: true,
+    };
+    memory.facts.push(fact.clone());
+    bump(memory)?;
+    Ok(fact)
 }
 
 pub fn assert_fact(
@@ -688,7 +734,7 @@ fn matches_with_bindings(
     }
     Some(bindings)
 }
-fn opposition(proposition: &Proposition) -> Proposition {
+pub(crate) fn opposition(proposition: &Proposition) -> Proposition {
     Proposition {
         negative: !proposition.negative,
         ..proposition.clone()
@@ -699,6 +745,26 @@ pub fn query(
     memory: &MemoryState,
     proposition: &Proposition,
     max_steps: u32,
+) -> Result<QueryOutcome> {
+    query_internal(memory, proposition, max_steps, None)
+}
+
+/// Evaluate only the explicitly supplied scenario assumptions as hypotheses.
+/// Persistent hypothesis records remain excluded from this bounded projection.
+pub(crate) fn query_hypothetical(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    max_steps: u32,
+    allowed_hypotheses: &BTreeSet<String>,
+) -> Result<QueryOutcome> {
+    query_internal(memory, proposition, max_steps, Some(allowed_hypotheses))
+}
+
+fn query_internal(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    max_steps: u32,
+    allowed_hypotheses: Option<&BTreeSet<String>>,
 ) -> Result<QueryOutcome> {
     validate(proposition)?;
     if max_steps == 0 {
@@ -734,7 +800,9 @@ pub fn query(
                         .get(id.as_str())
                         .is_some_and(|rule| permitted_rule(rule, &rule_map, &mut BTreeSet::new()))
             })
-            && !matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown)
+            && fact.guarantee != Guarantee::Unknown
+            && (fact.guarantee != Guarantee::Hypothesis
+                || allowed_hypotheses.is_some_and(|ids| ids.contains(&fact.id)))
         {
             known
                 .entry(fact.proposition.clone())
@@ -910,7 +978,14 @@ fn derive(
         Fact {
             id,
             proposition: conclusion,
-            guarantee: Guarantee::Derived,
+            guarantee: if premises
+                .iter()
+                .any(|premise| premise.guarantee == Guarantee::Hypothesis)
+            {
+                Guarantee::Hypothesis
+            } else {
+                Guarantee::Derived
+            },
             source_input: premises
                 .first()
                 .map_or_else(String::new, |fact| fact.source_input.clone()),
@@ -937,7 +1012,13 @@ pub fn answer_dependencies(answer: &QueryOutcome) -> Vec<String> {
 /// A direct user premise stays a premise even when it refutes the asked
 /// proposition; rule-backed conclusions remain derived.
 pub fn answer_guarantee(answer: &QueryOutcome) -> Guarantee {
-    if answer.used_rules.is_empty() {
+    if answer
+        .facts
+        .iter()
+        .any(|fact| fact.guarantee == Guarantee::Hypothesis)
+    {
+        Guarantee::Hypothesis
+    } else if answer.used_rules.is_empty() {
         Guarantee::UserPremise
     } else {
         Guarantee::Derived

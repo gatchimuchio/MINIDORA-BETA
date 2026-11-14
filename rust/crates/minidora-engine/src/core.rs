@@ -245,6 +245,35 @@ struct RelationComparisonReportArtifact {
     inventory_b: relations::RelationInventory,
 }
 
+/// Typed terminal of the direct, bounded counterfactual Core API. This API
+/// constructs an isolated scenario from typed propositions; it does not add a
+/// natural-language counterfactual route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CounterfactualRelationStatus {
+    Supported,
+    Contradicted,
+    Conflict,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CounterfactualRelationReport {
+    pub status: CounterfactualRelationStatus,
+    pub target: Proposition,
+    pub guarantee: Guarantee,
+    pub facts: Vec<Fact>,
+    pub dependencies: Vec<String>,
+    pub hypothesis_ids: Vec<String>,
+    pub hypothesis_ids_used: Vec<String>,
+    pub superseded_fact_ids: Vec<String>,
+    pub invalidated_record_ids: Vec<String>,
+    pub base_memory_revision: u64,
+    pub scenario_memory_revision: u64,
+    pub steps: u32,
+}
+
 /// Trusted frontends supply an authenticated local principal. A caller-controlled
 /// actor string is not remote authentication; the HTTP adapter binds it to its
 /// configured authenticated identity before entering this API.
@@ -270,6 +299,256 @@ impl Engine {
     pub fn latest(&self, actor: &str, case: &str) -> Result<Option<CaseRevision>> {
         self.store.load_case(actor, case)
     }
+
+    /// Evaluate a bounded counterfactual relation in a disposable clone of
+    /// actor memory. Only exact, active USER_PREMISE opposites explicitly
+    /// named by `superseded_fact_ids` may be invalidated in that clone. The
+    /// method performs no persistent write, effect, or content adoption.
+    /// Natural-language parsing is intentionally outside this API.
+    pub fn evaluate_counterfactual_relation(
+        &self,
+        actor: &str,
+        case: &str,
+        assumptions: &[Proposition],
+        superseded_fact_ids: &[String],
+        target: &Proposition,
+        max_actions: u32,
+    ) -> Result<CounterfactualRelationReport> {
+        const MAX_ASSUMPTIONS: usize = 8;
+        const MAX_SUPERSEDED_FACTS: usize = 16;
+        const MAX_ACTIONS: u32 = 4096;
+
+        if self.store.load_case(actor, case)?.is_none() {
+            return Err(failure(
+                "CASE_NOT_FOUND",
+                "counterfactual evaluation requires an actor-owned case",
+            ));
+        }
+        if assumptions.is_empty() || assumptions.len() > MAX_ASSUMPTIONS {
+            return Err(failure(
+                "COUNTERFACTUAL_ASSUMPTION_LIMIT",
+                "counterfactual evaluation requires one to eight explicit assumptions",
+            ));
+        }
+        if superseded_fact_ids.len() > MAX_SUPERSEDED_FACTS {
+            return Err(failure(
+                "COUNTERFACTUAL_OVERRIDE_LIMIT",
+                "counterfactual override list exceeds its bounded limit",
+            ));
+        }
+        if max_actions == 0 || max_actions > MAX_ACTIONS {
+            return Err(failure(
+                "COUNTERFACTUAL_BUDGET",
+                "counterfactual action budget must be between one and 4096",
+            ));
+        }
+        relations::validate(target)?;
+        if !relations::is_ground(target) {
+            return Err(failure(
+                "UNBOUND_VARIABLE",
+                "a counterfactual target requires bound subject and object",
+            ));
+        }
+
+        let mut unique_assumptions = BTreeSet::new();
+        for assumption in assumptions {
+            relations::validate(assumption)?;
+            if !relations::is_ground(assumption) || assumption.scope != target.scope {
+                return Err(failure(
+                    "COUNTERFACTUAL_SCOPE_MISMATCH",
+                    "assumptions must be ground propositions in the target scope",
+                ));
+            }
+            if !unique_assumptions.insert(assumption.clone())
+                || unique_assumptions.contains(&relations::opposition(assumption))
+            {
+                return Err(failure(
+                    "COUNTERFACTUAL_ASSUMPTION_CONFLICT",
+                    "assumptions must be unique and may not contain exact opposites",
+                ));
+            }
+        }
+
+        let mut unique_superseded = BTreeSet::new();
+        if superseded_fact_ids
+            .iter()
+            .any(|id| !unique_superseded.insert(id.clone()))
+        {
+            return Err(failure(
+                "COUNTERFACTUAL_OVERRIDE_DUPLICATE",
+                "a superseded fact identity may be listed only once",
+            ));
+        }
+
+        let mut memory = self.store.load_memory(actor)?;
+        let base_memory_revision = memory.revision;
+        let record_count = memory
+            .facts
+            .len()
+            .checked_add(memory.rules.len())
+            .ok_or_else(|| failure("COUNTERFACTUAL_BUDGET", "memory scan count overflowed"))?;
+        let record_actions = u32::try_from(record_count).map_err(|_| {
+            failure(
+                "COUNTERFACTUAL_BUDGET",
+                "actor memory exceeds the bounded scan representation",
+            )
+        })?;
+        let preparation_actions = record_actions
+            .checked_add(u32::try_from(superseded_fact_ids.len()).unwrap_or(u32::MAX))
+            .and_then(|count| {
+                count.checked_add(u32::try_from(assumptions.len()).unwrap_or(u32::MAX))
+            })
+            .ok_or_else(|| failure("COUNTERFACTUAL_BUDGET", "scenario preparation overflowed"))?;
+        if preparation_actions >= max_actions {
+            return Err(failure(
+                "COUNTERFACTUAL_BUDGET",
+                "memory scan and scenario setup consume the bounded action budget",
+            ));
+        }
+
+        for id in superseded_fact_ids {
+            let Some(fact) = memory.facts.iter().find(|fact| fact.id == *id) else {
+                return Err(failure(
+                    "COUNTERFACTUAL_OVERRIDE_INVALID",
+                    "each override must identify an active direct actor-memory fact",
+                ));
+            };
+            let exact_opposite = assumptions
+                .iter()
+                .any(|assumption| fact.proposition == relations::opposition(assumption));
+            if !fact.valid
+                || fact.guarantee != Guarantee::UserPremise
+                || !fact.dependencies.is_empty()
+                || fact.source_input.is_empty()
+                || !exact_opposite
+            {
+                return Err(failure(
+                    "COUNTERFACTUAL_OVERRIDE_INVALID",
+                    "only an active direct USER_PREMISE exactly opposite to an assumption may be superseded",
+                ));
+            }
+        }
+
+        let scenario_identity = identity(&(
+            "counterfactual-scenario-v1",
+            actor,
+            case,
+            base_memory_revision,
+            assumptions,
+            superseded_fact_ids,
+            target,
+        ))?;
+        let mut invalidated = BTreeSet::new();
+        for id in superseded_fact_ids {
+            invalidated.extend(relations::invalidate(&mut memory, id)?);
+        }
+        let mut hypothesis_ids = Vec::with_capacity(assumptions.len());
+        for (ordinal, assumption) in assumptions.iter().enumerate() {
+            let hypothesis = relations::add_hypothesis(
+                &mut memory,
+                assumption.clone(),
+                &scenario_identity,
+                ordinal,
+            )?;
+            hypothesis_ids.push(hypothesis.id);
+        }
+        let allowed_hypotheses: BTreeSet<_> = hypothesis_ids.iter().cloned().collect();
+        let conflicting_premises: Vec<_> = memory
+            .facts
+            .iter()
+            .filter(|fact| {
+                fact.valid
+                    && assumptions
+                        .iter()
+                        .any(|assumption| fact.proposition == relations::opposition(assumption))
+            })
+            .cloned()
+            .collect();
+        if !conflicting_premises.is_empty() {
+            let mut facts = conflicting_premises;
+            facts.extend(
+                memory
+                    .facts
+                    .iter()
+                    .filter(|fact| allowed_hypotheses.contains(&fact.id))
+                    .cloned(),
+            );
+            facts.sort_by(|left, right| left.id.cmp(&right.id));
+            facts.dedup_by(|left, right| left.id == right.id);
+            let dependencies: Vec<_> = facts
+                .iter()
+                .flat_map(|fact| {
+                    std::iter::once(fact.id.clone()).chain(fact.dependencies.iter().cloned())
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let dependency_set: BTreeSet<_> = dependencies.iter().cloned().collect();
+            let hypothesis_ids_used = hypothesis_ids
+                .iter()
+                .filter(|id| dependency_set.contains(*id))
+                .cloned()
+                .collect();
+            let mut invalidated_record_ids: Vec<_> = invalidated.into_iter().collect();
+            invalidated_record_ids.sort();
+            return Ok(CounterfactualRelationReport {
+                status: CounterfactualRelationStatus::Conflict,
+                target: target.clone(),
+                guarantee: Guarantee::Unknown,
+                facts,
+                dependencies,
+                hypothesis_ids,
+                hypothesis_ids_used,
+                superseded_fact_ids: superseded_fact_ids.to_vec(),
+                invalidated_record_ids,
+                base_memory_revision,
+                scenario_memory_revision: memory.revision,
+                steps: preparation_actions,
+            });
+        }
+        let outcome = relations::query_hypothetical(
+            &memory,
+            target,
+            max_actions - preparation_actions,
+            &allowed_hypotheses,
+        )?;
+        let dependencies = relations::answer_dependencies(&outcome);
+        let dependency_set: BTreeSet<_> = dependencies.iter().cloned().collect();
+        let hypothesis_ids_used: Vec<_> = hypothesis_ids
+            .iter()
+            .filter(|id| dependency_set.contains(*id))
+            .cloned()
+            .collect();
+        let status = match outcome.status.as_str() {
+            "SUPPORTED" => CounterfactualRelationStatus::Supported,
+            "CONTRADICTED" => CounterfactualRelationStatus::Contradicted,
+            "CONFLICT" => CounterfactualRelationStatus::Conflict,
+            _ => CounterfactualRelationStatus::Unknown,
+        };
+        let guarantee = match status {
+            CounterfactualRelationStatus::Conflict | CounterfactualRelationStatus::Unknown => {
+                Guarantee::Unknown
+            }
+            _ if !hypothesis_ids_used.is_empty() => Guarantee::Hypothesis,
+            _ => relations::answer_guarantee(&outcome),
+        };
+
+        Ok(CounterfactualRelationReport {
+            status,
+            target: target.clone(),
+            guarantee,
+            facts: outcome.facts,
+            dependencies,
+            hypothesis_ids,
+            hypothesis_ids_used,
+            superseded_fact_ids: superseded_fact_ids.to_vec(),
+            invalidated_record_ids: invalidated.into_iter().collect(),
+            base_memory_revision,
+            scenario_memory_revision: memory.revision,
+            steps: outcome.steps.saturating_add(preparation_actions),
+        })
+    }
+
     pub fn execute(&mut self, actor: &str, request: RequestEnvelope) -> Result<ResultRecord> {
         let attempt = self.execute_inner(actor, request.clone());
         match attempt {
