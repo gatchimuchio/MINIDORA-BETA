@@ -40,4 +40,4 @@
 
 ## 次工程
 
-三点セットの「中核確認四」へ進む。実際に保存された計算・関係結果を次の要求で参照し、変更を新しいversionへ保存するproducer→consumer経路を確認する。
+三点セットの「中核確認四」は [BUILD_BATCH_13](BUILD_BATCH_13.md) で観測した。計算・関係結果を後続要求で参照し、変更を新しい入力versionとして保持するproducer→consumer経路を確認した。
