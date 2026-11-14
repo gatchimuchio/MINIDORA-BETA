@@ -3791,6 +3791,14 @@ impl Engine {
                     );
                 }
 
+                let Some(source_evidence) = input::assertion_source_evidence(&bundle)? else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "CORRECTION_SOURCE_EVIDENCE_UNAVAILABLE",
+                        "訂正文の出典役割を一意に検証できません。記憶は変更していません。",
+                    );
+                };
                 let (dependencies, invalidated_count) = apply_premise_correction(
                     &self.store,
                     actor,
@@ -3798,7 +3806,7 @@ impl Engine {
                     &targets,
                     (&superseded, &replacement),
                     &fingerprint,
-                    None,
+                    Some(source_evidence),
                 )?;
                 let negative_superseded = Proposition {
                     negative: true,
@@ -8076,6 +8084,280 @@ mod core_construction_observation_tests {
         );
         drop(reopened);
         fs::remove_dir_all(directory).expect("remove isolated English correction state");
+    }
+
+    #[test]
+    fn contextual_premise_correction_source_roles_follow_both_facts_into_reopened_proofs() {
+        struct Scenario<'a> {
+            actor: &'a str,
+            case: &'a str,
+            seed_input: &'a str,
+            anchor_input: &'a str,
+            correction_input: &'a str,
+            followup_input: &'a str,
+            subject: &'a str,
+            superseded_object: &'a str,
+            replacement_object: &'a str,
+            roles: &'a [(&'a str, &'a str)],
+        }
+        fn observe_case(parent: &std::path::Path, scenario: Scenario<'_>) {
+            let Scenario {
+                actor,
+                case,
+                seed_input,
+                anchor_input,
+                correction_input,
+                followup_input,
+                subject,
+                superseded_object,
+                replacement_object,
+                roles,
+            } = scenario;
+            let directory = parent.join(case);
+            fs::create_dir(&directory).expect("create isolated contextual-correction state");
+            let mut engine = Engine::open(&directory).expect("open contextual Core");
+            let seed = engine
+                .execute(actor, RequestEnvelope::new(case, "seed", actor, seed_input))
+                .expect("commit the premise later corrected");
+            assert_eq!(seed.lifecycle, Lifecycle::Commit, "{seed:?}");
+            let anchor = engine
+                .execute(
+                    actor,
+                    RequestEnvelope::new(case, "anchor", actor, anchor_input),
+                )
+                .expect("commit the actual contextual correction anchor");
+            assert_eq!(anchor.lifecycle, Lifecycle::Commit, "{anchor:?}");
+            assert!(
+                seed.dependencies
+                    .iter()
+                    .any(|dependency| anchor.dependencies.contains(dependency))
+            );
+
+            let request = RequestEnvelope::new(case, "correction", actor, correction_input);
+            let correction = engine
+                .execute(actor, request.clone())
+                .expect("execute contextual premise correction");
+            assert_eq!(correction.lifecycle, Lifecycle::Commit, "{correction:?}");
+            assert_eq!(correction.guarantee, Guarantee::UserPremise);
+            let state = engine
+                .latest(actor, case)
+                .expect("read contextual correction result")
+                .expect("contextual correction result exists");
+            let bundle = state.bundle.as_ref().expect("sealed correction input");
+            assert_eq!(
+                bundle.meaning.context_result_ref.as_deref(),
+                Some(anchor.id.as_str())
+            );
+            match &bundle.meaning.intent {
+                Intent::CorrectPreviousPremise {
+                    predicate,
+                    superseded_object: parsed_old,
+                    replacement_object: parsed_new,
+                    scope,
+                } => {
+                    assert_eq!(predicate, "is");
+                    assert_eq!(parsed_old, superseded_object);
+                    assert_eq!(parsed_new, replacement_object);
+                    assert_eq!(scope.as_deref(), Some("biology"));
+                }
+                other => panic!("expected contextual correction, got {other:?}"),
+            }
+            assert_eq!(bundle.meaning.parser_version, input::PARSER_VERSION);
+            let evidence = input::assertion_source_evidence(bundle)
+                .expect("validate contextual correction source roles")
+                .expect("the exact source roles bind to the actual prior result");
+            assert_eq!(evidence.bundle_fingerprint, bundle.fingerprint);
+            assert_eq!(evidence.raw_sha256, bundle.raw_sha256);
+            assert_eq!(
+                evidence.input_fingerprint,
+                identity(&bundle.request).unwrap()
+            );
+            let role_root = "/CorrectPreviousPremise";
+            for (role, expected) in roles {
+                let role = format!("{role_root}/{role}");
+                let spans = evidence
+                    .source_roles
+                    .get(&role)
+                    .unwrap_or_else(|| panic!("missing contextual correction role {role}"));
+                assert_eq!(
+                    spans.len(),
+                    1,
+                    "ambiguous contextual correction role {role}"
+                );
+                assert_eq!(spans[0].text, *expected, "incorrect contextual role {role}");
+                assert_eq!(
+                    request.text.get(spans[0].start..spans[0].end),
+                    Some(*expected)
+                );
+            }
+
+            let corrected_old = Proposition {
+                subject: subject.into(),
+                predicate: "is".into(),
+                object: superseded_object.into(),
+                scope: "biology".into(),
+                negative: true,
+            };
+            let replacement = Proposition {
+                object: replacement_object.into(),
+                negative: false,
+                ..corrected_old.clone()
+            };
+            let memory = engine
+                .store
+                .load_memory(actor)
+                .expect("load contextual correction facts");
+            let corrected_old_fact = memory
+                .facts
+                .iter()
+                .find(|fact| fact.valid && fact.proposition == corrected_old)
+                .expect("negative superseded fact is persisted");
+            let replacement_fact = memory
+                .facts
+                .iter()
+                .find(|fact| fact.valid && fact.proposition == replacement)
+                .expect("replacement fact is persisted");
+            assert_eq!(corrected_old_fact.source_evidence, Some(evidence.clone()));
+            assert_eq!(replacement_fact.source_evidence, Some(evidence.clone()));
+            assert!(correction.dependencies.contains(&corrected_old_fact.id));
+            assert!(correction.dependencies.contains(&replacement_fact.id));
+            let corrected_old_id = corrected_old_fact.id.clone();
+            let replacement_id = replacement_fact.id.clone();
+
+            drop(engine);
+            let mut reopened = Engine::open(&directory).expect("reopen contextual Core");
+            let restored_memory = reopened
+                .store
+                .load_memory(actor)
+                .expect("Store revalidates sealed contextual evidence");
+            for (proposition, fact_id) in [
+                (&corrected_old, &corrected_old_id),
+                (&replacement, &replacement_id),
+            ] {
+                let proof = relations::query(&restored_memory, proposition, 32)
+                    .expect("query reopened contextual correction fact");
+                assert_eq!(proof.status, "SUPPORTED");
+                assert!(relations::answer_dependencies(&proof).contains(fact_id));
+                assert_eq!(proof.facts[0].source_evidence, Some(evidence.clone()));
+            }
+            let followup = reopened
+                .execute(
+                    actor,
+                    RequestEnvelope::new(case, "followup", actor, followup_input),
+                )
+                .expect("ordinary Core query consumes the replacement fact");
+            assert_eq!(followup.lifecycle, Lifecycle::Commit, "{followup:?}");
+            assert!(followup.dependencies.contains(&replacement_id));
+            println!(
+                "B29_CONTEXTUAL_CORRECTION_SOURCE_PROOF={}",
+                serde_json::to_string(&serde_json::json!({
+                    "input": request.text,
+                    "anchor_result_id": anchor.id,
+                    "context_result_ref": bundle.meaning.context_result_ref,
+                    "parser_version": evidence.parser_version,
+                    "source_roles": evidence.source_roles,
+                    "corrected_old_fact_id": corrected_old_id,
+                    "replacement_fact_id": replacement_id,
+                    "both_facts_link_same_source_evidence": true,
+                    "reopened_negative_proof": "SUPPORTED",
+                    "reopened_replacement_proof": "SUPPORTED",
+                    "followup_consumes_replacement_fact": followup.dependencies.contains(&replacement_id),
+                    "source_roles_are_themselves_world_truth": false,
+                    "external_network_or_effects": false
+                }))
+                .expect("serialize B29 contextual correction observation")
+            );
+            drop(reopened);
+            fs::remove_dir_all(&directory).expect("remove isolated contextual correction state");
+        }
+
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let parent = std::env::temp_dir().join(format!(
+            "minidora-core-contextual-correction-source-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&parent).expect("unique contextual-correction source state directory");
+        observe_case(
+            &parent,
+            Scenario {
+                actor: "context-ja-correction-actor",
+                case: "context-ja-correction-case",
+                seed_input: "[scope=biology]ココは哺乳類です。",
+                anchor_input: "[scope=biology]ココは哺乳類ですか",
+                correction_input: "[scope=biology]それは哺乳類ではなく鳥です。",
+                followup_input: "[scope=biology]ココは鳥ですか",
+                subject: "ココ",
+                superseded_object: "哺乳類",
+                replacement_object: "鳥",
+                roles: &[
+                    ("subject", "それ"),
+                    ("subject_particle", "は"),
+                    ("superseded_object", "哺乳類"),
+                    ("correction_marker", "ではなく"),
+                    ("replacement_object", "鳥"),
+                    ("scope", "biology"),
+                ],
+            },
+        );
+        observe_case(
+            &parent,
+            Scenario {
+                actor: "context-en-correction-actor",
+                case: "context-en-correction-case",
+                seed_input: "[scope=biology]Coco is a mammal.",
+                anchor_input: "[scope=biology]Coco is a mammal?",
+                correction_input: "[scope=biology]It is a bird, not a mammal.",
+                followup_input: "[scope=biology]Coco is a bird?",
+                subject: "Coco",
+                superseded_object: "mammal",
+                replacement_object: "bird",
+                roles: &[
+                    ("subject", "It"),
+                    ("copula", "is"),
+                    ("superseded_article", "a"),
+                    ("superseded_object", "mammal"),
+                    ("correction_marker", "not"),
+                    ("replacement_article", "a"),
+                    ("replacement_object", "bird"),
+                    ("scope", "biology"),
+                ],
+            },
+        );
+
+        let mut engine = Engine::open(&parent).expect("open Core for missing-context boundary");
+        let missing = engine
+            .execute(
+                "context-correction-missing-actor",
+                RequestEnvelope::new(
+                    "context-correction-missing-case",
+                    "missing-context",
+                    "context-correction-missing-actor",
+                    "[scope=biology]それは哺乳類ではなく鳥です。",
+                ),
+            )
+            .expect("missing contextual anchor returns a typed stop");
+        assert_eq!(missing.lifecycle, Lifecycle::Suspend, "{missing:?}");
+        assert!(missing.dependencies.is_empty());
+        let missing_state = engine
+            .latest(
+                "context-correction-missing-actor",
+                "context-correction-missing-case",
+            )
+            .expect("read missing-context result")
+            .expect("retain missing-context request");
+        let missing_bundle = missing_state
+            .bundle
+            .as_ref()
+            .expect("sealed missing-context input");
+        assert!(missing_bundle.meaning.context_result_ref.is_none());
+        assert!(
+            input::assertion_source_evidence(missing_bundle)
+                .expect("validate missing-context source roles")
+                .is_none(),
+            "a correction without its actual previous result has no sealed evidence"
+        );
+        drop(engine);
+        fs::remove_dir_all(parent).expect("remove contextual correction state directory");
     }
 
     #[test]

@@ -1,0 +1,116 @@
+{
+  "observation_id": "MB-BUILD-20261114-INPUT-09-B29_CONTEXTUAL_PREMISE_CORRECTION_SOURCE_TO_BOTH_FACTS",
+  "status": "PASS",
+  "base_commit": "079989ab5c28a423b47d01ab310d4c8d0e053101",
+  "target": "MINIDORA-BETA Rust Core contextual premise-correction path",
+  "scope": "Two explicitly scoped immediate singular-pronoun copular corrections: Japanese それは旧対象ではなく新対象 and English It is a new object, not an old object. Both use a committed same-case prior result that depends on one active direct premise.",
+  "route": "original contextual correction -> sealed v82 CorrectPreviousPremise with exact pronoun/grammar/old-value/new-value/scope byte ranges and actual context_result_ref -> Core validates the immediately preceding committed result and uniquely selects its direct USER_PREMISE dependency -> one actor-memory CAS writes the negative superseded Fact and replacement Fact with the same sealed source evidence -> Store reloads and revalidates the immutable input on Engine reopen -> both propositions return SUPPORTED proofs with the same evidence -> ordinary Core Ask consumes the replacement Fact ID",
+  "observations": [
+    {
+      "language": "Japanese",
+      "input": "[scope=biology]それは哺乳類ではなく鳥です。",
+      "anchor_input": "[scope=biology]ココは哺乳類ですか",
+      "source_role_root": "/CorrectPreviousPremise",
+      "source_roles": {
+        "subject": {"start": 15, "end": 21, "text": "それ"},
+        "subject_particle": {"start": 21, "end": 24, "text": "は"},
+        "superseded_object": {"start": 24, "end": 33, "text": "哺乳類"},
+        "correction_marker": {"start": 33, "end": 45, "text": "ではなく"},
+        "replacement_object": {"start": 45, "end": 48, "text": "鳥"},
+        "scope": {"start": 7, "end": 14, "text": "biology"}
+      },
+      "context_result_ref_matches_actual_anchor": true,
+      "both_facts_link_same_source_evidence": true,
+      "reopened_negative_proof": "SUPPORTED",
+      "reopened_replacement_proof": "SUPPORTED",
+      "followup_consumes_replacement_fact": true
+    },
+    {
+      "language": "English",
+      "input": "[scope=biology]It is a bird, not a mammal.",
+      "anchor_input": "[scope=biology]Coco is a mammal?",
+      "source_role_root": "/CorrectPreviousPremise",
+      "source_roles": {
+        "subject": {"start": 15, "end": 17, "text": "It"},
+        "copula": {"start": 18, "end": 20, "text": "is"},
+        "replacement_article": {"start": 21, "end": 22, "text": "a"},
+        "replacement_object": {"start": 23, "end": 27, "text": "bird"},
+        "correction_marker": {"start": 29, "end": 32, "text": "not"},
+        "superseded_article": {"start": 33, "end": 34, "text": "a"},
+        "superseded_object": {"start": 35, "end": 41, "text": "mammal"},
+        "scope": {"start": 7, "end": 14, "text": "biology"}
+      },
+      "context_result_ref_matches_actual_anchor": true,
+      "both_facts_link_same_source_evidence": true,
+      "reopened_negative_proof": "SUPPORTED",
+      "reopened_replacement_proof": "SUPPORTED",
+      "followup_consumes_replacement_fact": true
+    }
+  ],
+  "missing_context": {
+    "lifecycle": "SUSPEND",
+    "context_result_ref": null,
+    "source_evidence_projected": false,
+    "proof_facts_written": false
+  },
+  "log_archive_location": "/workspace/.minidora-cloud/b29-contextual-correction-source-evidence/ (external to Git; not versioned)",
+  "parser_revision": "declarative-ja-en-v82-contextual-correction-source-ranges",
+  "focused_test": {
+    "command": "cargo test -p minidora-engine --locked --lib contextual_premise_correction_source_roles -- --nocapture",
+    "passed": 1,
+    "failed": 0,
+    "exit_code": 0,
+    "log": "01-focused-contextual-correction-final.log"
+  },
+  "engine_package_tests": {
+    "command": "cargo test -p minidora-engine --locked",
+    "unit_tests_passed": 247,
+    "integration_test_cases_passed": 12,
+    "integration_harnesses_launched": 11,
+    "total_passed": 259,
+    "failed": 0,
+    "ignored": 0,
+    "doc_tests": 0,
+    "exit_code": 0,
+    "log": "02-engine-package-tests-final.log"
+  },
+  "workspace_gates": {
+    "cargo_fmt_all_check": {"status": "PASS", "exit_code": 0, "log": "03-fmt-check.log"},
+    "cargo_check_workspace_all_targets_locked": {"status": "PASS", "exit_code": 0, "log": "05-workspace-check.log"},
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": {"status": "PASS", "exit_code": 0, "log": "06-clippy.log"},
+    "cargo_build_workspace_locked": {"status": "PASS", "exit_code": 0, "log": "07-workspace-build.log"},
+    "git_diff_check": {"status": "PASS", "exit_code": 0, "log": "04-diff-check.log"},
+    "environment": "Linux x86_64-unknown-linux-gnu, rustc/cargo 1.99.1",
+    "environment_log": "08-rust-environment.log"
+  },
+  "construction_adjustment": {
+    "initial_clippy": "FAIL: too_many_arguments on the test-only route helper",
+    "correction": "Grouped route inputs in a local Scenario structure; no production semantics changed.",
+    "initial_log": "04-clippy.log",
+    "final_clippy": "PASS"
+  },
+  "source_sha256": {
+    "rust/crates/minidora-engine/src/core.rs": "62d715024a1cef36e22d3032869dd758b8826090b95f31a5d0cb07ed6b5ca4c9",
+    "rust/crates/minidora-engine/src/input.rs": "b0a6fd1f65ce4d70cba985e958f53d01af5eb700600620548a2ec78209840db0",
+    "rust/crates/minidora-engine/src/relations.rs": "c51a537c47cd722d91978fb2aba4fde3e5c8875cb7a6c344b1b987c4b4e0cabf"
+  },
+  "change_boundary": {
+    "production_behavior_changed": true,
+    "parser_version_changed": true,
+    "database_schema_changed": false,
+    "dependency_or_lockfile_changed": false,
+    "changed_scope": "Exact source-role evidence now covers the already-supported immediate contextual correction grammar in Japanese and English. Core attaches the validated evidence to both correction Facts, suspends before mutation if the roles cannot be validated, and Store revalidates it after reopen. No correction-target selection rule changed."
+  },
+  "acceptance_status": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_93_requirements": "UNVERIFIED"
+  },
+  "not_established": [
+    "General co-reference, plural or non-immediate references, arbitrary English/Japanese clause structures, multiple corrections, or corrections without a committed same-case anchor.",
+    "Outside-world truth of the original, superseded or replacement user premise.",
+    "Full workspace all-features runtime, CLI/browser/output delivery, other operating systems, independent QA, or complete A04/A15/E08 acceptance."
+  ],
+  "release_status": "NOT_RELEASED"
+}

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v81-english-correction-source-ranges";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v82-contextual-correction-source-ranges";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -625,25 +625,63 @@ fn japanese_transitive_assertion_source_roles_with_root(
     Ok(Some(roles))
 }
 
+struct PremiseCorrectionSourceContract<'a> {
+    role_root: &'static str,
+    subject: Option<&'a str>,
+    predicate: &'a str,
+    superseded_object: &'a str,
+    replacement_object: &'a str,
+    scope: &'a str,
+}
+
+fn premise_correction_source_contract(
+    expected: &Intent,
+) -> Option<PremiseCorrectionSourceContract<'_>> {
+    match expected {
+        Intent::CorrectPremise {
+            superseded,
+            replacement,
+        } => Some(PremiseCorrectionSourceContract {
+            role_root: "/CorrectPremise",
+            subject: Some(&superseded.subject),
+            predicate: &superseded.predicate,
+            superseded_object: &superseded.object,
+            replacement_object: &replacement.object,
+            scope: &superseded.scope,
+        }),
+        Intent::CorrectPreviousPremise {
+            predicate,
+            superseded_object,
+            replacement_object,
+            scope,
+        } => Some(PremiseCorrectionSourceContract {
+            role_root: "/CorrectPreviousPremise",
+            subject: None,
+            predicate,
+            superseded_object,
+            replacement_object,
+            scope: scope.as_deref().unwrap_or("default"),
+        }),
+        _ => None,
+    }
+}
+
+fn correction_source_subject_matches(observed: &str, expected: Option<&str>) -> bool {
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    match expected {
+        Some(expected) => normalized(observed) == normalized(expected),
+        None => singular_previous_subject(observed),
+    }
+}
+
 fn japanese_premise_correction_source_roles(
     text: &str,
     expected: &Intent,
 ) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
-    let Intent::CorrectPremise {
-        superseded,
-        replacement,
-    } = expected
-    else {
+    let Some(contract) = premise_correction_source_contract(expected) else {
         return Ok(None);
     };
-    if superseded.predicate != "is"
-        || replacement.predicate != "is"
-        || superseded.negative
-        || replacement.negative
-        || superseded.subject != replacement.subject
-        || superseded.scope != replacement.scope
-        || superseded.object == replacement.object
-    {
+    if contract.predicate != "is" || contract.superseded_object == contract.replacement_object {
         return Ok(None);
     }
 
@@ -657,7 +695,7 @@ fn japanese_premise_correction_source_roles(
             let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
                 return Ok(None);
             };
-            if scope_span.text != superseded.scope {
+            if scope_span.text != contract.scope {
                 return Ok(None);
             }
             (
@@ -666,7 +704,7 @@ fn japanese_premise_correction_source_roles(
                 Some(scope_span),
             )
         } else {
-            if superseded.scope != "default" {
+            if contract.scope != "default" {
                 return Ok(None);
             }
             (statement, source_offset, None)
@@ -722,12 +760,12 @@ fn japanese_premise_correction_source_roles(
         return Ok(None);
     };
 
-    let normalized = |value: &str| value.nfkc().collect::<String>();
     if !matches!(particle_span.text.as_str(), "は" | "が")
-        || normalized(&subject_span.text) != normalized(&superseded.subject)
-        || normalized(&subject_span.text) != normalized(&replacement.subject)
-        || normalized(&superseded_span.text) != normalized(&superseded.object)
-        || normalized(&replacement_span.text) != normalized(&replacement.object)
+        || !correction_source_subject_matches(&subject_span.text, contract.subject)
+        || superseded_span.text.nfkc().collect::<String>()
+            != contract.superseded_object.nfkc().collect::<String>()
+        || replacement_span.text.nfkc().collect::<String>()
+            != contract.replacement_object.nfkc().collect::<String>()
         || marker_span.text != "ではなく"
         || premise_correction_intent(text)?.as_ref() != Some(expected)
     {
@@ -735,26 +773,29 @@ fn japanese_premise_correction_source_roles(
     }
 
     let mut roles = BTreeMap::from([
-        ("/CorrectPremise/subject".into(), vec![subject_span]),
         (
-            "/CorrectPremise/subject_particle".into(),
+            format!("{}/subject", contract.role_root),
+            vec![subject_span],
+        ),
+        (
+            format!("{}/subject_particle", contract.role_root),
             vec![particle_span],
         ),
         (
-            "/CorrectPremise/superseded_object".into(),
+            format!("{}/superseded_object", contract.role_root),
             vec![superseded_span],
         ),
         (
-            "/CorrectPremise/correction_marker".into(),
+            format!("{}/correction_marker", contract.role_root),
             vec![marker_span],
         ),
         (
-            "/CorrectPremise/replacement_object".into(),
+            format!("{}/replacement_object", contract.role_root),
             vec![replacement_span],
         ),
     ]);
     if let Some(scope_span) = scope_span {
-        roles.insert("/CorrectPremise/scope".into(), vec![scope_span]);
+        roles.insert(format!("{}/scope", contract.role_root), vec![scope_span]);
     }
     Ok(Some(roles))
 }
@@ -799,21 +840,10 @@ fn english_premise_correction_source_roles(
     text: &str,
     expected: &Intent,
 ) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
-    let Intent::CorrectPremise {
-        superseded,
-        replacement,
-    } = expected
-    else {
+    let Some(contract) = premise_correction_source_contract(expected) else {
         return Ok(None);
     };
-    if superseded.predicate != "is"
-        || replacement.predicate != "is"
-        || superseded.negative
-        || replacement.negative
-        || superseded.subject != replacement.subject
-        || superseded.scope != replacement.scope
-        || superseded.object == replacement.object
-    {
+    if contract.predicate != "is" || contract.superseded_object == contract.replacement_object {
         return Ok(None);
     }
 
@@ -827,7 +857,7 @@ fn english_premise_correction_source_roles(
             let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
                 return Ok(None);
             };
-            if scope_span.text != superseded.scope {
+            if scope_span.text != contract.scope {
                 return Ok(None);
             }
             (
@@ -836,7 +866,7 @@ fn english_premise_correction_source_roles(
                 Some(scope_span),
             )
         } else {
-            if superseded.scope != "default" {
+            if contract.scope != "default" {
                 return Ok(None);
             }
             (statement, source_offset, None)
@@ -871,7 +901,7 @@ fn english_premise_correction_source_roles(
         text,
         body_offset,
         superseded_capture,
-        &superseded.object,
+        contract.superseded_object,
     ) else {
         return Ok(None);
     };
@@ -879,44 +909,51 @@ fn english_premise_correction_source_roles(
         text,
         body_offset,
         replacement_capture,
-        &replacement.object,
+        contract.replacement_object,
     ) else {
         return Ok(None);
     };
-    let normalized = |value: &str| value.nfkc().collect::<String>();
     if !matches!(copula_span.text.to_ascii_lowercase().as_str(), "is" | "are")
         || !marker_span.text.eq_ignore_ascii_case("not")
-        || normalized(&subject_span.text) != normalized(&superseded.subject)
-        || normalized(&subject_span.text) != normalized(&replacement.subject)
+        || !correction_source_subject_matches(&subject_span.text, contract.subject)
         || premise_correction_intent(text)?.as_ref() != Some(expected)
     {
         return Ok(None);
     }
 
     let mut roles = BTreeMap::from([
-        ("/CorrectPremise/subject".into(), vec![subject_span]),
-        ("/CorrectPremise/copula".into(), vec![copula_span]),
         (
-            "/CorrectPremise/superseded_object".into(),
+            format!("{}/subject", contract.role_root),
+            vec![subject_span],
+        ),
+        (format!("{}/copula", contract.role_root), vec![copula_span]),
+        (
+            format!("{}/superseded_object", contract.role_root),
             vec![superseded_object],
         ),
         (
-            "/CorrectPremise/correction_marker".into(),
+            format!("{}/correction_marker", contract.role_root),
             vec![marker_span],
         ),
         (
-            "/CorrectPremise/replacement_object".into(),
+            format!("{}/replacement_object", contract.role_root),
             vec![replacement_object],
         ),
     ]);
     if let Some(article) = superseded_article {
-        roles.insert("/CorrectPremise/superseded_article".into(), vec![article]);
+        roles.insert(
+            format!("{}/superseded_article", contract.role_root),
+            vec![article],
+        );
     }
     if let Some(article) = replacement_article {
-        roles.insert("/CorrectPremise/replacement_article".into(), vec![article]);
+        roles.insert(
+            format!("{}/replacement_article", contract.role_root),
+            vec![article],
+        );
     }
     if let Some(scope_span) = scope_span {
-        roles.insert("/CorrectPremise/scope".into(), vec![scope_span]);
+        roles.insert(format!("{}/scope", contract.role_root), vec![scope_span]);
     }
     Ok(Some(roles))
 }
@@ -931,15 +968,23 @@ fn premise_correction_source_roles(
     english_premise_correction_source_roles(text, expected)
 }
 
-/// Project only a complete, unambiguous supported Japanese direct-premise role
-/// map into evidence. A contextual assertion records its source pronoun here;
-/// the sealed bundle links that pronoun to the prior result used by Core.
-/// Corrections retain one shared role map on their negative and replacement
-/// facts so the exact superseded and replacement surfaces remain distinct.
+/// Project complete source-role maps for supported assertions and corrections.
+/// Contextual assertion/correction maps retain the literal pronoun; the sealed
+/// bundle binds that request to the prior result used by Core.
 pub(crate) fn assertion_source_evidence(
     bundle: &InputBundle,
 ) -> Result<Option<SealedSourceEvidence>> {
-    if let Intent::CorrectPremise { .. } = &bundle.meaning.intent {
+    if matches!(
+        &bundle.meaning.intent,
+        Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
+    ) {
+        let contextual = matches!(
+            &bundle.meaning.intent,
+            Intent::CorrectPreviousPremise { .. }
+        );
+        if contextual && bundle.meaning.context_result_ref.is_none() {
+            return Ok(None);
+        }
         let Some(source_roles) =
             premise_correction_source_roles(&bundle.request.text, &bundle.meaning.intent)?
         else {
@@ -1174,8 +1219,10 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     {
         return Ok(source_roles);
     }
-    if let Intent::CorrectPremise { .. } = intent
-        && let Some(source_roles) = premise_correction_source_roles(text, intent)?
+    if matches!(
+        intent,
+        Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
+    ) && let Some(source_roles) = premise_correction_source_roles(text, intent)?
     {
         return Ok(source_roles);
     }
