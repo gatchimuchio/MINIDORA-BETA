@@ -1,0 +1,597 @@
+{
+  "evidence_schema": "minidora-direct-core-observation-v1",
+  "observation_id": "MB-BUILD-20261114-CORE-06",
+  "base_commit": "48c2f434fbba6258590970fbcac7235bb892e8d1",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "host": "x86_64-unknown-linux-gnu"
+  },
+  "command": "cargo test -p minidora-engine --test core_construction_observation_06 --locked -- --nocapture",
+  "test_result": "PASS: 1 passed, 0 failed",
+  "test_log_sha256": "b74d072eeb4c9c5317f513c3818f10535e72957a630e9dd959239870a551af06",
+  "test_source": {
+    "path": "rust/crates/minidora-engine/tests/core_construction_observation_06.rs",
+    "sha256": "0fcc5aa04e0e9e9def30600f35e398dcdafe5a9e2815bee6be8ff781a7ce055f"
+  },
+  "three_point_set_manifest_checks": [
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+      "expected_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "actual_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "expected_bytes": 28807,
+      "actual_bytes": 28807,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_01_施工仕様書_20261114.md",
+      "expected_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "actual_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "expected_bytes": 23191,
+      "actual_bytes": 23191,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_02_施工工程表_20261114.md",
+      "expected_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "actual_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "expected_bytes": 21474,
+      "actual_bytes": 21474,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_03_Codex施工指示書_20261114.md",
+      "expected_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "actual_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "expected_bytes": 23396,
+      "actual_bytes": 23396,
+      "matches": true
+    }
+  ],
+  "scope": "isolated temporary SQLite, in-process Engine::execute, local Core only; no network, external model or physical output effect",
+  "observation": {
+    "actor": "b15-safe-stop-observation",
+    "cases": [
+      "deadline-case",
+      "action-budget-case",
+      "permission-case",
+      "unknown-effect-case",
+      "empty-cancel-case"
+    ],
+    "entry": "in-process minidora_engine::Engine::execute",
+    "external_file_write_attempts": false,
+    "external_network": false,
+    "external_semantic_generation": false,
+    "limitations": [
+      "isolated in-process Core and temporary SQLite only",
+      "no physical power-loss/crash test, external provider or browser acceptance",
+      "no full workspace runtime or requirement acceptance claim"
+    ],
+    "observation": "MB-BUILD-20261114 core construction observation six",
+    "observations": [
+      {
+        "case_after_stop": {
+          "goal_sha256": "65ca0c4dae270fd0b148433ce01e2b868f7a96f78c0bf37273f5c75694df6151",
+          "input_id": "deadline-zero",
+          "input_version": 1,
+          "intent": {
+            "expression": "4+6",
+            "kind": "CALCULATE"
+          },
+          "lifecycle": "SUSPEND",
+          "original_text": "4+6を計算して",
+          "parent_revision": 2,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "e8fa1f6b662a91b148473fc1bee1e018e04459905e58f7b5da27c95c13864bdd",
+          "result": {
+            "calculation": null,
+            "content_plan": null,
+            "dependencies": [],
+            "execution_graph_ref": null,
+            "guarantee": "UNKNOWN",
+            "id": "9cbd6c6b3ffc6520f915ee5acc970ae1c6c8e33e63758a462a52cd253d4c7728",
+            "input_id": "deadline-zero",
+            "input_version": 1,
+            "lifecycle": "SUSPEND",
+            "reason": "RESOURCE_LIMIT: 計算予算がありません。",
+            "receipts": [],
+            "render": null,
+            "text": "計算予算がありません。"
+          },
+          "retained_result_ids": [],
+          "revision": 3
+        },
+        "request": {
+          "deadline_ms": 0,
+          "text": "4+6を計算して"
+        },
+        "result": {
+          "calculation": null,
+          "content_plan": null,
+          "dependencies": [],
+          "execution_graph_ref": null,
+          "guarantee": "UNKNOWN",
+          "id": "9cbd6c6b3ffc6520f915ee5acc970ae1c6c8e33e63758a462a52cd253d4c7728",
+          "input_id": "deadline-zero",
+          "input_version": 1,
+          "lifecycle": "SUSPEND",
+          "reason": "RESOURCE_LIMIT: 計算予算がありません。",
+          "receipts": [],
+          "render": null,
+          "text": "計算予算がありません。"
+        }
+      },
+      {
+        "case_after_stop": {
+          "goal_sha256": "2e644cf895e62bdc37b841a662f4b810efd8677f1ba7d8873c9f1157bec23176",
+          "input_id": "too-little-actions",
+          "input_version": 1,
+          "intent": {
+            "expression": "4+6",
+            "kind": "CALCULATE"
+          },
+          "lifecycle": "SUSPEND",
+          "original_text": "4+6を計算して",
+          "parent_revision": 2,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "e8fa1f6b662a91b148473fc1bee1e018e04459905e58f7b5da27c95c13864bdd",
+          "result": {
+            "calculation": null,
+            "content_plan": null,
+            "dependencies": [],
+            "execution_graph_ref": null,
+            "guarantee": "UNKNOWN",
+            "id": "894a3bae7cd4229bc7ba3ff07ae2c59d4675a9a454677649685de6f0bd80b911",
+            "input_id": "too-little-actions",
+            "input_version": 1,
+            "lifecycle": "SUSPEND",
+            "reason": "ACTION_BUDGET_EXHAUSTED: 必須成果の残件: [\"compute\", \"content\", \"render\"]",
+            "receipts": [],
+            "render": null,
+            "text": "必須成果の残件: [\"compute\", \"content\", \"render\"]"
+          },
+          "retained_result_ids": [],
+          "revision": 3
+        },
+        "request": {
+          "max_actions": 2,
+          "text": "4+6を計算して"
+        },
+        "result": {
+          "calculation": null,
+          "content_plan": null,
+          "dependencies": [],
+          "execution_graph_ref": null,
+          "guarantee": "UNKNOWN",
+          "id": "894a3bae7cd4229bc7ba3ff07ae2c59d4675a9a454677649685de6f0bd80b911",
+          "input_id": "too-little-actions",
+          "input_version": 1,
+          "lifecycle": "SUSPEND",
+          "reason": "ACTION_BUDGET_EXHAUSTED: 必須成果の残件: [\"compute\", \"content\", \"render\"]",
+          "receipts": [],
+          "render": null,
+          "text": "必須成果の残件: [\"compute\", \"content\", \"render\"]"
+        }
+      },
+      {
+        "action_ledger": [],
+        "case_after_stop": {
+          "goal_sha256": "8732c34f70b98d19823a9f3d297b2a1f1442704d4f6b383d195e1bc8daf29c68",
+          "input_id": "missing-write-grant",
+          "input_version": 1,
+          "intent": {
+            "expression": "4+6",
+            "kind": "CALCULATE"
+          },
+          "lifecycle": "SUSPEND",
+          "original_text": "4+6を計算して",
+          "parent_revision": 6,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "e8fa1f6b662a91b148473fc1bee1e018e04459905e58f7b5da27c95c13864bdd",
+          "result": {
+            "calculation": {
+              "exact_value": "10",
+              "expression": "4+6",
+              "steps": [
+                "4 + 6 = 10"
+              ]
+            },
+            "content_plan": {
+              "guarantee": "COMPUTED",
+              "id": "b78371f1fee17e3063d7e25ffc78fda047fdde47f020e2590bfc08f8a595655b",
+              "model_artifact_ref": "e5fdaa7ea5be62fa0dbaa450143d5f8892eb520b28cf180f0500b243645a3b2a",
+              "model_observation_ref": "80c25f27cc86717995d0e75c1e60b2c6f620471eebb600f96bfff326cb2b9acf",
+              "model_revision": "0f22eea5fe8e5aad6daba1c5ffb14edba2f2f46b9ee8a1a99438848c4c8246df",
+              "required_units": [
+                "4+6 = 10"
+              ],
+              "text": "4+6 = 10"
+            },
+            "dependencies": [],
+            "execution_graph_ref": null,
+            "guarantee": "COMPUTED",
+            "id": "275395e9f988427d739f1e8f31f8a921f47e59cb79ceb133799f4980b67481f5",
+            "input_id": "missing-write-grant",
+            "input_version": 1,
+            "lifecycle": "SUSPEND",
+            "reason": "WRITE_PERMISSION_MISSING: 指定ファイルへの書込権限がありません。",
+            "receipts": [],
+            "render": {
+              "actual_sha256": "71bb53de51b8bb3b3bd9b2a96fa0003ec800482b7b3e52325568e0bf5f7ad8c2",
+              "byte_length": 8,
+              "plan_id": "b78371f1fee17e3063d7e25ffc78fda047fdde47f020e2590bfc08f8a595655b",
+              "renderer_version": "utf8-bytes-v1",
+              "status": "RENDERED"
+            },
+            "text": "4+6 = 10"
+          },
+          "retained_result_ids": [],
+          "revision": 7
+        },
+        "file_exists_after_stop": false,
+        "goal_unmet": "CONFIRMED_FILE required predicate has no receipt; case remains SUSPEND",
+        "request": {
+          "output_path": "/tmp/minidora-core-construction-observation-six-310753-0/not-authorized.txt",
+          "text": "4+6を計算して",
+          "write_grant": false
+        },
+        "result": {
+          "calculation": {
+            "exact_value": "10",
+            "expression": "4+6",
+            "steps": [
+              "4 + 6 = 10"
+            ]
+          },
+          "content_plan": {
+            "guarantee": "COMPUTED",
+            "id": "b78371f1fee17e3063d7e25ffc78fda047fdde47f020e2590bfc08f8a595655b",
+            "model_artifact_ref": "e5fdaa7ea5be62fa0dbaa450143d5f8892eb520b28cf180f0500b243645a3b2a",
+            "model_observation_ref": "80c25f27cc86717995d0e75c1e60b2c6f620471eebb600f96bfff326cb2b9acf",
+            "model_revision": "0f22eea5fe8e5aad6daba1c5ffb14edba2f2f46b9ee8a1a99438848c4c8246df",
+            "required_units": [
+              "4+6 = 10"
+            ],
+            "text": "4+6 = 10"
+          },
+          "dependencies": [],
+          "execution_graph_ref": null,
+          "guarantee": "COMPUTED",
+          "id": "275395e9f988427d739f1e8f31f8a921f47e59cb79ceb133799f4980b67481f5",
+          "input_id": "missing-write-grant",
+          "input_version": 1,
+          "lifecycle": "SUSPEND",
+          "reason": "WRITE_PERMISSION_MISSING: 指定ファイルへの書込権限がありません。",
+          "receipts": [],
+          "render": {
+            "actual_sha256": "71bb53de51b8bb3b3bd9b2a96fa0003ec800482b7b3e52325568e0bf5f7ad8c2",
+            "byte_length": 8,
+            "plan_id": "b78371f1fee17e3063d7e25ffc78fda047fdde47f020e2590bfc08f8a595655b",
+            "renderer_version": "utf8-bytes-v1",
+            "status": "RENDERED"
+          },
+          "text": "4+6 = 10"
+        }
+      },
+      {
+        "action": {
+          "action_id": "fixture-unknown-local-write",
+          "actor_id": "b15-safe-stop-observation",
+          "authorization_sha256": "2e46e4328b36dc1dc8de6dda8f7623bde374626b372e6847163367404bd91462",
+          "case_id": "unknown-effect-case",
+          "effect_class": "LOCAL_WRITE",
+          "exact_request_sha256": "f1e453fb3f34eebf43014e7a6c6dfe5278586ba3c20f9eb4ff57d8a23badc004",
+          "idempotency_key": "fixture-unknown-local-write-key",
+          "input_fingerprint": "596ab06410cfbf043b89bb8d83067c34fb8717da1c2fbd0dad55d9ff6502c398",
+          "phase": "UNKNOWN",
+          "receipt": null,
+          "target": "/tmp/minidora-core-construction-observation-six-310753-0/unknown-effect-never-written.txt"
+        },
+        "case_after_seed": {
+          "goal_sha256": "918bd77ae68b8a0910d3f753f5300e4ae1b2bc75f7a37a72efc7fe56f607deb6",
+          "input_id": "effect-origin",
+          "input_version": 1,
+          "intent": {
+            "expression": "2+2",
+            "kind": "CALCULATE"
+          },
+          "lifecycle": "COMMIT",
+          "original_text": "2+2を計算して",
+          "parent_revision": 6,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "96d26b4a4d8c12d92ab13f4e45f33136ed3fca1c0720a80f8ec594216236dc59",
+          "result": {
+            "calculation": {
+              "exact_value": "4",
+              "expression": "2+2",
+              "steps": [
+                "2 + 2 = 4"
+              ]
+            },
+            "content_plan": {
+              "guarantee": "COMPUTED",
+              "id": "f65a6219f8d549800f68e30ac87afc83f8f90852093d0596c13cbaf5d037a5a9",
+              "model_artifact_ref": "69384277fc61a8509aba1d24f7b663bdd9a5cca912b47d91c74c29fa4b53a9e0",
+              "model_observation_ref": "61d20bfd0a6fce88cfc61d03ff68690c9d1df29fa74d88f6b6cf770d808b7f24",
+              "model_revision": "d6fef9c1034e61347f330762801b280c8401839a8b67dd6856608c11585849ab",
+              "required_units": [
+                "2+2 = 4"
+              ],
+              "text": "2+2 = 4"
+            },
+            "dependencies": [],
+            "execution_graph_ref": "2fbee838cb8318f8b186a2ca8d3b52124db9f24d27fad2ee93d66b9dfc6349be",
+            "guarantee": "COMPUTED",
+            "id": "596ab06410cfbf043b89bb8d83067c34fb8717da1c2fbd0dad55d9ff6502c398",
+            "input_id": "effect-origin",
+            "input_version": 1,
+            "lifecycle": "COMMIT",
+            "reason": null,
+            "receipts": [],
+            "render": {
+              "actual_sha256": "ed7a029f72f172a65914d67f00217eb8b92ec43a9447e00a0f584f4d1b2b7dae",
+              "byte_length": 7,
+              "plan_id": "f65a6219f8d549800f68e30ac87afc83f8f90852093d0596c13cbaf5d037a5a9",
+              "renderer_version": "utf8-bytes-v1",
+              "status": "RENDERED"
+            },
+            "text": "2+2 = 4"
+          },
+          "retained_result_ids": [],
+          "revision": 7
+        },
+        "external_effect_performed": false,
+        "fixture_source": "Store action journal transition PROPOSED -> AUTHORIZED -> PREPARED -> ATTEMPTED; Store::actions exposes ATTEMPTED as UNKNOWN",
+        "state": "attempted action without confirmed receipt",
+        "target_exists": false
+      },
+      {
+        "case_after_stop": {
+          "goal_sha256": "918bd77ae68b8a0910d3f753f5300e4ae1b2bc75f7a37a72efc7fe56f607deb6",
+          "input_id": "effect-origin",
+          "input_version": 1,
+          "intent": {
+            "expression": "2+2",
+            "kind": "CALCULATE"
+          },
+          "lifecycle": "COMMIT",
+          "original_text": "2+2を計算して",
+          "parent_revision": 6,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "96d26b4a4d8c12d92ab13f4e45f33136ed3fca1c0720a80f8ec594216236dc59",
+          "result": {
+            "calculation": {
+              "exact_value": "4",
+              "expression": "2+2",
+              "steps": [
+                "2 + 2 = 4"
+              ]
+            },
+            "content_plan": {
+              "guarantee": "COMPUTED",
+              "id": "f65a6219f8d549800f68e30ac87afc83f8f90852093d0596c13cbaf5d037a5a9",
+              "model_artifact_ref": "69384277fc61a8509aba1d24f7b663bdd9a5cca912b47d91c74c29fa4b53a9e0",
+              "model_observation_ref": "61d20bfd0a6fce88cfc61d03ff68690c9d1df29fa74d88f6b6cf770d808b7f24",
+              "model_revision": "d6fef9c1034e61347f330762801b280c8401839a8b67dd6856608c11585849ab",
+              "required_units": [
+                "2+2 = 4"
+              ],
+              "text": "2+2 = 4"
+            },
+            "dependencies": [],
+            "execution_graph_ref": "2fbee838cb8318f8b186a2ca8d3b52124db9f24d27fad2ee93d66b9dfc6349be",
+            "guarantee": "COMPUTED",
+            "id": "596ab06410cfbf043b89bb8d83067c34fb8717da1c2fbd0dad55d9ff6502c398",
+            "input_id": "effect-origin",
+            "input_version": 1,
+            "lifecycle": "COMMIT",
+            "reason": null,
+            "receipts": [],
+            "render": {
+              "actual_sha256": "ed7a029f72f172a65914d67f00217eb8b92ec43a9447e00a0f584f4d1b2b7dae",
+              "byte_length": 7,
+              "plan_id": "f65a6219f8d549800f68e30ac87afc83f8f90852093d0596c13cbaf5d037a5a9",
+              "renderer_version": "utf8-bytes-v1",
+              "status": "RENDERED"
+            },
+            "text": "2+2 = 4"
+          },
+          "retained_result_ids": [],
+          "revision": 7
+        },
+        "previous_committed_case_result_unchanged": true,
+        "prior_unknown_action_id": "fixture-unknown-local-write",
+        "request": "3+4を計算して",
+        "result": {
+          "calculation": null,
+          "content_plan": null,
+          "dependencies": [],
+          "execution_graph_ref": null,
+          "guarantee": "UNKNOWN",
+          "id": "a81b36c0e3b97a9acbf6fe47e9b6afa6350b99dd574e56a4798fb846885b946b",
+          "input_id": "work-while-unknown",
+          "input_version": 1,
+          "lifecycle": "SUSPEND",
+          "reason": "EXTERNAL_EFFECT_UNKNOWN: 既存作用の結果が未確定です。同一identityを再照合するまで新しい実行を開始しません。",
+          "receipts": [],
+          "render": null,
+          "text": "既存作用の結果が未確定です。同一identityを再照合するまで新しい実行を開始しません。"
+        }
+      },
+      {
+        "action_ledger_after_cancel": [
+          {
+            "action_id": "fixture-unknown-local-write",
+            "actor_id": "b15-safe-stop-observation",
+            "authorization_sha256": "2e46e4328b36dc1dc8de6dda8f7623bde374626b372e6847163367404bd91462",
+            "case_id": "unknown-effect-case",
+            "effect_class": "LOCAL_WRITE",
+            "exact_request_sha256": "f1e453fb3f34eebf43014e7a6c6dfe5278586ba3c20f9eb4ff57d8a23badc004",
+            "idempotency_key": "fixture-unknown-local-write-key",
+            "input_fingerprint": "596ab06410cfbf043b89bb8d83067c34fb8717da1c2fbd0dad55d9ff6502c398",
+            "phase": "UNKNOWN",
+            "receipt": null,
+            "target": "/tmp/minidora-core-construction-observation-six-310753-0/unknown-effect-never-written.txt"
+          }
+        ],
+        "case_after_cancel": {
+          "goal_sha256": "e263a7aeb247bbcda0b43318628fb3db64b3180bae69e9f378644d419c076db4",
+          "input_id": "cancel-with-unknown-effect",
+          "input_version": 1,
+          "intent": {
+            "kind": "CANCEL"
+          },
+          "lifecycle": "CANCEL",
+          "original_text": "キャンセル",
+          "parent_revision": 10,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "bca84ea5c65fee0eccd1f23a972b95cce908f83977c65b4e8b32ca72a772a9a5",
+          "result": {
+            "calculation": null,
+            "content_plan": null,
+            "dependencies": [],
+            "execution_graph_ref": null,
+            "guarantee": "UNKNOWN",
+            "id": "45f4bd259f95506d951f8584c10d1ae79d76de8eafbfaf299ac69718d05b2c3d",
+            "input_id": "cancel-with-unknown-effect",
+            "input_version": 1,
+            "lifecycle": "CANCEL",
+            "reason": "AUTHORIZED_CANCEL: 取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
+            "receipts": [
+              {
+                "action_id": "fixture-unknown-local-write",
+                "content_sha256": "f1e453fb3f34eebf43014e7a6c6dfe5278586ba3c20f9eb4ff57d8a23badc004",
+                "observed_bytes": null,
+                "phase": "UNKNOWN",
+                "reason": "actual prior effect accounting; cancellation does not undo it",
+                "target": "/tmp/minidora-core-construction-observation-six-310753-0/unknown-effect-never-written.txt"
+              }
+            ],
+            "render": null,
+            "text": "取消を記録しました。既発生・未確定の作用は消去せず保持しています。"
+          },
+          "retained_result_ids": [
+            "596ab06410cfbf043b89bb8d83067c34fb8717da1c2fbd0dad55d9ff6502c398"
+          ],
+          "revision": 11
+        },
+        "request": "キャンセル",
+        "result": {
+          "calculation": null,
+          "content_plan": null,
+          "dependencies": [],
+          "execution_graph_ref": null,
+          "guarantee": "UNKNOWN",
+          "id": "45f4bd259f95506d951f8584c10d1ae79d76de8eafbfaf299ac69718d05b2c3d",
+          "input_id": "cancel-with-unknown-effect",
+          "input_version": 1,
+          "lifecycle": "CANCEL",
+          "reason": "AUTHORIZED_CANCEL: 取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
+          "receipts": [
+            {
+              "action_id": "fixture-unknown-local-write",
+              "content_sha256": "f1e453fb3f34eebf43014e7a6c6dfe5278586ba3c20f9eb4ff57d8a23badc004",
+              "observed_bytes": null,
+              "phase": "UNKNOWN",
+              "reason": "actual prior effect accounting; cancellation does not undo it",
+              "target": "/tmp/minidora-core-construction-observation-six-310753-0/unknown-effect-never-written.txt"
+            }
+          ],
+          "render": null,
+          "text": "取消を記録しました。既発生・未確定の作用は消去せず保持しています。"
+        },
+        "target_exists_after_cancel": false
+      },
+      {
+        "case_after_cancel": {
+          "goal_sha256": "b2575c9a2a7c4d73f12a51004c2ccf11cabdc948b74361dc63a0ba6daac698b0",
+          "input_id": "cancel-before-work",
+          "input_version": 1,
+          "intent": {
+            "kind": "CANCEL"
+          },
+          "lifecycle": "CANCEL",
+          "original_text": "キャンセル",
+          "parent_revision": 2,
+          "parser_version": "declarative-ja-en-v72-contextual-relation-assertion",
+          "raw_sha256": "bca84ea5c65fee0eccd1f23a972b95cce908f83977c65b4e8b32ca72a772a9a5",
+          "result": {
+            "calculation": null,
+            "content_plan": null,
+            "dependencies": [],
+            "execution_graph_ref": null,
+            "guarantee": "UNKNOWN",
+            "id": "1894422078c68a1984cecb21251c6b914051ed7c1688b0ea301ef6bbfac6d87c",
+            "input_id": "cancel-before-work",
+            "input_version": 1,
+            "lifecycle": "CANCEL",
+            "reason": "AUTHORIZED_CANCEL: 取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
+            "receipts": [],
+            "render": null,
+            "text": "取消を記録しました。既発生・未確定の作用は消去せず保持しています。"
+          },
+          "retained_result_ids": [],
+          "revision": 3
+        },
+        "request": "キャンセル",
+        "result": {
+          "calculation": null,
+          "content_plan": null,
+          "dependencies": [],
+          "execution_graph_ref": null,
+          "guarantee": "UNKNOWN",
+          "id": "1894422078c68a1984cecb21251c6b914051ed7c1688b0ea301ef6bbfac6d87c",
+          "input_id": "cancel-before-work",
+          "input_version": 1,
+          "lifecycle": "CANCEL",
+          "reason": "AUTHORIZED_CANCEL: 取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
+          "receipts": [],
+          "render": null,
+          "text": "取消を記録しました。既発生・未確定の作用は消去せず保持しています。"
+        }
+      }
+    ],
+    "unknown_effect_fixture": "The action ledger was advanced through ATTEMPTED without invoking the writer; Store recovery exposed UNKNOWN with no receipt, modeling an ambiguous effect record without claiming that a physical write occurred."
+  },
+  "claims_not_established": [
+    "real ambiguous physical write/crash behavior",
+    "remote effect delivery or reconciliation",
+    "full workspace runtime",
+    "E02/E04/E05/E06/E10 or complete requirement acceptance",
+    "release or deployment"
+  ],
+  "verification_results": [
+    {
+      "command": "cargo test -p minidora-engine --test core_construction_observation_06 --locked -- --nocapture",
+      "status": "PASS",
+      "summary": "1 passed, 0 failed",
+      "log_sha256": "b74d072eeb4c9c5317f513c3818f10535e72957a630e9dd959239870a551af06"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "status": "PASS",
+      "summary": "232 unit; B11/B12/B13/B14/B15 integrations 1/2/1/1/1; 0 doc tests",
+      "log_sha256": "be2644f102af44068063d4ab0ee7a041947018deceda28ea357666ae6c83c30e"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "PASS"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "status": "PASS"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "status": "PASS"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ]
+}
