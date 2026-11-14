@@ -1,0 +1,119 @@
+{
+  "record_type": "WORKSPACE_RUNTIME_TEST_BASELINE_COMPARISON",
+  "work_item": "BODY-1 Core one-hop contextual relation assertion depth boundary",
+  "recorded_at": "2026-11-14T03:14:36+00:00",
+  "tested_revision": "working tree based on c820916a78f3564f2fec518cb2b2f68787426204",
+  "commands": {
+    "workspace": "CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target cargo test --workspace --locked",
+    "baseline_replay": "CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target cargo test -p minidora-cli --test normal_route --locked <test_name> -- --exact"
+  },
+  "workspace_run": {
+    "exit_code": 101,
+    "results": [
+      {
+        "target": "minidora-cli unit tests",
+        "passed": 10,
+        "failed": 0
+      },
+      {
+        "target": "minidora-cli tests/normal_route.rs",
+        "passed": 134,
+        "failed": 7
+      }
+    ],
+    "failing_tests": [
+      "conjunctive_rule_joins_two_new_subject_premises_and_explains_both",
+      "csv_statistics_followup_explains_revalidated_source_cells",
+      "declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage",
+      "elliptical_why_questions_explain_the_previous_committed_result",
+      "natural_common_relation_questions_compare_two_subjects_using_shared_proofs",
+      "natural_why_question_explains_only_current_relation_proofs",
+      "relation_answer_follow_up_explains_the_same_current_proof_after_restart"
+    ],
+    "later_workspace_test_targets": "NOT_RUN; Cargo stopped after the failing normal_route test target",
+    "log_sha256": "54cc4f46a9bf290692b38a33962fd7f6cb792252879fba0d29ce940bbaa4d148"
+  },
+  "baseline_comparison": {
+    "baseline_revision": "c820916a78f3564f2fec518cb2b2f68787426204",
+    "baseline_core_sha256": "4d6804f964ac2bef0f4ec42a999589f4ca175de91d9e8553a1ffc1e6c682473d",
+    "b08_core_sha256": "a16de962bc83e48e5145775c0aba0d7b7501fd19839e7f780adbe1c9b8c4585e",
+    "method": "Temporarily restored only core.rs byte-for-byte to the baseline SHA, reran each failing normal_route test individually, then reapplied the saved B08 core diff and rebuilt the workspace.",
+    "tests": [
+      {
+        "test": "conjunctive_rule_joins_two_new_subject_premises_and_explains_both",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "適用規則: $xはbirdである かつ $xはfeatheredである",
+        "classification": "scope_preserving_rule_display_assertion",
+        "baseline_log_sha256": "389e1e1ff6a05ef7039fc1559a38195873f5b06648845b2b42f9e52a7a6d7d60"
+      },
+      {
+        "test": "csv_statistics_followup_explains_revalidated_source_cells",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "JSON_TABLE_CONTEXT_INVALID: the prior table report does not match its sealed input operation",
+        "classification": "CSV statistics explanation rejected by JSON-table operation dispatch",
+        "baseline_log_sha256": "fcb49ddcf97968644f0607985ff9f201450466f2581295ba4263d73f7742ae8f"
+      },
+      {
+        "test": "declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "適用規則: $xは鳥である ならば $xは動物である",
+        "classification": "scope_preserving_rule_display_assertion",
+        "baseline_log_sha256": "dd40d7c640bdc820a91e825ef60fd4119c18a2366d03339fff879fe283a659ae"
+      },
+      {
+        "test": "elliptical_why_questions_explain_the_previous_committed_result",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "derived_why text contains 適用規則:",
+        "classification": "scope_preserving_rule_display_assertion",
+        "baseline_log_sha256": "dd2bd65447ffb8240a3e8ad0f037f2b4c7ec82c9ffc66afc6b4b4a3a9b92309a"
+      },
+      {
+        "test": "natural_common_relation_questions_compare_two_subjects_using_shared_proofs",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "derived_text contains 適用規則:",
+        "classification": "scope_preserving_rule_display_assertion",
+        "baseline_log_sha256": "6612d485a359ece1ac253b6e9ca9f7db46f047a84270848e8343bbd9453f00db"
+      },
+      {
+        "test": "natural_why_question_explains_only_current_relation_proofs",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "適用規則: $xは鳥である ならば $xは動物である",
+        "classification": "scope_preserving_rule_display_assertion",
+        "baseline_log_sha256": "a57f86e992e7abe99ed3962e27eac9b5cfd80ff2778f1a69a0d4a091807f48f6"
+      },
+      {
+        "test": "relation_answer_follow_up_explains_the_same_current_proof_after_restart",
+        "b08_result": "FAILED",
+        "baseline_result": "FAILED",
+        "both_replay_exit_code": 101,
+        "failure_signature": "適用規則: $xは鳥である ならば $xは動物である",
+        "classification": "scope_preserving_rule_display_assertion",
+        "baseline_log_sha256": "9d92c26add5fee4356455c4cdd0ee9d5a338312c5f508bac12ac29d9853f5e11"
+      }
+    ],
+    "result": "All seven observed failures reproduce on the baseline core with the same failure signatures; they are not introduced by the B08 depth guard."
+  },
+  "cause_notes": [
+    {
+      "classification": "Six stale normal_route assertions",
+      "details": "Six tests expect rule explanation text beginning 適用規則: without scope. The existing formatter in rust/crates/minidora-engine/src/core.rs emits 適用規則（範囲: <scope>）: and includes the scope in the conclusion. No expectation or product behavior was changed in B08."
+    },
+    {
+      "classification": "Existing CSV explanation dispatch bug",
+      "details": "csv_statistics_followup_explains_revalidated_source_cells receives SUSPEND JSON_TABLE_CONTEXT_INVALID: the prior table report does not match its sealed input operation. Core calls previous_json_table_operation_explanation for every committed ExplainPrevious result before choosing the CSV statistics consumer; the JSON operation recognizer misclassifies this CSV report. This needs a separate bounded follow-up."
+    }
+  ],
+  "disposition": "B08 targeted routes and static checks pass. Full workspace runtime suite is FAIL because of the seven baseline-confirmed failures above. No full workspace pass or full requirement acceptance is claimed."
+}

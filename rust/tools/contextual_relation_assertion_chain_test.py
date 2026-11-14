@@ -213,6 +213,68 @@ def main() -> None:
         assert missing_new_fact.get("content_plan") is None
         assert stale_anchor["id"] in stale_first["dependencies"]
 
+        depth_actor = "typed-pronoun-assertion-depth-limit"
+        depth_case = "typed-pronoun-assertion-depth-limit-case"
+        run(
+            depth_case,
+            depth_actor,
+            "depth-limit-rule",
+            "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+        )
+        run(depth_case, depth_actor, "depth-limit-bird", "[scope=biology]ココは鳥")
+        depth_anchor = run(
+            depth_case,
+            depth_actor,
+            "depth-limit-anchor",
+            "それは動物ですか",
+        )
+        depth_first = run(
+            depth_case,
+            depth_actor,
+            "depth-limit-assertion-one",
+            "それは温血動物です",
+        )
+        assert depth_first["lifecycle"] == "COMMIT"
+        depth_second = run(
+            depth_case,
+            depth_actor,
+            "depth-limit-assertion-two",
+            "それは哺乳類です",
+        )
+        assert depth_second["lifecycle"] == "COMMIT"
+        assert depth_second["dependencies"][0] == depth_first["id"]
+        depth_third = run(
+            depth_case,
+            depth_actor,
+            "depth-limit-assertion-three",
+            "それは爬虫類です",
+            expected_exit=2,
+        )
+        assert depth_third["lifecycle"] == "SUSPEND"
+        assert depth_third["reason"].startswith("CONTEXT_CHAIN_DEPTH_LIMIT:")
+        assert depth_third.get("content_plan") is None
+        _, depth_memory = memory(depth_actor)
+        depth_facts = {
+            fact["id"]: fact
+            for fact in depth_memory["facts"]
+        }
+        assert depth_second["dependencies"][1] in depth_facts
+        assert not any(
+            fact["proposition"]["object"] == "爬虫類"
+            for fact in depth_facts.values()
+        )
+        no_third_fact = run(
+            "depth-limit-no-third-fact-probe",
+            depth_actor,
+            "depth-limit-reptile-was-not-stored",
+            "[scope=biology]ココは爬虫類ですか",
+            expected_exit=2,
+        )
+        assert no_third_fact["lifecycle"] == "SUSPEND"
+        assert no_third_fact["reason"].startswith("MISSING_PREMISES:")
+        assert no_third_fact.get("content_plan") is None
+        assert depth_anchor["id"] in depth_first["dependencies"]
+
         source_paths = [
             "crates/minidora-domain/src/lib.rs",
             "crates/minidora-engine/src/input.rs",
@@ -222,7 +284,7 @@ def main() -> None:
             "tools/contextual_relation_assertion_chain_test.py",
         ]
         report = {
-            "work_item": "BODY-1 Core exact fact continuity across one chained contextual relation assertion",
+            "work_item": "BODY-1 Core one-hop contextual relation assertion depth boundary",
             "stage": "BODY-1_EXECUTION",
             "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "base_commit": command_output(
@@ -250,14 +312,16 @@ def main() -> None:
             ),
             "execution_mode": "fresh CLI process per request; one temporary SQLite state; direct actor memory revision inspection",
             "scope": (
-                "One immediate chained singular-pronoun relation assertion consumes the prior contextual assertion's exact active USER_PREMISE fact, rechecks that fact through the current relation proof, and is consumed by one following ordinary relation question. "
-                "A corrected/inactivated prior fact suspends the chain without a ContentPlan."
+                "At most one singular-pronoun relation assertion may immediately follow another such assertion. "
+                "The second consumes the prior contextual assertion's exact active USER_PREMISE fact and rechecks it through the current relation proof; a third consecutive assertion suspends without storage. "
+                "A corrected/inactivated source fact also suspends without a ContentPlan."
             ),
             "producer_consumer": (
                 "typed relation answer -> first sealed AssertPreviousRelation -> resolved USER_PREMISE fact -> "
                 "second sealed AssertPreviousRelation -> exact source-input fact lookup and current proof revalidation -> "
                 "second USER_PREMISE fact -> next AskPreviousRelation consumes only the second fact; "
-                "a correction that invalidates the first fact blocks the second assertion"
+                "a correction that invalidates the first fact blocks the second assertion; "
+                "a third consecutive assertion is stopped by the depth boundary before fact storage"
             ),
             "targeted_checks": {
                 "chained_assertion_reuses_previous_typed_subject_and_scope": "PASS",
@@ -266,11 +330,14 @@ def main() -> None:
                 "cross_case_correction_invalidates_exact_source_fact": "PASS",
                 "invalidated_source_fact_suspends_without_content_plan": "PASS",
                 "failed_second_assertion_is_not_stored": "PASS",
+                "third_consecutive_assertion_suspends_at_depth_limit": "PASS",
+                "depth_limit_does_not_store_third_fact": "PASS",
             },
             "summary": {
                 "fresh_process_observations": len(observations),
                 "positive_chain_observations": 6,
                 "invalidated_chain_observations": 7,
+                "depth_boundary_observations": 7,
             },
             "first_assertion_fact_id": first_fact_id,
             "second_assertion_fact_id": second_fact_id,
@@ -282,7 +349,7 @@ def main() -> None:
                 "cargo check --workspace --all-targets --locked",
                 "cargo clippy --workspace --all-targets --locked -- -D warnings",
                 "cargo build --workspace --locked",
-                "python3 tools/contextual_relation_assertion_chain_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output audit/bb-context-pronoun-relation-assertion-chain-v1-route-validation.json",
+                "python3 tools/contextual_relation_assertion_chain_test.py --binary /workspace/.minidora-cloud/rust-target/debug/minidora-rust --evidence-output audit/bb-context-pronoun-relation-assertion-depth-v1-route-validation.json",
                 "git diff --check",
             ],
             "not_run": [
@@ -291,8 +358,8 @@ def main() -> None:
                 "full A04/A07/A08/A15/CAP-D04/CAP-D11 acceptance",
             ],
             "acceptance_boundary": (
-                "This verifies one same-case consecutive assertion chain over an exact active direct premise, plus one subsequent relation query and an invalidation denial. "
-                "It does not establish arbitrary Japanese/English co-reference, unbounded assertion chains, general discourse resolution, truth verification, or full requirement acceptance."
+                "This verifies the supported two-assertion same-case chain, its following relation query, invalidation denial and explicit suspension of a third consecutive assertion. "
+                "It does not establish arbitrary Japanese/English co-reference, non-immediate discourse resolution, general discourse understanding, truth verification, or full requirement acceptance."
             ),
         }
         arguments.evidence_output.parent.mkdir(parents=True, exist_ok=True)

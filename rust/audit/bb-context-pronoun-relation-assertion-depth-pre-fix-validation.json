@@ -1,0 +1,142 @@
+{
+  "work_item": "Pre-fix observation: contextual relation assertion chain exceeded Batch 07 declared boundary",
+  "recorded_at": "2026-11-14T02:55:23+00:00",
+  "base_commit": "c820916a78f3564f2fec518cb2b2f68787426204",
+  "binary_sha256": "60bf06d4755823509cf402514a7c60ae45b2fa5de56f8f695cd3113b43d7491c",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "execution_mode": "six fresh CLI processes; one temporary SQLite state; actor memory revision inspected directly",
+  "expected_boundary": "at most one contextual assertion may inherit subject and scope from the immediately preceding contextual assertion",
+  "observed_boundary": "a second consecutive inherited assertion was accepted and created a third USER_PREMISE fact",
+  "observations": [
+    {
+      "input_id": "depth-rule",
+      "request": "[scope=biology]Xは鳥なら[scope=biology]Xは動物",
+      "input_sha256": "36b16ee060703093bbe2930dbc901fcc5ce9602b2f09ab3bc3d1ad6dc1a54fd7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "id": "229bae7205fd315302f6f1fca09582286710b7b1faaa62e36700cd7b824a3815",
+      "reason": null,
+      "dependencies": [
+        "rule:60cab39244f720fb2abb3ca6b192a34b6c736bd2bb648b70342ded28d8d63191"
+      ],
+      "text": "条件付き前提を保存しました: $xは鳥である ならば $xは動物である。\n規則ID: rule:60cab39244f720fb2abb3ca6b192a34b6c736bd2bb648b70342ded28d8d63191\n保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。",
+      "content_plan_id": "c45afba4464b951cd197615a3aaff71b212e76e379aabe46a803e7dbac0f831a"
+    },
+    {
+      "input_id": "depth-bird",
+      "request": "[scope=biology]ココは鳥",
+      "input_sha256": "27b4b08ccca4dfe17c9928b55245e49183d8adef9768a42682f38ff3aaa17fb5",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "id": "4d7bf9d395c436a35d38997641e6b20f9136cd8a582695d49828a20afd582437",
+      "reason": null,
+      "dependencies": [
+        "fact:8797df56e572b35e268f894f888abc1eb19b23bf13257bf2804a955841e9f313"
+      ],
+      "text": "前提を保存しました: ココは鳥である。\n前提ID: fact:8797df56e572b35e268f894f888abc1eb19b23bf13257bf2804a955841e9f313\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "content_plan_id": "4e6ee54c05dbb84f4e6d10078bd74e8017e1a1e111234e6612acb10aadae4c83"
+    },
+    {
+      "input_id": "depth-anchor",
+      "request": "それは動物ですか",
+      "input_sha256": "2b1b6170d1bad4ecdb1f053b73fb48720f6ac432dcec5feb4c535cd53cf3ad3b",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "id": "5c90470cb9a7200ad754b7fec4ca2cfa03d8157d3ced769a3ac25dca678495d7",
+      "reason": null,
+      "dependencies": [
+        "fact:35e738dfa282b92be978df0d9148a5a909fa554e33840a2593f7684d0c25fe9c",
+        "fact:8797df56e572b35e268f894f888abc1eb19b23bf13257bf2804a955841e9f313",
+        "rule:60cab39244f720fb2abb3ca6b192a34b6c736bd2bb648b70342ded28d8d63191"
+      ],
+      "text": "提示された前提の範囲では、ココは動物である（範囲: biology）。",
+      "content_plan_id": "ea35440c2aa100fc0d945f5747d3fbf5eb6cbe9d1b24941b2a1f0ed6e45c577b"
+    },
+    {
+      "input_id": "depth-assertion-one",
+      "request": "それは温血動物です",
+      "input_sha256": "1ea3e860f570834cbbd0f6dd475b6c773ff3f14e7a2ad152d47d2586931e95a7",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "id": "8fb31efbbdbd6a64fafd71da7df8cb476c486348b69d3387bcaf9d5894fa1a8b",
+      "reason": null,
+      "dependencies": [
+        "5c90470cb9a7200ad754b7fec4ca2cfa03d8157d3ced769a3ac25dca678495d7",
+        "fact:17e771af84a85bd2a6a78263ba11565ef81e3024e2f43bfd4a0e9a1e0bd53a31"
+      ],
+      "text": "直前結果 5c90470cb9a7200ad754b7fec4ca2cfa03d8157d3ced769a3ac25dca678495d7 の関係根拠を再確認し、主語「ココ」とscope「biology」を復元しました。\n前提を保存しました: ココは温血動物である。\n前提ID: fact:17e771af84a85bd2a6a78263ba11565ef81e3024e2f43bfd4a0e9a1e0bd53a31\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "content_plan_id": "205fe9f14d345e59881a648f61a7f23f3bd7a5e2aea8db0e06c42b6fe43f4aec"
+    },
+    {
+      "input_id": "depth-assertion-two",
+      "request": "それは哺乳類です",
+      "input_sha256": "8f6ef57e7987127df9b483a87513049265746c517ef79e5e79d0b6153b95c048",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "id": "805d3ecd982367d1bb8f570bdd0f5a4f550533a33bb2938875716092d9334094",
+      "reason": null,
+      "dependencies": [
+        "8fb31efbbdbd6a64fafd71da7df8cb476c486348b69d3387bcaf9d5894fa1a8b",
+        "fact:f9055dc88ff6fda471e1174206415d70b002193b19af86d4758b2356754d45d4"
+      ],
+      "text": "直前結果 8fb31efbbdbd6a64fafd71da7df8cb476c486348b69d3387bcaf9d5894fa1a8b の関係根拠を再確認し、主語「ココ」とscope「biology」を復元しました。\n前提を保存しました: ココは哺乳類である。\n前提ID: fact:f9055dc88ff6fda471e1174206415d70b002193b19af86d4758b2356754d45d4\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "content_plan_id": "1d311aa6dc46bbda28d2de69f2af19f7b28972805ba59cd87bce6dca3b702afb"
+    },
+    {
+      "input_id": "depth-assertion-three",
+      "request": "それは爬虫類です",
+      "input_sha256": "593b2a18ae7c4cf76002856f5bdbd4a457ebd52bbb32f3b0de6d2e476bc0ac6c",
+      "exit_code": 0,
+      "lifecycle": "COMMIT",
+      "id": "e09bde312a6a8e2224daf4bae6d7b0b36d9cc012d1c6c0e066db91c7e211efd0",
+      "reason": null,
+      "dependencies": [
+        "805d3ecd982367d1bb8f570bdd0f5a4f550533a33bb2938875716092d9334094",
+        "fact:c6e435d528bbd34c122f6aca0a02876d7e2c94ea8ce4116d6286f38f781ea5b2"
+      ],
+      "text": "直前結果 805d3ecd982367d1bb8f570bdd0f5a4f550533a33bb2938875716092d9334094 の関係根拠を再確認し、主語「ココ」とscope「biology」を復元しました。\n前提を保存しました: ココは爬虫類である。\n前提ID: fact:c6e435d528bbd34c122f6aca0a02876d7e2c94ea8ce4116d6286f38f781ea5b2\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+      "content_plan_id": "cda65d063a94bf598e047bddc91578c96b6b21683a3b1bf91bfa31a2df2f6871"
+    }
+  ],
+  "memory_revision": 5,
+  "facts": [
+    {
+      "id": "fact:8797df56e572b35e268f894f888abc1eb19b23bf13257bf2804a955841e9f313",
+      "source_input": "4d7bf9d395c436a35d38997641e6b20f9136cd8a582695d49828a20afd582437",
+      "valid": true,
+      "subject": "ココ",
+      "predicate": "is",
+      "object": "鳥",
+      "scope": "biology"
+    },
+    {
+      "id": "fact:17e771af84a85bd2a6a78263ba11565ef81e3024e2f43bfd4a0e9a1e0bd53a31",
+      "source_input": "8fb31efbbdbd6a64fafd71da7df8cb476c486348b69d3387bcaf9d5894fa1a8b",
+      "valid": true,
+      "subject": "ココ",
+      "predicate": "is",
+      "object": "温血動物",
+      "scope": "biology"
+    },
+    {
+      "id": "fact:f9055dc88ff6fda471e1174206415d70b002193b19af86d4758b2356754d45d4",
+      "source_input": "805d3ecd982367d1bb8f570bdd0f5a4f550533a33bb2938875716092d9334094",
+      "valid": true,
+      "subject": "ココ",
+      "predicate": "is",
+      "object": "哺乳類",
+      "scope": "biology"
+    },
+    {
+      "id": "fact:c6e435d528bbd34c122f6aca0a02876d7e2c94ea8ce4116d6286f38f781ea5b2",
+      "source_input": "e09bde312a6a8e2224daf4bae6d7b0b36d9cc012d1c6c0e066db91c7e211efd0",
+      "valid": true,
+      "subject": "ココ",
+      "predicate": "is",
+      "object": "爬虫類",
+      "scope": "biology"
+    }
+  ],
+  "outcome": "SCOPE_BOUNDARY_MISMATCH",
+  "preserved_pre_correction": true
+}

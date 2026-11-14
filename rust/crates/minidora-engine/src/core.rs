@@ -3560,7 +3560,7 @@ impl Engine {
                     );
                 }
                 let mut memory = self.store.load_memory(actor)?;
-                let previous_assertion_fact = previous_contextual_assertion_fact(
+                let previous_assertion = previous_contextual_assertion_fact(
                     &self.store,
                     actor,
                     &request.case_id,
@@ -3568,7 +3568,11 @@ impl Engine {
                     &memory,
                 )?;
                 let (anchor, expected_proof_dependencies, adopted_conclusion, assertion_fact_id) =
-                    if let Some(fact) = previous_assertion_fact {
+                    if let Some(previous_assertion) = previous_assertion {
+                        let PreviousContextualAssertion {
+                            fact,
+                            has_contextual_assertion_parent,
+                        } = previous_assertion;
                         if !fact.valid {
                             return self.stop(
                                 &mut state,
@@ -3583,6 +3587,14 @@ impl Engine {
                                 Lifecycle::Suspend,
                                 "MISSING_RELATION_CONTEXT",
                                 "直前の前提自体に未解決の代名詞主語が残っています。主語を推測しません。",
+                            );
+                        }
+                        if has_contextual_assertion_parent {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTEXT_CHAIN_DEPTH_LIMIT",
+                                "代名詞主語の継承は、型付き関係回答に続く一段までです。三つ目の連続した代名詞前提は保存していません。",
                             );
                         }
                         (
@@ -5704,13 +5716,18 @@ pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposit
     }
 }
 
+struct PreviousContextualAssertion {
+    fact: Fact,
+    has_contextual_assertion_parent: bool,
+}
+
 fn previous_contextual_assertion_fact(
     store: &Store,
     actor: &str,
     case: &str,
     previous: &ResultRecord,
     memory: &MemoryState,
-) -> Result<Option<Fact>> {
+) -> Result<Option<PreviousContextualAssertion>> {
     let Some((_, bundle)) =
         store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
     else {
@@ -5744,13 +5761,21 @@ fn previous_contextual_assertion_fact(
     let Some(context_result_ref) = bundle.meaning.context_result_ref.as_ref() else {
         return Ok(None);
     };
+    let has_contextual_assertion_parent = memory.facts.iter().any(|fact| {
+        fact.source_input == context_result_ref.as_str()
+            && fact.guarantee == Guarantee::UserPremise
+            && fact.dependencies.is_empty()
+    });
     let expected_dependencies = vec![context_result_ref.clone(), fact.id.clone()];
     if previous.guarantee != Guarantee::UserPremise
         || previous.dependencies != expected_dependencies
     {
         return Ok(None);
     }
-    Ok(Some((*fact).clone()))
+    Ok(Some(PreviousContextualAssertion {
+        fact: (*fact).clone(),
+        has_contextual_assertion_parent,
+    }))
 }
 
 pub(crate) fn previous_relation_meaning(
