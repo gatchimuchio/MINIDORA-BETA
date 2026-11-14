@@ -6815,6 +6815,201 @@ mod core_construction_observation_tests {
     }
 
     #[test]
+    fn direct_english_assertion_source_roles_follow_the_fact_into_reopened_proofs() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-english-assertion-source-proof-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated English assertion provenance state");
+        let actor = "english-assertion-source-proof-actor";
+        let assertion_request = RequestEnvelope::new(
+            "english-assertion-source-proof-case",
+            "english-assertion-source-proof-input",
+            actor,
+            "[scope=biology]Coco is a bird",
+        );
+        let mut engine = Engine::open(&directory).expect("open Core");
+        let assertion = engine
+            .execute(actor, assertion_request.clone())
+            .expect("execute sealed English assertion");
+        assert_eq!(assertion.lifecycle, Lifecycle::Commit, "{assertion:?}");
+        assert_eq!(assertion.guarantee, Guarantee::UserPremise);
+        let assertion_case = engine
+            .latest(actor, &assertion_request.case_id)
+            .expect("load English assertion case")
+            .expect("English assertion case exists");
+        let assertion_bundle = assertion_case
+            .bundle
+            .as_ref()
+            .expect("English assertion bundle is sealed");
+        let expected_evidence = input::assertion_source_evidence(assertion_bundle)
+            .expect("build sealed English source evidence")
+            .expect("English copular roles are complete and unambiguous");
+        assert_eq!(expected_evidence.parser_version, input::PARSER_VERSION);
+        for (role, expected) in [
+            ("/Assert/proposition/scope", "biology"),
+            ("/Assert/proposition/subject", "Coco"),
+            ("/Assert/proposition/predicate", "is"),
+            ("/Assert/proposition/article", "a"),
+            ("/Assert/proposition/object", "bird"),
+        ] {
+            let spans = expected_evidence
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing exact English role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous source role {role}");
+            let span = &spans[0];
+            assert_eq!(span.text, expected, "wrong source value for {role}");
+            assert_eq!(
+                assertion_request.text.get(span.start..span.end),
+                Some(expected),
+                "role {role} does not point into the original UTF-8 request"
+            );
+        }
+
+        let mut incomplete_bundle = assertion_bundle.clone();
+        incomplete_bundle
+            .meaning
+            .source_roles
+            .remove("/Assert/proposition/article");
+        assert!(
+            input::assertion_source_evidence(&incomplete_bundle)
+                .expect("validate missing article role")
+                .is_none(),
+            "incomplete English source roles are not promoted into Fact evidence"
+        );
+
+        let fact_id = assertion.dependencies[0].clone();
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("load Core memory after English assertion");
+        let premise = memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("English assertion Fact is in Core memory");
+        assert_eq!(premise.source_evidence, Some(expected_evidence.clone()));
+        let proposition = premise.proposition.clone();
+
+        let negative_request = RequestEnvelope::new(
+            "english-assertion-source-proof-negative-case",
+            "english-assertion-source-proof-negative-input",
+            actor,
+            "Mice are not mammals",
+        );
+        let negative_result = engine
+            .execute(actor, negative_request.clone())
+            .expect("execute English negative assertion with are");
+        assert_eq!(negative_result.lifecycle, Lifecycle::Commit);
+        let negative_case = engine
+            .latest(actor, &negative_request.case_id)
+            .expect("load negative English case")
+            .expect("negative English case exists");
+        let negative_bundle = negative_case
+            .bundle
+            .as_ref()
+            .expect("sealed negative input");
+        let negative_evidence = input::assertion_source_evidence(negative_bundle)
+            .expect("build negative English source evidence")
+            .expect("are/not roles are exact");
+        assert_eq!(
+            negative_evidence.source_roles["/Assert/proposition/predicate"][0].text,
+            "are"
+        );
+        assert_eq!(
+            negative_evidence.source_roles["/Assert/proposition/negation"][0].text,
+            "not"
+        );
+        let negative_fact = engine
+            .store
+            .load_memory(actor)
+            .expect("load memory with negative English assertion")
+            .facts
+            .into_iter()
+            .find(|fact| negative_result.dependencies.contains(&fact.id))
+            .expect("negative assertion Fact is present");
+        assert_eq!(
+            negative_fact.source_evidence,
+            Some(negative_evidence.clone())
+        );
+
+        drop(engine);
+        let mut reopened = Engine::open(&directory).expect("reopen Core state");
+        let restored_memory = reopened
+            .store
+            .load_memory(actor)
+            .expect("restore actor memory");
+        let restored_premise = restored_memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("restore English source-backed premise");
+        assert_eq!(
+            restored_premise.source_evidence,
+            Some(expected_evidence.clone()),
+            "the reopened memory retains exact English source spans"
+        );
+        let restored_negative = restored_memory
+            .facts
+            .iter()
+            .find(|fact| negative_result.dependencies.contains(&fact.id))
+            .expect("restore negative English source-backed premise");
+        assert_eq!(
+            restored_negative.source_evidence,
+            Some(negative_evidence.clone()),
+            "the reopened memory retains are/not source spans"
+        );
+        let proof = relations::query(&restored_memory, &proposition, 32)
+            .expect("query English source-backed premise");
+        assert_eq!(proof.status, "SUPPORTED");
+        assert_eq!(proof.facts.len(), 1);
+        assert_eq!(
+            proof.facts[0].source_evidence,
+            Some(expected_evidence.clone())
+        );
+        assert!(relations::answer_dependencies(&proof).contains(&fact_id));
+
+        let ask = RequestEnvelope::new(
+            "english-assertion-source-proof-case",
+            "english-assertion-source-proof-followup",
+            actor,
+            "[scope=biology]Coco is a bird?",
+        );
+        let answer = reopened
+            .execute(actor, ask)
+            .expect("Core consumes the restored premise through its normal Ask route");
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert_eq!(answer.guarantee, Guarantee::UserPremise);
+        assert!(answer.dependencies.contains(&fact_id));
+
+        println!(
+            "B30_ENGLISH_ASSERTION_SOURCE_PROOF={}",
+            serde_json::to_string(&serde_json::json!({
+                "source": assertion_request.text,
+                "parser_version": expected_evidence.parser_version,
+                "raw_sha256": expected_evidence.raw_sha256,
+                "semantic_signature": expected_evidence.semantic_signature,
+                "source_roles": expected_evidence.source_roles,
+                "fact_id": fact_id,
+                "assertion_lifecycle": assertion.lifecycle,
+                "article_role_required": true,
+                "incomplete_role_map_not_projected": true,
+                "negative_are_source_roles": negative_evidence.source_roles,
+                "memory_reopened_with_same_source_evidence": true,
+                "query_proof_returns_source_evidence": true,
+                "normal_core_followup_consumes_fact": answer.dependencies.contains(&fact_id),
+                "outside_world_truth_verified": false,
+                "external_network_or_effects": false
+            }))
+            .expect("serialize B30 English assertion source proof observation")
+        );
+        drop(reopened);
+        fs::remove_dir_all(directory).expect("remove isolated English assertion provenance state");
+    }
+
+    #[test]
     fn direct_assertion_source_roles_follow_the_fact_into_reopened_proofs() {
         let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(

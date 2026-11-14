@@ -1,0 +1,159 @@
+{
+  "observation_id": "MB-BUILD-20261114-INPUT-10-B30_DIRECT_ENGLISH_ASSERTION_SOURCE_TO_REOPENED_PROOF",
+  "status": "PASS",
+  "base_commit": "4a71d1bff750810193217797f49d9bb004b01e6c",
+  "target": "MINIDORA-BETA Rust successor Input -> Core direct English copular Assertion source provenance",
+  "scope": "Already-supported, direct English copular Assert requests with bounded is/are, optional lowercase a/an, explicit or default scope, and optional not. No general English grammar or contextual assertion change.",
+  "route": "Original English request -> sealed parser v83 source roles at exact UTF-8 byte ranges -> Core validates the full role map against the same parsed proposition -> direct USER_PREMISE Fact receives SealedSourceEvidence -> Store revalidates the sealed input after Engine reopen -> relation proof returns the same evidence -> ordinary same-case English Ask consumes the Fact ID.",
+  "observations": [
+    {
+      "language": "English",
+      "input": "[scope=biology]Coco is a bird",
+      "proposition": {
+        "subject": "Coco",
+        "predicate": "is",
+        "object": "bird",
+        "negative": false,
+        "scope": "biology"
+      },
+      "source_roles": {
+        "/Assert/proposition/scope": {
+          "start": 7,
+          "end": 14,
+          "text": "biology"
+        },
+        "/Assert/proposition/subject": {
+          "start": 15,
+          "end": 19,
+          "text": "Coco"
+        },
+        "/Assert/proposition/predicate": {
+          "start": 20,
+          "end": 22,
+          "text": "is"
+        },
+        "/Assert/proposition/article": {
+          "start": 23,
+          "end": 24,
+          "text": "a"
+        },
+        "/Assert/proposition/object": {
+          "start": 25,
+          "end": 29,
+          "text": "bird"
+        }
+      },
+      "assertion_lifecycle": "COMMIT",
+      "guarantee": "USER_PREMISE",
+      "fact_source_evidence_matches_sealed_input": true,
+      "incomplete_article_role_map_not_projected": true,
+      "reopened_fact_source_evidence_matches": true,
+      "reopened_proof": "SUPPORTED",
+      "normal_followup": "[scope=biology]Coco is a bird?",
+      "followup_consumes_same_fact_id": true
+    },
+    {
+      "language": "English",
+      "input": "Mice are not mammals",
+      "source_roles": {
+        "/Assert/proposition/subject": {
+          "start": 0,
+          "end": 4,
+          "text": "Mice"
+        },
+        "/Assert/proposition/predicate": {
+          "start": 5,
+          "end": 8,
+          "text": "are"
+        },
+        "/Assert/proposition/negation": {
+          "start": 9,
+          "end": 12,
+          "text": "not"
+        },
+        "/Assert/proposition/object": {
+          "start": 13,
+          "end": 20,
+          "text": "mammals"
+        }
+      },
+      "fact_source_evidence_matches_sealed_input": true,
+      "reopened_fact_source_evidence_matches": true
+    }
+  ],
+  "parser_revision": "declarative-ja-en-v83-direct-english-assertion-source-ranges",
+  "focused_test": {
+    "command": "cargo test -p minidora-engine --locked direct_english_assertion_source_roles_follow_the_fact_into_reopened_proofs -- --nocapture",
+    "passed": 1,
+    "failed": 0,
+    "exit_code": 0,
+    "log": "/workspace/.minidora-cloud/b30-english-assertion-source/01-focused-route-final.log"
+  },
+  "engine_package_tests": {
+    "command": "cargo test -p minidora-engine --locked",
+    "unit_tests_passed": 248,
+    "integration_test_cases_passed": 12,
+    "integration_harnesses_launched": 11,
+    "total_passed": 260,
+    "failed": 0,
+    "ignored": 0,
+    "doc_tests": 0,
+    "exit_code": 0,
+    "log": "/workspace/.minidora-cloud/b30-english-assertion-source/engine-tests.log"
+  },
+  "workspace_gates": {
+    "cargo_fmt_all_check": {
+      "status": "PASS",
+      "exit_code": 0,
+      "log": "/workspace/.minidora-cloud/b30-english-assertion-source/03-fmt-check.log"
+    },
+    "cargo_check_workspace_all_targets_locked": {
+      "status": "PASS",
+      "exit_code": 0,
+      "log": "/workspace/.minidora-cloud/b30-english-assertion-source/workspace-check.log"
+    },
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": {
+      "status": "PASS",
+      "exit_code": 0,
+      "log": "/workspace/.minidora-cloud/b30-english-assertion-source/clippy.log"
+    },
+    "cargo_build_workspace_locked": {
+      "status": "PASS",
+      "exit_code": 0,
+      "log": "/workspace/.minidora-cloud/b30-english-assertion-source/workspace-build.log"
+    },
+    "git_diff_check": {
+      "status": "PASS",
+      "exit_code": 0,
+      "log": "/workspace/.minidora-cloud/b30-english-assertion-source/07-diff-check.log"
+    },
+    "environment": "Linux x86_64-unknown-linux-gnu, rustc 1.99.1 (58cf8f9c3 2026-10-13), cargo 1.99.1 (5f94df478 2026-08-27)",
+    "environment_log": "/workspace/.minidora-cloud/b30-english-assertion-source/08-environment.log"
+  },
+  "source_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "2936e8233af508ce9ea1fc0e81d1743df90796210ff47fa64958699d7d59fd4b",
+    "rust/crates/minidora-engine/src/core.rs": "88da915afec24f72a0530ed709cbedab196412b257c9b04af2ac9fa291ed891e",
+    "rust/audit/requirements.tsv": "479cd0696d39064261eb14016cfe09124ba52ee39291d711f331cc30f126bd84",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "64d2d8e609414bcf98d712a58f8e68de67b6ee4b0c8e0d4372cb7b400d97db0a"
+  },
+  "change_boundary": {
+    "production_behavior_changed": true,
+    "parser_version_changed": true,
+    "database_schema_changed": false,
+    "dependency_or_lockfile_changed": false,
+    "external_effects": false,
+    "changed_scope": "Adds exact original-source evidence for bounded direct English is/are Assert forms and carries the evidence through Core Fact save, Store reopen, proof and ordinary follow-up. Contextual assertions, general grammar and truth verification are outside this change."
+  },
+  "acceptance_status": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_93_requirements": "UNVERIFIED"
+  },
+  "not_established": [
+    "Outside-world truth of user-provided assertions.",
+    "Arbitrary English copular grammar, plural/contextual subjects, general co-reference, or all English surface forms.",
+    "Full workspace all-features runtime, CLI/browser/output delivery, other operating systems, independent QA, or complete A04/A15/E08 and 93-requirement acceptance."
+  ],
+  "release_status": "NOT_RELEASED"
+}
