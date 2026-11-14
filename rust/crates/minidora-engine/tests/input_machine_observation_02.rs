@@ -1,5 +1,6 @@
 use minidora_domain::{Guarantee, Intent, Lifecycle, RequestEnvelope, SourceSpan};
 use minidora_engine::Engine;
+use minidora_engine::input::PARSER_VERSION;
 use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,10 +62,7 @@ fn parsed_relation_roles_keep_exact_source_ranges_across_persisted_input_replay(
                 && proposition.negative
                 && proposition.scope == "materials-lab"
     ));
-    assert_eq!(
-        bundle.meaning.parser_version,
-        "declarative-ja-en-v79-contextual-assertion-source-ranges"
-    );
+    assert_eq!(bundle.meaning.parser_version, PARSER_VERSION);
     let source = &bundle.request.text;
     let roles = &bundle.meaning.source_roles;
     let subject = exact_role_span(source, roles, "/Assert/proposition/subject", "Nera");

@@ -42,7 +42,7 @@ B26は、B25で既に実装されているv79経路の追加実観測・回帰te
 | コマンド | 結果 |
 |---|---|
 | `cargo test -p minidora-engine --locked --lib contextual_negative_japanese_transitive_assertion_preserves_halfwidth_surface_roles_after_reopen -- --nocapture` | PASS: 同case anchor→seal→Fact→reopen→proof→後続Core Ask |
-| `cargo test -p minidora-engine --locked` | PASS: 242 unit + 26 integration = 268 passed、0 failed; doc tests 0 |
+| `cargo test -p minidora-engine --locked` | PASS: 242 unit + 12 integration = 254 passed、0 failed; doc tests 0 |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo check --workspace --all-targets --locked` | PASS |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS |

@@ -394,7 +394,11 @@ pub(crate) fn assert_fact_with_source_evidence(
                 .source_roles
                 .keys()
                 .all(|role| role.starts_with("/AssertPreviousRelation/proposition/"));
-        let spans_are_well_formed = one_assertion_family
+        let one_correction_family = evidence
+            .source_roles
+            .keys()
+            .all(|role| role.starts_with("/CorrectPremise/"));
+        let spans_are_well_formed = (one_assertion_family || one_correction_family)
             && evidence.source_roles.iter().all(|(_, spans)| {
                 !spans.is_empty()
                     && spans.iter().all(|span| {

@@ -1,0 +1,108 @@
+{
+  "observation_id": "MB-BUILD-20261114-INPUT-07-B27_JAPANESE_CORRECTION_SOURCE_TO_BOTH_FACTS",
+  "status": "PASS",
+  "base_commit": "b1a635b53b179e22ea3f068c609541cf47125876",
+  "target": "MINIDORA-BETA Rust Core Japanese premise-correction input path",
+  "scope": "One in-process Engine::execute route for a scoped direct Japanese copular correction with one explicit subject, a superseded relation, the ではなく correction marker, and one replacement relation.",
+  "route": "original correction text -> sealed v80 CorrectPremise and exact role spans -> Core validates an existing same-scope premise target -> one memory CAS writes the negative superseded Fact and replacement Fact with shared sealed source evidence -> Store revalidates the source link after Engine reopen -> SUPPORTED proofs for both facts -> ordinary Core Ask consumes the replacement Fact ID",
+  "core_route_observation": {
+    "input": "[scope=biology]訂正: ココは哺乳類ではなく鳥です。",
+    "parser_version": "declarative-ja-en-v80-correction-source-ranges",
+    "intent": "CorrectPremise",
+    "superseded_relation": {
+      "subject": "ココ",
+      "predicate": "is",
+      "object": "哺乳類",
+      "scope": "biology",
+      "negative": false
+    },
+    "replacement_relation": {
+      "subject": "ココ",
+      "predicate": "is",
+      "object": "鳥",
+      "scope": "biology",
+      "negative": false
+    },
+    "corrected_negative_fact_id": "fact:af15edffecabb1f8487e5c4d94c2260c5d08d30a76ff243abc6b52be85aafafa",
+    "replacement_fact_id": "fact:ae4f7bedf7b93a079227d6b6d0826f7fafed335f498cc896fc9d93c60589241a",
+    "both_facts_link_same_source_evidence": true,
+    "input_fingerprint": "7ccea3411a78f0e2a69b9ec387d37c5928430f9932439bfcdf4953a381913713",
+    "raw_sha256": "292bab17a8db19be2a7778b32b1d5b1d2f6ac17f28c9828a32dba65bffacc453",
+    "bundle_fingerprint": "d4c4d4e80d665d66842bd8c42946dd77ea6f23b08feda49ebda33f0e12df239b",
+    "semantic_signature": "b035a4fd1be5e6c262d58466ff732ad753a2119a9e80edad68d5d1a006705c03",
+    "source_roles": {
+      "/CorrectPremise/correction_marker": [
+        {"start": 41, "end": 53, "text": "ではなく"}
+      ],
+      "/CorrectPremise/replacement_object": [
+        {"start": 53, "end": 56, "text": "鳥"}
+      ],
+      "/CorrectPremise/scope": [
+        {"start": 7, "end": 14, "text": "biology"}
+      ],
+      "/CorrectPremise/subject": [
+        {"start": 23, "end": 29, "text": "ココ"}
+      ],
+      "/CorrectPremise/subject_particle": [
+        {"start": 29, "end": 32, "text": "は"}
+      ],
+      "/CorrectPremise/superseded_object": [
+        {"start": 32, "end": 41, "text": "哺乳類"}
+      ]
+    },
+    "reopened_negative_proof": "SUPPORTED",
+    "reopened_replacement_proof": "SUPPORTED",
+    "normal_followup_consumes_replacement_fact": true,
+    "source_roles_are_themselves_world_truth": false,
+    "external_network_or_effects": false
+  },
+  "focused_tests": {
+    "command": "cargo test -p minidora-engine --locked --lib japanese_premise_correction -- --nocapture",
+    "passed": 2,
+    "failed": 0,
+    "log": "14-focused-final.log"
+  },
+  "engine_package_tests": {
+    "command": "cargo test -p minidora-engine --locked",
+    "unit_tests_passed": 244,
+    "integration_test_cases_passed": 12,
+    "total_passed": 256,
+    "failed": 0,
+    "ignored": 0,
+    "doc_tests": 0,
+    "log": "15-engine-package-final.log"
+  },
+  "workspace_gates": {
+    "cargo_fmt_all_check": {"status": "PASS", "exit_code": 0},
+    "cargo_check_workspace_all_targets_locked": {"status": "PASS", "exit_code": 0},
+    "cargo_clippy_workspace_all_targets_locked_deny_warnings": {"status": "PASS", "exit_code": 0},
+    "cargo_build_workspace_locked": {"status": "PASS", "exit_code": 0},
+    "git_diff_check": {"status": "PASS", "exit_code": 0, "log": "20-diff-check-final.log"},
+    "environment": "Linux x86_64-unknown-linux-gnu, Rust/Cargo 1.99.1"
+  },
+  "historical_count_correction": {
+    "b25_corrected_total": 253,
+    "b26_corrected_total": 254,
+    "basis": "Cargo launched 12 integration test cases in each saved package log. Fourteen subprocess worker results from the engine unit tests had previously been miscounted as integration cases.",
+    "test_outcomes_changed": false
+  },
+  "change_boundary": {
+    "production_behavior_changed": true,
+    "parser_version_changed": true,
+    "database_schema_changed": false,
+    "dependency_or_lockfile_changed": false,
+    "changed_scope": "Added exact source roles and Store-revalidated source evidence for the supported direct Japanese premise-correction route; both correction facts retain that evidence."
+  },
+  "acceptance_status": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_93_requirements": "UNVERIFIED"
+  },
+  "not_established": [
+    "English correction source-evidence projection or general Japanese correction grammar.",
+    "Ambiguous, omitted, quoted, multi-clause, or arbitrary relation ownership beyond this exact grammar.",
+    "Outside-world truth of the user-provided old or replacement premise.",
+    "Full workspace all-features runtime, CLI/UI/output delivery, other operating systems, independent QA, or full A04/A15/E08 acceptance."
+  ]
+}

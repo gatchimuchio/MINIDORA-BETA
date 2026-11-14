@@ -75,8 +75,8 @@
   "engine_package_tests": {
     "command": "cargo test -p minidora-engine --locked",
     "unit_tests_passed": 242,
-    "integration_test_cases_passed": 26,
-    "total_passed": 268,
+    "integration_test_cases_passed": 12,
+    "total_passed": 254,
     "failed": 0,
     "ignored": 0,
     "doc_tests": 0,

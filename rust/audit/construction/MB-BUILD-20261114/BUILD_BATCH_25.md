@@ -43,7 +43,7 @@ Parser versionは`declarative-ja-en-v79-contextual-assertion-source-ranges`へ�
 | コマンド | 結果 |
 |---|---|
 | `cargo test -p minidora-engine --locked --lib contextual_japanese_assertion_source_roles_follow_the_fact_into_reopened_proofs -- --nocapture` | PASS: focused Core route。copular/transitive、evidence、reopen、proof、follow-up、ambiguous role、missing-contextを観測 |
-| `cargo test -p minidora-engine --locked` | PASS: 241 unit + 26 integration = 267 passed、0 failed; doc tests 0 |
+| `cargo test -p minidora-engine --locked` | PASS: 241 unit + 12 integration = 253 passed、0 failed; doc tests 0 |
 | `cargo fmt --all -- --check` | PASS |
 | `cargo check --workspace --all-targets --locked` | PASS |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | PASS |

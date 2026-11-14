@@ -1,5 +1,6 @@
 use minidora_domain::{Guarantee, Intent, Lifecycle, RequestEnvelope};
 use minidora_engine::Engine;
+use minidora_engine::input::PARSER_VERSION;
 use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,10 +44,7 @@ fn concise_arithmetic_question_reaches_core_once_and_replays_its_versioned_resul
         &bundle.meaning.intent,
         Intent::Calculate { expression } if expression == "6+7"
     ));
-    assert_eq!(
-        bundle.meaning.parser_version,
-        "declarative-ja-en-v79-contextual-assertion-source-ranges"
-    );
+    assert_eq!(bundle.meaning.parser_version, PARSER_VERSION);
     assert_eq!(bundle.request.input_version, 1);
     assert_eq!(bundle.request.text, "６＋７は？");
     assert_eq!(bundle.meaning.spans.len(), 1);

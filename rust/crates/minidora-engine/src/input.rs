@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v79-contextual-assertion-source-ranges";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v80-correction-source-ranges";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -625,13 +625,168 @@ fn japanese_transitive_assertion_source_roles_with_root(
     Ok(Some(roles))
 }
 
-/// Project only a complete, unambiguous supported Japanese assertion role map
-/// into a direct-premise evidence record. A contextual assertion records its
-/// source pronoun here; the sealed bundle links that pronoun to the actual
-/// preceding result used by Core to restore the proposition subject.
+fn japanese_premise_correction_source_roles(
+    text: &str,
+    expected: &Intent,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    let Intent::CorrectPremise {
+        superseded,
+        replacement,
+    } = expected
+    else {
+        return Ok(None);
+    };
+    if superseded.predicate != "is"
+        || replacement.predicate != "is"
+        || superseded.negative
+        || replacement.negative
+        || superseded.subject != replacement.subject
+        || superseded.scope != replacement.scope
+        || superseded.object == replacement.object
+    {
+        return Ok(None);
+    }
+
+    let trimmed = text.trim();
+    let source_offset = text.len() - text.trim_start().len();
+    let statement = terminal_trim(trimmed);
+    let (body, body_offset, scope_span) =
+        if let Some(scoped) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(statement) {
+            let scope_capture = scoped.get(1).expect("scope capture group exists");
+            let body_capture = scoped.get(2).expect("statement capture group exists");
+            let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
+                return Ok(None);
+            };
+            if scope_span.text != superseded.scope {
+                return Ok(None);
+            }
+            (
+                body_capture.as_str(),
+                source_offset + body_capture.start(),
+                Some(scope_span),
+            )
+        } else {
+            if superseded.scope != "default" {
+                return Ok(None);
+            }
+            (statement, source_offset, None)
+        };
+
+    let Some(correction) =
+        regex(r"^(?:(?:訂正|訂正します)[：:]\s*)?(.+?)(は|が)(.+?)(ではなく)(.+)$")?.captures(body)
+    else {
+        return Ok(None);
+    };
+    let subject_capture = correction.get(1).expect("subject capture group exists");
+    let particle_capture = correction
+        .get(2)
+        .expect("subject-particle capture group exists");
+    let superseded_capture = correction
+        .get(3)
+        .expect("superseded-object capture group exists");
+    let marker_capture = correction
+        .get(4)
+        .expect("correction-marker capture group exists");
+    let replacement_capture = correction
+        .get(5)
+        .expect("replacement-object capture group exists");
+    let Some(subject_span) = captured_source_span(text, body_offset, subject_capture) else {
+        return Ok(None);
+    };
+    let Some(particle_span) = captured_source_span(text, body_offset, particle_capture) else {
+        return Ok(None);
+    };
+    let Some(superseded_span) = captured_source_span(text, body_offset, superseded_capture) else {
+        return Ok(None);
+    };
+    let Some(marker_span) = captured_source_span(text, body_offset, marker_capture) else {
+        return Ok(None);
+    };
+    let replacement_raw = replacement_capture.as_str();
+    let replacement_leading = replacement_raw.len() - replacement_raw.trim_start().len();
+    let replacement_value = replacement_raw.trim();
+    let replacement_value = ["です", "である", "だ"]
+        .iter()
+        .find_map(|suffix| replacement_value.strip_suffix(suffix))
+        .unwrap_or(replacement_value)
+        .trim_end();
+    if replacement_value.is_empty() {
+        return Ok(None);
+    }
+    let replacement_start = body_offset + replacement_capture.start() + replacement_leading;
+    let Some(replacement_span) = source_span_at(
+        text,
+        replacement_start,
+        replacement_start + replacement_value.len(),
+    ) else {
+        return Ok(None);
+    };
+
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    if !matches!(particle_span.text.as_str(), "は" | "が")
+        || normalized(&subject_span.text) != normalized(&superseded.subject)
+        || normalized(&subject_span.text) != normalized(&replacement.subject)
+        || normalized(&superseded_span.text) != normalized(&superseded.object)
+        || normalized(&replacement_span.text) != normalized(&replacement.object)
+        || marker_span.text != "ではなく"
+        || premise_correction_intent(text)?.as_ref() != Some(expected)
+    {
+        return Ok(None);
+    }
+
+    let mut roles = BTreeMap::from([
+        ("/CorrectPremise/subject".into(), vec![subject_span]),
+        (
+            "/CorrectPremise/subject_particle".into(),
+            vec![particle_span],
+        ),
+        (
+            "/CorrectPremise/superseded_object".into(),
+            vec![superseded_span],
+        ),
+        (
+            "/CorrectPremise/correction_marker".into(),
+            vec![marker_span],
+        ),
+        (
+            "/CorrectPremise/replacement_object".into(),
+            vec![replacement_span],
+        ),
+    ]);
+    if let Some(scope_span) = scope_span {
+        roles.insert("/CorrectPremise/scope".into(), vec![scope_span]);
+    }
+    Ok(Some(roles))
+}
+
+/// Project only a complete, unambiguous supported Japanese direct-premise role
+/// map into evidence. A contextual assertion records its source pronoun here;
+/// the sealed bundle links that pronoun to the prior result used by Core.
+/// Corrections retain one shared role map on their negative and replacement
+/// facts so the exact superseded and replacement surfaces remain distinct.
 pub(crate) fn assertion_source_evidence(
     bundle: &InputBundle,
 ) -> Result<Option<SealedSourceEvidence>> {
+    if let Intent::CorrectPremise { .. } = &bundle.meaning.intent {
+        let Some(source_roles) =
+            japanese_premise_correction_source_roles(&bundle.request.text, &bundle.meaning.intent)?
+        else {
+            return Ok(None);
+        };
+        if bundle.meaning.source_roles != source_roles {
+            return Ok(None);
+        }
+        return Ok(Some(SealedSourceEvidence {
+            evidence_version: SOURCE_EVIDENCE_VERSION.into(),
+            input_fingerprint: identity(&bundle.request)?,
+            bundle_fingerprint: bundle.fingerprint.clone(),
+            raw_sha256: bundle.raw_sha256.clone(),
+            parser_version: bundle.meaning.parser_version.clone(),
+            semantic_signature: bundle.semantic_signature.clone(),
+            source_roles,
+        }));
+    }
+
     let (proposition, role_root, contextual) = match &bundle.meaning.intent {
         Intent::Assert { proposition } => (proposition, "/Assert/proposition", false),
         Intent::AssertPreviousRelation { proposition, .. }
@@ -844,6 +999,11 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
             proposition,
             "/AssertPreviousRelation/proposition",
         )?
+    {
+        return Ok(source_roles);
+    }
+    if let Intent::CorrectPremise { .. } = intent
+        && let Some(source_roles) = japanese_premise_correction_source_roles(text, intent)?
     {
         return Ok(source_roles);
     }
@@ -4599,10 +4759,7 @@ mod tests {
             Intent::Calculate { expression } if expression == "6+7"
         ));
         assert_eq!(bundle.request.input_version, 3);
-        assert_eq!(
-            bundle.meaning.parser_version,
-            "declarative-ja-en-v79-contextual-assertion-source-ranges"
-        );
+        assert_eq!(bundle.meaning.parser_version, PARSER_VERSION);
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());
         assert_eq!(bundle.meaning.spans[0].text, request.text);
@@ -4678,6 +4835,60 @@ mod tests {
         }
         assert_eq!(roles["/Assert/proposition/predicate"].len(), 1);
     }
+
+    #[test]
+    fn japanese_premise_correction_roles_keep_old_new_values_at_distinct_source_ranges() {
+        let text = "[scope=biology]訂正: ココは哺乳類ではなく鳥です。";
+        let request = RequestEnvelope::new("c", "i", "actor", text);
+        let bundle = seal(&request, None).unwrap();
+        assert!(matches!(
+            &bundle.meaning.intent,
+            Intent::CorrectPremise { superseded, replacement }
+                if superseded.subject == "ココ"
+                    && superseded.object == "哺乳類"
+                    && replacement.subject == "ココ"
+                    && replacement.object == "鳥"
+        ));
+        assert_eq!(bundle.meaning.parser_version, PARSER_VERSION);
+        let expected = [
+            ("/CorrectPremise/subject", "ココ"),
+            ("/CorrectPremise/subject_particle", "は"),
+            ("/CorrectPremise/superseded_object", "哺乳類"),
+            ("/CorrectPremise/correction_marker", "ではなく"),
+            ("/CorrectPremise/replacement_object", "鳥"),
+            ("/CorrectPremise/scope", "biology"),
+        ];
+        assert_eq!(bundle.meaning.source_roles.len(), expected.len());
+        for (role, value) in expected {
+            let spans = bundle
+                .meaning
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing source role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous source role {role}");
+            assert_eq!(spans[0].text, value, "incorrect value for {role}");
+            assert_eq!(
+                text.get(spans[0].start..spans[0].end),
+                Some(value),
+                "source role {role} must point at the original UTF-8 bytes"
+            );
+        }
+        assert!(
+            assertion_source_evidence(&bundle)
+                .unwrap()
+                .is_some_and(|evidence| evidence.source_roles == bundle.meaning.source_roles)
+        );
+
+        let mut tampered = bundle;
+        tampered
+            .meaning
+            .source_roles
+            .get_mut("/CorrectPremise/replacement_object")
+            .unwrap()[0]
+            .text = "哺乳類".into();
+        assert!(assertion_source_evidence(&tampered).unwrap().is_none());
+    }
+
     #[test]
     fn old_meaning_ir_without_optional_source_roles_keeps_its_canonical_bytes() {
         let old_json = serde_json::json!({
