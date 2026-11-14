@@ -151,6 +151,11 @@ pub struct Fact {
     pub proposition: Proposition,
     pub guarantee: Guarantee,
     pub source_input: String,
+    /// Exact sealed input evidence for a direct premise when the input
+    /// interpreter produced an unambiguous role-to-source map. Older facts
+    /// omit this field and remain readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_evidence: Option<SealedSourceEvidence>,
     pub dependencies: Vec<String>,
     pub valid: bool,
 }
@@ -450,6 +455,17 @@ pub struct SourceSpan {
     pub start: usize,
     pub end: usize,
     pub text: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SealedSourceEvidence {
+    pub evidence_version: String,
+    pub input_fingerprint: String,
+    pub bundle_fingerprint: String,
+    pub raw_sha256: String,
+    pub parser_version: String,
+    pub semantic_signature: String,
+    pub source_roles: BTreeMap<String, Vec<SourceSpan>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalculationSequenceStep {

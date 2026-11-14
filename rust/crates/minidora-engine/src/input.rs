@@ -8,6 +8,7 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
 pub const PARSER_VERSION: &str = "declarative-ja-en-v77-japanese-assertion-source-ranges";
+const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -473,6 +474,126 @@ fn japanese_assertion_source_roles(
         );
     }
     Ok(Some(roles))
+}
+
+/// Project only a complete, unambiguous Japanese copular assertion role map
+/// into a direct-premise evidence record. This validates the already sealed
+/// interpretation and its original byte ranges; it does not reinterpret the
+/// request. Other assertion forms keep their existing input bundle only.
+pub(crate) fn assertion_source_evidence(
+    bundle: &InputBundle,
+) -> Result<Option<SealedSourceEvidence>> {
+    let Intent::Assert { proposition } = &bundle.meaning.intent else {
+        return Ok(None);
+    };
+    if proposition.predicate != "is" {
+        return Ok(None);
+    }
+
+    let roles = &bundle.meaning.source_roles;
+    let subject_role = "/Assert/proposition/subject";
+    let predicate_role = "/Assert/proposition/predicate";
+    let object_role = "/Assert/proposition/object";
+    let scope_role = "/Assert/proposition/scope";
+    let negation_role = "/Assert/proposition/negation";
+    if roles.keys().any(|role| {
+        !matches!(
+            role.as_str(),
+            "/Assert/proposition/subject"
+                | "/Assert/proposition/predicate"
+                | "/Assert/proposition/object"
+                | "/Assert/proposition/scope"
+                | "/Assert/proposition/negation"
+        )
+    }) {
+        return Ok(None);
+    }
+    let single = |role: &str| -> Option<&SourceSpan> {
+        let spans = roles.get(role)?;
+        (spans.len() == 1).then(|| &spans[0])
+    };
+    let Some(subject) = single(subject_role) else {
+        return Ok(None);
+    };
+    let Some(predicate) = single(predicate_role) else {
+        return Ok(None);
+    };
+    let Some(object) = single(object_role) else {
+        return Ok(None);
+    };
+    let scope = if roles.contains_key(scope_role) {
+        let Some(scope) = single(scope_role) else {
+            return Ok(None);
+        };
+        Some(scope)
+    } else {
+        None
+    };
+    let negation = if roles.contains_key(negation_role) {
+        let Some(negation) = single(negation_role) else {
+            return Ok(None);
+        };
+        Some(negation)
+    } else {
+        None
+    };
+    let source_has_scope_tag = bundle.request.text.trim_start().starts_with("[scope=");
+    if proposition.negative != negation.is_some() || source_has_scope_tag != scope.is_some() {
+        return Ok(None);
+    }
+
+    let mut spans = vec![subject, predicate, object];
+    spans.extend(scope);
+    spans.extend(negation);
+    if spans.iter().any(|span| {
+        bundle.request.text.get(span.start..span.end) != Some(span.text.as_str())
+            || span.start >= span.end
+    }) {
+        return Ok(None);
+    }
+    let mut ranges: Vec<_> = spans.iter().map(|span| (span.start, span.end)).collect();
+    ranges.sort_unstable();
+    if ranges.windows(2).any(|pair| pair[0].1 > pair[1].0) {
+        return Ok(None);
+    }
+    if scope.is_some_and(|span| span.end > subject.start)
+        || subject.end > predicate.start
+        || predicate.end > object.start
+        || negation.is_some_and(|span| object.end > span.start)
+    {
+        return Ok(None);
+    }
+
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    if normalized(&subject.text) != normalized(&proposition.subject)
+        || !matches!(predicate.text.as_str(), "は" | "が")
+        || object.text.nfkc().collect::<String>() != proposition.object.nfkc().collect::<String>()
+        || scope.is_some_and(|span| {
+            span.text.nfkc().collect::<String>() != proposition.scope.nfkc().collect::<String>()
+        })
+        || negation.is_some_and(|span| {
+            ![
+                "ではありません",
+                "ではない",
+                "じゃない",
+                "でありません",
+                "でない",
+            ]
+            .contains(&span.text.as_str())
+        })
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(SealedSourceEvidence {
+        evidence_version: SOURCE_EVIDENCE_VERSION.into(),
+        input_fingerprint: identity(&bundle.request)?,
+        bundle_fingerprint: bundle.fingerprint.clone(),
+        raw_sha256: bundle.raw_sha256.clone(),
+        parser_version: bundle.meaning.parser_version.clone(),
+        semantic_signature: bundle.semantic_signature.clone(),
+        source_roles: roles.clone(),
+    }))
 }
 
 fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) -> bool {

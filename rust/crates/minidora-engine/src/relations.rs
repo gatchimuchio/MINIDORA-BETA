@@ -347,6 +347,7 @@ pub(crate) fn add_hypothesis(
         proposition,
         guarantee: Guarantee::Hypothesis,
         source_input,
+        source_evidence: None,
         dependencies: Vec::new(),
         valid: true,
     };
@@ -359,6 +360,15 @@ pub fn assert_fact(
     memory: &mut MemoryState,
     proposition: Proposition,
     source_input: &str,
+) -> Result<Fact> {
+    assert_fact_with_source_evidence(memory, proposition, source_input, None)
+}
+
+pub(crate) fn assert_fact_with_source_evidence(
+    memory: &mut MemoryState,
+    proposition: Proposition,
+    source_input: &str,
+    source_evidence: Option<SealedSourceEvidence>,
 ) -> Result<Fact> {
     validate(&proposition)?;
     if !variables(&proposition).is_empty() {
@@ -373,11 +383,46 @@ pub fn assert_fact(
             "a premise needs its original input identity",
         ));
     }
+    if let Some(evidence) = &source_evidence {
+        let valid_digest =
+            |value: &str| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let spans_are_well_formed = evidence.source_roles.iter().all(|(role, spans)| {
+            role.starts_with("/Assert/proposition/")
+                && !spans.is_empty()
+                && spans
+                    .iter()
+                    .all(|span| span.start < span.end && span.end - span.start == span.text.len())
+        });
+        if evidence.evidence_version != "minidora.sealed-source-evidence.v1"
+            || evidence.input_fingerprint != source_input
+            || !valid_digest(&evidence.bundle_fingerprint)
+            || !valid_digest(&evidence.raw_sha256)
+            || !valid_digest(&evidence.semantic_signature)
+            || evidence.parser_version.is_empty()
+            || evidence.semantic_signature.is_empty()
+            || evidence.source_roles.is_empty()
+            || !spans_are_well_formed
+        {
+            return Err(failure(
+                "INVALID_SOURCE_EVIDENCE",
+                "direct-premise source evidence is not bound to a valid sealed input",
+            ));
+        }
+    }
     let id = format!(
         "fact:{}",
         identity(&("user-premise-v1", &proposition, source_input))?
     );
     if let Some(old) = memory.facts.iter().find(|fact| fact.id == id) {
+        if source_evidence
+            .as_ref()
+            .is_some_and(|evidence| old.source_evidence.as_ref() != Some(evidence))
+        {
+            return Err(failure(
+                "SOURCE_EVIDENCE_CONFLICT",
+                "the same direct premise identity has different sealed source evidence",
+            ));
+        }
         return Ok(old.clone());
     }
     let fact = Fact {
@@ -385,6 +430,7 @@ pub fn assert_fact(
         proposition,
         guarantee: Guarantee::UserPremise,
         source_input: source_input.into(),
+        source_evidence,
         dependencies: Vec::new(),
         valid: true,
     };
@@ -989,6 +1035,7 @@ fn derive(
             source_input: premises
                 .first()
                 .map_or_else(String::new, |fact| fact.source_input.clone()),
+            source_evidence: None,
             dependencies,
             valid: true,
         },
@@ -1114,6 +1161,33 @@ mod tests {
             scope: "premise-world".into(),
         }
     }
+    #[test]
+    fn older_direct_fact_without_optional_source_evidence_remains_wire_compatible() {
+        let old_json = serde_json::json!({
+            "id": "fact:legacy",
+            "proposition": {
+                "subject": "legacy subject",
+                "predicate": "is",
+                "object": "legacy object",
+                "negative": false,
+                "scope": "premise-world"
+            },
+            "guarantee": "USER_PREMISE",
+            "source_input": "legacy-input-fingerprint",
+            "dependencies": [],
+            "valid": true
+        });
+        let old_fact: Fact = serde_json::from_value(old_json)
+            .expect("older memory records omit the additive source evidence field");
+        assert!(old_fact.source_evidence.is_none());
+        assert!(
+            serde_json::to_value(old_fact)
+                .unwrap()
+                .get("source_evidence")
+                .is_none()
+        );
+    }
+
     #[test]
     fn unseen_entity_uses_proof_composition_and_retains_dependency() {
         let mut memory = MemoryState::default();

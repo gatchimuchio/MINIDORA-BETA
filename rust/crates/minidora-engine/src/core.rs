@@ -3826,7 +3826,13 @@ impl Engine {
             }
             Intent::Assert { proposition } => {
                 let mut memory = self.store.load_memory(actor)?;
-                let fact = relations::assert_fact(&mut memory, proposition.clone(), &fingerprint)?;
+                let source_evidence = input::assertion_source_evidence(&bundle)?;
+                let fact = relations::assert_fact_with_source_evidence(
+                    &mut memory,
+                    proposition.clone(),
+                    &fingerprint,
+                    source_evidence,
+                )?;
                 self.store.save_memory(actor, &memory)?;
                 units.push(format!(
                     "前提を保存しました: {}。",
@@ -6781,6 +6787,244 @@ mod core_construction_observation_tests {
         engine
             .execute(actor, RequestEnvelope::new(case, input, actor, text))
             .unwrap_or_else(|error| panic!("Engine::execute failed for {input}: {error}"))
+    }
+
+    #[test]
+    fn direct_assertion_source_roles_follow_the_fact_into_reopened_proofs() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-assertion-source-proof-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated assertion provenance state");
+        let actor = "assertion-source-proof-actor";
+        let assertion_request = RequestEnvelope::new(
+            "assertion-source-proof-case",
+            "assertion-source-proof-input",
+            actor,
+            "[scope=ｶﾞ]ｶﾞはｶﾞではない",
+        );
+        let mut engine = Engine::open(&directory).expect("open Core");
+        let assertion = engine
+            .execute(actor, assertion_request.clone())
+            .expect("execute sealed assertion");
+        assert_eq!(assertion.lifecycle, Lifecycle::Commit, "{assertion:?}");
+        assert_eq!(assertion.guarantee, Guarantee::UserPremise);
+        let assertion_case = engine
+            .latest(actor, &assertion_request.case_id)
+            .expect("load assertion case")
+            .expect("assertion case exists");
+        let assertion_bundle = assertion_case
+            .bundle
+            .as_ref()
+            .expect("assertion bundle is sealed");
+        let expected_evidence = input::assertion_source_evidence(assertion_bundle)
+            .expect("build sealed source evidence")
+            .expect("copular role spans are complete and unambiguous");
+        assert_eq!(expected_evidence.raw_sha256, assertion_bundle.raw_sha256);
+        assert_eq!(
+            expected_evidence.bundle_fingerprint,
+            assertion_bundle.fingerprint
+        );
+        assert_eq!(
+            expected_evidence.input_fingerprint,
+            identity(&assertion_bundle.request).expect("registered request fingerprint")
+        );
+        let fact_id = assertion.dependencies[0].clone();
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("load Core memory after assertion");
+        let premise = memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("assertion fact is in Core memory");
+        assert_eq!(premise.source_evidence, Some(expected_evidence.clone()));
+        let mut tampered_memory = memory.clone();
+        tampered_memory
+            .facts
+            .iter_mut()
+            .find(|fact| fact.id == fact_id)
+            .and_then(|fact| fact.source_evidence.as_mut())
+            .expect("direct fact source evidence")
+            .raw_sha256 = "0".repeat(64);
+        assert!(
+            engine.store.save_memory(actor, &tampered_memory).is_err(),
+            "store must reject source evidence that differs from its sealed input"
+        );
+        assert_eq!(
+            engine.store.load_memory(actor).unwrap(),
+            memory,
+            "rejected source tampering leaves the retained memory unchanged"
+        );
+
+        let mut ambiguous_bundle = assertion_bundle.clone();
+        let subject_spans = ambiguous_bundle
+            .meaning
+            .source_roles
+            .get_mut("/Assert/proposition/subject")
+            .expect("subject role exists");
+        subject_spans.push(subject_spans[0].clone());
+        assert!(
+            input::assertion_source_evidence(&ambiguous_bundle)
+                .expect("validate ambiguous evidence")
+                .is_none(),
+            "ambiguous role attribution is not promoted into fact evidence"
+        );
+        let mut swapped_bundle = assertion_bundle.clone();
+        let subject_span = swapped_bundle
+            .meaning
+            .source_roles
+            .get("/Assert/proposition/subject")
+            .expect("subject role exists")[0]
+            .clone();
+        let object_span = swapped_bundle
+            .meaning
+            .source_roles
+            .get("/Assert/proposition/object")
+            .expect("object role exists")[0]
+            .clone();
+        swapped_bundle
+            .meaning
+            .source_roles
+            .insert("/Assert/proposition/subject".into(), vec![object_span]);
+        swapped_bundle
+            .meaning
+            .source_roles
+            .insert("/Assert/proposition/object".into(), vec![subject_span]);
+        assert!(
+            input::assertion_source_evidence(&swapped_bundle)
+                .expect("validate swapped evidence")
+                .is_none(),
+            "equal normalized values do not allow role positions to be swapped"
+        );
+        let mut missing_scope_bundle = assertion_bundle.clone();
+        missing_scope_bundle
+            .meaning
+            .source_roles
+            .remove("/Assert/proposition/scope");
+        assert!(
+            input::assertion_source_evidence(&missing_scope_bundle)
+                .expect("validate missing explicit-scope evidence")
+                .is_none(),
+            "an explicit scope marker without its source span is not promoted"
+        );
+
+        let implicit_request = RequestEnvelope::new(
+            "assertion-source-proof-implicit-scope",
+            "assertion-source-proof-implicit-input",
+            actor,
+            "defaultはdefaultではない",
+        );
+        let implicit_result = engine
+            .execute(actor, implicit_request.clone())
+            .expect("execute implicit-default direct assertion");
+        assert_eq!(implicit_result.lifecycle, Lifecycle::Commit);
+        let implicit_case = engine
+            .latest(actor, &implicit_request.case_id)
+            .expect("load implicit-default case")
+            .expect("implicit-default case exists");
+        let implicit_bundle = implicit_case.bundle.as_ref().expect("sealed input");
+        let implicit_evidence = input::assertion_source_evidence(implicit_bundle)
+            .expect("build implicit-default source evidence")
+            .expect("implicit default assertion still has attributable lexical roles");
+        assert!(
+            !implicit_evidence
+                .source_roles
+                .contains_key("/Assert/proposition/scope"),
+            "a generated default scope has no source location"
+        );
+        let implicit_fact = engine
+            .store
+            .load_memory(actor)
+            .expect("load memory with implicit-default assertion")
+            .facts
+            .into_iter()
+            .find(|fact| implicit_result.dependencies.contains(&fact.id))
+            .expect("implicit assertion fact is present");
+        assert_eq!(
+            implicit_fact.source_evidence,
+            Some(implicit_evidence.clone())
+        );
+
+        drop(engine);
+        let mut reopened = Engine::open(&directory).expect("reopen Core state");
+        let restored_memory = reopened
+            .store
+            .load_memory(actor)
+            .expect("restore actor memory");
+        let restored_premise = restored_memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("restore source-backed premise");
+        assert_eq!(
+            restored_premise.source_evidence,
+            Some(expected_evidence.clone()),
+            "the memory revision retains sealed role spans after reopen"
+        );
+        let proposition = restored_premise.proposition.clone();
+        let proof = relations::query(&restored_memory, &proposition, 32)
+            .expect("query the source-backed premise");
+        assert_eq!(proof.status, "SUPPORTED");
+        assert_eq!(proof.facts.len(), 1);
+        assert_eq!(
+            proof.facts[0].source_evidence,
+            Some(expected_evidence.clone())
+        );
+        assert!(relations::answer_dependencies(&proof).contains(&fact_id));
+
+        let ask = RequestEnvelope::new(
+            "assertion-source-proof-case",
+            "assertion-source-proof-followup",
+            actor,
+            "[scope=ｶﾞ]ｶﾞはｶﾞではない?",
+        );
+        let answer = reopened
+            .execute(actor, ask)
+            .expect("Core consumes the restored premise through the normal query route");
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert_eq!(answer.guarantee, Guarantee::UserPremise);
+        assert!(answer.dependencies.contains(&fact_id));
+        assert_eq!(
+            reopened.execute(actor, implicit_request).unwrap(),
+            implicit_result,
+            "implicit-default result replays without reinterpreting its proof fact"
+        );
+
+        println!(
+            "B23_ASSERTION_SOURCE_PROOF={}",
+            serde_json::to_string(&serde_json::json!({
+                "source": assertion_request.text,
+                "parser_version": expected_evidence.parser_version,
+                "bundle_fingerprint": expected_evidence.input_fingerprint,
+                "raw_sha256": expected_evidence.raw_sha256,
+                "semantic_signature": expected_evidence.semantic_signature,
+                "source_roles": expected_evidence.source_roles,
+                "implicit_default_source_roles": implicit_evidence.source_roles,
+                "implicit_default_has_no_scope_span": !implicit_evidence.source_roles.contains_key("/Assert/proposition/scope"),
+                "request_fingerprint": expected_evidence.input_fingerprint,
+                "assertion_result_text": assertion.text,
+                "follow_up_question": "[scope=ｶﾞ]ｶﾞはｶﾞではない?",
+                "follow_up_result_text": answer.text,
+                "fact_id": fact_id,
+                "assertion_lifecycle": assertion.lifecycle,
+                "tampered_raw_digest_rejected_without_memory_change": true,
+                "duplicated_role_map_not_projected": true,
+                "swapped_equal_value_roles_not_projected": true,
+                "explicit_scope_without_source_span_not_projected": true,
+                "legacy_fact_json_compatibility_pass": true,
+                "memory_reopened_with_same_source_evidence": true,
+                "query_proof_returns_source_evidence": true,
+                "normal_core_followup_consumes_fact": answer.dependencies.contains(&fact_id),
+                "source_roles_are_themselves_world_truth": false,
+                "external_network_or_effects": false
+            }))
+            .expect("serialize B23 assertion source proof observation")
+        );
+        drop(reopened);
+        fs::remove_dir_all(directory).expect("remove isolated assertion provenance state");
     }
 
     #[test]

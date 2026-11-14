@@ -1050,6 +1050,40 @@ impl Store {
                 ));
             }
         }
+        for fact in &memory.facts {
+            let Some(evidence) = &fact.source_evidence else {
+                continue;
+            };
+            let source_key: Option<(String, String, i64)> = sql(self.connection.query_row(
+                "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2",
+                params![actor, fact.source_input],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional())?;
+            let Some((case, input, version)) = source_key else {
+                return Err(failure(
+                    "SOURCE_EVIDENCE_UNOWNED",
+                    "fact source evidence does not resolve to an actor-owned sealed input",
+                ));
+            };
+            let version = u64::try_from(version).map_err(|_| {
+                failure(
+                    "SOURCE_EVIDENCE_IDENTITY",
+                    "fact source evidence has a negative input version",
+                )
+            })?;
+            let Some((_, bundle)) = self.get_input_bundle(actor, &case, &input, version)? else {
+                return Err(failure(
+                    "SOURCE_EVIDENCE_UNSEALED",
+                    "fact source evidence does not resolve to a retained sealed input",
+                ));
+            };
+            if crate::input::assertion_source_evidence(&bundle)?.as_ref() != Some(evidence) {
+                return Err(failure(
+                    "SOURCE_EVIDENCE_MISMATCH",
+                    "fact source evidence differs from its immutable sealed input",
+                ));
+            }
+        }
         Ok(())
     }
 
