@@ -63,7 +63,7 @@ fn parsed_relation_roles_keep_exact_source_ranges_across_persisted_input_replay(
     ));
     assert_eq!(
         bundle.meaning.parser_version,
-        "declarative-ja-en-v75-all-intent-source-spans"
+        "declarative-ja-en-v76-nfkc-source-span-boundaries"
     );
     let source = &bundle.request.text;
     let roles = &bundle.meaning.source_roles;

@@ -1,0 +1,196 @@
+{
+  "evidence_schema": "minidora-construction-change-record-v1",
+  "observation_id": "MB-BUILD-20261114-INPUT-04-B21-NFKC",
+  "base_commit": "2bad31cb7f9c70fdf2f4702a087afc2b8f86ce48",
+  "parser_version": "declarative-ja-en-v76-nfkc-source-span-boundaries",
+  "previous_parser_version": "declarative-ja-en-v75-all-intent-source-spans",
+  "scope": {
+    "producer": "RequestEnvelope original text -> input::interpret -> Intent string leaves",
+    "transform": "Group NFKD nonstarters and composable CCC=0 pairs into source-safe segments; apply NFKC to each complete segment",
+    "consumer": "input::source_role_spans -> sealed MeaningIR.source_roles -> Core actor-scoped relation assertion and SQLite persisted CaseRevision",
+    "parser_revision_reason": "Cross-codepoint NFKC composition changed the source-role output. New input versions use a distinct parser revision and fingerprint; existing input identities replay their saved result.",
+    "observations": [
+      {
+        "request": "ｶﾞはsensor",
+        "lifecycle": "COMMIT",
+        "subject_role": "/Assert/proposition/subject",
+        "source_byte_span": [
+          0,
+          6
+        ],
+        "source_text": "ｶﾞ",
+        "nfkc_text": "ガ"
+      },
+      {
+        "request": "가はsensor",
+        "lifecycle": "COMMIT",
+        "subject_role": "/Assert/proposition/subject",
+        "source_byte_span": [
+          0,
+          6
+        ],
+        "source_text": "가",
+        "nfkc_text": "가"
+      }
+    ],
+    "unit_cases": [
+      "halfwidth katakana plus dakuten",
+      "Hangul Jamo composition",
+      "NFD Latin acute",
+      "combining mark canonical reordering",
+      "compatibility ligature expansion"
+    ],
+    "replay": "Both v76 saved ResultRecords and CaseRevisions exactly match after closing and reopening the same SQLite Engine state.",
+    "external_network_or_side_effects": false,
+    "schema_or_dependency_change": false,
+    "known_limits": [
+      "five-case normalization unit corpus is not full Unicode normalization conformance",
+      "the route checks two relation subjects and does not establish general language quality",
+      "cross-software replay from a pre-existing v75 database was not tested in B21",
+      "full workspace all-features runtime, other OS, GPQA and full A04/A15/E08 acceptance were not run"
+    ]
+  },
+  "root_cause": {
+    "before": "v75 independently normalized each Unicode scalar, which does not equal whole-string NFKC when combining composition crosses scalar boundaries.",
+    "reproduction": "The ordinary Engine route sealed the parsed subject for ｶﾞ but the /Assert/proposition/subject span was absent; initial failing run is retained.",
+    "after": "v76 normalizes source-safe segments and maps every normalized UTF-8 byte back to its original segment byte range."
+  },
+  "environment": {
+    "host": "Linux c11e90bda0c3 6.18.57 #1 SMP Tue Oct 20 21:56:04 UTC 2026 x86_64 GNU/Linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "CARGO_HOME": "/workspace/.cargo",
+    "RUSTUP_HOME": "/workspace/.rustup",
+    "CARGO_TARGET_DIR": "/workspace/.minidora-cloud/rust-target"
+  },
+  "commands": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib nfkc_source_mapping --locked -- --nocapture",
+      "result": "PASS; 1 passed"
+    },
+    {
+      "command": "cargo test -p minidora-engine --test input_machine_observation_04 --locked -- --nocapture",
+      "result": "PASS; 1 test, two normal Engine cases"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "result": "PASS; 247 passed, 0 failed, 0 ignored; 0 doc tests"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo test --workspace --all-features --locked",
+      "result": "NOT_RUN_IN_B21; B20 all-features suite is separate historical evidence"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "engine_package_test_breakdown": {
+    "engine_unit": 236,
+    "core_construction_integrations": 5,
+    "core_meaning_composition_integrations": 2,
+    "input_machine_integrations": 4,
+    "total": 247
+  },
+  "initial_failure": {
+    "version": "v75",
+    "outcome": "FAIL; missing source role /Assert/proposition/subject for ｶﾞ",
+    "resolution": "v76 source-safe NFKC segments retain the original six-byte source span"
+  },
+  "local_verification_logs": {
+    "initial_v75_failure": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/initial-v75-failure.log",
+      "bytes": 987,
+      "sha256": "ec983fa1d501af849b6f3edf93f6c01a38dd40b8a470ff17e8fd67a66e997d5e"
+    },
+    "normalization_unit": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/normalization-unit.log",
+      "bytes": 507,
+      "sha256": "87e0a11a848ea6081f7c018127a9b4e40f73bba00d1fc1e2481f3d7351774628"
+    },
+    "engine_route_reopen": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/engine-route-reopen.log",
+      "bytes": 954,
+      "sha256": "4b3b4cc82452cc17e786a1ad6fe03798c5d5b65dcb98cf34cc4175c2d328e371"
+    },
+    "fmt_check": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/fmt-check.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "workspace_check": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/workspace-check.log",
+      "bytes": 253,
+      "sha256": "94ccd846887db8bed3aae5ebb2168db1214cefacd352373d5bb7a8e0b5cd0ab2"
+    },
+    "workspace_clippy": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/workspace-clippy.log",
+      "bytes": 253,
+      "sha256": "ffd4fc3ffa1b1b407625064f1bf955fb4c28f889a66fc786483b5a13cee75886"
+    },
+    "engine_package_tests": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/engine-package-tests.log",
+      "bytes": 28063,
+      "sha256": "a812e0b06a7ed102c52ec49e88f0240ceed0f86dae988f618346e8e08b87af5e"
+    },
+    "workspace_build": {
+      "path": "/workspace/.minidora-cloud/b21-nfkc-source-span/workspace-build.log",
+      "bytes": 154,
+      "sha256": "ffa03235d0623de333d019fa960efe0e3990766526f49ca63505fdd0cd0e132f"
+    }
+  },
+  "three_point_set_archive": {
+    "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+    "sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "bytes": 28807,
+    "expected_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "matches_expected": true
+  },
+  "change_files_sha256": {
+    "rust/crates/minidora-engine/src/input.rs": "59826560bda62c2b424dc4f6d41444eac57c027537ac146752d9edd6320b85f9",
+    "rust/crates/minidora-engine/tests/input_machine_observation_01.rs": "37dd9598335a172f3d296d63ffd36c5ded5be3d787aa7fd330eacec3d2747736",
+    "rust/crates/minidora-engine/tests/input_machine_observation_02.rs": "b1988e650d0df263188aee28f3a42cec3f73809baa8ac52768c5d95673b0939d",
+    "rust/crates/minidora-engine/tests/input_machine_observation_04.rs": "54e6063e211c3a58ef1dc42748f0aa6a7855b2c6bce21c0bd560a79dd9b3f3fb",
+    "rust/audit/requirements.tsv": "68a8d1364aa0681d7fbbc55f27410cc4b3f169fcd44b30561e2fa792857862e0",
+    "rust/audit/IMPLEMENTATION_STATUS.md": "1fd9fccd2c5977a615ff218335bcef9132c797489843975ca0668007917efbde",
+    "rust/audit/construction/MB-BUILD-20261114/BUILD_BATCH_21.md": "872ecaabb67685228d807553f6610e7d12a5c01a0beb90dcfd5ada24fd2a0b8e"
+  },
+  "requirements": {
+    "A04": "UNVERIFIED",
+    "A15": "UNVERIFIED",
+    "E08": "UNVERIFIED",
+    "all_requirement_acceptance": "UNVERIFIED"
+  },
+  "runtime_observation": "BOUNDED_NFKC_ROLE_SPANS_AND_SAVED_REPLAY_PASS",
+  "release": "NOT_RELEASED",
+  "asset_closure": {
+    "git_retained": [
+      "source-span normalization correction",
+      "v76 parser expectations",
+      "B21 route test",
+      "validation and construction records"
+    ],
+    "local_verification_logs": "/workspace/.minidora-cloud/b21-nfkc-source-span",
+    "active_build_cache": "/workspace/.minidora-cloud/rust-target",
+    "cargo_cache": "/workspace/.cargo",
+    "preexisting_unmodified_cache": "/workspace/MINIDORA-BETA/rust/target",
+    "temporary_sqlite_state": "RAII removed by integration-test TempState",
+    "temporary_logs": "Removed after SHA-256 preservation in the local evidence directory."
+  }
+}

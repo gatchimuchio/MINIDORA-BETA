@@ -5,8 +5,9 @@ use minidora_domain::*;
 use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v75-all-intent-source-spans";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v76-nfkc-source-span-boundaries";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -280,6 +281,57 @@ fn numeric_token_byte(byte: u8) -> bool {
 
 const MAX_SOURCE_SPAN_MATCH_EVENTS: usize = 1_000_000;
 
+fn first_nfkd_character(character: char) -> char {
+    character.to_string().nfkd().next().unwrap_or(character)
+}
+
+fn starts_new_nfkc_segment(previous_source: &str, next_character: char) -> bool {
+    let next_decomposed = first_nfkd_character(next_character);
+    if canonical_combining_class(next_decomposed) != 0 {
+        return false;
+    }
+    let Some(previous_normalized) = previous_source.nfkc().last() else {
+        return true;
+    };
+    canonical_combining_class(previous_normalized) != 0
+        || compose(previous_normalized, next_decomposed).is_none()
+}
+
+fn normalized_source_with_ranges(text: &str) -> (String, Vec<(usize, usize)>) {
+    let mut normalized_source = String::new();
+    let mut source_ranges = Vec::new();
+    let mut source_segment = String::new();
+    let mut segment_start = 0;
+    let mut segment_end = 0;
+    for (start, character) in text.char_indices() {
+        let end = start + character.len_utf8();
+        if !source_segment.is_empty() && starts_new_nfkc_segment(&source_segment, character) {
+            let normalized_segment: String = source_segment.nfkc().collect();
+            normalized_source.push_str(&normalized_segment);
+            source_ranges.extend(std::iter::repeat_n(
+                (segment_start, segment_end),
+                normalized_segment.len(),
+            ));
+            source_segment.clear();
+            segment_start = start;
+        }
+        if source_segment.is_empty() {
+            segment_start = start;
+        }
+        source_segment.push(character);
+        segment_end = end;
+    }
+    if !source_segment.is_empty() {
+        let normalized_segment: String = source_segment.nfkc().collect();
+        normalized_source.push_str(&normalized_segment);
+        source_ranges.extend(std::iter::repeat_n(
+            (segment_start, segment_end),
+            normalized_segment.len(),
+        ));
+    }
+    (normalized_source, source_ranges)
+}
+
 fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) -> bool {
     let bytes = haystack.as_bytes();
     let needle = needle.as_bytes();
@@ -336,17 +388,7 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
         return Ok(BTreeMap::new());
     }
 
-    let mut normalized_source = String::new();
-    let mut source_ranges = Vec::new();
-    for (start, character) in text.char_indices() {
-        let end = start + character.len_utf8();
-        let normalized_character: String = character.to_string().nfkc().collect();
-        normalized_source.push_str(&normalized_character);
-        source_ranges.extend(std::iter::repeat_n(
-            (start, end),
-            normalized_character.len(),
-        ));
-    }
+    let (normalized_source, source_ranges) = normalized_source_with_ranges(text);
 
     let mut pattern_roles = BTreeMap::<String, Vec<String>>::new();
     for (role, values) in candidates {
@@ -3987,7 +4029,7 @@ mod tests {
         assert_eq!(bundle.request.input_version, 3);
         assert_eq!(
             bundle.meaning.parser_version,
-            "declarative-ja-en-v75-all-intent-source-spans"
+            "declarative-ja-en-v76-nfkc-source-span-boundaries"
         );
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());
@@ -4006,6 +4048,34 @@ mod tests {
                 "must not adopt a partial, unknown, or compound request: {text}"
             );
         }
+    }
+    #[test]
+    fn nfkc_source_mapping_keeps_cross_character_normalization_and_original_ranges() {
+        for (source, expected) in [
+            ("ｶﾞ", "ガ"),
+            ("각", "각"),
+            ("Cafe\u{301}", "Café"),
+            ("A\u{315}\u{300}", "À\u{315}"),
+            ("ﬃ", "ffi"),
+        ] {
+            let (normalized, ranges) = normalized_source_with_ranges(source);
+            let expected_by_whole_string: String = source.nfkc().collect();
+            assert_eq!(normalized, expected, "source {source:?}");
+            assert_eq!(normalized, expected_by_whole_string, "source {source:?}");
+            assert_eq!(ranges.len(), normalized.len(), "source {source:?}");
+            assert!(ranges.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+            for (start, end) in ranges {
+                assert!(source.get(start..end).is_some(), "source {source:?}");
+            }
+        }
+
+        let (normalized, ranges) = normalized_source_with_ranges("ｶﾞは");
+        assert_eq!(normalized, "ガは");
+        assert_eq!(&ranges[.."ガ".len()], &[(0, "ｶﾞ".len()); "ガ".len()]);
+        assert_eq!(
+            &ranges["ガ".len()..],
+            &[("ｶﾞ".len(), "ｶﾞは".len()); "は".len()]
+        );
     }
     #[test]
     fn relation_roles_map_to_exact_utf8_source_and_preserve_negation_and_scope() {
