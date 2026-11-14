@@ -6171,3 +6171,94 @@ fn matches_artifact(path: &Path, expected: &[u8]) -> bool {
     })();
     checked.unwrap_or(false)
 }
+
+#[cfg(test)]
+mod previous_relation_meaning_tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn previous_relation_meaning_reads_legacy_computation_artifact() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-legacy-relation-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("unique legacy relation test directory");
+        let store = Store::open(&directory).expect("open isolated store");
+        let request = RequestEnvelope::new(
+            "legacy-relation-case",
+            "legacy-relation-input",
+            "legacy-relation-actor",
+            "それは動物ですか",
+        );
+        let fingerprint = identity(&request).expect("request identity");
+        assert!(
+            store
+                .register_input(&request.actor_id, &request, &fingerprint)
+                .expect("register legacy request")
+        );
+
+        let legacy_dependencies = vec!["legacy-direct-premise".to_owned()];
+        let legacy_artifact = serde_json::json!({
+            "calculation": null,
+            "units": [],
+            "evidence": [],
+            "dependencies": legacy_dependencies,
+        });
+        let artifact_ref = store
+            .put_artifact(&request.actor_id, &request.case_id, &legacy_artifact)
+            .expect("store unversioned computation artifact");
+        let previous_text = "提示された前提の範囲では、ココは動物（範囲: default）。".to_owned();
+        let previous = ResultRecord {
+            id: "legacy-prior-result".into(),
+            input_id: request.input_id.clone(),
+            input_version: request.input_version,
+            lifecycle: Lifecycle::Commit,
+            text: previous_text.clone(),
+            reason: None,
+            guarantee: Guarantee::Derived,
+            calculation: None,
+            content_plan: Some(ContentPlan {
+                id: "legacy-prior-plan".into(),
+                text: previous_text,
+                locale: "ja".into(),
+                guarantee: Guarantee::Derived,
+                required_units: Vec::new(),
+                dependencies: vec![artifact_ref],
+                model_revision: "legacy-model".into(),
+                model_artifact_ref: "legacy-model-artifact".into(),
+                model_observation_ref: "legacy-model-observation".into(),
+            }),
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: vec!["legacy-direct-premise".into()],
+            execution_graph_ref: None,
+        };
+
+        let meaning =
+            previous_relation_meaning(&store, &request.actor_id, &request.case_id, &previous)
+                .expect("legacy prior relation is readable")
+                .expect("legacy prior relation is recognized");
+        assert_eq!(
+            meaning,
+            PriorRelationMeaning::AdoptedConclusion {
+                proposition: Proposition {
+                    subject: "ココ".into(),
+                    predicate: "is".into(),
+                    object: "動物".into(),
+                    negative: false,
+                    scope: "default".into(),
+                },
+                proof_dependencies: vec!["legacy-direct-premise".into()],
+            }
+        );
+
+        drop(store);
+        fs::remove_dir_all(directory).expect("remove isolated legacy relation store");
+    }
+}
