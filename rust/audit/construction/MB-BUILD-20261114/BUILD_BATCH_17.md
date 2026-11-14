@@ -26,4 +26,4 @@
 
 ## 次工程
 
-第六命令の残り: 既存Coreが消費する関係・訂正・条件・source/document・時間/数量・permission入力のルートを棚卸しし、原文に対する不足のない役割対応、曖昧入力の保留、input versionごとの一回封印を追加の通常Core経路で確認する。入力側から学習採否・計画・goal completionを決めない。
+第六命令を続け、[BUILD_BATCH_18](BUILD_BATCH_18.md) で選択されたmeaning roleと元のUTF-8位置を結ぶoptional source-role spanを追加した。未対応Intent群を引き続き棚卸しし、曖昧入力の保留とinput versionごとの一回封印を確認する。

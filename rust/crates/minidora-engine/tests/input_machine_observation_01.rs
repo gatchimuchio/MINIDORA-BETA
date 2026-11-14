@@ -45,7 +45,7 @@ fn concise_arithmetic_question_reaches_core_once_and_replays_its_versioned_resul
     ));
     assert_eq!(
         bundle.meaning.parser_version,
-        "declarative-ja-en-v73-arithmetic-topic-question"
+        "declarative-ja-en-v74-role-source-spans"
     );
     assert_eq!(bundle.request.input_version, 1);
     assert_eq!(bundle.request.text, "６＋７は？");
@@ -53,6 +53,13 @@ fn concise_arithmetic_question_reaches_core_once_and_replays_its_versioned_resul
     assert_eq!(bundle.meaning.spans[0].start, 0);
     assert_eq!(bundle.meaning.spans[0].end, request.text.len());
     assert_eq!(bundle.meaning.spans[0].text, request.text);
+    let expression_source = &bundle.meaning.source_roles["/Calculate/expression"][0];
+    assert_eq!(
+        request
+            .text
+            .get(expression_source.start..expression_source.end),
+        Some("６＋７")
+    );
 
     drop(engine);
     let mut reopened = Engine::open(&directory).expect("reopen persisted input state");

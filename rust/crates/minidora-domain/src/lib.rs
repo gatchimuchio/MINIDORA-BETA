@@ -462,6 +462,11 @@ pub struct MeaningIR {
     pub parser_version: String,
     pub intent: Intent,
     pub spans: Vec<SourceSpan>,
+    /// Optional slash-delimited semantic-role to source byte-span links for
+    /// values extracted from the original request. Each span is a half-open
+    /// UTF-8 byte range; empty/older maps are omitted on the wire.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_roles: BTreeMap<String, Vec<SourceSpan>>,
     pub unresolved: Vec<String>,
     pub source_kind: String,
     pub context_result_ref: Option<String>,

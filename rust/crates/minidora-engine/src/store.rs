@@ -1458,6 +1458,7 @@ mod tests {
                     expression: "2+3".into(),
                 },
                 spans: vec![],
+                source_roles: std::collections::BTreeMap::new(),
                 unresolved: vec![],
                 source_kind: "USER".into(),
                 context_result_ref: None,

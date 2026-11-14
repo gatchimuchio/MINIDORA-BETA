@@ -1,0 +1,236 @@
+{
+  "evidence_schema": "minidora-direct-core-observation-v1",
+  "observation_id": "MB-BUILD-20261114-INPUT-02",
+  "base_commit": "d735eabf1bd039707aac0450d9b67f675ec3d57b",
+  "toolchain": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "host": "x86_64-unknown-linux-gnu"
+  },
+  "command": "cargo test -p minidora-engine --test input_machine_observation_02 --locked -- --nocapture",
+  "test_result": "PASS: 1 passed, 0 failed",
+  "test_log_sha256": "d1599f1c3ce51b0445ed40cd90d59eea2ccdbe488bceeeedbc90266fea497bfc",
+  "test_sources": [
+    {
+      "path": "rust/crates/minidora-domain/src/lib.rs",
+      "sha256": "348e4adcff642e914b4ecdddf28f75091fc2789625d22fe1b58a3b887f532646"
+    },
+    {
+      "path": "rust/crates/minidora-engine/src/input.rs",
+      "sha256": "630d1907a71f90385d0a0c943810f972b43e14106d6b8a5ca5586bd6de9c81e7"
+    },
+    {
+      "path": "rust/crates/minidora-engine/src/store.rs",
+      "sha256": "3a18a90a2b0934490bd727c53e8a0324d100d6664d30a2d0cae59a347a0df363"
+    },
+    {
+      "path": "rust/crates/minidora-engine/tests/input_machine_observation_01.rs",
+      "sha256": "59b379e68ca899d85a88c2febb9a2610a2e9ce0089fec5015908307a9f811506"
+    },
+    {
+      "path": "rust/crates/minidora-engine/tests/input_machine_observation_02.rs",
+      "sha256": "95a5669845768723b0a4ae74fbf251856f4c082cf0c565eda77e25d7b8f634db"
+    }
+  ],
+  "three_point_set_manifest_checks": [
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_3点セット_日本語基底_20261114.zip",
+      "expected_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "actual_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+      "expected_bytes": 28807,
+      "actual_bytes": 28807,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_01_施工仕様書_20261114.md",
+      "expected_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "actual_sha256": "2e6ce6e181555cebd66ff2f7a57bc01188981ecf116c6b2555e3f1b406b8edbc",
+      "expected_bytes": 23191,
+      "actual_bytes": 23191,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_02_施工工程表_20261114.md",
+      "expected_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "actual_sha256": "d776f6a3ee57f0b8ba84a59461cc539e1888836d9de2ef08405830f7daa724ae",
+      "expected_bytes": 21474,
+      "actual_bytes": 21474,
+      "matches": true
+    },
+    {
+      "repository_path": "rust/audit/construction/MB-BUILD-20261114/ミニドラベータ_03_Codex施工指示書_20261114.md",
+      "expected_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "actual_sha256": "e348c05716a3bf2f7541be29096dc71c139f5c9d44efba49da93e02c1bbb37e8",
+      "expected_bytes": 23396,
+      "actual_bytes": 23396,
+      "matches": true
+    }
+  ],
+  "parser_version": "declarative-ja-en-v74-role-source-spans",
+  "meaning_ir_compatibility": "source_roles is an optional serde-defaulted field omitted when empty; a pre-v74 MeaningIR canonical byte roundtrip passed without changing SCHEMA_VERSION",
+  "scope": "bounded role-to-source mapping for selected calculation and relation Intents; exact UTF-8 spans are found through an NFKC matching view but return slices from the untouched original request; saved bundle/result replay after Engine reopen",
+  "observation": {
+    "actor": "b18-input-role-source-observation",
+    "case_id": "input-machine-observation-two",
+    "entry": "in-process minidora_engine::Engine::execute",
+    "exact_saved_bundle_replayed_after_engine_reopen": true,
+    "exact_saved_result_replayed": true,
+    "external_network_or_side_effects": false,
+    "external_semantic_generation": false,
+    "guarantee": "USER_PREMISE",
+    "input_version": 1,
+    "lifecycle": "COMMIT",
+    "limitations": [
+      "role spans are emitted only for currently mapped bounded Intent families",
+      "a role without an exact raw lexical match has no span entry",
+      "this does not establish complete language or document provenance coverage"
+    ],
+    "model_revision": "9927518505d860ce9ad4ad377a0ac8a5040387597a4a1b77e82f7e4fa8bdad41",
+    "observation": "MB-BUILD-20261114 sixth instruction; input-machine observation 02",
+    "parser_version": "declarative-ja-en-v74-role-source-spans",
+    "render_sha256": "59a526719a0087b303a8a6abe54c76c45137a39a81e6690439bdb5f9d6b99782",
+    "result_id": "fe61f3e72803bd39136b0505b5c638871f76d7adb2b3e27934129a98ae59b4c0",
+    "semantic_intent": {
+      "kind": "ASSERT",
+      "proposition": {
+        "negative": true,
+        "object": "sensor",
+        "predicate": "is",
+        "scope": "materials-lab",
+        "subject": "Nera"
+      }
+    },
+    "source_roles": {
+      "/Assert/proposition/negation": [
+        {
+          "end": 46,
+          "start": 34,
+          "text": "ではない"
+        }
+      ],
+      "/Assert/proposition/object": [
+        {
+          "end": 34,
+          "start": 28,
+          "text": "sensor"
+        }
+      ],
+      "/Assert/proposition/predicate": [
+        {
+          "end": 28,
+          "start": 25,
+          "text": "は"
+        }
+      ],
+      "/Assert/proposition/scope": [
+        {
+          "end": 20,
+          "start": 7,
+          "text": "materials-lab"
+        }
+      ],
+      "/Assert/proposition/subject": [
+        {
+          "end": 25,
+          "start": 21,
+          "text": "Nera"
+        }
+      ]
+    },
+    "source_sha256": "8fed3e3cb34f73e072510660be59cefcac3dbddbb98b794ceea1532a9f593634",
+    "source_text": "[scope=materials-lab]Neraはsensorではない",
+    "verified_role_ranges": {
+      "negation": {
+        "end": 46,
+        "start": 34,
+        "text": "ではない"
+      },
+      "object": {
+        "end": 34,
+        "start": 28,
+        "text": "sensor"
+      },
+      "predicate": {
+        "end": 28,
+        "start": 25,
+        "text": "は"
+      },
+      "scope": {
+        "end": 20,
+        "start": 7,
+        "text": "materials-lab"
+      },
+      "subject": {
+        "end": 25,
+        "start": 21,
+        "text": "Nera"
+      }
+    }
+  },
+  "additional_observations": {
+    "arithmetic_route": {
+      "command": "cargo test -p minidora-engine --test input_machine_observation_01 --locked -- --nocapture",
+      "status": "PASS: 1 passed, 0 failed",
+      "log_sha256": "6883394c1c09d2dccb9647b116118a8a355e68faaadc74f77c71376f919c468f",
+      "parser_version": "declarative-ja-en-v74-role-source-spans",
+      "observed_source_role": "/Calculate/expression -> ６＋７"
+    },
+    "legacy_meaning_ir_without_source_roles": "PASS in engine suite; old canonical bytes preserved"
+  },
+  "claims_not_established": [
+    "source-role maps for every Intent variant, especially arbitrary document, time, person and external-source structures",
+    "roles whose normalized semantic value has no exact lexical match in the source",
+    "full natural Japanese language coverage or complete A04/A15/E08 acceptance",
+    "full workspace runtime acceptance",
+    "release or deployment"
+  ],
+  "verification_results": [
+    {
+      "command": "cargo test -p minidora-engine --test input_machine_observation_02 --locked -- --nocapture",
+      "status": "PASS",
+      "summary": "1 passed, 0 failed",
+      "log_sha256": "e39dc2b7d21b3a9418b4c58b80aded6838475ea057879884d9352a18e003717b"
+    },
+    {
+      "command": "cargo test -p minidora-engine --test input_machine_observation_01 --locked -- --nocapture",
+      "status": "PASS",
+      "summary": "1 passed, 0 failed; arithmetic source span preserved through replay",
+      "log_sha256": "28dd90d7154d5825adeee46eda6162af87ef0f23f2bec7bc626ae8785e689796"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "status": "PASS",
+      "summary": "235 unit tests; nine bounded integration tests; 0 doc tests",
+      "log_sha256": "4a52bc654ad012befe9dfa1aa98f6c20d6dc21175deaf23a68ae5a4a31fdb80e"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "PASS",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "status": "PASS",
+      "log_sha256": "e63e90692ac000b1d94ef7ff8523a8c27c1c8134749f8a26bc1cbbc0deadace3"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "status": "PASS",
+      "log_sha256": "ef230985102168cf182f2c1ba7e2bb9fcfd37b7a4c8555eb276566a6d71a65b5"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "status": "PASS",
+      "log_sha256": "122b8b1674dfcc0684827ad1afda8f8b89d359ed42b72322ed42b3c66f591c7f"
+    },
+    {
+      "command": "cargo test --workspace --locked",
+      "status": "NOT_RUN",
+      "summary": "full workspace runtime acceptance was not exercised"
+    },
+    {
+      "command": "git diff --cached --check",
+      "status": "PASS"
+    }
+  ]
+}

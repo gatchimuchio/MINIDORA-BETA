@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v73-arithmetic-topic-question";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v74-role-source-spans";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -114,6 +114,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         unresolved.push("no actual committed calculation is available to correct".into());
     }
     let context_sha256 = identity(&previous)?;
+    let source_roles = source_role_spans(&request.text, &intent);
     let meaning = MeaningIR {
         parser_version: PARSER_VERSION.into(),
         intent,
@@ -124,6 +125,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             end: request.text.len(),
             text: request.text.clone(),
         }],
+        source_roles,
         unresolved,
         source_kind: "USER_REQUEST".into(),
         context_result_ref: previous.map(|result| result.id.clone()),
@@ -139,6 +141,304 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         meaning,
         semantic_signature,
     })
+}
+
+type SourceRoleCandidates = BTreeMap<String, Vec<String>>;
+
+fn add_source_candidate(candidates: &mut SourceRoleCandidates, role: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let values = candidates.entry(role.to_string()).or_default();
+    if !values.iter().any(|candidate| candidate == value) {
+        values.push(value.to_string());
+    }
+    if let Some(variable) = value.strip_prefix('$')
+        && !variable.is_empty()
+    {
+        let source_form = variable.to_ascii_uppercase();
+        if !values.iter().any(|candidate| candidate == &source_form) {
+            values.push(source_form);
+        }
+    }
+}
+
+fn add_proposition_source_candidates(
+    candidates: &mut SourceRoleCandidates,
+    prefix: &str,
+    proposition: &Proposition,
+) {
+    add_source_candidate(
+        candidates,
+        &format!("{prefix}/subject"),
+        &proposition.subject,
+    );
+    let predicate_role = format!("{prefix}/predicate");
+    add_source_candidate(candidates, &predicate_role, &proposition.predicate);
+    if proposition.predicate == "is" {
+        for verb in ["is", "are"] {
+            add_source_candidate(candidates, &predicate_role, verb);
+        }
+    }
+    add_source_candidate(candidates, &format!("{prefix}/object"), &proposition.object);
+    add_source_candidate(candidates, &format!("{prefix}/scope"), &proposition.scope);
+    if proposition.negative {
+        let role = format!("{prefix}/negation");
+        for marker in [
+            "not",
+            "ではありません",
+            "ではない",
+            "じゃない",
+            "でありません",
+            "でない",
+        ] {
+            add_source_candidate(candidates, &role, marker);
+        }
+    }
+}
+
+/// Build a bounded, versioned index from selected sealed meaning roles back to
+/// exact UTF-8 ranges in the original request. Matching uses the parser's
+/// NFKC view, while every returned span slices the untouched source bytes.
+fn source_role_spans(text: &str, intent: &Intent) -> BTreeMap<String, Vec<SourceSpan>> {
+    let mut candidates = SourceRoleCandidates::new();
+    match intent {
+        Intent::Calculate { expression } => {
+            add_source_candidate(&mut candidates, "/Calculate/expression", expression);
+        }
+        Intent::CorrectCalculation { replacement, .. } => {
+            add_source_candidate(
+                &mut candidates,
+                "/CorrectCalculation/replacement",
+                replacement,
+            );
+        }
+        Intent::CalculateSequence { steps } => {
+            for (index, step) in steps.iter().enumerate() {
+                add_source_candidate(
+                    &mut candidates,
+                    &format!("/CalculateSequence/steps/{index}/expression"),
+                    &step.expression.text,
+                );
+            }
+        }
+        Intent::Assert { proposition }
+        | Intent::Ask { proposition }
+        | Intent::AskWhy { proposition } => {
+            let prefix = match intent {
+                Intent::Assert { .. } => "/Assert/proposition",
+                Intent::Ask { .. } => "/Ask/proposition",
+                _ => "/AskWhy/proposition",
+            };
+            add_proposition_source_candidates(&mut candidates, prefix, proposition);
+        }
+        Intent::AssertPreviousRelation { proposition, .. } => {
+            add_proposition_source_candidates(
+                &mut candidates,
+                "/AssertPreviousRelation/proposition",
+                proposition,
+            );
+        }
+        Intent::AskPreviousRelation { proposition, .. } => {
+            add_proposition_source_candidates(
+                &mut candidates,
+                "/AskPreviousRelation/proposition",
+                proposition,
+            );
+        }
+        Intent::CorrectPremise {
+            superseded,
+            replacement,
+        } => {
+            add_proposition_source_candidates(
+                &mut candidates,
+                "/CorrectPremise/superseded",
+                superseded,
+            );
+            add_proposition_source_candidates(
+                &mut candidates,
+                "/CorrectPremise/replacement",
+                replacement,
+            );
+        }
+        Intent::AddRule {
+            premise,
+            conclusion,
+        } => {
+            add_proposition_source_candidates(&mut candidates, "/AddRule/premise", premise);
+            add_proposition_source_candidates(&mut candidates, "/AddRule/conclusion", conclusion);
+        }
+        Intent::AddConjunctiveRule {
+            premises,
+            conclusion,
+        } => {
+            for (index, premise) in premises.iter().enumerate() {
+                add_proposition_source_candidates(
+                    &mut candidates,
+                    &format!("/AddConjunctiveRule/premises/{index}"),
+                    premise,
+                );
+            }
+            add_proposition_source_candidates(
+                &mut candidates,
+                "/AddConjunctiveRule/conclusion",
+                conclusion,
+            );
+        }
+        Intent::AskConjunction { propositions } => {
+            for (index, proposition) in propositions.iter().enumerate() {
+                add_proposition_source_candidates(
+                    &mut candidates,
+                    &format!("/AskConjunction/propositions/{index}"),
+                    proposition,
+                );
+            }
+        }
+        Intent::CorrectPreviousPremise {
+            predicate,
+            superseded_object,
+            replacement_object,
+            scope,
+        } => {
+            add_source_candidate(
+                &mut candidates,
+                "/CorrectPreviousPremise/predicate",
+                predicate,
+            );
+            add_source_candidate(
+                &mut candidates,
+                "/CorrectPreviousPremise/superseded_object",
+                superseded_object,
+            );
+            add_source_candidate(
+                &mut candidates,
+                "/CorrectPreviousPremise/replacement_object",
+                replacement_object,
+            );
+            if let Some(scope) = scope {
+                add_source_candidate(&mut candidates, "/CorrectPreviousPremise/scope", scope);
+            }
+        }
+        Intent::LinearEquation { left, right } => {
+            add_source_candidate(&mut candidates, "/LinearEquation/left", left);
+            add_source_candidate(&mut candidates, "/LinearEquation/right", right);
+        }
+        Intent::QuadraticEquation { left, right } => {
+            add_source_candidate(&mut candidates, "/QuadraticEquation/left", left);
+            add_source_candidate(&mut candidates, "/QuadraticEquation/right", right);
+        }
+        Intent::Symbolic {
+            expression,
+            variable,
+            ..
+        } => {
+            add_source_candidate(&mut candidates, "/Symbolic/expression", expression);
+            add_source_candidate(&mut candidates, "/Symbolic/variable", variable);
+        }
+        Intent::JsonPointer { document, pointer }
+        | Intent::JsonStatistics { document, pointer } => {
+            add_source_candidate(&mut candidates, "/document", document);
+            add_source_candidate(&mut candidates, "/pointer", pointer);
+        }
+        Intent::JsonObjectProject { document, fields } => {
+            add_source_candidate(&mut candidates, "/document", document);
+            for (index, field) in fields.iter().take(32).enumerate() {
+                add_source_candidate(&mut candidates, &format!("/fields/{index}"), field);
+            }
+        }
+        _ => {}
+    }
+    if candidates.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let mut normalized_source = String::new();
+    let mut source_ranges = Vec::new();
+    for (start, character) in text.char_indices() {
+        let end = start + character.len_utf8();
+        let normalized_character: String = character.to_string().nfkc().collect();
+        normalized_source.push_str(&normalized_character);
+        source_ranges.extend(std::iter::repeat_n(
+            (start, end),
+            normalized_character.len(),
+        ));
+    }
+
+    let japanese_predicate_roles = candidates
+        .iter()
+        .filter(|(role, values)| {
+            role.ends_with("/predicate") && values.iter().any(|value| value == "is")
+        })
+        .map(|(role, _)| role.clone())
+        .collect::<Vec<_>>();
+    let mut result = BTreeMap::new();
+    for (role, values) in candidates {
+        let mut spans = Vec::new();
+        for value in values {
+            let normalized_value: String = value.nfkc().collect();
+            if normalized_value.is_empty() {
+                continue;
+            }
+            let mut offset = 0;
+            while spans.len() < 32
+                && let Some(relative_start) = normalized_source[offset..].find(&normalized_value)
+            {
+                let start = offset + relative_start;
+                let end = start + normalized_value.len();
+                let source_start = source_ranges[start].0;
+                let source_end = source_ranges[end - 1].1;
+                spans.push(SourceSpan {
+                    start: source_start,
+                    end: source_end,
+                    text: text[source_start..source_end].to_string(),
+                });
+                offset = end;
+            }
+        }
+        spans.sort_by_key(|span| (span.start, span.end));
+        spans.dedup_by(|left, right| left.start == right.start && left.end == right.end);
+        if !spans.is_empty() {
+            result.insert(role, spans);
+        }
+    }
+    for predicate_role in japanese_predicate_roles {
+        if result.contains_key(&predicate_role) {
+            continue;
+        }
+        let Some(role_prefix) = predicate_role.strip_suffix("predicate") else {
+            continue;
+        };
+        let Some(subjects) = result.get(&format!("{role_prefix}subject")) else {
+            continue;
+        };
+        let Some(objects) = result.get(&format!("{role_prefix}object")) else {
+            continue;
+        };
+        let mut markers = Vec::new();
+        for subject in subjects {
+            for object in objects.iter().filter(|object| object.start >= subject.end) {
+                let between = &text[subject.end..object.start];
+                if let Some((index, marker)) = ["は", "が"]
+                    .iter()
+                    .filter_map(|marker| between.find(marker).map(|index| (index, *marker)))
+                    .min_by_key(|(index, _)| *index)
+                {
+                    let start = subject.end + index;
+                    markers.push(SourceSpan {
+                        start,
+                        end: start + marker.len(),
+                        text: marker.to_string(),
+                    });
+                }
+            }
+        }
+        markers.sort_by_key(|span| (span.start, span.end));
+        markers.dedup_by(|left, right| left.start == right.start && left.end == right.end);
+        if !markers.is_empty() {
+            result.insert(predicate_role, markers);
+        }
+    }
+    result
 }
 
 fn regex(pattern: &str) -> Result<Regex> {
@@ -3656,11 +3956,17 @@ mod tests {
         assert_eq!(bundle.request.input_version, 3);
         assert_eq!(
             bundle.meaning.parser_version,
-            "declarative-ja-en-v73-arithmetic-topic-question"
+            "declarative-ja-en-v74-role-source-spans"
         );
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());
         assert_eq!(bundle.meaning.spans[0].text, request.text);
+        let expression_source = &bundle.meaning.source_roles["/Calculate/expression"][0];
+        assert_eq!(
+            &request.text[expression_source.start..expression_source.end],
+            "６＋７"
+        );
+        assert_eq!(expression_source.text, "６＋７");
 
         for text in ["6+7は", "謎語は？", "6+7は？保存して"] {
             let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
@@ -3669,6 +3975,50 @@ mod tests {
                 "must not adopt a partial, unknown, or compound request: {text}"
             );
         }
+    }
+    #[test]
+    fn relation_roles_map_to_exact_utf8_source_and_preserve_negation_and_scope() {
+        let request = RequestEnvelope::new(
+            "c",
+            "i",
+            "actor",
+            "[scope=materials-lab]Neraはsensorではない",
+        );
+        let bundle = seal(&request, None).unwrap();
+        let roles = &bundle.meaning.source_roles;
+        for (role, expected) in [
+            ("/Assert/proposition/subject", "Nera"),
+            ("/Assert/proposition/predicate", "は"),
+            ("/Assert/proposition/object", "sensor"),
+            ("/Assert/proposition/scope", "materials-lab"),
+            ("/Assert/proposition/negation", "ではない"),
+        ] {
+            let span = roles[role]
+                .iter()
+                .find(|span| span.text == expected)
+                .unwrap_or_else(|| panic!("missing source role {role}={expected}"));
+            assert_eq!(
+                request.text.get(span.start..span.end),
+                Some(expected),
+                "source span must index the exact original UTF-8 text"
+            );
+        }
+        assert_eq!(roles["/Assert/proposition/predicate"].len(), 1);
+    }
+    #[test]
+    fn old_meaning_ir_without_optional_source_roles_keeps_its_canonical_bytes() {
+        let old_json = serde_json::json!({
+            "parser_version": "old-parser-v1",
+            "intent": {"kind": "UNKNOWN", "reason": "unsupported"},
+            "spans": [],
+            "unresolved": ["unsupported"],
+            "source_kind": "USER_REQUEST",
+            "context_result_ref": null
+        });
+        let old_bytes = canonical(&old_json).unwrap();
+        let old_meaning: MeaningIR = serde_json::from_value(old_json).unwrap();
+        assert!(old_meaning.source_roles.is_empty());
+        assert_eq!(canonical(&old_meaning).unwrap(), old_bytes);
     }
     #[test]
     fn unit_arithmetic_input_requires_a_complete_two_quantity_expression() {
