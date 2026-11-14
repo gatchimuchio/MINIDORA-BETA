@@ -169,17 +169,15 @@ fn escape_role_segment(segment: &str) -> String {
 }
 
 fn serde_tag_role(tag: &str) -> String {
-    tag.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut characters = part.chars();
-            characters
-                .next()
-                .map(|first| first.to_ascii_uppercase().to_string())
-                .unwrap_or_default()
-                + &characters.as_str().to_ascii_lowercase()
-        })
-        .collect()
+    let mut role = String::new();
+    for part in tag.split('_').filter(|part| !part.is_empty()) {
+        let mut characters = part.chars();
+        if let Some(first) = characters.next() {
+            role.push(first.to_ascii_uppercase());
+            role.push_str(&characters.as_str().to_ascii_lowercase());
+        }
+    }
+    role
 }
 
 fn collect_string_leaf_candidates(
@@ -284,7 +282,7 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
     if ends_word && end < bytes.len() && ascii_word_byte(bytes[end]) {
         return false;
     }
-    let numeric = needle.iter().any(u8::is_ascii_digit)
+    let numeric = needle.iter().any(|byte| byte.is_ascii_digit())
         && needle.iter().all(|byte| numeric_token_byte(*byte));
     if numeric
         && ((start > 0 && numeric_token_byte(bytes[start - 1]))
@@ -365,7 +363,7 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
         )
     })?;
     let mut pattern_spans = vec![Vec::<SourceSpan>::new(); patterns.len()];
-    for matched in automaton.find_overlapping_iter(&normalized_source) {
+    for matched in automaton.find_overlapping_iter(normalized_source.as_str()) {
         let pattern_index = matched.pattern().as_usize();
         let pattern = patterns[pattern_index];
         if !has_token_boundaries(&normalized_source, matched.start(), matched.end(), pattern) {
