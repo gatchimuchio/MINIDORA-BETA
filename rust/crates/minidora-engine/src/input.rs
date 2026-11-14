@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v77-japanese-assertion-source-ranges";
+pub const PARSER_VERSION: &str =
+    "declarative-ja-en-v78-japanese-transitive-assertion-source-ranges";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -476,10 +477,158 @@ fn japanese_assertion_source_roles(
     Ok(Some(roles))
 }
 
-/// Project only a complete, unambiguous Japanese copular assertion role map
-/// into a direct-premise evidence record. This validates the already sealed
-/// interpretation and its original byte ranges; it does not reinterpret the
-/// request. Other assertion forms keep their existing input bundle only.
+fn source_span_at(text: &str, start: usize, end: usize) -> Option<SourceSpan> {
+    Some(SourceSpan {
+        start,
+        end,
+        text: text.get(start..end)?.to_string(),
+    })
+}
+
+fn japanese_transitive_assertion_source_roles(
+    text: &str,
+    proposition: &Proposition,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    let trimmed = text.trim();
+    let source_offset = text.len() - text.trim_start().len();
+    let statement = terminal_trim(trimmed);
+    let (body, body_offset, scope_span) =
+        if let Some(scoped) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(statement) {
+            let scope_capture = scoped.get(1).expect("scope capture group exists");
+            let body_capture = scoped.get(2).expect("statement capture group exists");
+            let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
+                return Ok(None);
+            };
+            if scope_span.text.nfkc().collect::<String>()
+                != proposition.scope.nfkc().collect::<String>()
+            {
+                return Ok(None);
+            }
+            (
+                body_capture.as_str(),
+                source_offset + body_capture.start(),
+                Some(scope_span),
+            )
+        } else {
+            if proposition.scope != "default" {
+                return Ok(None);
+            }
+            (statement, source_offset, None)
+        };
+
+    let Some(relation) = regex(r"^([^はが]+?)(は|が)(.+)$")?.captures(body) else {
+        return Ok(None);
+    };
+    let subject_capture = relation.get(1).expect("subject capture group exists");
+    let particle_capture = relation
+        .get(2)
+        .expect("subject-particle capture group exists");
+    let rest_capture = relation
+        .get(3)
+        .expect("object and predicate capture group exists");
+    let Some(subject_span) = captured_source_span(text, body_offset, subject_capture) else {
+        return Ok(None);
+    };
+    let Some(subject_particle_span) = captured_source_span(text, body_offset, particle_capture)
+    else {
+        return Ok(None);
+    };
+
+    let rest_text = rest_capture.as_str();
+    let rest_leading = rest_text.len() - rest_text.trim_start().len();
+    let rest = rest_text.trim();
+    let Some(object_particle_start_in_rest) = rest.rfind('を') else {
+        return Ok(None);
+    };
+    let object_text = &rest[..object_particle_start_in_rest];
+    let predicate_text = &rest[object_particle_start_in_rest + 'を'.len_utf8()..];
+    let object_leading = object_text.len() - object_text.trim_start().len();
+    let object = object_text.trim();
+    let predicate_leading = predicate_text.len() - predicate_text.trim_start().len();
+    let predicate = predicate_text.trim();
+    if object.is_empty() || predicate.is_empty() {
+        return Ok(None);
+    }
+
+    let rest_start = body_offset + rest_capture.start() + rest_leading;
+    let object_start = rest_start + object_leading;
+    let object_particle_start = rest_start + object_particle_start_in_rest;
+    let predicate_start = object_particle_start + 'を'.len_utf8() + predicate_leading;
+    let Some(object_span) = source_span_at(text, object_start, object_start + object.len()) else {
+        return Ok(None);
+    };
+    let Some(object_particle_span) = source_span_at(
+        text,
+        object_particle_start,
+        object_particle_start + 'を'.len_utf8(),
+    ) else {
+        return Ok(None);
+    };
+    let Some(predicate_span) =
+        source_span_at(text, predicate_start, predicate_start + predicate.len())
+    else {
+        return Ok(None);
+    };
+
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    let Some((parsed_subject, parsed_predicate, parsed_object, parsed_negative)) =
+        japanese_transitive_proposition(body)?
+    else {
+        return Ok(None);
+    };
+    let Some((surface_predicate, surface_negative)) =
+        japanese_transitive_verb(&predicate_span.text)
+    else {
+        return Ok(None);
+    };
+    if normalized(&subject_span.text) != normalized(&proposition.subject)
+        || normalized(&object_span.text) != normalized(&proposition.object)
+        || normalized(
+            scope_span
+                .as_ref()
+                .map_or("default", |span| span.text.as_str()),
+        ) != normalized(&proposition.scope)
+        || !matches!(subject_particle_span.text.as_str(), "は" | "が")
+        || object_particle_span.text != "を"
+        || parsed_subject != proposition.subject
+        || parsed_predicate != proposition.predicate
+        || parsed_object != proposition.object
+        || parsed_negative != proposition.negative
+        || surface_predicate != proposition.predicate
+        || surface_negative != proposition.negative
+    {
+        return Ok(None);
+    }
+
+    let mut roles = BTreeMap::from([
+        (
+            "/Assert/proposition/subject".to_string(),
+            vec![subject_span],
+        ),
+        (
+            "/Assert/proposition/subject_particle".to_string(),
+            vec![subject_particle_span],
+        ),
+        ("/Assert/proposition/object".to_string(), vec![object_span]),
+        (
+            "/Assert/proposition/object_particle".to_string(),
+            vec![object_particle_span],
+        ),
+        (
+            "/Assert/proposition/predicate".to_string(),
+            vec![predicate_span],
+        ),
+    ]);
+    if let Some(scope_span) = scope_span {
+        roles.insert("/Assert/proposition/scope".to_string(), vec![scope_span]);
+    }
+    Ok(Some(roles))
+}
+
+/// Project only a complete, unambiguous supported direct Japanese assertion
+/// role map into a direct-premise evidence record. This validates the already
+/// sealed interpretation and its original byte ranges; contextual assertions
+/// and other input families keep their existing bundle only.
 pub(crate) fn assertion_source_evidence(
     bundle: &InputBundle,
 ) -> Result<Option<SealedSourceEvidence>> {
@@ -487,7 +636,23 @@ pub(crate) fn assertion_source_evidence(
         return Ok(None);
     };
     if proposition.predicate != "is" {
-        return Ok(None);
+        let Some(source_roles) =
+            japanese_transitive_assertion_source_roles(&bundle.request.text, proposition)?
+        else {
+            return Ok(None);
+        };
+        if bundle.meaning.source_roles != source_roles {
+            return Ok(None);
+        }
+        return Ok(Some(SealedSourceEvidence {
+            evidence_version: SOURCE_EVIDENCE_VERSION.into(),
+            input_fingerprint: identity(&bundle.request)?,
+            bundle_fingerprint: bundle.fingerprint.clone(),
+            raw_sha256: bundle.raw_sha256.clone(),
+            parser_version: bundle.meaning.parser_version.clone(),
+            semantic_signature: bundle.semantic_signature.clone(),
+            source_roles,
+        }));
     }
 
     let roles = &bundle.meaning.source_roles;
@@ -640,6 +805,11 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     let intent_role = format!("/{}", serde_tag_role(tag));
     if let Intent::Assert { proposition } = intent
         && let Some(source_roles) = japanese_assertion_source_roles(text, proposition)?
+    {
+        return Ok(source_roles);
+    }
+    if let Intent::Assert { proposition } = intent
+        && let Some(source_roles) = japanese_transitive_assertion_source_roles(text, proposition)?
     {
         return Ok(source_roles);
     }
@@ -4046,6 +4216,105 @@ mod tests {
     }
 
     #[test]
+    fn direct_transitive_assertion_roles_capture_original_fields_and_inflection() {
+        for (
+            input_id,
+            text,
+            expected_scope,
+            expected_subject,
+            expected_subject_particle,
+            expected_object,
+            expected_verb,
+            expected_negative,
+        ) in [
+            (
+                "scoped-negative",
+                "[scope=story]ミナは毒を食べません。",
+                Some("story"),
+                "ミナ",
+                "は",
+                "毒",
+                "食べません",
+                true,
+            ),
+            (
+                "implicit-default",
+                "defaultはdefaultを使う",
+                None,
+                "default",
+                "は",
+                "default",
+                "使う",
+                false,
+            ),
+            (
+                "ga-polite",
+                "ユウがノートを使います",
+                None,
+                "ユウ",
+                "が",
+                "ノート",
+                "使います",
+                false,
+            ),
+        ] {
+            let request =
+                RequestEnvelope::new(input_id, input_id, "transitive-source-role-actor", text);
+            let bundle = seal(&request, None).expect("seal direct transitive assertion");
+            assert!(matches!(
+                &bundle.meaning.intent,
+                Intent::Assert { proposition }
+                    if proposition.subject == expected_subject
+                        && proposition.object == expected_object
+                        && proposition.scope == expected_scope.unwrap_or("default")
+                        && proposition.negative == expected_negative
+            ));
+
+            let source_evidence = assertion_source_evidence(&bundle)
+                .expect("validate transitive assertion source map")
+                .expect("complete Japanese transitive source roles are attributable");
+            assert_eq!(
+                source_evidence.source_roles, bundle.meaning.source_roles,
+                "the evidence must use the exact sealed role map"
+            );
+            for (role, expected) in [
+                ("/Assert/proposition/subject", expected_subject),
+                ("/Assert/proposition/object", expected_object),
+                ("/Assert/proposition/predicate", expected_verb),
+            ] {
+                let spans = bundle
+                    .meaning
+                    .source_roles
+                    .get(role)
+                    .unwrap_or_else(|| panic!("missing {role}"));
+                assert_eq!(spans.len(), 1, "ambiguous {role}");
+                assert_eq!(spans[0].text, expected, "wrong {role} source text");
+                assert_eq!(
+                    text.get(spans[0].start..spans[0].end),
+                    Some(expected),
+                    "wrong {role} original UTF-8 range"
+                );
+            }
+            assert_eq!(
+                bundle.meaning.source_roles["/Assert/proposition/subject_particle"][0].text,
+                expected_subject_particle
+            );
+            assert_eq!(
+                bundle.meaning.source_roles["/Assert/proposition/object_particle"][0].text,
+                "を"
+            );
+            assert_eq!(
+                bundle
+                    .meaning
+                    .source_roles
+                    .contains_key("/Assert/proposition/scope"),
+                expected_scope.is_some(),
+                "an implicit default scope must not gain a fabricated source span"
+            );
+        }
+    }
+
+    #[test]
     fn highest_group_mean_questions_have_explicit_japanese_and_english_shapes() {
         for text in [
             "平均が最も高いグループはどれですか",
@@ -4298,7 +4567,7 @@ mod tests {
         assert_eq!(bundle.request.input_version, 3);
         assert_eq!(
             bundle.meaning.parser_version,
-            "declarative-ja-en-v77-japanese-assertion-source-ranges"
+            "declarative-ja-en-v78-japanese-transitive-assertion-source-ranges"
         );
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());

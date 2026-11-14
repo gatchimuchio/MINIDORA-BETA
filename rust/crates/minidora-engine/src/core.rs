@@ -7028,6 +7028,161 @@ mod core_construction_observation_tests {
     }
 
     #[test]
+    fn direct_transitive_assertion_source_roles_follow_the_fact_into_reopened_proofs() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-core-transitive-source-proof-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("unique transitive-source state directory");
+        let actor = "transitive-source-proof-actor";
+        let assertion_request = RequestEnvelope::new(
+            "transitive-source-proof-case",
+            "transitive-source-proof-input",
+            actor,
+            "[scope=biology]ミナは毒を食べません。",
+        );
+        let mut engine = Engine::open(&directory).expect("open Core");
+        let assertion = engine
+            .execute(actor, assertion_request.clone())
+            .expect("execute sealed Japanese transitive assertion");
+        assert_eq!(assertion.lifecycle, Lifecycle::Commit, "{assertion:?}");
+        assert_eq!(assertion.guarantee, Guarantee::UserPremise);
+        let assertion_case = engine
+            .latest(actor, &assertion_request.case_id)
+            .expect("load assertion case")
+            .expect("assertion case exists");
+        let assertion_bundle = assertion_case
+            .bundle
+            .as_ref()
+            .expect("assertion bundle is sealed");
+        let expected_evidence = input::assertion_source_evidence(assertion_bundle)
+            .expect("build sealed transitive source evidence")
+            .expect("transitive source roles are complete and unambiguous");
+        assert_eq!(
+            expected_evidence.parser_version,
+            input::PARSER_VERSION,
+            "the new role projection has an explicit parser revision"
+        );
+        for (role, expected) in [
+            ("/Assert/proposition/scope", "biology"),
+            ("/Assert/proposition/subject", "ミナ"),
+            ("/Assert/proposition/subject_particle", "は"),
+            ("/Assert/proposition/object", "毒"),
+            ("/Assert/proposition/object_particle", "を"),
+            ("/Assert/proposition/predicate", "食べません"),
+        ] {
+            let spans = expected_evidence
+                .source_roles
+                .get(role)
+                .unwrap_or_else(|| panic!("missing source role {role}"));
+            assert_eq!(spans.len(), 1, "ambiguous source role {role}");
+            assert_eq!(spans[0].text, expected, "wrong source role {role}");
+            assert_eq!(
+                assertion_request.text.get(spans[0].start..spans[0].end),
+                Some(expected),
+                "source role {role} does not point into original UTF-8 bytes"
+            );
+        }
+
+        let fact_id = assertion.dependencies[0].clone();
+        let memory = engine
+            .store
+            .load_memory(actor)
+            .expect("load Core memory after assertion");
+        let premise = memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("transitive assertion fact is in Core memory");
+        assert_eq!(premise.source_evidence, Some(expected_evidence.clone()));
+        assert!(premise.proposition.negative);
+
+        let mut ambiguous_bundle = assertion_bundle.clone();
+        let duplicate_predicate_span =
+            ambiguous_bundle.meaning.source_roles["/Assert/proposition/predicate"][0].clone();
+        ambiguous_bundle
+            .meaning
+            .source_roles
+            .get_mut("/Assert/proposition/predicate")
+            .expect("predicate source role exists")
+            .push(duplicate_predicate_span);
+        assert!(
+            input::assertion_source_evidence(&ambiguous_bundle)
+                .expect("validate ambiguous transitive source evidence")
+                .is_none(),
+            "duplicated inflected-predicate spans are not projected"
+        );
+
+        drop(engine);
+        let mut reopened = Engine::open(&directory).expect("reopen Core state");
+        let restored_memory = reopened
+            .store
+            .load_memory(actor)
+            .expect("restore actor memory");
+        let restored_premise = restored_memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .expect("restore source-backed transitive premise");
+        assert_eq!(
+            restored_premise.source_evidence,
+            Some(expected_evidence.clone()),
+            "the memory revision retains transitive source roles after reopen"
+        );
+        let proof = relations::query(&restored_memory, &restored_premise.proposition, 32)
+            .expect("query the source-backed transitive premise");
+        assert_eq!(proof.status, "SUPPORTED");
+        assert_eq!(proof.facts.len(), 1);
+        assert_eq!(
+            proof.facts[0].source_evidence,
+            Some(expected_evidence.clone())
+        );
+        assert!(relations::answer_dependencies(&proof).contains(&fact_id));
+
+        let ask = RequestEnvelope::new(
+            "transitive-source-proof-case",
+            "transitive-source-proof-followup",
+            actor,
+            "[scope=biology]ミナは毒を食べませんか",
+        );
+        let answer = reopened
+            .execute(actor, ask)
+            .expect("Core consumes the restored premise through the normal relation query");
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert_eq!(answer.guarantee, Guarantee::UserPremise);
+        assert!(answer.dependencies.contains(&fact_id));
+
+        println!(
+            "B24_TRANSITIVE_ASSERTION_SOURCE_PROOF={}",
+            serde_json::to_string(&serde_json::json!({
+                "source": assertion_request.text,
+                "parser_version": expected_evidence.parser_version,
+                "bundle_fingerprint": expected_evidence.bundle_fingerprint,
+                "raw_sha256": expected_evidence.raw_sha256,
+                "semantic_signature": expected_evidence.semantic_signature,
+                "source_roles": expected_evidence.source_roles,
+                "assertion_result_text": assertion.text,
+                "fact_id": &fact_id,
+                "reopened_proof_status": proof.status,
+                "follow_up_question": "[scope=biology]ミナは毒を食べませんか",
+                "follow_up_result_text": answer.text,
+                "follow_up_dependencies": &answer.dependencies,
+                "negative_verb_polarity_preserved": restored_premise.proposition.negative,
+                "duplicated_predicate_role_not_projected": true,
+                "memory_reopened_with_same_source_evidence": true,
+                "query_proof_returns_source_evidence": true,
+                "normal_core_followup_consumes_fact": answer.dependencies.contains(&fact_id),
+                "source_roles_are_themselves_world_truth": false,
+                "external_network_or_effects": false
+            }))
+            .expect("serialize B24 transitive assertion source proof observation")
+        );
+        drop(reopened);
+        fs::remove_dir_all(directory).expect("remove isolated transitive-source state");
+    }
+
+    #[test]
     fn direct_core_observation_preserves_relation_conditions_subject_scope_and_negation() {
         let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let directory = std::env::temp_dir().join(format!(

@@ -1,0 +1,129 @@
+{
+  "record_id": "B24_INPUT_MACHINE_OBSERVATION_07",
+  "batch": "MB-BUILD-20261114-B24",
+  "recorded_at": "2026-11-14",
+  "base_head": "8c425bf28af09b0284101836da598d53fb8d6756",
+  "environment": {
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "execution_surface": "in-process public Engine API; CLI/UI/output delivery not exercised"
+  },
+  "observed_route": {
+    "assertion_result_text": "前提を保存しました: ミナは毒を食べない。\n前提ID: fact:0e954bcd64201fbcb1ab37d92a032e37e55e49d94f4bdbf6aa9154d5bedc5b79\n保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。",
+    "bundle_fingerprint": "604b15b600277aee6a1178e52a8ed4c779dfc95c573fec56e0cba344a8c5deac",
+    "duplicated_predicate_role_not_projected": true,
+    "external_network_or_effects": false,
+    "fact_id": "fact:0e954bcd64201fbcb1ab37d92a032e37e55e49d94f4bdbf6aa9154d5bedc5b79",
+    "follow_up_dependencies": [
+      "fact:0e954bcd64201fbcb1ab37d92a032e37e55e49d94f4bdbf6aa9154d5bedc5b79"
+    ],
+    "follow_up_question": "[scope=biology]ミナは毒を食べませんか",
+    "follow_up_result_text": "提示された前提の範囲では、ミナは毒を食べない（範囲: biology）。",
+    "memory_reopened_with_same_source_evidence": true,
+    "negative_verb_polarity_preserved": true,
+    "normal_core_followup_consumes_fact": true,
+    "parser_version": "declarative-ja-en-v78-japanese-transitive-assertion-source-ranges",
+    "query_proof_returns_source_evidence": true,
+    "raw_sha256": "1e3caa24a88610e480f99d1be29654165dc35675f2a12f7b97d1bc15a220ae6a",
+    "reopened_proof_status": "SUPPORTED",
+    "semantic_signature": "a118b22690b4bf81d68d592853713aa62a3a99b565a94fced197d277a8696bdb",
+    "source": "[scope=biology]ミナは毒を食べません。",
+    "source_roles": {
+      "/Assert/proposition/object": [
+        {
+          "end": 27,
+          "start": 24,
+          "text": "毒"
+        }
+      ],
+      "/Assert/proposition/object_particle": [
+        {
+          "end": 30,
+          "start": 27,
+          "text": "を"
+        }
+      ],
+      "/Assert/proposition/predicate": [
+        {
+          "end": 45,
+          "start": 30,
+          "text": "食べません"
+        }
+      ],
+      "/Assert/proposition/scope": [
+        {
+          "end": 14,
+          "start": 7,
+          "text": "biology"
+        }
+      ],
+      "/Assert/proposition/subject": [
+        {
+          "end": 21,
+          "start": 15,
+          "text": "ミナ"
+        }
+      ],
+      "/Assert/proposition/subject_particle": [
+        {
+          "end": 24,
+          "start": 21,
+          "text": "は"
+        }
+      ]
+    },
+    "source_roles_are_themselves_world_truth": false
+  },
+  "commands": [
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "result": "PASS: 240 unit tests and 12 integration tests; 0 failed"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --lib direct_transitive_assertion_source_roles_follow_the_fact_into_reopened_proofs -- --nocapture",
+      "result": "PASS: 1 focused route observation"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "result": "PASS"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "scope": {
+    "covered": [
+      "Direct Japanese transitive Assert source roles for subject, subject particle, object, object particle, inflected predicate, and explicit scope",
+      "Negative verb morphology remains aligned with the sealed proposition",
+      "Versioned source evidence is stored on the direct USER_PREMISE Fact",
+      "Memory reopen revalidates the evidence against the actor-owned sealed InputBundle",
+      "Reopened relation proof returns the same Fact and a subsequent Core query consumes its Fact ID",
+      "Duplicated predicate role attribution is not projected into fact evidence"
+    ],
+    "not_established": [
+      "AssertPreviousRelation/context-restored assertions and multi-source provenance",
+      "Other assertion/parser families and general Japanese meaning coverage",
+      "CLI/UI rendering, delivery, full three-machine closure, full workspace runtime suite, other OS, QA, and requirement acceptance",
+      "Any outside-world truth claim: source spans establish origin linkage only"
+    ],
+    "requirement_acceptance": {
+      "A04": "UNVERIFIED",
+      "A15": "UNVERIFIED",
+      "E08": "UNVERIFIED"
+    }
+  }
+}
