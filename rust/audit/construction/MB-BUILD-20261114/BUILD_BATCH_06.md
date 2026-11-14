@@ -12,7 +12,7 @@
 
 - ⓪ Authority: repository `AGENTS.md`, the complete three-piece BUILD set and manifest, Core/R2 implementation status, requirement mappings and current Rust source were inspected. The BUILD documents define the implementation target; this report and route evidence record observations without changing those source documents.
 - ① Repository: `MINIDORA-BETA`, `main`, base `015f2750243a974b2d49313560e511b00bf63d4a`. The batch began with a clean worktree and `origin/main` at the same base.
-- ② Writers and recovery: one main worktree, no concurrent writer, and sufficient free disk were observed. Before edits, local `main` and `origin/main` were at the base and local recovery refs were rotated with expected-old checks. Fresh pre-push inspection found `origin/codex/backup-main` at `d8361afb57dd443dd919733fd35205211f92d23b` and `origin/codex/backup-main-prev` at `b6dc924aeaad9256d9e258b78517ea3d0f59186f`; backup tags remained at the base. Final recovery refs will be advanced using those exact observed OIDs after the main push succeeds.
+- ② Writers and recovery: one main worktree, no concurrent writer, and sufficient free disk were observed. Before edits, local `main` and `origin/main` were at the base and local recovery refs were rotated with expected-old checks. Fresh pre-push inspection found `origin/codex/backup-main` at `d8361afb57dd443dd919733fd35205211f92d23b` and `origin/codex/backup-main-prev` at `b6dc924aeaad9256d9e258b78517ea3d0f59186f`; backup tags remained at the base. After the Batch 06 implementation commit was pushed, the backup branch and tag were advanced with compare-and-swap; the previous backup branch and tag point at the pre-edit base.
 - ③ Bounded unit: immediately after a committed same-case typed relation answer, accept one singular-pronoun relation assertion by rechecking its current proof, restoring subject/scope, and storing a user premise; then verify that a following relation question consumes the new fact. Missing, cross-case, cross-actor and changed-proof cases must stop without adoption.
 - ④ Exclusions: no general co-reference, plural or multi-clause assertion, unrelated previous-result interpretation, truth verification, full workspace runtime suite, release decision or requirement acceptance is claimed.
 
@@ -42,6 +42,10 @@ The fresh-process route records 49 requests and reconciliation observations, inc
 - Fresh-process route smoke — PASS, 49 observations; unresolved input, adoption, exact following-fact query and denial checks passed.
 - `git diff --check` — PASS.
 - Full workspace runtime suite — NOT RUN.
+
+## GitHub retention
+
+The implementation commit was pushed to `main` without force. `codex/backup-main` branch/tag and `codex/backup-main-prev` branch/tag were synchronized to the final Batch 06 commit and the pre-edit base respectively using exact expected-old OIDs.
 
 ## Acceptance boundary
 
