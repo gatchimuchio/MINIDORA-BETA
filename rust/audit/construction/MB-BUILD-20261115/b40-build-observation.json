@@ -1,0 +1,111 @@
+{
+  "schema": "MINIDORA_B40_BUILD_OBSERVATION_V1",
+  "base_commit": "a130d32eca93fac0b57747a4448646d9324346d0",
+  "purpose": "Run the B39 rule-bearing V3 relation comparison through ContentPlan, K7 render, and process-reopened follow-up replay.",
+  "source": {
+    "path": "rust/crates/minidora-engine/tests/core_atomic_relation_comparison_40.rs",
+    "sha256": "8f48563fe1b89dc70049a50f0b2395b2d910400849226c260b610be6d51c2ae9",
+    "producer": "scoped direct premises and one declared relation rule -> relation inventories -> proof IDs -> V3 typed comparison request",
+    "consumer": "MeaningCompositionReport -> ContentPlan -> K7 RenderObservation -> reopened Engine follow-up",
+    "implementation_changed": false
+  },
+  "runtime": {
+    "log": {
+      "path": "rust/audit/construction/MB-BUILD-20261115/b40-focused-tests.log",
+      "sha256": "2941e4c2c3ddf29829a3950d8902d0dc03efe20769b71d28b14e76c2bf2fdf74",
+      "failed_attempts_retained": true
+    },
+    "b40_v3_comparison": {
+      "command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_40 -- --nocapture",
+      "status": "PASS",
+      "exit_code": 0,
+      "test_count": 1,
+      "artifact_kind": "minidora.relation-comparison-content.v3",
+      "artifact_sha256": "cdddc56b393acdc45f32ee62063889b1b02580fa1c8f77b8e28b8d7d5249e34f",
+      "result_id": "13d171e9af5300da990a6e767473aba09333a63e5077a056ebff201061cf9bb7",
+      "content_plan_id": "3402f969b7f7912d351079f441b570e41f118d38faa18a30c9b9678b57963799",
+      "render_status": "RENDERED",
+      "render_sha256": "ef2a1b2b0d6bfc4fbe90bdc9115485bcc639126790f00d8fdcc6a4824831d76e",
+      "render_bytes": 1970,
+      "rule_unit_count": 1,
+      "reopened_followup": {
+        "result_id": "7df5fd1273fe58e51a0cb23b26935d0eab830c8007aa5b8dbc8a56e6ac870c61",
+        "lifecycle": "COMMIT",
+        "consumes_prior_comparison": true,
+        "render_status": "RENDERED"
+      },
+      "outside_world_truth": "not checked"
+    },
+    "b38_compatibility_regression": {
+      "command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_38 -- --nocapture",
+      "status": "PASS",
+      "exit_code": 0,
+      "test_count": 1,
+      "v2_direct_comparison_and_reopened_followup": "PASS",
+      "v1_legacy_report_and_reopened_followup": "PASS"
+    }
+  },
+  "boundary_observations": [
+    {
+      "fixture": "two-rule derived comparison",
+      "budget_max_actions": 32,
+      "observed": "SUSPEND / RESOURCE_LIMIT during proof expansion",
+      "status": "OBSERVED"
+    },
+    {
+      "fixture": "same two-rule derived comparison",
+      "budget_max_actions": 256,
+      "observed": "comparison committed but surfaced legacy report text; V3 assertion failed",
+      "artifact_kind_directly_read": false,
+      "likely_explanation": "V3/V2 typed-unit bounds caused the documented V1 fallback; exact rejecting unit/limit was not captured",
+      "status": "OBSERVED_WITH_INFERENCE"
+    }
+  ],
+  "checks": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --locked -p minidora-engine --all-targets",
+      "status": "PASS",
+      "exit_code": 0,
+      "note": "Compiles engine test targets; does not execute all test cases."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "exit_code": 0
+    }
+  ],
+  "gate": {
+    "CORE-G03": "PARTIAL",
+    "other_core_gates": "not reassessed in B40"
+  },
+  "environment": {
+    "os": "linux",
+    "rustc": "1.99.1",
+    "cargo": "1.99.1",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "three_document_set": {
+    "current_repository_set": "R4 2026-11-15; unchanged",
+    "r4_spec_sha256": "eb2ca32bea74e88f5d82e370d33b2f62f2f4f6aeadbc2375fc78f428342ab0b7",
+    "r4_schedule_sha256": "a4a2aba0af11f8cccd86c45e4ab2dc280cbea9be155b949cd863a156f8585fbf",
+    "r4_work_order_sha256": "ac5484a5ce2272c91227ae36e9c18a1dcaa152e80004c6c87bf40c9a95c7c4c0",
+    "r4_archive_sha256": "fc7822f6fb3a734990dc208dc8dc264b49607d8b6476c9695bd5660dccf270ee",
+    "uploaded_2026_11_14_archive_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "extracted_or_copied": false
+  },
+  "assets": {
+    "keep": 5,
+    "store": 0,
+    "in_use": 3,
+    "trash": 0,
+    "hold": 0,
+    "total": 8,
+    "temporary_test_directories_remaining": 0
+  },
+  "release_or_deployment": "not performed"
+}

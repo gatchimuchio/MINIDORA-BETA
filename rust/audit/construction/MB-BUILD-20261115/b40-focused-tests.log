@@ -1,0 +1,119 @@
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.29s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+
+thread 'derived_comparison_v3_replays_rules_renders_and_survives_reopen' (425571) panicked at crates/minidora-engine/tests/core_atomic_relation_comparison_40.rs:107:5:
+assertion `left == right` failed: ResultRecord { id: "3dca97c99c18441d57af5bc3499a8c18fc4a7bdb1421a988b82ec6dde0a3abaa", input_id: "b40-comparison", input_version: 1, lifecycle: Suspend, text: "proof expansion exceeded the task relation budget", reason: Some("RESOURCE_LIMIT: proof expansion exceeded the task relation budget"), guarantee: Unknown, calculation: None, content_plan: None, render: None, receipts: [], evidence: [], dependencies: [], execution_graph_ref: None }
+  left: Suspend
+ right: Commit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... FAILED
+
+failures:
+
+failures:
+    derived_comparison_v3_replays_rules_renders_and_survives_reopen
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_atomic_relation_comparison_40`
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+
+thread 'derived_comparison_v3_replays_rules_renders_and_survives_reopen' (425699) panicked at crates/minidora-engine/tests/core_atomic_relation_comparison_40.rs:110:5:
+assertion failed: compared.text.starts_with("左右の保存関係根拠を照合した比較です。")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... FAILED
+
+failures:
+
+failures:
+    derived_comparison_v3_replays_rules_renders_and_survives_reopen
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_atomic_relation_comparison_40`
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+
+thread 'derived_comparison_v3_replays_rules_renders_and_survives_reopen' (425814) panicked at crates/minidora-engine/tests/core_atomic_relation_comparison_40.rs:110:5:
+missing the opening unit from composed comparison text: 保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。
+比較対象: Aster／Beryl（scope: b40-derived-comparison-lab）
+両側で確認した同じ関係: Asterはinspectedである ／ Berylはinspectedである
+根拠(Aster): Asterはinspectedである（保存規則からの導出; 記録ID: fact:7ad6894a3ab104f16a638e85b195a02eaef2717ff1f481caa33b84f51c756a08; 依存ID: fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396, rule:965b5feacf8c29773e72e0ccaa2c7dbf4b7a91b812571994c642ecbbb8ad51f9）
+根拠(Beryl): Berylはinspectedである（保存規則からの導出; 記録ID: fact:cb4491d1eb74b3ace7a23520ba5e9512ef1795285a83e8272f76aa7ea73c1644; 依存ID: fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294, rule:965b5feacf8c29773e72e0ccaa2c7dbf4b7a91b812571994c642ecbbb8ad51f9）
+両側で確認した同じ関係: Asterはreliableである ／ Berylはreliableである
+根拠(Aster): Asterはreliableである（保存規則からの導出; 記録ID: fact:b84adf6a91acb7b1be81313dd25cf3ed3c2dfd39d3b246b8e0181f5687f91e7a; 依存ID: fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396, rule:1e5641f1b749c53b79509c4aa88e3188b6b5df816fd30eeb25feaa824053703e, rule:965b5feacf8c29773e72e0ccaa2c7dbf4b7a91b812571994c642ecbbb8ad51f9, rule:fc0245b4af395582b0b554eec727e4da3947e93d83c4c42aa2d002b210b03050）
+根拠(Beryl): Berylはreliableである（保存規則からの導出; 記録ID: fact:e56c1dc47e71ff7ad34359a13ccdfedcc56712d2f7fe21bdf5698875013346b7; 依存ID: fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294, rule:1e5641f1b749c53b79509c4aa88e3188b6b5df816fd30eeb25feaa824053703e, rule:965b5feacf8c29773e72e0ccaa2c7dbf4b7a91b812571994c642ecbbb8ad51f9, rule:fc0245b4af395582b0b554eec727e4da3947e93d83c4c42aa2d002b210b03050）
+両側で確認した同じ関係: Asterはsensorである ／ Berylはsensorである
+根拠(Aster): Asterはsensorである（直接提示された前提; 記録ID: fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396; 依存ID: なし）
+根拠(Beryl): Berylはsensorである（直接提示された前提; 記録ID: fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294; 依存ID: なし）
+確認できた範囲では、明確に片側のみと分類できる関係はありませんでした。保存記録が網羅的とは限りません。
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... FAILED
+
+failures:
+
+failures:
+    derived_comparison_v3_replays_rules_renders_and_survives_reopen
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_atomic_relation_comparison_40`
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+MINIDORA_B40_TRACE={"comparison":{"artifact_kind":"minidora.relation-comparison-content.v3","artifact_sha256":"cdddc56b393acdc45f32ee62063889b1b02580fa1c8f77b8e28b8d7d5249e34f","plan_id":"3402f969b7f7912d351079f441b570e41f118d38faa18a30c9b9678b57963799","proof_ids":["fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294","fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:cd56167fb3be9ea67ba022f4e93587f4df858bab899e2ab551927328c6d0a31f","fact:f8e68b177edf26c3f4f84f51ca177a3a49ee67f3389f44cd91f689439c006fa6","rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"render_bytes":1970,"render_sha256":"ef2a1b2b0d6bfc4fbe90bdc9115485bcc639126790f00d8fdcc6a4824831d76e","result_id":"13d171e9af5300da990a6e767473aba09333a63e5077a056ebff201061cf9bb7","rule_unit_count":1},"os":"linux","outside_world_truth":"not checked","producer":"relation inventory -> V3 rule-bearing typed comparison -> ContentPlan -> K7 render","reopened_followup":{"lifecycle":"COMMIT","prior_comparison_consumed":true,"rendered":true,"result_id":"7df5fd1273fe58e51a0cb23b26935d0eab830c8007aa5b8dbc8a56e6ac870c61"},"schema":"MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V1","scope":"b40-derived-comparison-lab","seed_premise_ids":["fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294"],"seed_rule_ids":["rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"subjects":["Aster","Beryl"]}
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/core_atomic_relation_comparison_38.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_38-276d3a884089cefe)
+
+running 1 test
+MINIDORA_B38_TRACE={"comparison":{"artifact_sha256":"95f7108520086ca80a01cb8917489c3a404a7c0f3d29dc9a835386ebc2375015","content_units":["左右の保存関係根拠を照合した比較です。","比較対象Aは「Aster」です（範囲: b38-comparison-lab）。","比較対象Bは「Beryl」です（範囲: b38-comparison-lab）。","両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである。","Aster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである。","Beryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである。","根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6; 依存ID: なし）。","根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488; 依存ID: なし）。","根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e; 依存ID: なし）。","根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74; 依存ID: なし）。","この比較は範囲「b38-comparison-lab」の保存記録内の支持を分類し、片側の無支持は関係の不存在を証明せず、保存記録の網羅性と現実世界の真偽も確認していません。"],"lifecycle":"COMMIT","proof_ids":["fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e","fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6","fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488","fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74"],"render_bytes":1626,"render_sha256":"cc11a62bf09341611566d7141ea956b7231fbb23bc8eb01dd2a3f71584909034","result_id":"1a3cac093f32220ec66e7a522e3154f1da4344f24aa926343a561fbbd5b42abf","text":"左右の保存関係根拠を照合した比較です。はじめに、比較対象Aは「Aster」です（範囲: b38-comparison-lab）。これに対して、比較対象Bは「Beryl」です（範囲: b38-comparison-lab）。同じく、両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである。比較に目を向けると、Aster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである。比較に目を向けると、Beryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである。根拠として、根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6; 依存ID: なし）。根拠として、根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488; 依存ID: なし）。根拠として、根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e; 依存ID: なし）。根拠として、根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74; 依存ID: なし）。ただし、この比較は範囲「b38-comparison-lab」の保存記録内の支持を分類し、片側の無支持は関係の不存在を証明せず、保存記録の網羅性と現実世界の真偽も確認していません。"},"conflicting_comparison":{"has_conflict":true,"lifecycle":"COMMIT","proof_ids":["fact:0a75a5bdb7bb8e89517437212a893691d439926733058002fcff31500f453b2f","fact:52fbde544e760fd250b58993a05f356ad74b793d4a5a012a32f3116783062a1f","fact:6c07c7e7171580a9d2c4ada8bc0e83d23ea47bd26504f3fd37ef55d0d6bd39cf"],"result_id":"6ac641d255c56ad1f406a126a961473ecb134d2f4d89d2160e6200e0ffbe47fc","text":"左右の保存関係根拠を照合した比較です。はじめに、比較対象Aは「Coda」です（範囲: b38-conflict-lab）。これに対して、比較対象Bは「Dara」です（範囲: b38-conflict-lab）。比較に目を向けると、競合根拠を含む関係（共通・片側のみと確定しません）: Codaはpilotである。比較に目を向けると、競合根拠を含む関係（共通・片側のみと確定しません）: Codaはpilotではない。根拠として、根拠(Dara): Daraはpilotである（直接提示された前提; 記録ID: fact:6c07c7e7171580a9d2c4ada8bc0e83d23ea47bd26504f3fd37ef55d0d6bd39cf; 依存ID: なし）。根拠として、根拠(Coda): Codaはpilotである（直接提示された前提; 記録ID: fact:52fbde544e760fd250b58993a05f356ad74b793d4a5a012a32f3116783062a1f; 依存ID: なし; 対立根拠あり）。根拠として、根拠(Coda): Codaはpilotではない（直接提示された前提; 記録ID: fact:0a75a5bdb7bb8e89517437212a893691d439926733058002fcff31500f453b2f; 依存ID: なし; 対立根拠あり）。ただし、この比較は範囲「b38-conflict-lab」の保存記録内の支持を分類し、片側の無支持は関係の不存在を証明せず、保存記録の網羅性と現実世界の真偽も確認していません。"},"legacy_artifact_reader":{"kind":"minidora.relation-comparison-report.v1","prior_comparison_consumed":true,"reopened_followup_lifecycle":"COMMIT"},"os":"linux","outside_world_truth":"not checked","producer":"relation_comparison_inventory -> Core typed Compare units -> MeaningCompositionReport","reopened_context":{"lifecycle":"COMMIT","prior_comparison_consumed":true,"rendered":true,"result_id":"3fcd473a8b5c01dff23e36451572143b926a9b62af868b335b5c74f5c04892fe"},"schema":"MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V2","scope":"b38-comparison-lab","seed_proofs":["fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488","fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6","fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74","fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e"],"subjects":["Aster","Beryl"]}
+test proof_derived_comparison_content_is_adopted_replayed_and_recovered ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.22s
+
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+MINIDORA_B40_TRACE={"comparison":{"artifact_kind":"minidora.relation-comparison-content.v3","artifact_sha256":"cdddc56b393acdc45f32ee62063889b1b02580fa1c8f77b8e28b8d7d5249e34f","plan_id":"3402f969b7f7912d351079f441b570e41f118d38faa18a30c9b9678b57963799","proof_ids":["fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294","fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:cd56167fb3be9ea67ba022f4e93587f4df858bab899e2ab551927328c6d0a31f","fact:f8e68b177edf26c3f4f84f51ca177a3a49ee67f3389f44cd91f689439c006fa6","rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"render_bytes":1970,"render_sha256":"ef2a1b2b0d6bfc4fbe90bdc9115485bcc639126790f00d8fdcc6a4824831d76e","result_id":"13d171e9af5300da990a6e767473aba09333a63e5077a056ebff201061cf9bb7","rule_unit_count":1},"os":"linux","outside_world_truth":"not checked","producer":"relation inventory -> V3 rule-bearing typed comparison -> ContentPlan -> K7 render","reopened_followup":{"lifecycle":"COMMIT","prior_comparison_consumed":true,"rendered":true,"result_id":"7df5fd1273fe58e51a0cb23b26935d0eab830c8007aa5b8dbc8a56e6ac870c61"},"schema":"MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V1","scope":"b40-derived-comparison-lab","seed_premise_ids":["fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294"],"seed_rule_ids":["rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"subjects":["Aster","Beryl"]}
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.37s
+
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+MINIDORA_B40_TRACE={"comparison":{"artifact_kind":"minidora.relation-comparison-content.v3","artifact_sha256":"cdddc56b393acdc45f32ee62063889b1b02580fa1c8f77b8e28b8d7d5249e34f","plan_id":"3402f969b7f7912d351079f441b570e41f118d38faa18a30c9b9678b57963799","proof_ids":["fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294","fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:cd56167fb3be9ea67ba022f4e93587f4df858bab899e2ab551927328c6d0a31f","fact:f8e68b177edf26c3f4f84f51ca177a3a49ee67f3389f44cd91f689439c006fa6","rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"render_bytes":1970,"render_sha256":"ef2a1b2b0d6bfc4fbe90bdc9115485bcc639126790f00d8fdcc6a4824831d76e","result_id":"13d171e9af5300da990a6e767473aba09333a63e5077a056ebff201061cf9bb7","rule_unit_count":1},"os":"linux","outside_world_truth":"not checked","producer":"relation inventory -> V3 rule-bearing typed comparison -> ContentPlan -> K7 render","reopened_followup":{"lifecycle":"COMMIT","prior_comparison_consumed":true,"rendered":true,"result_id":"7df5fd1273fe58e51a0cb23b26935d0eab830c8007aa5b8dbc8a56e6ac870c61"},"schema":"MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V1","scope":"b40-derived-comparison-lab","seed_premise_ids":["fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294"],"seed_rule_ids":["rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"subjects":["Aster","Beryl"]}
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.48s
+
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.72s
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-2c604a1a1ab3bfd2)
+
+running 1 test
+MINIDORA_B40_TRACE={"comparison":{"artifact_kind":"minidora.relation-comparison-content.v3","artifact_sha256":"cdddc56b393acdc45f32ee62063889b1b02580fa1c8f77b8e28b8d7d5249e34f","plan_id":"3402f969b7f7912d351079f441b570e41f118d38faa18a30c9b9678b57963799","proof_ids":["fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294","fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:cd56167fb3be9ea67ba022f4e93587f4df858bab899e2ab551927328c6d0a31f","fact:f8e68b177edf26c3f4f84f51ca177a3a49ee67f3389f44cd91f689439c006fa6","rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"render_bytes":1970,"render_sha256":"ef2a1b2b0d6bfc4fbe90bdc9115485bcc639126790f00d8fdcc6a4824831d76e","result_id":"13d171e9af5300da990a6e767473aba09333a63e5077a056ebff201061cf9bb7","rule_unit_count":1},"os":"linux","outside_world_truth":"not checked","producer":"relation inventory -> V3 rule-bearing typed comparison -> ContentPlan -> K7 render","reopened_followup":{"lifecycle":"COMMIT","prior_comparison_consumed":true,"rendered":true,"result_id":"7df5fd1273fe58e51a0cb23b26935d0eab830c8007aa5b8dbc8a56e6ac870c61"},"schema":"MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V1","scope":"b40-derived-comparison-lab","seed_premise_ids":["fact:20f24d2010f237d8d7dd3b63d8e613aab1599a94abbdd7c500333eb192fa1396","fact:11798ac4ebaeec6fcd92d85ac6dfa6f87809ef7b927c3f6437450dd8574d9294"],"seed_rule_ids":["rule:ce87cd2cef37665eed2726e12d4312f3a2274c1a0425fd24fd76051eca144c69"],"subjects":["Aster","Beryl"]}
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
