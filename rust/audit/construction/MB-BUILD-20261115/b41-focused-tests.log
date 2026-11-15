@@ -1,0 +1,32 @@
+B41 focused build log
+Base: 08688315f3b82f0032ad4bcb16f1638438b6cb35
+Environment: Linux; rustc 1.99.1; cargo 1.99.1
+Target directory: /workspace/.minidora-cloud/rust-target
+
+Fixture development observations:
+- First B41 run committed a V4 artifact, then a test assertion expecting exactly two rule units failed with observed count 3. The proof contains two declared rules and one Core-composed rule. The assertion was revised to require both declared rules while matching all rules through the complete proof set.
+- A subsequent assertion selected a relation-summary unit instead of a fact Evidence unit. The test selector was narrowed to `EVIDENCE` units beginning `根拠(`.
+- The first reopened follow-up used the default max_actions=32 and returned `RESOURCE_LIMIT`. The final follow-up uses the same explicit max_actions=256 as the comparison. This records a local proof-expansion budget boundary; it is not a general resource guarantee.
+
+Final targeted commands:
+
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_41 -- --nocapture`
+PASS: 1 test. Artifact `minidora.relation-comparison-content.v4`; 16 typed units; 3 rule units; 9/9 proof IDs retained; max V4 fact Evidence text 178 bytes; reconstructed full-dependency V3 style max 451 bytes; ContentPlan and K7 render matched; reopened follow-up COMMIT with prior-result dependency and RENDERED output.
+Trace artifact SHA-256: b68a3409e069c64e8ccf4fba1fda90b6cd07fdff2db6bd232801f4adefed0821
+
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_40 -- --nocapture`
+PASS: 1 test. Existing V3 artifact, one rule, complete proof mapping, K7 render, and reopened V3 follow-up.
+
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_38 -- --nocapture`
+PASS: 1 test. Existing V2 direct-premise comparison and V1 legacy report follow-up.
+
+`/workspace/.cargo/bin/cargo fmt --all -- --check`
+PASS.
+
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo check --locked -p minidora-engine --all-targets`
+PASS. Compile check only; it did not execute every test.
+
+`git diff --check`
+PASS.
+
+Not run: full engine/workspace test suites, Clippy, CLI/HTTP path, Windows or macOS, full R4 gates, release, deployment.

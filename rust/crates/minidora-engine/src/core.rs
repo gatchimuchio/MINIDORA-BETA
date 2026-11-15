@@ -82,6 +82,7 @@ const COMMON_RELATIONS_REPORT_HEADER: &str = "保存済みの前提・規則か�
 const RELATION_COMPARISON_REPORT_KIND: &str = "minidora.relation-comparison-report.v1";
 const RELATION_COMPARISON_CONTENT_KIND: &str = "minidora.relation-comparison-content.v2";
 const RELATION_COMPARISON_CONTENT_KIND_V3: &str = "minidora.relation-comparison-content.v3";
+const RELATION_COMPARISON_CONTENT_KIND_V4: &str = "minidora.relation-comparison-content.v4";
 const RELATION_COMPARISON_REPORT_HEADER: &str = "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。";
 const RELATION_COMPARISON_CONTENT_HEADER: &str = "左右の保存関係根拠を照合した比較です。";
 
@@ -2881,10 +2882,13 @@ impl Engine {
                             RELATION_COMPARISON_REPORT_KIND
                                 | RELATION_COMPARISON_CONTENT_KIND
                                 | RELATION_COMPARISON_CONTENT_KIND_V3
+                                | RELATION_COMPARISON_CONTENT_KIND_V4
                         )
                         || matches!(
                             artifact.kind.as_str(),
-                            RELATION_COMPARISON_CONTENT_KIND | RELATION_COMPARISON_CONTENT_KIND_V3
+                            RELATION_COMPARISON_CONTENT_KIND
+                                | RELATION_COMPARISON_CONTENT_KIND_V3
+                                | RELATION_COMPARISON_CONTENT_KIND_V4
                         ) != artifact.content.is_some()
                         || artifact.result_id != prior.id
                         || artifact.subject_a.is_empty()
@@ -3007,6 +3011,17 @@ impl Engine {
                             }
                             RELATION_COMPARISON_CONTENT_KIND_V3 => {
                                 relation_comparison_content_request_v3(
+                                    &artifact.subject_a,
+                                    &artifact.subject_b,
+                                    &artifact.scope,
+                                    &inventory_a,
+                                    &inventory_b,
+                                    &memory.rules,
+                                    content_request.max_output_bytes,
+                                )?
+                            }
+                            RELATION_COMPARISON_CONTENT_KIND_V4 => {
+                                relation_comparison_content_request_v4(
                                     &artifact.subject_a,
                                     &artifact.subject_b,
                                     &artifact.scope,
@@ -4617,6 +4632,16 @@ impl Engine {
                     request.budget.max_evidence_bytes,
                 )? {
                     (Some(request), RELATION_COMPARISON_CONTENT_KIND_V3)
+                } else if let Some(request) = relation_comparison_content_request_v4(
+                    subject_a,
+                    subject_b,
+                    scope,
+                    &inventory_a,
+                    &inventory_b,
+                    &comparison_rules,
+                    request.budget.max_evidence_bytes,
+                )? {
+                    (Some(request), RELATION_COMPARISON_CONTENT_KIND_V4)
                 } else {
                     (
                         relation_comparison_content_request_v2(
@@ -7388,6 +7413,26 @@ fn relation_comparison_content_request_v2(
     inventory_b: &relations::RelationInventory,
     max_output_bytes: usize,
 ) -> Result<Option<language::MeaningCompositionRequest>> {
+    relation_comparison_content_request_base(
+        subject_a,
+        subject_b,
+        scope,
+        inventory_a,
+        inventory_b,
+        max_output_bytes,
+        false,
+    )
+}
+
+fn relation_comparison_content_request_base(
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    max_output_bytes: usize,
+    compact_dependency_summary: bool,
+) -> Result<Option<language::MeaningCompositionRequest>> {
     use language::{
         MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle, MeaningRole,
         TypedMeaningUnit,
@@ -7529,15 +7574,26 @@ fn relation_comparison_content_request_v2(
         } else {
             ""
         };
-        units.push(TypedMeaningUnit {
-            id: unit_id("evidence", &format!("{side}:{}", fact.id))?,
-            role: MeaningRole::Evidence,
-            text: format!(
+        let evidence_text = if compact_dependency_summary {
+            format!(
+                "根拠({side}): {}（{}; 記録ID: {}; 依存根拠: {}件{contested}）。",
+                describe(&fact.proposition),
+                guarantee_label(&fact.guarantee),
+                fact.id,
+                dependencies.len()
+            )
+        } else {
+            format!(
                 "根拠({side}): {}（{}; 記録ID: {}; 依存ID: {dependency_text}{contested}）。",
                 describe(&fact.proposition),
                 guarantee_label(&fact.guarantee),
                 fact.id
-            ),
+            )
+        };
+        units.push(TypedMeaningUnit {
+            id: unit_id("evidence", &format!("{side}:{}", fact.id))?,
+            role: MeaningRole::Evidence,
+            text: evidence_text,
             evidence_ids,
             dependencies: Vec::new(),
         });
@@ -7599,15 +7655,62 @@ fn relation_comparison_content_request_v3(
     rules: &[RelationRule],
     max_output_bytes: usize,
 ) -> Result<Option<language::MeaningCompositionRequest>> {
+    relation_comparison_content_request_with_rules(
+        subject_a,
+        subject_b,
+        scope,
+        inventory_a,
+        inventory_b,
+        rules,
+        max_output_bytes,
+        false,
+        "core-relation-comparison-content-unit-v3",
+    )
+}
+
+fn relation_comparison_content_request_v4(
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    rules: &[RelationRule],
+    max_output_bytes: usize,
+) -> Result<Option<language::MeaningCompositionRequest>> {
+    relation_comparison_content_request_with_rules(
+        subject_a,
+        subject_b,
+        scope,
+        inventory_a,
+        inventory_b,
+        rules,
+        max_output_bytes,
+        true,
+        "core-relation-comparison-content-unit-v4",
+    )
+}
+
+fn relation_comparison_content_request_with_rules(
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    rules: &[RelationRule],
+    max_output_bytes: usize,
+    compact_dependency_summary: bool,
+    rule_unit_namespace: &str,
+) -> Result<Option<language::MeaningCompositionRequest>> {
     use language::{MeaningRole, TypedMeaningUnit};
 
-    let Some(mut request) = relation_comparison_content_request_v2(
+    let Some(mut request) = relation_comparison_content_request_base(
         subject_a,
         subject_b,
         scope,
         inventory_a,
         inventory_b,
         max_output_bytes,
+        compact_dependency_summary,
     )?
     else {
         return Ok(None);
@@ -7628,8 +7731,7 @@ fn relation_comparison_content_request_v3(
     }
     let mut rule_unit_ids = BTreeMap::new();
     for rule in &used_rules {
-        let fingerprint =
-            identity(&("core-relation-comparison-content-unit-v3", "rule", &rule.id))?;
+        let fingerprint = identity(&(rule_unit_namespace, "rule", &rule.id))?;
         rule_unit_ids.insert(rule.id.clone(), format!("rule_{}", &fingerprint[..40]));
     }
 
@@ -7777,7 +7879,12 @@ fn decode_relation_comparison_artifact(bytes: &[u8]) -> Result<RelationCompariso
             content: None,
         });
     }
-    if kind == RELATION_COMPARISON_CONTENT_KIND || kind == RELATION_COMPARISON_CONTENT_KIND_V3 {
+    if matches!(
+        kind,
+        RELATION_COMPARISON_CONTENT_KIND
+            | RELATION_COMPARISON_CONTENT_KIND_V3
+            | RELATION_COMPARISON_CONTENT_KIND_V4
+    ) {
         let artifact: RelationComparisonContentArtifact = serde_json::from_value(value)?;
         return Ok(RelationComparisonArtifactView {
             canonical_bytes: canonical(&artifact)?,
