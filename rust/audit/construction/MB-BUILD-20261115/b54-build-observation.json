@@ -1,0 +1,83 @@
+{
+  "schema": "MINIDORA_B54_VALIDATION_V1",
+  "work_item": "Exact world scope and polarity through Core relation proof and correction",
+  "base_head": "ed1063dc363672ea6c01d1f32da080e603368c16",
+  "software_version": "0.7.0-alpha.10",
+  "schema_version": "minidora-rust/0.7.0-alpha.10",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "rust/target"
+  },
+  "producer_consumer": [
+    "A direct typed Engine rule request with different premise/conclusion scopes reaches the Core rule consumer, which suspends with SCOPE_MISMATCH before content adoption or render.",
+    "Same-scope positive Fact and Rule are consumed by exact relation query and proof derivation; Fact/Rule IDs flow into the adopted ContentPlan and rendered result.",
+    "A negative direct Fact cannot satisfy the positive Rule premise. A positive question contradicted by the negative Fact retains that negative Fact ID in its explanation plan and rendered bytes.",
+    "Core correct_atomic_relation moves one exact positive Fact from lab scope to archive scope; the previous fact and its dependent result stop, the replacement Fact is available only in archive, and unrelated negative Fact plus lab Rule remain valid."
+  ],
+  "fixture": {
+    "actor": "b54-scope-polarity",
+    "case": "b54-scope-polarity-case",
+    "scopes": ["b54-lab-world", "b54-archive-world"],
+    "rule_id": "rule:ba37d87450390ad925df6d68de31b1cc7c6bf96df1144ac3ef38fe218e87cada",
+    "old_positive_fact_id": "fact:03d24dd3da9d23b778d998ced0a40c211568cbdcf54d3347db4c6044de1fe6c4",
+    "unrelated_negative_fact_id": "fact:f2c198743265e2ae974bf86cbf6b3f1a4bb8c2b7d54a929b6f0462aa196bf7c3",
+    "same_scope_positive_derivation": {
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "dependencies": [
+        "fact:03d24dd3da9d23b778d998ced0a40c211568cbdcf54d3347db4c6044de1fe6c4",
+        "fact:39b1dc88ec0b03fe245965c94905461bddcda6546e8ff221438f09fab83acc4b",
+        "rule:ba37d87450390ad925df6d68de31b1cc7c6bf96df1144ac3ef38fe218e87cada"
+      ],
+      "content_plan_id": "1505d0d669fafd305fe7ff853b2971f51a3f6c3a8fa58ed109cad021ff177be1",
+      "render_status": "RENDERED",
+      "rendered_bytes_match_plan": true
+    },
+    "scope_and_polarity_stops": {
+      "cross_scope_rule": "SUSPEND / SCOPE_MISMATCH",
+      "different_scope_query": "SUSPEND / MISSING_PREMISES",
+      "negative_fact_to_positive_rule": "SUSPEND / MISSING_PREMISES",
+      "these_stops_have_no_content_plan_or_render": true
+    },
+    "negative_fact_explanation": {
+      "lifecycle": "COMMIT",
+      "negative_fact_id_retained": true,
+      "contrary_wording_present": true,
+      "render_status": "RENDERED",
+      "rendered_bytes_match_plan": true
+    },
+    "correction": {
+      "changed_dimension": "world scope: b54-lab-world -> b54-archive-world",
+      "lifecycle": "COMMIT",
+      "old_lab_derived_query": "SUSPEND / MISSING_PREMISES",
+      "archive_derived_query_without_archive_rule": "SUSPEND / MISSING_PREMISES",
+      "replacement_archive_premise": "COMMIT / USER_PREMISE",
+      "old_lab_fact_invalidated": true,
+      "unrelated_negative_fact_valid": true,
+      "lab_rule_stays_in_lab": true
+    }
+  },
+  "verification": {
+    "core_scope_polarity_integration": "PASS: 1 integration test",
+    "engine_all_targets_check": "PASS",
+    "format_check": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "gate_assessment": {
+    "CORE-G01": "PARTIAL: direct typed polarity and world-scope boundaries now preserve exact proof and correction dependencies; condition truth evaluation, natural-language conditions and the complete combined success predicate remain open",
+    "CORE-G03": "PARTIAL: this relation explanation does not establish the general first-seen content-plan acceptance predicate",
+    "CORE-G02": "NOT_REASSESSED",
+    "CORE-G04": "NOT_REASSESSED",
+    "CORE-G05": "NOT_REASSESSED",
+    "CORE-G06": "NOT_REASSESSED",
+    "CORE-G07": "NOT_REASSESSED"
+  },
+  "limitations": [
+    "Direct typed Engine API only",
+    "One positive rule, two scopes and two subjects",
+    "No natural-language condition parser or condition evaluator",
+    "No R2-wide or 93-obligation acceptance claim"
+  ]
+}
