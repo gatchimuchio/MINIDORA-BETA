@@ -24,6 +24,7 @@
 - `cargo fmt --all -- --check`: **PASS**。
 - `git diff --cached --check`: **PASS**（6 staged files）。
 - MANIFEST.tsvとR4三文書/ZIPのSHA256・バイト数・archive member照合: **PASS**。R4三文書とZIPは変更していない。
+- 変更6ファイルに対するsecret-pattern scan: **PASS**（一致0件）。
 - 実行記録: [`b45-focused-tests.log`](b45-focused-tests.log)。構造化観測: [`b45-build-observation.json`](b45-build-observation.json)。
 - 環境はLinux、`rustc 1.99.1 (58cf8f9c3 2026-10-13)` / `cargo 1.99.1 (5f94df478 2026-08-27)`。
 
@@ -40,7 +41,7 @@
 | hold | 0 | 保留する資産なし |
 | **合計** | **9** | keep 6 + store 0 + in-use 3 + trash 0 + hold 0 |
 
-test temporary directoryはDrop後0件を確認する。R4三文書・archiveは変更していない。LinuxのためWindows storage routineはN/A。
+test temporary directory cleanup: **PASS**（Drop後、`/tmp`の該当directory 0件）。R4三文書・archiveは変更していない。LinuxのためWindows storage routineはN/A。
 
 ## 次consumer
 

@@ -187,5 +187,20 @@
   "recovery_refs_at_unit_start": {
     "codex/backup-main": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6",
     "codex/backup-main-prev": "87f26a978a1ca7e46de1428d1a10a9763a105fea"
+  },
+  "post_build_checks": {
+    "staged_diff_check": {
+      "result": "PASS",
+      "files": 6
+    },
+    "observation_json_parse": "PASS",
+    "secret_pattern_scan": {
+      "result": "PASS",
+      "matches": 0
+    },
+    "temporary_fixture_directories": {
+      "result": "PASS",
+      "remaining_under_tmp": 0
+    }
   }
 }
