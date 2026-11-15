@@ -1,0 +1,366 @@
+{
+  "schema": "MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_OBSERVATION_V1",
+  "execution": {
+    "base_main_sha": "ff220dc068ac6332bfa21558a2e86d91fe15ee0a",
+    "operating_system": "linux",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "focused_command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_36 -- --nocapture",
+    "focused_result": "PASS: 1 passed, 0 failed",
+    "format_command": "cargo fmt --all -- --check",
+    "format_result": "PASS",
+    "test_log_sha256": "be693cfcde7a96d2985161592a777b092f9eef5669f1c3ba1eb58f0db2f74ab6",
+    "test_log_bytes": 15490
+  },
+  "trace": {
+    "missing_evidence": {
+      "case_id": "comparison-missing",
+      "content_plan_adopted": false,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: このscopeで二つの対象について比較できる支持記録がありません。共通点や差異がないとは断定しません。",
+      "render_created": false,
+      "result_id": "053995249b15568a93616e657d25c2c58db7fe6728630d06373720a8ed6d67a6"
+    },
+    "os": "linux",
+    "producer": "Engine::compose_atomic_relation_comparison",
+    "schema": "MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V1",
+    "seed_proofs": {
+      "aster_musician": "fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff",
+      "aster_pilot": "fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11",
+      "beryl_geologist": "fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c",
+      "beryl_pilot": "fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e"
+    },
+    "supported": {
+      "artifact": {
+        "inventory_a": {
+          "contested_fact_ids": [],
+          "dependencies": [
+            "fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff",
+            "fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11"
+          ],
+          "facts": [
+            {
+              "dependencies": [],
+              "guarantee": "USER_PREMISE",
+              "id": "fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff",
+              "proposition": {
+                "negative": false,
+                "object": "musician",
+                "predicate": "is",
+                "scope": "atomic-relation-comparison-lab",
+                "subject": "Aster"
+              },
+              "source_evidence": {
+                "bundle_fingerprint": "8911983efb46804de5c07b4a033f326e824bb9670314ab9ddd87085cc755d12b",
+                "evidence_version": "minidora.sealed-source-evidence.v1",
+                "input_fingerprint": "afbb0724cb5392e7eb3edd68d94d0f21c1d05ad91821438479fa9ceec7b2d120",
+                "parser_version": "declarative-ja-en-v83-direct-english-assertion-source-ranges",
+                "raw_sha256": "2e4e206a94bb6737c540c4a7f5836f28251f261d072cd9e6ebeaa97a64ba0d7b",
+                "semantic_signature": "5cbb6359a9404d6a4101b56ff9e9d57dfd44755de4f99520fe1bd562b621ab73",
+                "source_roles": {
+                  "/Assert/proposition/article": [
+                    {
+                      "end": 48,
+                      "start": 47,
+                      "text": "a"
+                    }
+                  ],
+                  "/Assert/proposition/object": [
+                    {
+                      "end": 57,
+                      "start": 49,
+                      "text": "musician"
+                    }
+                  ],
+                  "/Assert/proposition/predicate": [
+                    {
+                      "end": 46,
+                      "start": 44,
+                      "text": "is"
+                    }
+                  ],
+                  "/Assert/proposition/scope": [
+                    {
+                      "end": 37,
+                      "start": 7,
+                      "text": "atomic-relation-comparison-lab"
+                    }
+                  ],
+                  "/Assert/proposition/subject": [
+                    {
+                      "end": 43,
+                      "start": 38,
+                      "text": "Aster"
+                    }
+                  ]
+                }
+              },
+              "source_input": "afbb0724cb5392e7eb3edd68d94d0f21c1d05ad91821438479fa9ceec7b2d120",
+              "valid": true
+            },
+            {
+              "dependencies": [],
+              "guarantee": "USER_PREMISE",
+              "id": "fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11",
+              "proposition": {
+                "negative": false,
+                "object": "pilot",
+                "predicate": "is",
+                "scope": "atomic-relation-comparison-lab",
+                "subject": "Aster"
+              },
+              "source_evidence": {
+                "bundle_fingerprint": "4919f1bd87ba9185fdc81deff0212bca46fd873aeadfd61fb2268378a75f3570",
+                "evidence_version": "minidora.sealed-source-evidence.v1",
+                "input_fingerprint": "bc40812885c6d1f5377298d16a8e034d75389fc6de74b7aa3786a9d8a34faebe",
+                "parser_version": "declarative-ja-en-v83-direct-english-assertion-source-ranges",
+                "raw_sha256": "d80b1bf27819f579c483204168f102b42ab4f0f6474ca12cd5b910a4b45eec40",
+                "semantic_signature": "8a47fb19ac086eb50594a4051acd362b82420ab3435e1acefdaa1903139fa6b5",
+                "source_roles": {
+                  "/Assert/proposition/article": [
+                    {
+                      "end": 48,
+                      "start": 47,
+                      "text": "a"
+                    }
+                  ],
+                  "/Assert/proposition/object": [
+                    {
+                      "end": 54,
+                      "start": 49,
+                      "text": "pilot"
+                    }
+                  ],
+                  "/Assert/proposition/predicate": [
+                    {
+                      "end": 46,
+                      "start": 44,
+                      "text": "is"
+                    }
+                  ],
+                  "/Assert/proposition/scope": [
+                    {
+                      "end": 37,
+                      "start": 7,
+                      "text": "atomic-relation-comparison-lab"
+                    }
+                  ],
+                  "/Assert/proposition/subject": [
+                    {
+                      "end": 43,
+                      "start": 38,
+                      "text": "Aster"
+                    }
+                  ]
+                }
+              },
+              "source_input": "bc40812885c6d1f5377298d16a8e034d75389fc6de74b7aa3786a9d8a34faebe",
+              "valid": true
+            }
+          ],
+          "guarantee": "USER_PREMISE",
+          "has_conflict": false
+        },
+        "inventory_b": {
+          "contested_fact_ids": [],
+          "dependencies": [
+            "fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c",
+            "fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e"
+          ],
+          "facts": [
+            {
+              "dependencies": [],
+              "guarantee": "USER_PREMISE",
+              "id": "fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c",
+              "proposition": {
+                "negative": false,
+                "object": "geologist",
+                "predicate": "is",
+                "scope": "atomic-relation-comparison-lab",
+                "subject": "Beryl"
+              },
+              "source_evidence": {
+                "bundle_fingerprint": "35df967e5dcf7641ba347935ab1aaaf7ce61cd361b5b6a527b37c06851399be6",
+                "evidence_version": "minidora.sealed-source-evidence.v1",
+                "input_fingerprint": "3038d4ef63d4259659d506ed9fc3b091a8cc9cb4ce6707c1cc9f084e1d506976",
+                "parser_version": "declarative-ja-en-v83-direct-english-assertion-source-ranges",
+                "raw_sha256": "b475458087143936912767294522d251d11671c1a333bdef030a689f081cc77d",
+                "semantic_signature": "875a037f9917ae5bf8d39379273c9a13f4d8fdc35b4e2c16ed157ed6273ac347",
+                "source_roles": {
+                  "/Assert/proposition/article": [
+                    {
+                      "end": 48,
+                      "start": 47,
+                      "text": "a"
+                    }
+                  ],
+                  "/Assert/proposition/object": [
+                    {
+                      "end": 58,
+                      "start": 49,
+                      "text": "geologist"
+                    }
+                  ],
+                  "/Assert/proposition/predicate": [
+                    {
+                      "end": 46,
+                      "start": 44,
+                      "text": "is"
+                    }
+                  ],
+                  "/Assert/proposition/scope": [
+                    {
+                      "end": 37,
+                      "start": 7,
+                      "text": "atomic-relation-comparison-lab"
+                    }
+                  ],
+                  "/Assert/proposition/subject": [
+                    {
+                      "end": 43,
+                      "start": 38,
+                      "text": "Beryl"
+                    }
+                  ]
+                }
+              },
+              "source_input": "3038d4ef63d4259659d506ed9fc3b091a8cc9cb4ce6707c1cc9f084e1d506976",
+              "valid": true
+            },
+            {
+              "dependencies": [],
+              "guarantee": "USER_PREMISE",
+              "id": "fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e",
+              "proposition": {
+                "negative": false,
+                "object": "pilot",
+                "predicate": "is",
+                "scope": "atomic-relation-comparison-lab",
+                "subject": "Beryl"
+              },
+              "source_evidence": {
+                "bundle_fingerprint": "6573ff7446ee30526aa2cf88523af9396f7a2af3521141d711d58f71e8f980ec",
+                "evidence_version": "minidora.sealed-source-evidence.v1",
+                "input_fingerprint": "e5084066ca24a8c58e73eaedda908796d4d6256c0ac32917b5bf940cc4a12cf2",
+                "parser_version": "declarative-ja-en-v83-direct-english-assertion-source-ranges",
+                "raw_sha256": "cfac85fb8b01ab70a99f47001910df1b3eb81ef100f3b6d679509da4d70246a8",
+                "semantic_signature": "50f72245242ea79f389b77bcc3916d50d6cc7868ade320c0a9ffa3283b4e542a",
+                "source_roles": {
+                  "/Assert/proposition/article": [
+                    {
+                      "end": 48,
+                      "start": 47,
+                      "text": "a"
+                    }
+                  ],
+                  "/Assert/proposition/object": [
+                    {
+                      "end": 54,
+                      "start": 49,
+                      "text": "pilot"
+                    }
+                  ],
+                  "/Assert/proposition/predicate": [
+                    {
+                      "end": 46,
+                      "start": 44,
+                      "text": "is"
+                    }
+                  ],
+                  "/Assert/proposition/scope": [
+                    {
+                      "end": 37,
+                      "start": 7,
+                      "text": "atomic-relation-comparison-lab"
+                    }
+                  ],
+                  "/Assert/proposition/subject": [
+                    {
+                      "end": 43,
+                      "start": 38,
+                      "text": "Beryl"
+                    }
+                  ]
+                }
+              },
+              "source_input": "e5084066ca24a8c58e73eaedda908796d4d6256c0ac32917b5bf940cc4a12cf2",
+              "valid": true
+            }
+          ],
+          "guarantee": "USER_PREMISE",
+          "has_conflict": false
+        },
+        "kind": "minidora.relation-comparison-report.v1",
+        "report_sha256": "8ea5edd866c7821c8608c659982bf670f099d124cb062f8f29f44c73021e1e89",
+        "result_id": "94a5eaf85ce8aaeb92a58ef91540b202d9a3c45dfd4649c8caa516d78a4ce4c8",
+        "scope": "atomic-relation-comparison-lab",
+        "subject_a": "Aster",
+        "subject_b": "Beryl"
+      },
+      "case_id": "comparison-supported",
+      "content_plan": {
+        "dependencies": [
+          "80fd6e3eaf218069e4ac3c1064d407b5cec1709520acf2282522ea4889fc2ee6",
+          "fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c",
+          "fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e",
+          "fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff",
+          "fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11",
+          "b6fc7b14cb5ebe030e627b2c303b80f628f3128c0d144b518159ab1fc389a168"
+        ],
+        "id": "b04949a6f83b5b5729b47d1b6e64e03a02b99c94705f0aeaf9df3698ef2f5a53",
+        "model_revision": "a9a2f3f4b98c1d2aff4a956fbc8e08067768983591e71ccc1f3879ff716d9f1a",
+        "required_units": [
+          "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。\n比較対象: Aster／Beryl（scope: atomic-relation-comparison-lab）\nBeryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである\n根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c; 依存ID: なし）\nAster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである\n根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff; 依存ID: なし）\n両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである\n根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11; 依存ID: なし）\n根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e; 依存ID: なし）"
+        ],
+        "text": "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。\n比較対象: Aster／Beryl（scope: atomic-relation-comparison-lab）\nBeryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである\n根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c; 依存ID: なし）\nAster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである\n根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff; 依存ID: なし）\n両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである\n根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11; 依存ID: なし）\n根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e; 依存ID: なし）"
+      },
+      "parser_version": "core-typed-relation-comparison-v1",
+      "render": {
+        "actual_sha256": "8ea5edd866c7821c8608c659982bf670f099d124cb062f8f29f44c73021e1e89",
+        "byte_length": 1346,
+        "plan_id": "b04949a6f83b5b5729b47d1b6e64e03a02b99c94705f0aeaf9df3698ef2f5a53",
+        "status": "RENDERED",
+        "utf8_text": "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。\n比較対象: Aster／Beryl（scope: atomic-relation-comparison-lab）\nBeryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである\n根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c; 依存ID: なし）\nAster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである\n根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff; 依存ID: なし）\n両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである\n根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11; 依存ID: なし）\n根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e; 依存ID: なし）"
+      },
+      "result": {
+        "dependencies": [
+          "80fd6e3eaf218069e4ac3c1064d407b5cec1709520acf2282522ea4889fc2ee6",
+          "fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c",
+          "fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e",
+          "fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff",
+          "fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11"
+        ],
+        "guarantee": "HYPOTHESIS",
+        "id": "94a5eaf85ce8aaeb92a58ef91540b202d9a3c45dfd4649c8caa516d78a4ce4c8",
+        "lifecycle": "COMMIT",
+        "text": "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。\n比較対象: Aster／Beryl（scope: atomic-relation-comparison-lab）\nBeryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである\n根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c; 依存ID: なし）\nAster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである\n根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff; 依存ID: なし）\n両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである\n根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11; 依存ID: なし）\n根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e; 依存ID: なし）"
+      },
+      "sealed_request_text": "{\"schema\":\"CORE_TYPED_RELATION_COMPARISON_V1\",\"purpose\":\"compare-relations\",\"subject_a\":\"Aster\",\"subject_b\":\"Beryl\",\"scope\":\"atomic-relation-comparison-lab\",\"source_ids_a\":[\"fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff\",\"fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11\"],\"source_ids_b\":[\"fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c\",\"fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e\"]}",
+      "semantic_signature": "7302c9466069c878de3b832210c2fe7f478c0ff15c7604eaed723ccd8eb97a98",
+      "source_kind": "CORE_TYPED_RELATION_COMPARISON_V1",
+      "typed_input": {
+        "purpose": "compare-relations",
+        "schema": "CORE_TYPED_RELATION_COMPARISON_V1",
+        "scope": "atomic-relation-comparison-lab",
+        "source_ids_a": [
+          "fact:48816d45ea7ee2dac987ac37d26df8b4d5df6f0ae8bfbf4a7f7ef2e1bc305dff",
+          "fact:ab4dea10d07de97758d07fae5e9b1aa0e412e3dcd0021a38285a3d8f9bd2ad11"
+        ],
+        "source_ids_b": [
+          "fact:101240e896f4db194cd06a3f8376a70b7debc53c70b0afa2b44ead3d5e6b6a2c",
+          "fact:14d65411b6adc3e1fef041ca88776dd94b39d0ac55ee33c78ab74a8dcfd2ca2e"
+        ],
+        "subject_a": "Aster",
+        "subject_b": "Beryl"
+      }
+    },
+    "unauthorized_write": {
+      "action_count": 0,
+      "case_id": "comparison-denied-write",
+      "lifecycle": "SUSPEND",
+      "reason": "WRITE_PERMISSION_MISSING: 指定ファイルへの書込権限がありません。",
+      "receipts": [],
+      "result_id": "c7456093be93ca216a084edc41fb867bdf11b07c7c46ab6230f83a7bbe6b07fc",
+      "target_created": false
+    }
+  }
+}

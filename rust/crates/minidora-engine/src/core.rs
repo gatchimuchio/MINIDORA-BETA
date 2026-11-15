@@ -17,6 +17,8 @@ struct CalculationSequenceStepArtifact {
 const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v1";
 const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
 const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
+const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
+const DIRECT_RELATION_COMPARISON_PARSER: &str = "core-typed-relation-comparison-v1";
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +27,18 @@ struct DirectAtomicMeaningInput {
     purpose: String,
     proposition: Proposition,
     source_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectRelationComparisonInput {
+    schema: String,
+    purpose: String,
+    subject_a: String,
+    subject_b: String,
+    scope: String,
+    source_ids_a: Vec<String>,
+    source_ids_b: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -645,6 +659,104 @@ impl Engine {
             ));
         }
         let bundle = direct_atomic_meaning_bundle(&request, &direct_input)?;
+        self.execute_with_bundle(actor, request, Some(bundle))
+    }
+
+    /// Build and adopt a comparison from two typed actor-memory subjects and a
+    /// scope. Core resolves each side's proof IDs, seals the typed request, then
+    /// sends it through the existing comparison, content, render, and result
+    /// lifecycle. It does not parse natural language or accept finished prose.
+    /// `request.text` must be empty; the method stores its canonical typed input
+    /// there while retaining the envelope's identity, budget, and permissions.
+    pub fn compose_atomic_relation_comparison(
+        &mut self,
+        actor: &str,
+        mut request: RequestEnvelope,
+        subject_a: &str,
+        subject_b: &str,
+        scope: &str,
+    ) -> Result<ResultRecord> {
+        if actor != request.actor_id {
+            return Err(failure(
+                "ACTOR_MISMATCH",
+                "authenticated actor and request actor differ",
+            ));
+        }
+        if request.context_ref.is_some() {
+            return Err(failure(
+                "DIRECT_CONTEXT_UNSUPPORTED",
+                "atomic relation comparison accepts two subjects and resolves their proofs from actor memory",
+            ));
+        }
+        if !request.text.is_empty() {
+            return Err(failure(
+                "DIRECT_TEXT_FORBIDDEN",
+                "direct relation comparison accepts typed subject and scope fields, not text",
+            ));
+        }
+        if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+            return Err(failure(
+                "DIRECT_LOCALE_UNSUPPORTED",
+                "the atomic relation comparison surface currently supports Japanese",
+            ));
+        }
+        if subject_a.is_empty()
+            || subject_b.is_empty()
+            || subject_a == subject_b
+            || scope.is_empty()
+            || subject_a.len() > 512
+            || subject_b.len() > 512
+            || scope.len() > 512
+        {
+            return Err(failure(
+                "INVALID_RELATION_COMPARISON",
+                "relation comparison requires two distinct bounded subjects and one nonempty bounded scope",
+            ));
+        }
+
+        // Capture both proof sets before execution. The normal Core comparison
+        // recomputes them before generating content and suspends if either side
+        // changed, so a stale preflight cannot silently replace its evidence.
+        let per_subject_actions = request.budget.max_actions / 2;
+        let (mut source_ids_a, mut source_ids_b) = if per_subject_actions == 0 {
+            (Vec::new(), Vec::new())
+        } else {
+            let memory = self.store.load_memory(actor)?;
+            let resolve_source_ids = |subject: &str| -> Result<Vec<String>> {
+                match relation_comparison_inventory(&memory, subject, scope, per_subject_actions) {
+                    Ok(inventory) => Ok(inventory.dependencies),
+                    Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
+                        Ok(Vec::new())
+                    }
+                    Err(error) => Err(error),
+                }
+            };
+            (
+                resolve_source_ids(subject_a)?,
+                resolve_source_ids(subject_b)?,
+            )
+        };
+        source_ids_a.sort();
+        source_ids_a.dedup();
+        source_ids_b.sort();
+        source_ids_b.dedup();
+        let direct_input = DirectRelationComparisonInput {
+            schema: DIRECT_RELATION_COMPARISON_KIND.into(),
+            purpose: "compare-relations".into(),
+            subject_a: subject_a.into(),
+            subject_b: subject_b.into(),
+            scope: scope.into(),
+            source_ids_a,
+            source_ids_b,
+        };
+        request.text = serde_json::to_string(&direct_input)?;
+        if request.text.is_empty() || request.text.len() > request.budget.max_input_bytes {
+            return Err(failure(
+                "INPUT_LIMIT",
+                "typed relation comparison exceeds the request byte budget",
+            ));
+        }
+        let bundle = direct_relation_comparison_bundle(&request, &direct_input)?;
         self.execute_with_bundle(actor, request, Some(bundle))
     }
 
@@ -4280,6 +4392,8 @@ impl Engine {
                         "二つの対象の関係を調べるための推論予算がありません。",
                     );
                 }
+                let direct_input =
+                    direct_relation_comparison_input(&bundle, subject_a, subject_b, scope)?;
                 let memory = self.store.load_memory(actor)?;
                 let inventory_a = match relation_comparison_inventory(
                     &memory,
@@ -4321,6 +4435,18 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 };
+                if let Some(direct_input) = &direct_input {
+                    if direct_input.source_ids_a != inventory_a.dependencies
+                        || direct_input.source_ids_b != inventory_b.dependencies
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_COMPARISON_EVIDENCE_CHANGED",
+                            "内容生成前に左右いずれかの根拠集合が変化しました。元の証拠参照を差し替えず保留します。",
+                        );
+                    }
+                }
                 if inventory_a.facts.is_empty() && inventory_b.facts.is_empty() {
                     return self.stop(
                         &mut state,
@@ -6105,6 +6231,72 @@ fn direct_atomic_meaning_bundle(
         meaning,
         semantic_signature,
     })
+}
+
+fn direct_relation_comparison_bundle(
+    request: &RequestEnvelope,
+    input: &DirectRelationComparisonInput,
+) -> Result<InputBundle> {
+    let parser_version = DIRECT_RELATION_COMPARISON_PARSER;
+    let context_sha256 = identity(&None::<&ResultRecord>)?;
+    let raw_sha256 = digest(request.text.as_bytes());
+    let source_span = SourceSpan {
+        start: 0,
+        end: request.text.len(),
+        text: request.text.clone(),
+    };
+    let meaning = MeaningIR {
+        parser_version: parser_version.into(),
+        intent: Intent::CompareRelationInventories {
+            subject_a: input.subject_a.clone(),
+            subject_b: input.subject_b.clone(),
+            scope: input.scope.clone(),
+        },
+        spans: vec![source_span.clone()],
+        source_roles: BTreeMap::from([("relation-comparison".into(), vec![source_span])]),
+        unresolved: Vec::new(),
+        source_kind: DIRECT_RELATION_COMPARISON_KIND.into(),
+        context_result_ref: None,
+    };
+    let fingerprint = identity(&(request, &raw_sha256, &context_sha256, parser_version))?;
+    let semantic_signature = identity(&meaning)?;
+    Ok(InputBundle {
+        request: request.clone(),
+        raw_sha256,
+        context_sha256,
+        fingerprint,
+        meaning,
+        semantic_signature,
+    })
+}
+
+fn direct_relation_comparison_input(
+    bundle: &InputBundle,
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+) -> Result<Option<DirectRelationComparisonInput>> {
+    if bundle.meaning.source_kind != DIRECT_RELATION_COMPARISON_KIND {
+        return Ok(None);
+    }
+    let input: DirectRelationComparisonInput = serde_json::from_str(&bundle.request.text)?;
+    if input.schema != DIRECT_RELATION_COMPARISON_KIND
+        || input.purpose != "compare-relations"
+        || input.subject_a != subject_a
+        || input.subject_b != subject_b
+        || input.scope != scope
+        || input.subject_a == input.subject_b
+        || input.source_ids_a.windows(2).any(|pair| pair[0] >= pair[1])
+        || input.source_ids_b.windows(2).any(|pair| pair[0] >= pair[1])
+        || serde_json::to_string(&input)? != bundle.request.text
+        || direct_relation_comparison_bundle(&bundle.request, &input)? != *bundle
+    {
+        return Err(failure(
+            "RELATION_COMPARISON_SEAL_INVALID",
+            "typed relation comparison, source references, or sealed bundle do not match",
+        ));
+    }
+    Ok(Some(input))
 }
 
 fn direct_atomic_meaning_input(
