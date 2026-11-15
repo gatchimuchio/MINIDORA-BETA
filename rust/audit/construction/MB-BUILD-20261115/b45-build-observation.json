@@ -1,0 +1,191 @@
+{
+  "schema": "MINIDORA_BUILD_RUNTIME_OBSERVATION_V1",
+  "unit": "B45",
+  "base_head": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6",
+  "subject": "MINIDORA-BETA Core saved relation-comparison proof invalidation isolation",
+  "purpose": "Verify V1 and V4 target comparisons suspend after a direct premise invalidation while cross-version controls in separate scopes still replay under the same actor and case.",
+  "scope": {
+    "actor": "b45-v1-v4-scoped-invalidation",
+    "comparison_case": "b45-coexisting-v1-v4-comparisons",
+    "artifact_versions": [
+      "minidora.relation-comparison-report.v1",
+      "minidora.relation-comparison-content.v4"
+    ],
+    "target_count": 2,
+    "control_count": 2,
+    "direct_invalidations": 2,
+    "production_code_changed": false,
+    "artifact_contract_changed": false,
+    "r4_documents_changed": false,
+    "core_g03": "PARTIAL"
+  },
+  "environment": {
+    "os": "linux",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "cargo_target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "commands": [
+    {
+      "command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_45 -- --nocapture",
+      "result": "PASS",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "duration_seconds": 18.4,
+      "log": "b45-focused-tests.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "exit_code": 0
+    }
+  ],
+  "runtime_trace": {
+    "actor": "b45-v1-v4-scoped-invalidation",
+    "comparison_case": "b45-coexisting-v1-v4-comparisons",
+    "controls": [
+      {
+        "label": "v4-control",
+        "lifecycle": "COMMIT",
+        "render_sha256": "5a4b5f3cccda377c8abf3fffcd3112da8945ea97c80a09680d4e40e870cbb093",
+        "render_status": "RENDERED",
+        "result_id": "6440affc22ad43481eec7c8729e44177ca1003e393a6f84838de98a9251091da",
+        "selected_comparison_id": "7385abaff555e9b125674ba62e284ea4bf52d853537183885289a1292114515f"
+      },
+      {
+        "label": "v1-control",
+        "lifecycle": "COMMIT",
+        "render_sha256": "9877e6dc1ddd8e33aeda8fa248805700e948f07e5c7afeb8b53d4aa294cf7f22",
+        "render_status": "RENDERED",
+        "result_id": "2c698efc31c1831e0e514e93c35821f722cdc71b307c4ade61d46a980285d16f",
+        "selected_comparison_id": "df2c5264841d57416e37200c4188044895b693c9ba618ead641749e23881df88"
+      }
+    ],
+    "engine_reopened_after_invalidation": true,
+    "invalidated_fact_ids": [
+      "fact:94a72781846e5b80884d58f0d8d1da8f04ab32559c5531788bba9a87c1eb9ce8",
+      "fact:9a7a2d5d2da83d78cd7a2396efd7665909299ad6407198596932c7cb247fdc5a"
+    ],
+    "invalidation_result_ids": [
+      "5a2ff7508e1359f80e94b867cbbda52d672048a6af17eaa7b8f3ad43241258eb",
+      "e66b953b222f4fb76ae982d23565aab105c30d898022fad7338cbc82653c88f5"
+    ],
+    "migration_or_concurrency": "not checked",
+    "os": "linux",
+    "outside_world_truth": "not checked",
+    "retained_artifacts": [
+      {
+        "artifact_ref": "0e7b1f28ef0ee2403999e24e89a13afdea04b0c1320590555de7a314d405b332",
+        "artifact_sha256": "0e7b1f28ef0ee2403999e24e89a13afdea04b0c1320590555de7a314d405b332",
+        "kind": "minidora.relation-comparison-report.v1",
+        "label": "v1-target",
+        "proof_count": 9,
+        "result_id": "2365384597de60477e8dafa22bbab8dfa99676f9bc98733aec6eaffc8bdcee62",
+        "retained_after_invalidation": true,
+        "scope": "b45-v1-target-scope"
+      },
+      {
+        "artifact_ref": "f0d45793e67b51c160fe2f2dbdb5d9aab077089867106dc903405e62192a8c49",
+        "artifact_sha256": "f0d45793e67b51c160fe2f2dbdb5d9aab077089867106dc903405e62192a8c49",
+        "kind": "minidora.relation-comparison-content.v4",
+        "label": "v4-control",
+        "proof_count": 9,
+        "result_id": "7385abaff555e9b125674ba62e284ea4bf52d853537183885289a1292114515f",
+        "retained_after_invalidation": true,
+        "scope": "b45-v4-control-scope"
+      },
+      {
+        "artifact_ref": "e08e753dd4b763d118442e1e87c7b2517a72151d39fc78e02cac44b6ccd2ac63",
+        "artifact_sha256": "e08e753dd4b763d118442e1e87c7b2517a72151d39fc78e02cac44b6ccd2ac63",
+        "kind": "minidora.relation-comparison-content.v4",
+        "label": "v4-target",
+        "proof_count": 9,
+        "result_id": "6f2fe14ce76791f0c828aa9c49d4446d1792700c17e7a3a488df171ef546d107",
+        "retained_after_invalidation": true,
+        "scope": "b45-v4-target-scope"
+      },
+      {
+        "artifact_ref": "0ddec95608843c75ae45d63e60e55fa00dc15aeb513dc41f17134c69b0964a4e",
+        "artifact_sha256": "0ddec95608843c75ae45d63e60e55fa00dc15aeb513dc41f17134c69b0964a4e",
+        "kind": "minidora.relation-comparison-report.v1",
+        "label": "v1-control",
+        "proof_count": 9,
+        "result_id": "df2c5264841d57416e37200c4188044895b693c9ba618ead641749e23881df88",
+        "retained_after_invalidation": true,
+        "scope": "b45-v1-control-scope"
+      }
+    ],
+    "schema": "MINIDORA_CORE_RELATION_COMPARISON_V1_V4_INVALIDATION_TRACE_V1",
+    "targets": [
+      {
+        "content_plan_created": false,
+        "label": "v1-target",
+        "lifecycle": "SUSPEND",
+        "reason": "CONTEXT_PROOF_CHANGED: 前回比較の左右いずれかの保存根拠・競合状態が変わっています。新しい比較を行ってください。",
+        "render_created": false,
+        "result_id": "9b9fabcb35bc3aeb979b50a41fb0f7dc024c37fcff3f5b3ead50dc9dd1449e7c",
+        "selected_comparison_id": "2365384597de60477e8dafa22bbab8dfa99676f9bc98733aec6eaffc8bdcee62"
+      },
+      {
+        "content_plan_created": false,
+        "label": "v4-target",
+        "lifecycle": "SUSPEND",
+        "reason": "CONTEXT_PROOF_CHANGED: 前回比較の左右いずれかの保存根拠・競合状態が変わっています。新しい比較を行ってください。",
+        "render_created": false,
+        "result_id": "316d9595b40b4b464caa9971cd4ad7d1a1d512ba33a9a054c74730c69368782f",
+        "selected_comparison_id": "6f2fe14ce76791f0c828aa9c49d4446d1792700c17e7a3a488df171ef546d107"
+      }
+    ]
+  },
+  "unverified": [
+    "full engine/workspace suite",
+    "Clippy",
+    "workspace all-target check/build",
+    "other operating systems",
+    "normal CLI/HTTP flow",
+    "R2-17",
+    "rule invalidation",
+    "schema migration",
+    "parallel writers",
+    "independent QA",
+    "release/deployment",
+    "outside-world truth"
+  ],
+  "r4": {
+    "manifest_archive_member_and_size_hash_check": "PASS",
+    "manifest": {
+      "path": "rust/audit/construction/MB-BUILD-20261115/MANIFEST.tsv",
+      "sha256": "c645e5bdbd41ed1bd9578ce36cdb6c1100e1af9a313866b8f43e4626f99c535d",
+      "bytes": 992
+    },
+    "documents": {
+      "01_施工仕様書.md": {
+        "sha256": "eb2ca32bea74e88f5d82e370d33b2f62f2f4f6aeadbc2375fc78f428342ab0b7",
+        "bytes": 22094
+      },
+      "02_施工工程表.md": {
+        "sha256": "a4a2aba0af11f8cccd86c45e4ab2dc280cbea9be155b949cd863a156f8585fbf",
+        "bytes": 22189
+      },
+      "03_Codex施工指示書.md": {
+        "sha256": "ac5484a5ce2272c91227ae36e9c18a1dcaa152e80004c6c87bf40c9a95c7c4c0",
+        "bytes": 22817
+      }
+    },
+    "archive": {
+      "path": "rust/audit/construction/MB-BUILD-20261115/MINIDORA-BETA_3DOC_R4_20261115.zip",
+      "sha256": "fc7822f6fb3a734990dc208dc8dc264b49607d8b6476c9695bd5660dccf270ee",
+      "bytes": 30467,
+      "members": [
+        "01_施工仕様書.md",
+        "02_施工工程表.md",
+        "03_Codex施工指示書.md"
+      ]
+    }
+  },
+  "recovery_refs_at_unit_start": {
+    "codex/backup-main": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6",
+    "codex/backup-main-prev": "87f26a978a1ca7e46de1428d1a10a9763a105fea"
+  }
+}
