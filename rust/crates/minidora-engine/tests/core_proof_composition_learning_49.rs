@@ -55,6 +55,7 @@ fn relation(subject: &str, object: &str, scope: &str) -> Proposition {
         negative: false,
         scope: scope.into(),
         temporal_scope: None,
+        condition_refs: Default::default(),
     }
 }
 

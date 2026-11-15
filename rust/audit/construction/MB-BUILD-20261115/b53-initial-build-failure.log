@@ -1,0 +1,15 @@
+BUILD BATCH 53 INITIAL FAILURE — retained first output
+
+Commands:
+  cargo test --locked -p minidora-engine explicit_alpha -- --nocapture
+  cargo check --locked --workspace --all-targets
+
+Both commands initially failed while compiling an invalid struct-pattern field in a parser regression test:
+
+error[E0532]: expected tuple struct or tuple variant, found associated function `Default::default`
+    --> crates/minidora-engine/src/input.rs:4603:33
+     |
+4603 |                 condition_refs: Default::default(),
+     |                                 ^^^^^^^^^^^^^^^^ not a tuple struct or tuple variant
+
+The parser test was corrected to bind `condition_refs` and assert `condition_refs.is_empty()`. Both commands were rerun successfully; see b53-migration-tests.log and b53-workspace-all-target-check.log.

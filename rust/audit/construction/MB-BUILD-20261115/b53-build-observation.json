@@ -1,0 +1,95 @@
+{
+  "schema": "MINIDORA_B53_VALIDATION_V1",
+  "work_item": "Exact opaque condition references through the direct Core relation path",
+  "base_head": "fec00c44a0792d847236f7d9812021665b93ab20",
+  "software_version": "0.7.0-alpha.10",
+  "schema_version": "minidora-rust/0.7.0-alpha.10",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "rust/target"
+  },
+  "producer_consumer": [
+    "The typed Engine API accepts a full Proposition with a canonical BTreeSet condition_refs and seals it as the corresponding typed Assertion, Rule, Correction, or Atomic Meaning InputBundle.",
+    "Core Intent consumers persist the exact Proposition in Fact/Rule memory; relation validation, rule admission, exact-shape matching, composition and proof query require exact condition-reference equality.",
+    "Core correction matches full Proposition identity, invalidates dependent facts/rules and preserves the old record; a follow-up typed explanation recomputes the former proof.",
+    "Relation comparison groups and keys include nonempty condition_refs, comparison and explanation labels render the opaque references, and empty-condition comparison key identity preserves its legacy form.",
+    "Store schema alpha10 rejects ordinary alpha7/8/9 opens; explicit migration verifies integrity and changes only store schema metadata while retaining old revision schema and blob identities."
+  ],
+  "condition_observation": {
+    "actor": "b53-condition-scope",
+    "world_scope": "b53-materials-lab",
+    "condition_refs": ["condition:dry", "condition:wet"],
+    "same_reference_rule_and_premise": {
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "render_status": "RENDERED",
+      "rule_id": "rule:c4364ec31ebc19f399bc7bdc7b8ed0825153872ec2c083ce526c0b1739f98b07",
+      "premise_id": "fact:8077e4d59e1835412af7a12cacf5eb0f8ededef55666e7d1e352cddc19771e73"
+    },
+    "missing_or_different_reference_query": {
+      "missing_condition": "SUSPEND / MISSING_PREMISES",
+      "different_condition": "SUSPEND / MISSING_PREMISES",
+      "content_plan": false,
+      "render": false
+    },
+    "condition_mismatch_rule": {
+      "lifecycle": "SUSPEND",
+      "reason_code_in_text": "CONDITION_SCOPE_MISMATCH",
+      "content_plan": false,
+      "render": false
+    },
+    "correction": {
+      "changed_reference": "condition:dry -> condition:wet",
+      "lifecycle": "COMMIT",
+      "old_derived_query_after_correction": "SUSPEND / MISSING_PREMISES",
+      "content_plan": false,
+      "render": false
+    },
+    "comparison": {
+      "lifecycle": "COMMIT",
+      "common_relation_label": false,
+      "both_condition_labels_present": true
+    }
+  },
+  "schema_migration": {
+    "ordinary_open_rejects": [
+      "minidora-rust/0.7.0-alpha.7",
+      "minidora-rust/0.7.0-alpha.8",
+      "minidora-rust/0.7.0-alpha.9"
+    ],
+    "explicit_metadata_only_migrations": ["alpha7", "alpha8", "alpha9"],
+    "integrity_checks": "existing migration verifier",
+    "old_revision_schema_and_blob_identity_preserved": true,
+    "idempotent": true
+  },
+  "verification": {
+    "domain_canonical_compatibility": "PASS: 1 focused test",
+    "condition_scope_core": "PASS: 1 integration test",
+    "explicit_alpha_migrations": "PASS: 3 tests",
+    "temporal_scope_and_correction_regressions": "PASS: 2 integration tests",
+    "workspace_all_targets_check": "PASS",
+    "format_check": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "gate_assessment": {
+    "CORE-G01": "PARTIAL: exact opaque typed references participate in relation identity, rule matching, proof invalidation, comparison and labels; reference truth evaluation, natural-language condition parsing, negation and broad applicability scopes remain open",
+    "CORE-G03": "PARTIAL: the typed smoke does not establish the general new-content acceptance path",
+    "CORE-G02": "NOT_REASSESSED",
+    "CORE-G04": "NOT_REASSESSED",
+    "CORE-G05": "NOT_REASSESSED",
+    "CORE-G06": "NOT_REASSESSED",
+    "CORE-G07": "NOT_REASSESSED"
+  },
+  "limitations": [
+    "Direct typed Engine API only",
+    "Condition references remain opaque labels; no condition evaluator was added",
+    "No natural-language condition parser, chronology solver, or general input-machine work",
+    "No full R2 capability or 93-obligation acceptance claim"
+  ],
+  "historical_failures": [
+    "An initial parser test used an invalid Default::default() struct-pattern field; corrected to bind and check the empty set.",
+    "An initial test expected a Rust Err for condition-mismatched rule admission; observed Core contract is a SUSPEND ResultRecord with CONDITION_SCOPE_MISMATCH, and the test now asserts that path."
+  ]
+}

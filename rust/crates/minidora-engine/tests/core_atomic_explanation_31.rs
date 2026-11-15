@@ -39,6 +39,7 @@ fn proposition(object: &str) -> Proposition {
         negative: false,
         scope: "atomic-explanation-lab".into(),
         temporal_scope: None,
+        condition_refs: Default::default(),
     }
 }
 

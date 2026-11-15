@@ -7,8 +7,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.9";
-pub const PREVIOUS_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.8";
+pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.10";
+pub const PREVIOUS_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.9";
+pub const ALPHA8_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.8";
 pub const LEGACY_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.7";
 pub const CANONICALIZER: &str = "utf8-sorted-json-v1";
 
@@ -132,6 +133,11 @@ pub struct Proposition {
     pub object: String,
     pub negative: bool,
     pub scope: String,
+    /// Canonical set of opaque applicability-condition references. It
+    /// participates in exact relation identity; the Core does not evaluate
+    /// the referenced conditions as facts.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub condition_refs: BTreeSet<String>,
     /// Exact source-provided temporal partition. It participates in relation
     /// identity and rule matching; it is not a chronology or interval solver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -684,6 +690,7 @@ mod tests {
         let legacy =
             br#"{"subject":"Nera","predicate":"is","object":"ore","negative":false,"scope":"lab"}"#;
         let proposition: Proposition = serde_json::from_slice(legacy).unwrap();
+        assert!(proposition.condition_refs.is_empty());
         assert_eq!(proposition.temporal_scope, None);
         assert_eq!(
             canonical(&proposition).unwrap(),
@@ -697,6 +704,7 @@ mod tests {
             negative: false,
             scope: "lab".into(),
             temporal_scope: Some("2026-11-15T10:00Z".into()),
+            condition_refs: Default::default(),
         };
         assert_eq!(
             serde_json::from_slice::<Proposition>(&canonical(&timed).unwrap()).unwrap(),

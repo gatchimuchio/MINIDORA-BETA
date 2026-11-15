@@ -39,6 +39,7 @@ fn relation(subject: &str, object: &str, scope: &str, temporal_scope: Option<&st
         negative: false,
         scope: scope.into(),
         temporal_scope: temporal_scope.map(str::to_owned),
+        condition_refs: Default::default(),
     }
 }
 

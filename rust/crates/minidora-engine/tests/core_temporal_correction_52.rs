@@ -41,6 +41,7 @@ fn relation(subject: &str, object: &str, scope: &str, time: &str) -> Proposition
         negative: false,
         scope: scope.into(),
         temporal_scope: Some(time.into()),
+        condition_refs: Default::default(),
     }
 }
 

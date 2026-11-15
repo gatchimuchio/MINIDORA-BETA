@@ -2,9 +2,9 @@
 //! blobs are durably published first. Orphan blobs are harmless, while a
 //! missing or corrupt referenced blob is an integrity failure.
 use minidora_domain::{
-    ActionRecord, CaseRevision, EffectPhase, InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle,
-    MemoryState, PREVIOUS_SCHEMA_VERSION, RequestEnvelope, Result, ResultRecord, SCHEMA_VERSION,
-    canonical, digest, failure, identity,
+    ALPHA8_SCHEMA_VERSION, ActionRecord, CaseRevision, EffectPhase, InputBundle,
+    LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState, PREVIOUS_SCHEMA_VERSION, RequestEnvelope,
+    Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -212,7 +212,7 @@ impl Store {
             && !(allow_legacy
                 && matches!(
                     schema.as_str(),
-                    LEGACY_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
+                    LEGACY_SCHEMA_VERSION | ALPHA8_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
                 ))
         {
             return Err(failure(
@@ -229,8 +229,9 @@ impl Store {
         Ok(store)
     }
 
-    /// Explicitly upgrades alpha 7 or alpha 8 store metadata after verifying
-    /// every referenced blob, case journal, action journal and conflict chain.
+    /// Explicitly upgrades alpha 7, alpha 8 or alpha 9 store metadata after
+    /// verifying every referenced blob, case journal, action journal and
+    /// conflict chain.
     /// Immutable case revision blobs keep their original schema identity.
     /// Returns the observed source and current schema versions.
     pub fn migrate_to_current(path: impl AsRef<Path>) -> Result<(String, String)> {
@@ -251,12 +252,12 @@ impl Store {
         }
         if !matches!(
             schema.as_str(),
-            LEGACY_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
+            LEGACY_SCHEMA_VERSION | ALPHA8_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
         ) {
             return Err(failure(
                 "SCHEMA_MISMATCH",
                 format!(
-                    "explicit migration supports only {LEGACY_SCHEMA_VERSION} or {PREVIOUS_SCHEMA_VERSION}"
+                    "explicit migration supports only {LEGACY_SCHEMA_VERSION}, {ALPHA8_SCHEMA_VERSION} or {PREVIOUS_SCHEMA_VERSION}"
                 ),
             ));
         }
@@ -292,7 +293,7 @@ impl Store {
     }
 
     /// Historical entry point retained for source compatibility. New callers
-    /// should use `migrate_to_current`, which also accepts alpha 8 stores.
+    /// should use `migrate_to_current`, which also accepts alpha 8 and alpha 9 stores.
     #[deprecated(note = "use migrate_to_current")]
     pub fn migrate_alpha7_to_alpha8(path: impl AsRef<Path>) -> Result<bool> {
         let (from, to) = Self::migrate_to_current(path)?;
@@ -1314,7 +1315,10 @@ impl Store {
             ))?;
             if !matches!(
                 revision.schema_version.as_str(),
-                SCHEMA_VERSION | LEGACY_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
+                SCHEMA_VERSION
+                    | LEGACY_SCHEMA_VERSION
+                    | ALPHA8_SCHEMA_VERSION
+                    | PREVIOUS_SCHEMA_VERSION
             ) || revision.actor_id != owner
                 || revision.case_id != case
                 || revision.revision != number as u64
@@ -2225,6 +2229,82 @@ mod tests {
 
     #[test]
     fn explicit_alpha8_migration_preserves_legacy_case_blob_and_is_idempotent() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        let fingerprint = identity(&request).unwrap();
+        assert!(
+            store
+                .register_input("alice", &request, &fingerprint)
+                .unwrap()
+        );
+
+        let mut legacy_revision = received(&request);
+        legacy_revision.schema_version = ALPHA8_SCHEMA_VERSION.into();
+        let (state_sha, state_length) = store.publish_blob(&legacy_revision).unwrap();
+        let transaction = store.transaction().unwrap();
+        Store::reference(&transaction, &state_sha, state_length, "case_revision").unwrap();
+        let event_hash = identity(&(
+            "case-revision-event-v1",
+            &request.case_id,
+            legacy_revision.revision,
+            &Option::<String>::None,
+            &state_sha,
+        ))
+        .unwrap();
+        transaction
+            .execute(
+                "INSERT INTO case_revision(case_id,revision,parent_revision,state_sha256,parent_hash,event_hash,lifecycle,goal_sha256) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![
+                    request.case_id,
+                    0_i64,
+                    Option::<i64>::None,
+                    state_sha,
+                    Option::<String>::None,
+                    event_hash,
+                    "RECEIVED",
+                    Option::<String>::None,
+                ],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE store_metadata SET value=?1 WHERE key='schema'",
+                [ALPHA8_SCHEMA_VERSION],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        drop(store);
+
+        assert!(matches!(
+            Store::open(&directory.0),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "SCHEMA_MISMATCH"
+        ));
+        assert_eq!(
+            Store::migrate_to_current(&directory.0).unwrap(),
+            (ALPHA8_SCHEMA_VERSION.into(), SCHEMA_VERSION.into())
+        );
+        let migrated = Store::open(&directory.0).unwrap();
+        let latest = migrated.load_case("alice", "case-a").unwrap().unwrap();
+        assert_eq!(latest.schema_version, ALPHA8_SCHEMA_VERSION);
+        assert_eq!(latest.revision, 0);
+        let stored_sha: String = migrated
+            .connection
+            .query_row(
+                "SELECT state_sha256 FROM case_revision WHERE case_id='case-a' AND revision=0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_sha, state_sha);
+        assert_eq!(
+            Store::migrate_to_current(&directory.0).unwrap(),
+            (SCHEMA_VERSION.into(), SCHEMA_VERSION.into())
+        );
+    }
+
+    #[test]
+    fn explicit_alpha9_migration_preserves_legacy_case_blob_and_is_idempotent() {
         let directory = Directory::new();
         let store = Store::open(&directory.0).unwrap();
         let request = request();

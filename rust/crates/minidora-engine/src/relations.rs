@@ -304,6 +304,19 @@ pub(crate) fn validate(proposition: &Proposition) -> Result<()> {
             "an explicit temporal scope must be nonempty, bounded, non-variable, and contain no control characters",
         ));
     }
+    if proposition.condition_refs.len() > 32
+        || proposition.condition_refs.iter().any(|value| {
+            value.trim().is_empty()
+                || value.len() > 1024
+                || value.chars().any(char::is_control)
+                || variable(value)
+        })
+    {
+        return Err(failure(
+            "INVALID_CONDITION_REFS",
+            "condition references must be a bounded set of nonempty, non-variable values without control characters",
+        ));
+    }
     if variable(&proposition.predicate) || variable(&proposition.scope) {
         return Err(failure(
             "UNSUPPORTED_RELATION",
@@ -515,6 +528,16 @@ pub fn add_rule_with_premises(
     }
     if premises
         .iter()
+        .any(|antecedent| antecedent.condition_refs != premise.condition_refs)
+        || premise.condition_refs != conclusion.condition_refs
+    {
+        return Err(failure(
+            "CONDITION_SCOPE_MISMATCH",
+            "a rule may not silently change applicability-condition references",
+        ));
+    }
+    if premises
+        .iter()
         .enumerate()
         .any(|(index, antecedent)| premises[index + 1..].contains(antecedent))
     {
@@ -652,6 +675,7 @@ fn same_shape(left: &Proposition, right: &Proposition) -> bool {
         && left.negative == right.negative
         && left.scope == right.scope
         && left.temporal_scope == right.temporal_scope
+        && left.condition_refs == right.condition_refs
 }
 fn substitute(proposition: &Proposition, bindings: &BTreeMap<String, String>) -> Proposition {
     Proposition {
@@ -945,11 +969,14 @@ fn isolated_composition_plan(
             .filter(|rule| {
                 rule.premise.scope == proposition.scope
                     && rule.premise.temporal_scope == proposition.temporal_scope
+                    && rule.premise.condition_refs == proposition.condition_refs
                     && rule.conclusion.scope == proposition.scope
                     && rule.conclusion.temporal_scope == proposition.temporal_scope
+                    && rule.conclusion.condition_refs == proposition.condition_refs
                     && rule.additional_premises.iter().all(|premise| {
                         premise.scope == proposition.scope
                             && premise.temporal_scope == proposition.temporal_scope
+                            && premise.condition_refs == proposition.condition_refs
                     })
             })
             .collect();
@@ -1341,12 +1368,25 @@ pub fn format_proposition(proposition: &Proposition) -> String {
             }
         )
     };
-    proposition
+    let surface = proposition
         .temporal_scope
         .as_ref()
         .map_or(surface.clone(), |time| {
             format!("{surface}（時刻範囲: {time}）")
-        })
+        });
+    if proposition.condition_refs.is_empty() {
+        surface
+    } else {
+        format!(
+            "{surface}（条件参照: {}）",
+            proposition
+                .condition_refs
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1360,6 +1400,7 @@ mod tests {
             negative: false,
             scope: "premise-world".into(),
             temporal_scope: None,
+            condition_refs: Default::default(),
         }
     }
     #[test]
@@ -1501,6 +1542,7 @@ mod contrary_evidence_tests {
             negative: false,
             scope: "story".into(),
             temporal_scope: None,
+            condition_refs: Default::default(),
         };
         let mut conclusion = base.clone();
         conclusion.object = "機械".into();
@@ -1535,6 +1577,7 @@ mod conjunctive_rule_tests {
             negative: false,
             scope: "biology".into(),
             temporal_scope: None,
+            condition_refs: Default::default(),
         }
     }
 

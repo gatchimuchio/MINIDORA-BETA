@@ -4077,6 +4077,7 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         negative,
         scope,
         temporal_scope: None,
+        condition_refs: Default::default(),
     }))
 }
 
@@ -4599,10 +4600,12 @@ mod tests {
                 negative: false,
                 scope,
                 temporal_scope: None,
+                condition_refs,
             }) if subject == "ミナ"
                 && predicate == "飲む"
                 && object == "水"
                 && scope == "default"
+                && condition_refs.is_empty()
         ));
         assert!(matches!(
             interpret("もしXはカッターを使うならXは道具を使う").unwrap(),

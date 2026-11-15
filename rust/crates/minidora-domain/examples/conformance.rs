@@ -7,6 +7,7 @@ fn main() {
         negative: true,
         scope: "仮定2026".into(),
         temporal_scope: None,
+        condition_refs: Default::default(),
     };
     let bytes = canonical(&record).expect("exact record");
     println!(

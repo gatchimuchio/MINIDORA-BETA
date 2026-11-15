@@ -214,6 +214,7 @@ pub(crate) fn relation_objects_answer(
             negative,
             scope: scope.into(),
             temporal_scope: None,
+            condition_refs: Default::default(),
         };
         let answer = relations::query(memory, &proposition, per_candidate_budget)?;
         match answer.status.as_str() {
@@ -777,8 +778,9 @@ impl Engine {
 
     /// Correct one exact typed premise through Core's versioned correction
     /// path. The superseded proposition is matched with its full identity,
-    /// including world and temporal scope; descendants are invalidated before
-    /// the replacement is adopted. This entry does not parse natural language.
+    /// including world scope, temporal scope and condition references; descendants
+    /// are invalidated before the replacement is adopted. This entry does not
+    /// parse natural language.
     pub fn correct_atomic_relation(
         &mut self,
         actor: &str,
@@ -823,8 +825,9 @@ impl Engine {
     }
 
     /// Add a one- or two-premise typed rule through the same Core path used by
-    /// parsed rules. Exact temporal-scope matching remains part of relation
-    /// identity; this entry does not infer chronology between labels.
+    /// parsed rules. Exact temporal-scope and condition-reference matching
+    /// remain part of relation identity; condition references stay opaque and
+    /// chronology is not inferred.
     pub fn add_atomic_relation_rule(
         &mut self,
         actor: &str,
@@ -4550,6 +4553,7 @@ impl Engine {
                         premise.subject != premises[0].subject
                             || premise.scope != premises[0].scope
                             || premise.temporal_scope != premises[0].temporal_scope
+                            || premise.condition_refs != premises[0].condition_refs
                     })
                 {
                     return self.stop(
@@ -5023,6 +5027,7 @@ impl Engine {
                         negative,
                         scope: scope.clone(),
                         temporal_scope: None,
+                        condition_refs: Default::default(),
                     };
                     let proposition_b = Proposition {
                         subject: subject_b.clone(),
@@ -7764,21 +7769,37 @@ fn relation_comparison_inventory(
     }
 }
 
-type RelationComparisonKey = (String, String, bool, String, Option<String>);
+type RelationComparisonKey = (
+    String,
+    String,
+    bool,
+    String,
+    Option<String>,
+    BTreeSet<String>,
+);
 
 fn relation_comparison_key_identity(key: &RelationComparisonKey) -> Result<String> {
-    let (predicate, object, negative, scope, temporal_scope) = key;
-    match temporal_scope {
+    let (predicate, object, negative, scope, temporal_scope, condition_refs) = key;
+    match (temporal_scope, condition_refs.is_empty()) {
         // Preserve pre-alpha-9 comparison unit identities for the legacy
         // untimed shape while making explicit time part of new identities.
-        None => identity(&(predicate, object, negative, scope)),
-        Some(temporal_scope) => identity(&(
+        (None, true) => identity(&(predicate, object, negative, scope)),
+        (Some(temporal_scope), true) => identity(&(
             "core-relation-comparison-temporal-key-v1",
             predicate,
             object,
             negative,
             scope,
             temporal_scope,
+        )),
+        (temporal_scope, false) => identity(&(
+            "core-relation-comparison-condition-key-v1",
+            predicate,
+            object,
+            negative,
+            scope,
+            temporal_scope,
+            condition_refs,
         )),
     }
 }
@@ -7817,6 +7838,7 @@ fn relation_comparison_map(
                 proposition.negative,
                 proposition.scope.clone(),
                 proposition.temporal_scope.clone(),
+                proposition.condition_refs.clone(),
             ))
             .or_insert_with(Vec::new)
             .push(fact);
@@ -8443,6 +8465,7 @@ mod relation_comparison_temporal_identity_tests {
             false,
             "lab".to_owned(),
             None,
+            BTreeSet::new(),
         );
         let legacy_key = ("is".to_owned(), "ore".to_owned(), false, "lab".to_owned());
 
@@ -8649,9 +8672,21 @@ fn describe(p: &Proposition) -> String {
             if p.negative { "否定" } else { "肯定" }
         )
     };
-    match p.temporal_scope.as_deref() {
+    let surface = match p.temporal_scope.as_deref() {
         Some(time) => format!("{surface}（時刻範囲: {time}）"),
         None => surface,
+    };
+    if p.condition_refs.is_empty() {
+        surface
+    } else {
+        format!(
+            "{surface}（条件参照: {}）",
+            p.condition_refs
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 
@@ -8787,6 +8822,7 @@ mod previous_relation_meaning_tests {
                     negative: false,
                     scope: "default".into(),
                     temporal_scope: None,
+                    condition_refs: Default::default(),
                 },
                 proof_dependencies: vec!["legacy-direct-premise".into()],
             }
@@ -10025,6 +10061,7 @@ mod core_construction_observation_tests {
             scope: "biology".into(),
             negative: true,
             temporal_scope: None,
+            condition_refs: Default::default(),
         };
         let replacement = Proposition {
             subject: "ココ".into(),
@@ -10033,6 +10070,7 @@ mod core_construction_observation_tests {
             scope: "biology".into(),
             negative: false,
             temporal_scope: None,
+            condition_refs: Default::default(),
         };
         let memory = engine
             .store
@@ -10205,6 +10243,7 @@ mod core_construction_observation_tests {
             scope: "biology".into(),
             negative: true,
             temporal_scope: None,
+            condition_refs: Default::default(),
         };
         let replacement = Proposition {
             subject: "Coco".into(),
@@ -10213,6 +10252,7 @@ mod core_construction_observation_tests {
             scope: "biology".into(),
             negative: false,
             temporal_scope: None,
+            condition_refs: Default::default(),
         };
         let memory = engine
             .store
@@ -10401,6 +10441,7 @@ mod core_construction_observation_tests {
                 scope: "biology".into(),
                 negative: true,
                 temporal_scope: None,
+                condition_refs: Default::default(),
             };
             let replacement = Proposition {
                 object: replacement_object.into(),

@@ -1,0 +1,17 @@
+   Compiling minidora-engine v0.7.0-alpha.10 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+error[E0382]: borrow of partially moved value: `mismatch`
+  --> crates/minidora-engine/tests/core_condition_scope_53.rs:69:46
+   |
+68 |         matches!(mismatch, Err(Error::Contract { code, .. }) if code == "CONDITION_SCOPE_MISMATCH"),
+   |                                                  ---- value partially moved here
+69 |         "unexpected mismatched rule result: {mismatch:?}"
+   |                                              ^^^^^^^^ value borrowed here after partial move
+   |
+   = note: partial move occurs because value has type `std::string::String`, which does not implement the `Copy` trait
+help: borrow this binding in the pattern to avoid moving the value
+   |
+68 |         matches!(mismatch, Err(Error::Contract { ref code, .. }) if code == "CONDITION_SCOPE_MISMATCH"),
+   |                                                  +++
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `minidora-engine` (test "core_condition_scope_53") due to 1 previous error

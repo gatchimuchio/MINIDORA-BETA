@@ -1,0 +1,21 @@
+   Compiling minidora-domain v0.7.0-alpha.10 (/workspace/MINIDORA-BETA/rust/crates/minidora-domain)
+   Compiling minidora-engine v0.7.0-alpha.10 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.08s
+     Running tests/core_condition_scope_53.rs (target/debug/deps/core_condition_scope_53-9b5d07333bafd72b)
+
+running 1 test
+
+thread 'typed_condition_refs_bind_rules_queries_correction_and_comparison' (461512) panicked at crates/minidora-engine/tests/core_condition_scope_53.rs:67:5:
+assertion failed: matches!(mismatch, Err(Error::Contract { code, .. }) if code ==
+    "CONDITION_SCOPE_MISMATCH")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test typed_condition_refs_bind_rules_queries_correction_and_comparison ... FAILED
+
+failures:
+
+failures:
+    typed_condition_refs_bind_rules_queries_correction_and_comparison
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_condition_scope_53`

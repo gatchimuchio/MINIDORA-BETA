@@ -1,0 +1,19 @@
+   Compiling minidora-engine v0.7.0-alpha.10 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.74s
+     Running tests/core_condition_scope_53.rs (target/debug/deps/core_condition_scope_53-9b5d07333bafd72b)
+
+running 1 test
+
+thread 'typed_condition_refs_bind_rules_queries_correction_and_comparison' (461630) panicked at crates/minidora-engine/tests/core_condition_scope_53.rs:67:5:
+unexpected mismatched rule result: Ok(ResultRecord { id: "b7a847fcbd4ccc5db13324de481a7386f39ff3b33e0ba61a3a4c1a042486589b", input_id: "mismatched-condition-rule", input_version: 1, lifecycle: Suspend, text: "CONDITION_SCOPE_MISMATCH: a rule may not silently change applicability-condition references", reason: Some("EXECUTION_ERROR: CONDITION_SCOPE_MISMATCH: a rule may not silently change applicability-condition references"), guarantee: Unknown, calculation: None, content_plan: None, render: None, receipts: [], evidence: [], dependencies: [], execution_graph_ref: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test typed_condition_refs_bind_rules_queries_correction_and_comparison ... FAILED
+
+failures:
+
+failures:
+    typed_condition_refs_bind_rules_queries_correction_and_comparison
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_condition_scope_53`

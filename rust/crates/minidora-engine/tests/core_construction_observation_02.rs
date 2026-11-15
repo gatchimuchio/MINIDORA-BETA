@@ -58,6 +58,7 @@ fn proposition(subject: &str, object: &str, negative: bool) -> Proposition {
         negative,
         scope: "virtual-lab".into(),
         temporal_scope: None,
+        condition_refs: Default::default(),
     }
 }
 
