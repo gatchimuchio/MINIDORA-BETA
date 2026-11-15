@@ -1,0 +1,74 @@
+{
+  "schema": "MINIDORA_B39_BUILD_OBSERVATION_V1",
+  "base_commit": "2124e6cd3e85fa373b4c2959b174dbb47447c3f5",
+  "purpose": "Add a proof-rule-aware typed content request and versioned artifact path for bounded relation comparisons.",
+  "source": {
+    "path": "rust/crates/minidora-engine/src/core.rs",
+    "sha256": "ecefe62ddfa57931d9ba8e82fbbc75e2f5a8725efed501bba6b05cf8a19c043d",
+    "producer": "Core CompareRelationInventories -> proof IDs -> matching active stored RelationRule units",
+    "intended_consumer": "MeaningCompositionPurpose::Compare -> ContentPlan -> K7",
+    "runtime_delivery_observed": false
+  },
+  "artifact_compatibility": {
+    "v1_report_reader": "retained",
+    "v2_content_builder_and_replay": "retained for direct-premise results and existing v2 artifacts",
+    "v3_content_builder_and_replay": "added for bounded comparisons whose proof IDs include active stored rules",
+    "runtime_replay_observed": false
+  },
+  "checks": [
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo check --locked -p minidora-engine --all-targets",
+      "status": "PASS",
+      "exit_code": 0,
+      "note": "Compiles engine test targets; no test cases were executed."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "exit_code": 0
+    }
+  ],
+  "runtime_tests": {
+    "status": "NOT_RUN",
+    "note": "This batch records format and compile checks only; route execution evidence remains unobserved.",
+    "coverage_needed_next": [
+      "derived relation comparison produces v3 typed rule evidence and retains all proof IDs through ContentPlan/K7",
+      "process-reopened v3 comparison revalidates inventories, rules, request, composition and render",
+      "v1 and v2 comparison artifact follow-ups remain readable"
+    ]
+  },
+  "environment": {
+    "os": "linux",
+    "rustc": "1.99.1",
+    "cargo": "1.99.1",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "gate": {
+    "CORE-G03": "PARTIAL",
+    "other_core_gates": "not reassessed in B39"
+  },
+  "release_or_deployment": "not performed",
+  "three_document_set": {
+    "current_repository_set": "R4 2026-11-15; unchanged",
+    "r4_spec_sha256": "eb2ca32bea74e88f5d82e370d33b2f62f2f4f6aeadbc2375fc78f428342ab0b7",
+    "r4_schedule_sha256": "a4a2aba0af11f8cccd86c45e4ab2dc280cbea9be155b949cd863a156f8585fbf",
+    "r4_work_order_sha256": "ac5484a5ce2272c91227ae36e9c18a1dcaa152e80004c6c87bf40c9a95c7c4c0",
+    "r4_archive_sha256": "fc7822f6fb3a734990dc208dc8dc264b49607d8b6476c9695bd5660dccf270ee",
+    "uploaded_2026_11_14_archive_sha256": "1f65df9f67448406d0fe1e9d3b1e13981afa236f352223cbb61ce1541bc1371e",
+    "byte_identical_to_tracked_2026_11_14_archive": true,
+    "extracted_or_copied": false
+  },
+  "assets": {
+    "keep": 5,
+    "store": 0,
+    "in_use": 3,
+    "trash": 0,
+    "hold": 0,
+    "total": 8
+  }
+}
