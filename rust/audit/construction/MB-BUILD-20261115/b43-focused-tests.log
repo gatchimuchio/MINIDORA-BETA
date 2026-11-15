@@ -1,0 +1,16 @@
+Base source: a029cb99c880f45b1b59e926890e72770cda4f40 (B42)
+Toolchain: rustc 1.99.1 (58cf8f9c3 2026-10-13); cargo 1.99.1 (5f94df478 2026-08-27); Linux
+
+Command:
+CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_43 -- --nocapture
+Result: PASS (1 test; 0 failed; 0 ignored; 16.22 seconds).
+Observed four distinct same-case blobs: V2 direct (4 proofs), V3 one-rule (5 proofs), V4 two-rule chain (9 proofs), V1 unit-bound fallback (9 proofs). All four blobs were re-read together after final generation and hashes matched. After Engine reopen, four explicit-context follow-ups selected their original comparison result, committed, and rendered.
+
+The first `cargo fmt --all -- --check` reported import-order-only formatting in the new test. `/workspace/.cargo/bin/cargo fmt --all` corrected it.
+
+Final checks from the `rust/` workspace / repository root:
+`/workspace/.cargo/bin/cargo fmt --all -- --check`: PASS.
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo check --locked -p minidora-engine --all-targets`: PASS (compile check only).
+`git diff --check`: PASS.
+`python3 -m json.tool rust/audit/construction/MB-BUILD-20261115/b43-build-observation.json`: PASS.
+Temporary test directory scan: 0 matching directories.
