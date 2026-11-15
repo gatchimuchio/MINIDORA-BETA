@@ -1,0 +1,353 @@
+{
+  "schema": "MINIDORA_BUILD_RUNTIME_OBSERVATION_V1",
+  "unit": "B46",
+  "base_head": "c2595ca19405c873faf12bef571e7210e2ba4dbd",
+  "subject": "MINIDORA-BETA unique Core saved relation-comparison proof and scope isolation",
+  "purpose": "Invalidate a rule used by a saved V4 target comparison, then verify stale target replay stops while an unaffected V1 comparison from a separate scope remains usable.",
+  "owner_instruction_scope": "Continue the previously authorized MINIDORA-BETA implementation on GitHub main; maintain two recovery generations before meaningful edits.",
+  "construction_stage": "B46 scoped construction observation; no CORE gate or system-level stage transition.",
+  "requirements": {
+    "R2_invariant": "I06",
+    "capability": "CAP-D13",
+    "capability_acceptance": "UNVERIFIED",
+    "core_g03": "PARTIAL"
+  },
+  "git_start": {
+    "branch": "main",
+    "head": "c2595ca19405c873faf12bef571e7210e2ba4dbd",
+    "origin_main": "c2595ca19405c873faf12bef571e7210e2ba4dbd",
+    "worktree_clean": true,
+    "worktree_count": 1,
+    "other_active_agents": 0,
+    "recovery_refs_at_unit_start": {
+      "codex/backup-main": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6",
+      "codex/backup-main-prev": "87f26a978a1ca7e46de1428d1a10a9763a105fea",
+      "remote_tag_backup_main": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6",
+      "remote_tag_backup_main_prev": "87f26a978a1ca7e46de1428d1a10a9763a105fea"
+    },
+    "recovery_refs_before_first_edit_after_cas": {
+      "codex/backup-main": "c2595ca19405c873faf12bef571e7210e2ba4dbd",
+      "codex/backup-main-prev": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6",
+      "remote_tag_backup_main": "c2595ca19405c873faf12bef571e7210e2ba4dbd",
+      "remote_tag_backup_main_prev": "49cfb7ee24e25f0421962d8c5ec8eaf953623cd6"
+    },
+    "existing_remote_backup_branches": [
+      {
+        "ref": "refs/heads/codex/backup-main",
+        "remote_tip": "8c425bf28af09b0284101836da598d53fb8d6756",
+        "relation": "ancestor_of_main",
+        "local_remote_tracking_tip": "c820916a78f3564f2fec518cb2b2f68787426204",
+        "modified": false
+      },
+      {
+        "ref": "refs/heads/codex/backup-main-prev",
+        "remote_tip": "e9a275591d9f062d033c07d2a9a4e239414269a6",
+        "relation": "ancestor_of_main",
+        "local_remote_tracking_tip": "1e84a3e83a2d9a76f30e067ca433b203d35570d5",
+        "modified": false
+      }
+    ]
+  },
+  "scope": {
+    "actor": "b46-v4-rule-v1-control",
+    "comparison_case": "b46-coexisting-v4-rule-v1-comparison",
+    "invalidation_case": "b46-invalidate-target-rule",
+    "scope_count": 2,
+    "invalidation_count": 1,
+    "target_artifact_kind": "minidora.relation-comparison-content.v4",
+    "control_artifact_kind": "minidora.relation-comparison-report.v1",
+    "production_code_changed": false,
+    "artifact_contract_changed": false,
+    "r4_documents_changed": false,
+    "external_effects": "none; local temporary test database only"
+  },
+  "producer_to_consumer": {
+    "producer": "Engine::execute seeded actor-scoped rules/facts; Engine::compose_atomic_relation_comparison persisted V4 target and V1 control artifacts.",
+    "mutation": "Engine::execute accepted invalidate <rule-id>; Core transitive invalidation retained the root and composed child rule records with valid=false and advanced memory revision once.",
+    "consumer": "After Engine reopen, explicit context_ref selected the saved V4 target (SUSPEND / CONTEXT_PROOF_CHANGED before ContentPlan/render) and the distinct-scope V1 control (COMMIT / RENDERED).",
+    "artifact_integrity": "Both saved comparison blobs remained available with original SHA256 after rule invalidation and subsequent replay."
+  },
+  "environment": {
+    "os": "linux",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "edition": "2024",
+    "cargo_target_dir": "/workspace/.minidora-cloud/rust-target",
+    "workspace_members": [
+      "minidora-domain",
+      "minidora-engine",
+      "minidora-cli"
+    ],
+    "dependency_lock_sha256": "90e0859f4274cb9c2e067e24ecc684f9738d3c04ae796bc72f6f40fe039767a1"
+  },
+  "commands": [
+    {
+      "command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_46 -- --nocapture",
+      "result": "PASS",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "duration_seconds": 5.0,
+      "log": "b46-focused-tests.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo metadata --locked --no-deps --format-version 1",
+      "result": "PASS",
+      "exit_code": 0
+    },
+    {
+      "command": "R4 manifest/archive-member/size/SHA256 verification",
+      "result": "PASS"
+    }
+  ],
+  "runtime_trace": {
+    "actor": "b46-v4-rule-v1-control",
+    "comparison_case": "b46-coexisting-v4-rule-v1-comparison",
+    "control": {
+      "artifact_kind": "minidora.relation-comparison-report.v1",
+      "artifact_ref": "bbf0b6bf57a6413302af2b8f35050b1e61c04fba57f0619cd6f031f8f9233321",
+      "artifact_sha256": "bbf0b6bf57a6413302af2b8f35050b1e61c04fba57f0619cd6f031f8f9233321",
+      "follow_up_result_id": "fb3263ecca95369d6b2272f981fee898d1004d4dbe8616fd3269bdc118b76df0",
+      "lifecycle": "COMMIT",
+      "render_sha256": "ef893784b68b592f11f3b247afc1ad00c360509cf9c8d49a824ba2cb45af5308",
+      "render_status": "RENDERED",
+      "retained_after_invalidation": true,
+      "selected_comparison_dependency": true,
+      "selected_result_id": "6e1914b2393d9ccfa6f23cea728722f2aae87911bac1a7ce43cddfe528cc18ee"
+    },
+    "dependent_rule_ids_retained_invalid": [
+      "rule:738bf07a232e436d2f1cca240d977374b64ff5fe7dd71bebbca604c1f0a952b1"
+    ],
+    "engine_reopened_after_invalidation": true,
+    "invalidated_record_ids": [
+      "rule:0757506f8b7560d5bf4e6b8cd1d9e9d9d08e2997345d7f9a8c620ff11d37f769",
+      "rule:738bf07a232e436d2f1cca240d977374b64ff5fe7dd71bebbca604c1f0a952b1"
+    ],
+    "invalidated_rule_id": "rule:0757506f8b7560d5bf4e6b8cd1d9e9d9d08e2997345d7f9a8c620ff11d37f769",
+    "invalidation_case": "b46-invalidate-target-rule",
+    "memory_revision_after": 12,
+    "memory_revision_before": 11,
+    "migration_or_concurrency": "not checked",
+    "outside_world_truth": "not checked",
+    "schema": "MINIDORA_CORE_RELATION_COMPARISON_V4_RULE_INVALIDATION_TRACE_V1",
+    "scopes": {
+      "v1_control": "b46-v1-control-scope",
+      "v4_target": "b46-v4-target-scope"
+    },
+    "target": {
+      "artifact_kind": "minidora.relation-comparison-content.v4",
+      "artifact_ref": "a7707ce702ea9571db23cb491c631b32da7d8edd94cd89e8094d7568953d0855",
+      "artifact_sha256": "a7707ce702ea9571db23cb491c631b32da7d8edd94cd89e8094d7568953d0855",
+      "content_plan_created": false,
+      "follow_up_result_id": "9318b8bfca42e6fdd446fbcbc0657339d90cfbeb1c6ebd2555eb6b97378bc9e3",
+      "lifecycle": "SUSPEND",
+      "proof_ids": [
+        "fact:964d045fe472df660ee7c7e460ddcab40dd6cc13b22e48e669f2dfd75a99efe9",
+        "fact:b5be4255763c6d8fb17dbf044c07230542cba6ad4478474443719fc1df302d7d",
+        "fact:c99d34903a48046c70c45cf215a5c3efe5b7659409a2dcf6e162e2a88f374732",
+        "fact:ce134f0d614946697fb19c450cf7715a708ed447273a393c7eab849b54280e43",
+        "fact:d281b5f5cf9e24ae04650758ab2d9d1d0a5f2ed3cb689c15cf998a2783d9a402",
+        "fact:f3ca4baf0e7209162550d3a8e7cd23256f5491d5efe7fb8f8e3b0b06ed7d2471",
+        "rule:0757506f8b7560d5bf4e6b8cd1d9e9d9d08e2997345d7f9a8c620ff11d37f769",
+        "rule:738bf07a232e436d2f1cca240d977374b64ff5fe7dd71bebbca604c1f0a952b1",
+        "rule:ce11e081e011b4f4f4066b28d39f626bf441ab00c72134b0de36a76cfef275c2"
+      ],
+      "reason": "CONTEXT_PROOF_CHANGED: 前回比較の左右いずれかの保存根拠・競合状態が変わっています。新しい比較を行ってください。",
+      "render_created": false,
+      "retained_after_invalidation": true
+    }
+  },
+  "r4": {
+    "manifest": {
+      "path": "rust/audit/construction/MB-BUILD-20261115/MANIFEST.tsv",
+      "sha256": "c645e5bdbd41ed1bd9578ce36cdb6c1100e1af9a313866b8f43e4626f99c535d",
+      "bytes": 992
+    },
+    "documents": {
+      "01_施工仕様書.md": {
+        "sha256": "eb2ca32bea74e88f5d82e370d33b2f62f2f4f6aeadbc2375fc78f428342ab0b7",
+        "bytes": 22094
+      },
+      "02_施工工程表.md": {
+        "sha256": "a4a2aba0af11f8cccd86c45e4ab2dc280cbea9be155b949cd863a156f8585fbf",
+        "bytes": 22189
+      },
+      "03_Codex施工指示書.md": {
+        "sha256": "ac5484a5ce2272c91227ae36e9c18a1dcaa152e80004c6c87bf40c9a95c7c4c0",
+        "bytes": 22817
+      }
+    },
+    "archive": {
+      "path": "rust/audit/construction/MB-BUILD-20261115/MINIDORA-BETA_3DOC_R4_20261115.zip",
+      "sha256": "fc7822f6fb3a734990dc208dc8dc264b49607d8b6476c9695bd5660dccf270ee",
+      "bytes": 30467,
+      "members": [
+        "01_施工仕様書.md",
+        "02_施工工程表.md",
+        "03_Codex施工指示書.md"
+      ]
+    }
+  },
+  "read_set_hashes_at_recording": {
+    "AGENTS.md": {
+      "sha256_at_recording": "0552bda2652c02be165925bc3d69423aedbf38f68b0bb8ccbe29bb9c442d8565",
+      "bytes": 37400,
+      "mtime_ns": 1794711826570009788
+    },
+    "docs/redesign/01_SYSTEM_SPECIFICATION.md": {
+      "sha256_at_recording": "4943c28fcf5992a98182339dc728c908c647feab5c49bd0f90cfc56364900cec",
+      "bytes": 80762,
+      "mtime_ns": 1794265694687975736
+    },
+    "docs/redesign/02_CAPABILITY_REGISTER.md": {
+      "sha256_at_recording": "56efd122056387832e374e8cc12a4c48031c34ebacb290097863c0dc010fb53e",
+      "bytes": 22735,
+      "mtime_ns": 1794265694687975736
+    },
+    "docs/redesign/03_REQUIREMENT_TRACE.tsv": {
+      "sha256_at_recording": "3261c99cef64fa70182fcc570e4103acb38c86d5a25c7b103653fa09525eacf2",
+      "bytes": 54152,
+      "mtime_ns": 1794573141644625766
+    },
+    "docs/redesign/05_VERIFICATION_AND_EVIDENCE.md": {
+      "sha256_at_recording": "095d41773ee8f3147bafcc86f5ed9eb8733e2f5ea233bd9335675dd8abefad31",
+      "bytes": 15984,
+      "mtime_ns": 1794265694687975736
+    },
+    "docs/redesign/06_LINEAGE_AND_DECISIONS.md": {
+      "sha256_at_recording": "3464987d806095b9daf441e5d12a648ba1fb94166b55395d1a25d47fc475718c",
+      "bytes": 11180,
+      "mtime_ns": 1794265694687975736
+    },
+    "rust/audit/implementation-obligations.md": {
+      "sha256_at_recording": "0a1dc56c1d5f3ba392869bdd806d74cad8812015d246e36b211def78f0c0c449",
+      "bytes": 34437,
+      "mtime_ns": 1794265694691454153
+    },
+    "rust/audit/requirements.tsv": {
+      "sha256_at_recording": "f5328235b3b3bd7c0f2510e69b2276d42a1dd8368c96c304230fa49f1c19abf5",
+      "bytes": 367547,
+      "mtime_ns": 1794749294697639241
+    },
+    "rust/audit/IMPLEMENTATION_STATUS.md": {
+      "sha256_at_recording": "d5b02a4ed7a21cd4b6dd9713c8fa33e11753264c4604fbba409d226d5b8da88b",
+      "bytes": 184090,
+      "mtime_ns": 1794749263462544250
+    },
+    "rust/docs/IMPLEMENTATION_CHOICES.md": {
+      "sha256_at_recording": "591586b0e1bd801e496d9e2d5d4f44d547c9072849b380e7a1e8e446f77cad23",
+      "bytes": 37857,
+      "mtime_ns": 1794749264054543756
+    },
+    "rust/docs/DEPENDENCIES.md": {
+      "sha256_at_recording": "33164e9fa3eb83d19194f0c8dd437d47d1e1fef127e435d1a3170ec430c55665",
+      "bytes": 5021,
+      "mtime_ns": 1794265694712039357
+    },
+    "rust/README.md": {
+      "sha256_at_recording": "51fa7cd3d11cb37ed0e276999779ad3b3f783aedd724f21cfc68cd01e96c210a",
+      "bytes": 91590,
+      "mtime_ns": 1794711826574009786
+    },
+    "rust/audit/validation.json": {
+      "sha256_at_recording": "6a0406428d242863f1db6419e7e602362d945096672e35358f14f611efcda8ed",
+      "bytes": 10309,
+      "mtime_ns": 1794265695663454122
+    },
+    "rust/audit/target-conformance.json": {
+      "sha256_at_recording": "979fa2293d20543ec7c342961f8f76c0b2f77f037dffb6d1cc4776110849e8d3",
+      "bytes": 993,
+      "mtime_ns": 1794265694707454152
+    },
+    "rust/audit/runtime-requirements.json": {
+      "sha256_at_recording": "524c46a1fa3e6ad96fdfe143e91c5003861b5a6b3769d8cf1c75ae7e140c5415",
+      "bytes": 968,
+      "mtime_ns": 1794265694699454152
+    }
+  },
+  "unverified_or_not_run": [
+    "full CAP-D13 acceptance and counterexample-gated active-conclusion transition",
+    "normal CLI/HTTP user route",
+    "all rule shapes and all scopes",
+    "full engine/workspace runtime suites",
+    "Clippy",
+    "workspace all-target check/build",
+    "other operating systems and physical Windows/8GB",
+    "migration",
+    "concurrent writers",
+    "outside-world truth",
+    "independent QC/QA",
+    "release/deployment"
+  ],
+  "temporary_fixture_directories_remaining": 0,
+  "changed_paths": [
+    {
+      "path": "rust/audit/IMPLEMENTATION_STATUS.md",
+      "sha256": "d5b02a4ed7a21cd4b6dd9713c8fa33e11753264c4604fbba409d226d5b8da88b",
+      "bytes": 184090
+    },
+    {
+      "path": "rust/audit/requirements.tsv",
+      "sha256": "f5328235b3b3bd7c0f2510e69b2276d42a1dd8368c96c304230fa49f1c19abf5",
+      "bytes": 367547
+    },
+    {
+      "path": "rust/docs/IMPLEMENTATION_CHOICES.md",
+      "sha256": "591586b0e1bd801e496d9e2d5d4f44d547c9072849b380e7a1e8e446f77cad23",
+      "bytes": 37857
+    },
+    {
+      "path": "rust/audit/construction/MB-BUILD-20261115/BUILD_BATCH_46.md",
+      "sha256": "09918dff771d9d51d146e34885d41eab42de4e89c40031c2a3a349889244b7b8",
+      "bytes": 5230
+    },
+    {
+      "path": "rust/audit/construction/MB-BUILD-20261115/b46-focused-tests.log",
+      "sha256": "570a3363464eb7598f85457f72ecde459c6dce3636ee42542ab08a7f707a61e1",
+      "bytes": 2945
+    },
+    {
+      "path": "rust/crates/minidora-engine/tests/core_atomic_relation_comparison_46.rs",
+      "sha256": "aa9d3e2e59128f4a289fb96793715933a4d80c65da924d71b748c92b3d6d0091",
+      "bytes": 16857
+    },
+    {
+      "path": "rust/audit/construction/MB-BUILD-20261115/b46-build-observation.json",
+      "self_hash": "omitted to avoid recursive digest"
+    }
+  ],
+  "resource_snapshot_after_focused_test": {
+    "filesystem": "/workspace",
+    "total_gib": 63,
+    "used_gib": 17,
+    "available_gib": 43,
+    "cargo_target_dir": "7.7G",
+    "cargo_home": "252M",
+    "rustup_home": "617M"
+  },
+  "non_git_storage": {
+    "external_store_operation": "none",
+    "onedrive_status": "N/A on Linux"
+  },
+  "post_build_checks": {
+    "staged_diff_check": {
+      "result": "PASS",
+      "files": 7
+    },
+    "observation_json_parse": "PASS",
+    "secret_pattern_scan": {
+      "result": "PASS",
+      "matches": 0
+    },
+    "temporary_fixture_directories": {
+      "result": "PASS",
+      "remaining_under_tmp": 0
+    },
+    "CAP-D13_acceptance_status": "UNVERIFIED"
+  }
+}
