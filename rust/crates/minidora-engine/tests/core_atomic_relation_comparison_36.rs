@@ -158,7 +158,12 @@ fn typed_atomic_relation_comparison_reaches_k7_and_preserves_stops() {
         serde_json::from_slice(&report_bytes).expect("parse comparison report artifact");
     assert_eq!(
         report_artifact["kind"],
-        "minidora.relation-comparison-report.v1"
+        "minidora.relation-comparison-content.v2"
+    );
+    assert_eq!(report_artifact["content_request"]["purpose"], "COMPARE");
+    assert_eq!(
+        report_artifact["content_composition"]["text"],
+        compared.text
     );
     assert_eq!(report_artifact["subject_a"], "Aster");
     assert_eq!(report_artifact["subject_b"], "Beryl");

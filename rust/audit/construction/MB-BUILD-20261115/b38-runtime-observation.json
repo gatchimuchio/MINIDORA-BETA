@@ -1,0 +1,66 @@
+{
+  "comparison": {
+    "artifact_sha256": "95f7108520086ca80a01cb8917489c3a404a7c0f3d29dc9a835386ebc2375015",
+    "content_units": [
+      "左右の保存関係根拠を照合した比較です。",
+      "比較対象Aは「Aster」です（範囲: b38-comparison-lab）。",
+      "比較対象Bは「Beryl」です（範囲: b38-comparison-lab）。",
+      "両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである。",
+      "Aster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである。",
+      "Beryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである。",
+      "根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6; 依存ID: なし）。",
+      "根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488; 依存ID: なし）。",
+      "根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e; 依存ID: なし）。",
+      "根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74; 依存ID: なし）。",
+      "この比較は範囲「b38-comparison-lab」の保存記録内の支持を分類し、片側の無支持は関係の不存在を証明せず、保存記録の網羅性と現実世界の真偽も確認していません。"
+    ],
+    "lifecycle": "COMMIT",
+    "proof_ids": [
+      "fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e",
+      "fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6",
+      "fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488",
+      "fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74"
+    ],
+    "render_bytes": 1626,
+    "render_sha256": "cc11a62bf09341611566d7141ea956b7231fbb23bc8eb01dd2a3f71584909034",
+    "result_id": "1a3cac093f32220ec66e7a522e3154f1da4344f24aa926343a561fbbd5b42abf",
+    "text": "左右の保存関係根拠を照合した比較です。はじめに、比較対象Aは「Aster」です（範囲: b38-comparison-lab）。これに対して、比較対象Bは「Beryl」です（範囲: b38-comparison-lab）。同じく、両側で確認した同じ関係: Asterはpilotである ／ Berylはpilotである。比較に目を向けると、Aster側で確認した関係（Beryl側では同じ関係の支持を確認できず）: Asterはmusicianである。比較に目を向けると、Beryl側で確認した関係（Aster側では同じ関係の支持を確認できず）: Berylはgeologistである。根拠として、根拠(Aster): Asterはmusicianである（直接提示された前提; 記録ID: fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6; 依存ID: なし）。根拠として、根拠(Aster): Asterはpilotである（直接提示された前提; 記録ID: fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488; 依存ID: なし）。根拠として、根拠(Beryl): Berylはgeologistである（直接提示された前提; 記録ID: fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e; 依存ID: なし）。根拠として、根拠(Beryl): Berylはpilotである（直接提示された前提; 記録ID: fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74; 依存ID: なし）。ただし、この比較は範囲「b38-comparison-lab」の保存記録内の支持を分類し、片側の無支持は関係の不存在を証明せず、保存記録の網羅性と現実世界の真偽も確認していません。"
+  },
+  "conflicting_comparison": {
+    "has_conflict": true,
+    "lifecycle": "COMMIT",
+    "proof_ids": [
+      "fact:0a75a5bdb7bb8e89517437212a893691d439926733058002fcff31500f453b2f",
+      "fact:52fbde544e760fd250b58993a05f356ad74b793d4a5a012a32f3116783062a1f",
+      "fact:6c07c7e7171580a9d2c4ada8bc0e83d23ea47bd26504f3fd37ef55d0d6bd39cf"
+    ],
+    "result_id": "6ac641d255c56ad1f406a126a961473ecb134d2f4d89d2160e6200e0ffbe47fc",
+    "text": "左右の保存関係根拠を照合した比較です。はじめに、比較対象Aは「Coda」です（範囲: b38-conflict-lab）。これに対して、比較対象Bは「Dara」です（範囲: b38-conflict-lab）。比較に目を向けると、競合根拠を含む関係（共通・片側のみと確定しません）: Codaはpilotである。比較に目を向けると、競合根拠を含む関係（共通・片側のみと確定しません）: Codaはpilotではない。根拠として、根拠(Dara): Daraはpilotである（直接提示された前提; 記録ID: fact:6c07c7e7171580a9d2c4ada8bc0e83d23ea47bd26504f3fd37ef55d0d6bd39cf; 依存ID: なし）。根拠として、根拠(Coda): Codaはpilotである（直接提示された前提; 記録ID: fact:52fbde544e760fd250b58993a05f356ad74b793d4a5a012a32f3116783062a1f; 依存ID: なし; 対立根拠あり）。根拠として、根拠(Coda): Codaはpilotではない（直接提示された前提; 記録ID: fact:0a75a5bdb7bb8e89517437212a893691d439926733058002fcff31500f453b2f; 依存ID: なし; 対立根拠あり）。ただし、この比較は範囲「b38-conflict-lab」の保存記録内の支持を分類し、片側の無支持は関係の不存在を証明せず、保存記録の網羅性と現実世界の真偽も確認していません。"
+  },
+  "legacy_artifact_reader": {
+    "kind": "minidora.relation-comparison-report.v1",
+    "prior_comparison_consumed": true,
+    "reopened_followup_lifecycle": "COMMIT"
+  },
+  "os": "linux",
+  "outside_world_truth": "not checked",
+  "producer": "relation_comparison_inventory -> Core typed Compare units -> MeaningCompositionReport",
+  "reopened_context": {
+    "lifecycle": "COMMIT",
+    "prior_comparison_consumed": true,
+    "rendered": true,
+    "result_id": "3fcd473a8b5c01dff23e36451572143b926a9b62af868b335b5c74f5c04892fe"
+  },
+  "schema": "MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_RUNTIME_TRACE_V2",
+  "scope": "b38-comparison-lab",
+  "seed_proofs": [
+    "fact:6caea2990aa6af998af542b67ad1718da3b4b93f0d073d6bbbeece75c4a41488",
+    "fact:48139a124310ad9ad3f78968e971f33608650b8c1120ed3cfb4273640fe7a9a6",
+    "fact:be63b9359369ef740d536b265fdcd0e7c79f60462102eb6fdd63fdddac09cd74",
+    "fact:0350cb5a95bff622b256181366032d8e1e61cbc111321bf98d337920e0820e5e"
+  ],
+  "subjects": [
+    "Aster",
+    "Beryl"
+  ]
+}

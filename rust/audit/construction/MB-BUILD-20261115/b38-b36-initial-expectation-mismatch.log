@@ -1,0 +1,24 @@
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/core_atomic_relation_comparison_36.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_36-6286e9bee989d286)
+
+running 1 test
+test typed_atomic_relation_comparison_reaches_k7_and_preserves_stops ... FAILED
+
+failures:
+
+---- typed_atomic_relation_comparison_reaches_k7_and_preserves_stops stdout ----
+
+thread 'typed_atomic_relation_comparison_reaches_k7_and_preserves_stops' (422265) panicked at crates/minidora-engine/tests/core_atomic_relation_comparison_36.rs:159:5:
+assertion `left == right` failed
+  left: String("minidora.relation-comparison-content.v2")
+ right: "minidora.relation-comparison-report.v1"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    typed_atomic_relation_comparison_reaches_k7_and_preserves_stops
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_atomic_relation_comparison_36`
