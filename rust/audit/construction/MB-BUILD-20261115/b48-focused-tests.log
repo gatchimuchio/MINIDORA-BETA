@@ -1,0 +1,9 @@
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running tests/core_actor_context_boundary_48.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_actor_context_boundary_48-b72f66bfde8ac632)
+
+running 1 test
+MINIDORA_B48_TRACE={"actor_a":{"actor_id":"b48-context-owner-a","case_id":"b48-context-case-a","content_plan_created":false,"foreign_context_lifecycle":"FAIL","foreign_context_reason":"INPUT_FAILURE: CONTEXT_MISMATCH: explicit context does not name the supplied actual prior result","foreign_context_result_id":"78deb97341617c282a97a5333eea37ed8d4dd0d4d89101798a993bcc9da62271","foreign_result_id_attempted":"5741fa42adf3b858dc2f9437a8f45132786d7885a85c45619ce12b5458da9b73","foreign_result_text_leaked":false,"memory_unchanged_after_rejection":true,"own_context_lifecycle":"COMMIT","own_context_render_status":"RENDERED","owned_result_id":"d927b4583f7f467d261c973f74884af7a40978626c8cca026c3f24ef2fe47428","render_created":false},"actor_b":{"actor_id":"b48-context-owner-b","case_id":"b48-context-case-b","memory_unchanged_after_actor_a_attempt_and_own_replay":true,"own_context_lifecycle":"COMMIT","own_context_render_status":"RENDERED","owned_result_id":"5741fa42adf3b858dc2f9437a8f45132786d7885a85c45619ce12b5458da9b73"},"cross_actor_access_rejected":true,"engine_reopened_before_foreign_context_attempt":true,"normal_cli_http_and_full_cap_d11_acceptance":"not checked","outside_world_truth":"not checked","schema":"MINIDORA_CORE_CROSS_ACTOR_CONTEXT_REJECTION_TRACE_V1","scope":"b48-context-scope"}
+test actor_cannot_use_another_actors_result_as_explicit_context ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s

@@ -1,0 +1,81 @@
+{
+  "schema": "MINIDORA_B48_CROSS_ACTOR_CONTEXT_BOUNDARY_OBSERVATION_V1",
+  "batch": "B48",
+  "base_commit": "7d791544815b30d97aa7086106aed7ed995e3a19",
+  "requirements": [
+    "R2 I02",
+    "R2 I06",
+    "CAP-D11"
+  ],
+  "test_source": {
+    "path": "rust/crates/minidora-engine/tests/core_actor_context_boundary_48.rs",
+    "sha256": "c9e5c9f70111bffdd431569d01cdda4d345698bc72c145973974a6ae0c4f2af8",
+    "test_name": "actor_cannot_use_another_actors_result_as_explicit_context"
+  },
+  "execution": {
+    "command": "cargo test --locked -p minidora-engine --test core_actor_context_boundary_48 -- --nocapture",
+    "exit_code": 0,
+    "tests_passed": 1,
+    "tests_failed": 0,
+    "format_check": "PASS",
+    "metadata_check": "PASS; 3 workspace members",
+    "r4_archive_manifest_check": "PASS",
+    "log": "rust/audit/construction/MB-BUILD-20261115/b48-focused-tests.log",
+    "initial_compile_attempt": {
+      "outcome": "FAIL; fixture compile error before test body execution",
+      "cause": "EvidencePacket was treated as a string in the no-leak assertion; unused MemoryState import",
+      "disposition": "serialized the EvidencePacket for the assertion, removed the unused import, and reran the focused test successfully",
+      "log": "rust/audit/construction/MB-BUILD-20261115/b48-initial-compile-failure.log",
+      "sha256": "1bdedd36442f5175126a5fc50478af8e4a42582fe0e90f0e563ae012176e48ea"
+    }
+  },
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "cargo_target_dir": "/workspace/.minidora-cloud/rust-target",
+    "workspace_members": 3
+  },
+  "producer_consumer": "two actors save separate relation facts and committed results -> Engine reopens -> actor A submits actor B result ID as explicit context -> Core rejects context before ContentPlan/render -> each actor replays its own selected result",
+  "trace": {
+    "actor_a": {
+      "actor_id": "b48-context-owner-a",
+      "case_id": "b48-context-case-a",
+      "content_plan_created": false,
+      "foreign_context_lifecycle": "FAIL",
+      "foreign_context_reason": "INPUT_FAILURE: CONTEXT_MISMATCH: explicit context does not name the supplied actual prior result",
+      "foreign_context_result_id": "78deb97341617c282a97a5333eea37ed8d4dd0d4d89101798a993bcc9da62271",
+      "foreign_result_id_attempted": "5741fa42adf3b858dc2f9437a8f45132786d7885a85c45619ce12b5458da9b73",
+      "foreign_result_text_leaked": false,
+      "memory_unchanged_after_rejection": true,
+      "own_context_lifecycle": "COMMIT",
+      "own_context_render_status": "RENDERED",
+      "owned_result_id": "d927b4583f7f467d261c973f74884af7a40978626c8cca026c3f24ef2fe47428",
+      "render_created": false
+    },
+    "actor_b": {
+      "actor_id": "b48-context-owner-b",
+      "case_id": "b48-context-case-b",
+      "memory_unchanged_after_actor_a_attempt_and_own_replay": true,
+      "own_context_lifecycle": "COMMIT",
+      "own_context_render_status": "RENDERED",
+      "owned_result_id": "5741fa42adf3b858dc2f9437a8f45132786d7885a85c45619ce12b5458da9b73"
+    },
+    "cross_actor_access_rejected": true,
+    "engine_reopened_before_foreign_context_attempt": true,
+    "normal_cli_http_and_full_cap_d11_acceptance": "not checked",
+    "outside_world_truth": "not checked",
+    "schema": "MINIDORA_CORE_CROSS_ACTOR_CONTEXT_REJECTION_TRACE_V1",
+    "scope": "b48-context-scope"
+  },
+  "limits": [
+    "one sequential Core integration fixture with two actors, two globally unique cases, one shared scope and one foreign result ID attempt",
+    "normal CLI/HTTP context paths not checked",
+    "parallel writers and migration not checked",
+    "outside-world truth not checked",
+    "full CAP-D11 acceptance remains UNVERIFIED",
+    "CORE-G03 remains PARTIAL"
+  ],
+  "release": "NOT_RELEASED"
+}
