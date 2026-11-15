@@ -38,6 +38,7 @@ fn proposition(object: &str) -> Proposition {
         object: object.into(),
         negative: false,
         scope: "atomic-explanation-lab".into(),
+        temporal_scope: None,
     }
 }
 

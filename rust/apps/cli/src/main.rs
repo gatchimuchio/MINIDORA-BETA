@@ -2,8 +2,8 @@
 #![forbid(unsafe_code)]
 
 use minidora_domain::{
-    ActionRecord, EffectPhase, LEGACY_SCHEMA_VERSION, Lifecycle, RequestEnvelope, ResourceBudget,
-    ResultRecord, SCHEMA_VERSION,
+    ActionRecord, EffectPhase, Lifecycle, RequestEnvelope, ResourceBudget, ResultRecord,
+    SCHEMA_VERSION,
 };
 use minidora_engine::{Engine, store::Store};
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.8 — local execution frontend
+const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.9 — local execution frontend
 
 Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...
@@ -48,9 +48,10 @@ These are trusted local configuration, not remote authentication. State director
 access must be protected by the host. Development budgets are finite admission
 defaults, not measured performance or Windows/8GB guarantees.
 
-Migrate explicitly accepts an existing alpha 7 state directory, verifies it, then
-updates only its schema metadata. It requires --db and also accepts an already-
-migrated alpha 8 directory as a verified no-op.
+Migrate explicitly accepts an existing alpha 7 or alpha 8 state directory,
+verifies it, then updates only its schema metadata to the current schema. It
+requires --db and also accepts an already-migrated current directory as a
+verified no-op.
 
 Reconcile asks Core to inspect the original saved operation and actual file.
 It accepts no new goal, permissions or target, and performs no write or resend.
@@ -292,11 +293,12 @@ fn run(options: Options) -> Result<u8, String> {
         return Ok(0);
     }
     if options.mode == Mode::Migrate {
-        let migrated =
-            Store::migrate_alpha7_to_alpha8(&options.db).map_err(|error| error.to_string())?;
+        let (from_schema, to_schema) =
+            Store::migrate_to_current(&options.db).map_err(|error| error.to_string())?;
+        let migrated = from_schema != to_schema;
         let report = serde_json::json!({
-            "from_schema": LEGACY_SCHEMA_VERSION,
-            "to_schema": SCHEMA_VERSION,
+            "from_schema": from_schema,
+            "to_schema": to_schema,
             "migrated": migrated,
         });
         if options.json {
@@ -306,7 +308,7 @@ fn run(options: Options) -> Result<u8, String> {
             );
         } else if migrated {
             println!(
-                "store metadata migrated from {LEGACY_SCHEMA_VERSION} to {SCHEMA_VERSION}; immutable case and effect records were retained"
+                "store metadata migrated from {from_schema} to {to_schema}; immutable case and effect records were retained"
             );
         } else {
             println!("store already uses {SCHEMA_VERSION}; no migration was needed");

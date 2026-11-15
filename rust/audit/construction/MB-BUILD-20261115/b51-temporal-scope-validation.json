@@ -1,0 +1,111 @@
+{
+  "schema": "MINIDORA_B51_VALIDATION_V1",
+  "work_item": "B51 exact temporal scope in Core relation identity",
+  "software_version": "0.7.0-alpha.9",
+  "schema_version": "minidora-rust/0.7.0-alpha.9",
+  "base_head": "f789ff50ff9fb11ddc52fab7526a7d38888e875d",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)"
+  },
+  "source_changes": [
+    "Add optional Proposition.temporal_scope separate from world scope, with omission when absent.",
+    "Use exact temporal equality for relation shape, rule validation, proof matching, explanation labels, and comparison grouping.",
+    "Add typed Core assertion and rule construction entry points through the normal sealed Core lifecycle.",
+    "Explicitly migrate validated alpha 7/8 metadata to alpha 9 while preserving immutable case/effect blobs.",
+    "Preserve legacy untimed relation-comparison unit key identities."
+  ],
+  "r4_source_integrity": {
+    "result": "PASS",
+    "manifest": "MANIFEST.tsv",
+    "three_markdown_documents_match_manifest": true,
+    "zip_members_match_markdown": true,
+    "r4_markdown_or_archive_modified": false
+  },
+  "verification": [
+    {
+      "command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_41 --test core_atomic_relation_comparison_43 --test core_temporal_scope_51 -- --nocapture",
+      "result": "PASS",
+      "passed": 3,
+      "failed": 0,
+      "log": "b51-engine-focused-tests-locked.log",
+      "observation": "b51-build-observation.json"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --lib explicit_",
+      "result": "PASS",
+      "passed": 17,
+      "failed": 0,
+      "filtered_out": 233,
+      "includes": [
+        "explicit_alpha7_migration_preserves_legacy_case_blobs_and_is_idempotent",
+        "explicit_alpha8_migration_preserves_legacy_case_blob_and_is_idempotent"
+      ],
+      "log": "b51-migration-tests-locked.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --lib untimed_comparison_key_identity_matches_the_legacy_shape",
+      "result": "PASS",
+      "passed": 1,
+      "failed": 0,
+      "log": "b51-legacy-comparison-key-test.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-domain unqualified_legacy_propositions_keep_their_canonical_bytes",
+      "result": "PASS",
+      "passed": 1,
+      "failed": 0,
+      "log": "b51-domain-compatibility-test-locked.log"
+    },
+    {
+      "command": "cargo test --locked -p minidora-cli schema_migration_accepts_only_a_database_path_and_json_output",
+      "result": "PASS",
+      "passed": 1,
+      "failed": 0,
+      "log": "b51-cli-migration-test-locked.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS",
+      "log": "b51-workspace-all-target-check.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b51-format-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS after correcting one trailing blank line",
+      "log": "b51-git-diff-check-final.log",
+      "initial_failure_log": "b51-git-diff-check.log"
+    }
+  ],
+  "retained_initial_failures": [
+    {
+      "log": "b51-initial-canonical-fixture-failure.log",
+      "cause": "The initial assertion compared canonical sorted-key bytes with the unsorted source JSON bytes.",
+      "resolution": "The test now checks the legacy canonical sorted-key shape and passes."
+    },
+    {
+      "log": "b51-git-diff-check.log",
+      "cause": "The appended implementation-choice section left an extra blank line at EOF.",
+      "resolution": "Removed the extra newline; final git diff --check passes."
+    }
+  ],
+  "not_run": [
+    "Full workspace runtime suite",
+    "Clippy",
+    "Natural-language temporal parsing through CLI/HTTP",
+    "Chronology and interval reasoning",
+    "Other operating systems and physical power-loss migration behavior",
+    "Full 93-capability acceptance and independent QA"
+  ],
+  "gate_assessment": {
+    "CORE-G01": "PARTIAL; typed exact-label time scope is observed, while normal-input time parsing and temporal operators remain open.",
+    "CORE-G03": "PARTIAL; no change to its overall acceptance status.",
+    "other_core_gates": "Not reassessed in B51.",
+    "input_machine_construction": "Not started; R4 core gates are not all PASS."
+  }
+}

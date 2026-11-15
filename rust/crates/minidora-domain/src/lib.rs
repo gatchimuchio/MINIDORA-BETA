@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.8";
+pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.9";
+pub const PREVIOUS_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.8";
 pub const LEGACY_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.7";
 pub const CANONICALIZER: &str = "utf8-sorted-json-v1";
 
@@ -131,6 +132,10 @@ pub struct Proposition {
     pub object: String,
     pub negative: bool,
     pub scope: String,
+    /// Exact source-provided temporal partition. It participates in relation
+    /// identity and rule matching; it is not a chronology or interval solver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal_scope: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationRule {
@@ -672,6 +677,31 @@ mod tests {
             "{\"a\":\"1/3\",\"z\":\"雨\"}".as_bytes()
         );
         assert_ne!(identity(&"Ａ").unwrap(), identity(&"A").unwrap());
+    }
+
+    #[test]
+    fn unqualified_legacy_propositions_keep_their_canonical_bytes() {
+        let legacy =
+            br#"{"subject":"Nera","predicate":"is","object":"ore","negative":false,"scope":"lab"}"#;
+        let proposition: Proposition = serde_json::from_slice(legacy).unwrap();
+        assert_eq!(proposition.temporal_scope, None);
+        assert_eq!(
+            canonical(&proposition).unwrap(),
+            br#"{"negative":false,"object":"ore","predicate":"is","scope":"lab","subject":"Nera"}"#
+        );
+
+        let timed = Proposition {
+            subject: "Nera".into(),
+            predicate: "is".into(),
+            object: "ore".into(),
+            negative: false,
+            scope: "lab".into(),
+            temporal_scope: Some("2026-11-15T10:00Z".into()),
+        };
+        assert_eq!(
+            serde_json::from_slice::<Proposition>(&canonical(&timed).unwrap()).unwrap(),
+            timed
+        );
     }
     #[test]
     fn nonexact_numbers_cannot_silently_become_null_or_facts() {

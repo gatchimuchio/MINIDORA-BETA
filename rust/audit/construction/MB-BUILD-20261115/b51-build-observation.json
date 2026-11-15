@@ -1,0 +1,45 @@
+{
+  "schema": "MINIDORA_CORE_TEMPORAL_SCOPE_RUNTIME_TRACE_V1",
+  "software_version": "0.7.0-alpha.9",
+  "schema_version": "minidora-rust/0.7.0-alpha.9",
+  "actor": "b51-temporal-scope",
+  "comparison": {
+    "common_label_present": false,
+    "different_time_labels_present": true,
+    "lifecycle": "COMMIT"
+  },
+  "different_time": "2026-11-15T18:00Z",
+  "different_time_result": {
+    "content_plan": false,
+    "lifecycle": "SUSPEND",
+    "reason": "MISSING_PREMISES: 範囲「b51-materials-lab」の「Neraはrefinedである（時刻範囲: 2026-11-15T18:00Z）」を説明する有効な前提または導出経路がありません。",
+    "render": false
+  },
+  "gate_assessment": {
+    "CORE-G01": "PARTIAL; exact time labels now participate in typed relation identity, rules, proof queries, explanation content and comparison grouping; natural-language time parsing and chronology remain open"
+  },
+  "limits": [
+    "typed Core API",
+    "exact label equality only",
+    "no chronology or interval reasoning"
+  ],
+  "proof_ids": [
+    "rule:b77479953ff3937f192c85a776ed6d9015585fdb2b1aeefcfb1ed3622def7867",
+    "fact:a6a5e4ccb90b41f0f4cb5f2db4233fdfa1eae7557910f35fb66f378329117566"
+  ],
+  "same_time": "2026-11-15T10:00Z",
+  "same_time_result": {
+    "content_plan_id": "b11b21fb7144f15624f572e575af6d61d40a0660790688a07421a1001a8096ec",
+    "dependencies": [
+      "fact:5212f82c5d3928a37a7d57a5b52349dc55aa2733c67264d219fc03e24eb3b93d",
+      "fact:a6a5e4ccb90b41f0f4cb5f2db4233fdfa1eae7557910f35fb66f378329117566",
+      "rule:b77479953ff3937f192c85a776ed6d9015585fdb2b1aeefcfb1ed3622def7867"
+    ],
+    "guarantee": "DERIVED",
+    "lifecycle": "COMMIT",
+    "render_status": "RENDERED",
+    "text": "保存された前提と規則から「Neraはrefinedである（時刻範囲: 2026-11-15T10:00Z）」が導かれています（範囲: b51-materials-lab）。根拠として、保存前提「Neraはoreである（時刻範囲: 2026-11-15T10:00Z）」は範囲「b51-materials-lab」の入力記録です（前提ID: fact:a6a5e4ccb90b41f0f4cb5f2db4233fdfa1eae7557910f35fb66f378329117566）。規則に照らすと、保存規則「$xはoreである（時刻範囲: 2026-11-15T10:00Z）」ならば「$xはrefinedである（時刻範囲: 2026-11-15T10:00Z）」です（範囲: b51-materials-lab; 規則ID: rule:b77479953ff3937f192c85a776ed6d9015585fdb2b1aeefcfb1ed3622def7867）。ただし、この説明は範囲「b51-materials-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+  },
+  "scope": "b51-materials-lab",
+  "work_item": "B51 exact temporal scope in Core relation identity"
+}

@@ -293,6 +293,17 @@ pub(crate) fn validate(proposition: &Proposition) -> Result<()> {
             "relation fields must be nonempty and bounded",
         ));
     }
+    if proposition.temporal_scope.as_deref().is_some_and(|value| {
+        value.trim().is_empty()
+            || value.len() > 1024
+            || value.chars().any(char::is_control)
+            || variable(value)
+    }) {
+        return Err(failure(
+            "INVALID_TIME_SCOPE",
+            "an explicit temporal scope must be nonempty, bounded, non-variable, and contain no control characters",
+        ));
+    }
     if variable(&proposition.predicate) || variable(&proposition.scope) {
         return Err(failure(
             "UNSUPPORTED_RELATION",
@@ -494,6 +505,16 @@ pub fn add_rule_with_premises(
     }
     if premises
         .iter()
+        .any(|antecedent| antecedent.temporal_scope != premise.temporal_scope)
+        || premise.temporal_scope != conclusion.temporal_scope
+    {
+        return Err(failure(
+            "TIME_SCOPE_MISMATCH",
+            "a rule may not silently change temporal scope",
+        ));
+    }
+    if premises
+        .iter()
         .enumerate()
         .any(|(index, antecedent)| premises[index + 1..].contains(antecedent))
     {
@@ -630,6 +651,7 @@ fn same_shape(left: &Proposition, right: &Proposition) -> bool {
     left.predicate == right.predicate
         && left.negative == right.negative
         && left.scope == right.scope
+        && left.temporal_scope == right.temporal_scope
 }
 fn substitute(proposition: &Proposition, bindings: &BTreeMap<String, String>) -> Proposition {
     Proposition {
@@ -922,11 +944,13 @@ fn isolated_composition_plan(
             .copied()
             .filter(|rule| {
                 rule.premise.scope == proposition.scope
+                    && rule.premise.temporal_scope == proposition.temporal_scope
                     && rule.conclusion.scope == proposition.scope
-                    && rule
-                        .additional_premises
-                        .iter()
-                        .all(|premise| premise.scope == proposition.scope)
+                    && rule.conclusion.temporal_scope == proposition.temporal_scope
+                    && rule.additional_premises.iter().all(|premise| {
+                        premise.scope == proposition.scope
+                            && premise.temporal_scope == proposition.temporal_scope
+                    })
             })
             .collect();
         let expected = BTreeSet::from([shortcut.id.as_str(), left.id.as_str(), right.id.as_str()]);
@@ -1293,7 +1317,7 @@ pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
 }
 
 pub fn format_proposition(proposition: &Proposition) -> String {
-    if proposition.predicate == "is" {
+    let surface = if proposition.predicate == "is" {
         format!(
             "{}は{}{}",
             proposition.subject,
@@ -1316,7 +1340,13 @@ pub fn format_proposition(proposition: &Proposition) -> String {
                 ""
             }
         )
-    }
+    };
+    proposition
+        .temporal_scope
+        .as_ref()
+        .map_or(surface.clone(), |time| {
+            format!("{surface}（時刻範囲: {time}）")
+        })
 }
 
 #[cfg(test)]
@@ -1329,6 +1359,7 @@ mod tests {
             object: object.into(),
             negative: false,
             scope: "premise-world".into(),
+            temporal_scope: None,
         }
     }
     #[test]
@@ -1469,6 +1500,7 @@ mod contrary_evidence_tests {
             object: "鳥".into(),
             negative: false,
             scope: "story".into(),
+            temporal_scope: None,
         };
         let mut conclusion = base.clone();
         conclusion.object = "機械".into();
@@ -1502,6 +1534,7 @@ mod conjunctive_rule_tests {
             object: object.into(),
             negative: false,
             scope: "biology".into(),
+            temporal_scope: None,
         }
     }
 

@@ -19,6 +19,10 @@ const CORE_COMPUTATION_ARTIFACT_KIND_V2: &str = "minidora.core-computation.relat
 const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v3";
 const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
 const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
+const DIRECT_TYPED_RELATION_ASSERTION_KIND: &str = "CORE_TYPED_RELATION_ASSERTION_V1";
+const DIRECT_TYPED_RELATION_ASSERTION_PARSER: &str = "core-typed-relation-assertion-v1";
+const DIRECT_TYPED_RELATION_RULE_KIND: &str = "CORE_TYPED_RELATION_RULE_V1";
+const DIRECT_TYPED_RELATION_RULE_PARSER: &str = "core-typed-relation-rule-v1";
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
 const DIRECT_RELATION_COMPARISON_PARSER: &str = "core-typed-relation-comparison-v1";
 
@@ -29,6 +33,21 @@ struct DirectAtomicMeaningInput {
     purpose: String,
     proposition: Proposition,
     source_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectTypedRelationAssertionInput {
+    schema: String,
+    proposition: Proposition,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectTypedRelationRuleInput {
+    schema: String,
+    premises: Vec<Proposition>,
+    conclusion: Proposition,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -184,6 +203,7 @@ pub(crate) fn relation_objects_answer(
             object,
             negative,
             scope: scope.into(),
+            temporal_scope: None,
         };
         let answer = relations::query(memory, &proposition, per_candidate_budget)?;
         match answer.status.as_str() {
@@ -710,6 +730,75 @@ impl Engine {
             ));
         }
         let bundle = direct_atomic_meaning_bundle(&request, &direct_input)?;
+        self.execute_with_bundle(actor, request, Some(bundle))
+    }
+
+    /// Assert one typed relation through the Core-owned persistence path.
+    /// This construction entry keeps temporal and world scopes in separate
+    /// fields and does not parse or infer natural-language meaning.
+    pub fn assert_atomic_relation(
+        &mut self,
+        actor: &str,
+        mut request: RequestEnvelope,
+        proposition: Proposition,
+    ) -> Result<ResultRecord> {
+        validate_direct_relation_request(actor, &request)?;
+        relations::validate(&proposition)?;
+        if !relations::is_ground(&proposition) {
+            return Err(failure(
+                "UNBOUND_VARIABLE",
+                "a typed atomic premise requires a bound subject and object",
+            ));
+        }
+        let input = DirectTypedRelationAssertionInput {
+            schema: DIRECT_TYPED_RELATION_ASSERTION_KIND.into(),
+            proposition,
+        };
+        request.text = serde_json::to_string(&input)?;
+        if request.text.len() > request.budget.max_input_bytes {
+            return Err(failure(
+                "INPUT_LIMIT",
+                "typed relation assertion exceeds the request byte budget",
+            ));
+        }
+        let bundle = direct_typed_relation_assertion_bundle(&request, &input)?;
+        self.execute_with_bundle(actor, request, Some(bundle))
+    }
+
+    /// Add a one- or two-premise typed rule through the same Core path used by
+    /// parsed rules. Exact temporal-scope matching remains part of relation
+    /// identity; this entry does not infer chronology between labels.
+    pub fn add_atomic_relation_rule(
+        &mut self,
+        actor: &str,
+        mut request: RequestEnvelope,
+        premises: Vec<Proposition>,
+        conclusion: Proposition,
+    ) -> Result<ResultRecord> {
+        validate_direct_relation_request(actor, &request)?;
+        if !(1..=2).contains(&premises.len()) {
+            return Err(failure(
+                "UNSUPPORTED_RULE_PREMISE_COUNT",
+                "a typed relation rule requires one or two explicit premises",
+            ));
+        }
+        for premise in &premises {
+            relations::validate(premise)?;
+        }
+        relations::validate(&conclusion)?;
+        let input = DirectTypedRelationRuleInput {
+            schema: DIRECT_TYPED_RELATION_RULE_KIND.into(),
+            premises,
+            conclusion,
+        };
+        request.text = serde_json::to_string(&input)?;
+        if request.text.len() > request.budget.max_input_bytes {
+            return Err(failure(
+                "INPUT_LIMIT",
+                "typed relation rule exceeds the request byte budget",
+            ));
+        }
+        let bundle = direct_typed_relation_rule_bundle(&request, &input)?;
         self.execute_with_bundle(actor, request, Some(bundle))
     }
 
@@ -4203,6 +4292,7 @@ impl Engine {
                 result.guarantee = Guarantee::UserPremise;
             }
             Intent::Assert { proposition } => {
+                let _ = direct_typed_relation_assertion_input(&bundle, proposition)?;
                 let mut memory = self.store.load_memory(actor)?;
                 let source_evidence = input::assertion_source_evidence(&bundle)?;
                 let fact = relations::assert_fact_with_source_evidence(
@@ -4369,6 +4459,11 @@ impl Engine {
                 premise,
                 conclusion,
             } => {
+                let _ = direct_typed_relation_rule_input(
+                    &bundle,
+                    std::slice::from_ref(premise),
+                    conclusion,
+                )?;
                 let mut memory = self.store.load_memory(actor)?;
                 let rule = relations::add_rule(
                     &mut memory,
@@ -4391,16 +4486,19 @@ impl Engine {
                 premises,
                 conclusion,
             } => {
+                let _ = direct_typed_relation_rule_input(&bundle, premises, conclusion)?;
                 if premises.len() != 2
                     || premises.iter().any(|premise| {
-                        premise.subject != premises[0].subject || premise.scope != premises[0].scope
+                        premise.subject != premises[0].subject
+                            || premise.scope != premises[0].scope
+                            || premise.temporal_scope != premises[0].temporal_scope
                     })
                 {
                     return self.stop(
                         &mut state,
                         Lifecycle::Reject,
                         "INVALID_CONJUNCTIVE_RULE",
-                        "二前提規則には同じ主語とscopeの関係節が必要です。",
+                        "二前提規則には同じ主語・scope・時刻範囲の関係節が必要です。",
                     );
                 }
                 let mut memory = self.store.load_memory(actor)?;
@@ -4866,6 +4964,7 @@ impl Engine {
                         object: object.clone(),
                         negative,
                         scope: scope.clone(),
+                        temporal_scope: None,
                     };
                     let proposition_b = Proposition {
                         subject: subject_b.clone(),
@@ -6536,6 +6635,157 @@ impl Engine {
     }
 }
 
+fn validate_direct_relation_request(actor: &str, request: &RequestEnvelope) -> Result<()> {
+    if actor != request.actor_id {
+        return Err(failure(
+            "ACTOR_MISMATCH",
+            "authenticated actor and request actor differ",
+        ));
+    }
+    if request.context_ref.is_some() {
+        return Err(failure(
+            "DIRECT_CONTEXT_UNSUPPORTED",
+            "typed relation construction requires an explicit proposition and proof context",
+        ));
+    }
+    if !request.text.is_empty() {
+        return Err(failure(
+            "DIRECT_TEXT_FORBIDDEN",
+            "typed relation construction accepts typed fields, not caller-supplied prose",
+        ));
+    }
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+        return Err(failure(
+            "DIRECT_LOCALE_UNSUPPORTED",
+            "typed relation construction currently supports Japanese output",
+        ));
+    }
+    Ok(())
+}
+
+fn direct_typed_relation_bundle(
+    request: &RequestEnvelope,
+    source_kind: &str,
+    parser_version: &str,
+    role: &str,
+    intent: Intent,
+) -> Result<InputBundle> {
+    let context_sha256 = identity(&None::<&ResultRecord>)?;
+    let raw_sha256 = digest(request.text.as_bytes());
+    let source_span = SourceSpan {
+        start: 0,
+        end: request.text.len(),
+        text: request.text.clone(),
+    };
+    let meaning = MeaningIR {
+        parser_version: parser_version.into(),
+        intent,
+        spans: vec![source_span.clone()],
+        source_roles: BTreeMap::from([(role.into(), vec![source_span])]),
+        unresolved: Vec::new(),
+        source_kind: source_kind.into(),
+        context_result_ref: None,
+    };
+    let fingerprint = identity(&(request, &raw_sha256, &context_sha256, parser_version))?;
+    let semantic_signature = identity(&meaning)?;
+    Ok(InputBundle {
+        request: request.clone(),
+        raw_sha256,
+        context_sha256,
+        fingerprint,
+        meaning,
+        semantic_signature,
+    })
+}
+
+fn direct_typed_relation_assertion_bundle(
+    request: &RequestEnvelope,
+    input: &DirectTypedRelationAssertionInput,
+) -> Result<InputBundle> {
+    direct_typed_relation_bundle(
+        request,
+        DIRECT_TYPED_RELATION_ASSERTION_KIND,
+        DIRECT_TYPED_RELATION_ASSERTION_PARSER,
+        "typed-relation-assertion",
+        Intent::Assert {
+            proposition: input.proposition.clone(),
+        },
+    )
+}
+
+fn direct_typed_relation_rule_bundle(
+    request: &RequestEnvelope,
+    input: &DirectTypedRelationRuleInput,
+) -> Result<InputBundle> {
+    let intent = match input.premises.as_slice() {
+        [premise] => Intent::AddRule {
+            premise: premise.clone(),
+            conclusion: input.conclusion.clone(),
+        },
+        [_, _] => Intent::AddConjunctiveRule {
+            premises: input.premises.clone(),
+            conclusion: input.conclusion.clone(),
+        },
+        _ => {
+            return Err(failure(
+                "UNSUPPORTED_RULE_PREMISE_COUNT",
+                "a typed relation rule requires one or two explicit premises",
+            ));
+        }
+    };
+    direct_typed_relation_bundle(
+        request,
+        DIRECT_TYPED_RELATION_RULE_KIND,
+        DIRECT_TYPED_RELATION_RULE_PARSER,
+        "typed-relation-rule",
+        intent,
+    )
+}
+
+fn direct_typed_relation_assertion_input(
+    bundle: &InputBundle,
+    proposition: &Proposition,
+) -> Result<Option<DirectTypedRelationAssertionInput>> {
+    if bundle.meaning.source_kind != DIRECT_TYPED_RELATION_ASSERTION_KIND {
+        return Ok(None);
+    }
+    let input: DirectTypedRelationAssertionInput = serde_json::from_str(&bundle.request.text)?;
+    if input.schema != DIRECT_TYPED_RELATION_ASSERTION_KIND
+        || input.proposition != *proposition
+        || serde_json::to_string(&input)? != bundle.request.text
+        || direct_typed_relation_assertion_bundle(&bundle.request, &input)? != *bundle
+    {
+        return Err(failure(
+            "TYPED_RELATION_SEAL_INVALID",
+            "typed relation assertion or sealed bundle does not match",
+        ));
+    }
+    Ok(Some(input))
+}
+
+fn direct_typed_relation_rule_input(
+    bundle: &InputBundle,
+    premises: &[Proposition],
+    conclusion: &Proposition,
+) -> Result<Option<DirectTypedRelationRuleInput>> {
+    if bundle.meaning.source_kind != DIRECT_TYPED_RELATION_RULE_KIND {
+        return Ok(None);
+    }
+    let input: DirectTypedRelationRuleInput = serde_json::from_str(&bundle.request.text)?;
+    if input.schema != DIRECT_TYPED_RELATION_RULE_KIND
+        || input.premises.as_slice() != premises
+        || input.conclusion != *conclusion
+        || serde_json::to_string(&input)? != bundle.request.text
+        || direct_typed_relation_rule_bundle(&bundle.request, &input)? != *bundle
+    {
+        return Err(failure(
+            "TYPED_RELATION_SEAL_INVALID",
+            "typed relation rule or sealed bundle does not match",
+        ));
+    }
+    Ok(Some(input))
+}
+
 fn direct_atomic_meaning_bundle(
     request: &RequestEnvelope,
     input: &DirectAtomicMeaningInput,
@@ -7417,7 +7667,24 @@ fn relation_comparison_inventory(
     }
 }
 
-type RelationComparisonKey = (String, String, bool, String);
+type RelationComparisonKey = (String, String, bool, String, Option<String>);
+
+fn relation_comparison_key_identity(key: &RelationComparisonKey) -> Result<String> {
+    let (predicate, object, negative, scope, temporal_scope) = key;
+    match temporal_scope {
+        // Preserve pre-alpha-9 comparison unit identities for the legacy
+        // untimed shape while making explicit time part of new identities.
+        None => identity(&(predicate, object, negative, scope)),
+        Some(temporal_scope) => identity(&(
+            "core-relation-comparison-temporal-key-v1",
+            predicate,
+            object,
+            negative,
+            scope,
+            temporal_scope,
+        )),
+    }
+}
 
 fn relation_comparison_proof_ids(
     inventory_a: &relations::RelationInventory,
@@ -7452,6 +7719,7 @@ fn relation_comparison_map(
                 proposition.object.clone(),
                 proposition.negative,
                 proposition.scope.clone(),
+                proposition.temporal_scope.clone(),
             ))
             .or_insert_with(Vec::new)
             .push(fact);
@@ -7529,7 +7797,7 @@ fn relation_comparison_content_request_base(
     let mut keys: BTreeSet<_> = left.keys().cloned().collect();
     keys.extend(right.keys().cloned());
     for key in keys {
-        let key_identity = identity(&key)?;
+        let key_identity = relation_comparison_key_identity(&key)?;
         let facts_a = left.get(&key).map(Vec::as_slice).unwrap_or_default();
         let facts_b = right.get(&key).map(Vec::as_slice).unwrap_or_default();
         let contested_a = facts_a
@@ -8066,6 +8334,28 @@ fn relation_comparison_report(
     lines.join("\n")
 }
 
+#[cfg(test)]
+mod relation_comparison_temporal_identity_tests {
+    use super::*;
+
+    #[test]
+    fn untimed_comparison_key_identity_matches_the_legacy_shape() {
+        let key = (
+            "is".to_owned(),
+            "ore".to_owned(),
+            false,
+            "lab".to_owned(),
+            None,
+        );
+        let legacy_key = ("is".to_owned(), "ore".to_owned(), false, "lab".to_owned());
+
+        assert_eq!(
+            relation_comparison_key_identity(&key).unwrap(),
+            identity(&legacy_key).unwrap()
+        );
+    }
+}
+
 pub(crate) fn relation_profile_units(
     subject: &str,
     inventory: &relations::RelationInventory,
@@ -8209,7 +8499,7 @@ fn guarantee_label(guarantee: &Guarantee) -> &'static str {
     }
 }
 fn describe(p: &Proposition) -> String {
-    if p.predicate == "is" {
+    let surface = if p.predicate == "is" {
         format!(
             "{}は{}{}",
             p.subject,
@@ -8243,14 +8533,16 @@ fn describe(p: &Proposition) -> String {
         .any(|ending| p.predicate.ends_with(ending))
     {
         let predicate = if p.negative {
-            let Some(predicate) = japanese_godan_negative_form(&p.predicate) else {
-                return format!("{} / {} / {} / 否定", p.subject, p.predicate, p.object);
-            };
-            predicate
+            japanese_godan_negative_form(&p.predicate)
+                .unwrap_or_else(|| format!("{} / {} / {} / 否定", p.subject, p.predicate, p.object))
         } else {
             p.predicate.clone()
         };
-        format!("{}は{}を{}", p.subject, p.object, predicate)
+        if p.negative && predicate.contains(" / ") {
+            predicate
+        } else {
+            format!("{}は{}を{}", p.subject, p.object, predicate)
+        }
     } else {
         format!(
             "{} / {} / {} / {}",
@@ -8259,6 +8551,10 @@ fn describe(p: &Proposition) -> String {
             p.object,
             if p.negative { "否定" } else { "肯定" }
         )
+    };
+    match p.temporal_scope.as_deref() {
+        Some(time) => format!("{surface}（時刻範囲: {time}）"),
+        None => surface,
     }
 }
 
@@ -8393,6 +8689,7 @@ mod previous_relation_meaning_tests {
                     object: "動物".into(),
                     negative: false,
                     scope: "default".into(),
+                    temporal_scope: None,
                 },
                 proof_dependencies: vec!["legacy-direct-premise".into()],
             }
@@ -9630,6 +9927,7 @@ mod core_construction_observation_tests {
             object: "哺乳類".into(),
             scope: "biology".into(),
             negative: true,
+            temporal_scope: None,
         };
         let replacement = Proposition {
             subject: "ココ".into(),
@@ -9637,6 +9935,7 @@ mod core_construction_observation_tests {
             object: "鳥".into(),
             scope: "biology".into(),
             negative: false,
+            temporal_scope: None,
         };
         let memory = engine
             .store
@@ -9808,6 +10107,7 @@ mod core_construction_observation_tests {
             object: "mammal".into(),
             scope: "biology".into(),
             negative: true,
+            temporal_scope: None,
         };
         let replacement = Proposition {
             subject: "Coco".into(),
@@ -9815,6 +10115,7 @@ mod core_construction_observation_tests {
             object: "bird".into(),
             scope: "biology".into(),
             negative: false,
+            temporal_scope: None,
         };
         let memory = engine
             .store
@@ -10002,6 +10303,7 @@ mod core_construction_observation_tests {
                 object: superseded_object.into(),
                 scope: "biology".into(),
                 negative: true,
+                temporal_scope: None,
             };
             let replacement = Proposition {
                 object: replacement_object.into(),

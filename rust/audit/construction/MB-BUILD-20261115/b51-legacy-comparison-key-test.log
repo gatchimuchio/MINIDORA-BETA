@@ -1,0 +1,8 @@
+   Compiling minidora-engine v0.7.0-alpha.9 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.68s
+     Running unittests src/lib.rs (target/debug/deps/minidora_engine-5f7069057e2f86e1)
+
+running 1 test
+test core::relation_comparison_temporal_identity_tests::untimed_comparison_key_identity_matches_the_legacy_shape ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 250 filtered out; finished in 0.00s

@@ -57,6 +57,7 @@ fn proposition(subject: &str, object: &str, negative: bool) -> Proposition {
         object: object.into(),
         negative,
         scope: "virtual-lab".into(),
+        temporal_scope: None,
     }
 }
 

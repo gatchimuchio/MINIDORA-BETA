@@ -1,0 +1,24 @@
+   Compiling minidora-engine v0.7.0-alpha.9 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.57s
+     Running unittests src/lib.rs (target/debug/deps/minidora_engine-5f7069057e2f86e1)
+
+running 17 tests
+test document::tests::explicit_headerless_index_and_final_empty_cell ... ok
+test document::tests::explicit_text_composition_rejects_ambiguous_or_over_budget_input ... ok
+test document::tests::explicit_text_composition_maps_material_and_layout_bytes ... ok
+test input::structured_document_tests::explicit_text_composition_headers_retain_complete_json_body ... ok
+test input::structured_document_tests::metadata_query_has_explicit_provider_and_data_boundary ... ok
+test input::symbolic_and_clause_tests::symbolic_grammar_has_explicit_operation_and_variable ... ok
+test input::tests::operand_correction_input_is_explicit_and_keeps_the_replacement_complete ... ok
+test input::tests::natural_relation_profile_requests_keep_one_explicit_subject ... ok
+test input::tests::highest_group_mean_questions_have_explicit_japanese_and_english_shapes ... ok
+test relations::conjunctive_rule_tests::declared_relation_rules_remain_limited_to_two_explicit_premises ... ok
+test relations::tests::explicit_premise_listing_excludes_invalid_derived_and_other_subject_facts ... ok
+test scheduler::tests::ready_list_retains_explicit_goal_order_not_lexical_identity ... ok
+test store::tests::explicit_alpha7_migration_preserves_legacy_case_blobs_and_is_idempotent ... ok
+test store::tests::explicit_alpha8_migration_preserves_legacy_case_blob_and_is_idempotent ... ok
+test input::tests::previous_result_summary_keeps_its_result_context_and_explicit_limits ... ok
+test input::tests::previous_source_summary_requires_an_explicit_source_context_phrase ... ok
+test input::tests::conjunctive_relation_rules_keep_explicit_and_shorthand_premises ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 233 filtered out; finished in 0.77s

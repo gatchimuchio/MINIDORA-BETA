@@ -4076,6 +4076,7 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         object,
         negative,
         scope,
+        temporal_scope: None,
     }))
 }
 
@@ -4597,6 +4598,7 @@ mod tests {
                 object,
                 negative: false,
                 scope,
+                temporal_scope: None,
             }) if subject == "ミナ"
                 && predicate == "飲む"
                 && object == "水"

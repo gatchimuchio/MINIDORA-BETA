@@ -6,6 +6,7 @@ fn main() {
         object: "決定論的".into(),
         negative: true,
         scope: "仮定2026".into(),
+        temporal_scope: None,
     };
     let bytes = canonical(&record).expect("exact record");
     println!(
