@@ -229,7 +229,7 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
         serde_json::from_slice(&compute_bytes).expect("stored content computation JSON");
     assert_eq!(
         compute_value["kind"],
-        "minidora.core-computation.relation-meaning.v2"
+        "minidora.core-computation.relation-meaning.v3"
     );
     let composition_request: MeaningCompositionRequest =
         serde_json::from_value(compute_value["content_request"].clone())

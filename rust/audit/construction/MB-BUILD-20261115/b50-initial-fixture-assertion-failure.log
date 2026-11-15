@@ -1,0 +1,8 @@
+BUILD_BATCH_50 initial focused test attempt
+Command: cargo test --locked -p minidora-engine --test core_atomic_explanation_50 -- --nocapture
+Toolchain: cargo/rustc 1.99.1; CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target
+Result: 0 passed, 1 failed; process exit 101; test body executed for 1.63 seconds.
+Failure:
+  assertion failed: composition.steps.iter().any(|step| step.role == MeaningRole::Detail)
+Location: crates/minidora-engine/tests/core_atomic_explanation_50.rs:210
+Interpretation: The fixture incorrectly required an intermediate derived Fact to be a separate Detail unit. The preceding runtime assertions had already confirmed COMMIT/DERIVED, both root rules and direct facts in result/plan lineage, multi-step explanatory text, K7 RENDERED, retained computation artifact, and exact proof ID projection. The test did not reach its final JSON print. The fixture was corrected to assert that both proof Rule units reach the composition sequence; no production code was changed.

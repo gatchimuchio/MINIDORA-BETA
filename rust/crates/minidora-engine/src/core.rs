@@ -15,7 +15,8 @@ struct CalculationSequenceStepArtifact {
 }
 
 const CORE_COMPUTATION_ARTIFACT_KIND_V1: &str = "minidora.core-computation.relation-meaning.v1";
-const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v2";
+const CORE_COMPUTATION_ARTIFACT_KIND_V2: &str = "minidora.core-computation.relation-meaning.v2";
+const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v3";
 const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
 const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
@@ -56,7 +57,7 @@ struct CoreComputationArtifact {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CoreComputationArtifactV2 {
+struct CoreComputationArtifactContent {
     kind: String,
     calculation: Option<Calculation>,
     units: Vec<String>,
@@ -6230,7 +6231,7 @@ impl Engine {
             self.store.put_artifact(
                 actor,
                 &request.case_id,
-                &CoreComputationArtifactV2 {
+                &CoreComputationArtifactContent {
                     kind: CORE_COMPUTATION_ARTIFACT_KIND.into(),
                     calculation: result.calculation.clone(),
                     units: units.clone(),
@@ -6879,10 +6880,14 @@ pub(crate) fn previous_relation_meaning(
             ));
         };
         let value: serde_json::Value = serde_json::from_slice(&bytes)?;
-        let artifact_kind = value.get("kind").and_then(serde_json::Value::as_str);
-        if artifact_kind.is_some_and(|kind| {
+        let artifact_kind = value
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        if artifact_kind.as_deref().is_some_and(|kind| {
             kind.starts_with("minidora.core-computation.relation-meaning.")
                 && kind != CORE_COMPUTATION_ARTIFACT_KIND_V1
+                && kind != CORE_COMPUTATION_ARTIFACT_KIND_V2
                 && kind != CORE_COMPUTATION_ARTIFACT_KIND
         }) {
             return Err(failure(
@@ -6890,7 +6895,7 @@ pub(crate) fn previous_relation_meaning(
                 "the prior relation meaning uses an unsupported computation artifact version",
             ));
         }
-        if artifact_kind == Some(CORE_COMPUTATION_ARTIFACT_KIND_V1) {
+        if artifact_kind.as_deref() == Some(CORE_COMPUTATION_ARTIFACT_KIND_V1) {
             let artifact: CoreComputationArtifact = serde_json::from_value(value)?;
             if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND_V1
                 || artifact.calculation != previous.calculation
@@ -6909,8 +6914,10 @@ pub(crate) fn previous_relation_meaning(
                 proof_dependencies: artifact.relation_proof_dependencies,
             }));
         }
-        if artifact_kind == Some(CORE_COMPUTATION_ARTIFACT_KIND) {
-            let artifact: CoreComputationArtifactV2 = serde_json::from_value(value)?;
+        if artifact_kind.as_deref() == Some(CORE_COMPUTATION_ARTIFACT_KIND_V2)
+            || artifact_kind.as_deref() == Some(CORE_COMPUTATION_ARTIFACT_KIND)
+        {
+            let artifact: CoreComputationArtifactContent = serde_json::from_value(value)?;
             let replay = language::compose_typed_meaning(&artifact.content_request).ok();
             let by_id = artifact
                 .content_request
@@ -6935,7 +6942,7 @@ pub(crate) fn previous_relation_meaning(
                 .iter()
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND
+            if artifact_kind.as_deref() != Some(artifact.kind.as_str())
                 || artifact.calculation != previous.calculation
                 || artifact.units != plan.required_units
                 || artifact.evidence != previous.evidence
@@ -7086,11 +7093,12 @@ fn relation_atomic_explanation_request(
     }
 
     let unit_id = |kind: &str, source: &str| -> Result<String> {
-        let fingerprint = identity(&("core-relation-content-unit-v1", kind, source))?;
+        let fingerprint = identity(&("core-relation-content-unit-v2", kind, source))?;
         Ok(format!("{kind}_{}", &fingerprint[..40]))
     };
     let mut units = Vec::<TypedMeaningUnit>::new();
     let mut rule_units = BTreeMap::<String, String>::new();
+    let mut derived_fact_unit_ids = Vec::new();
 
     let claim_text = if answer.status == "CONTRADICTED" {
         format!(
@@ -7174,6 +7182,8 @@ fn relation_atomic_explanation_request(
         let id = unit_id(kind, &fact.id)?;
         if role == MeaningRole::Evidence {
             direct_fact_unit_ids.push(id.clone());
+        } else if role == MeaningRole::Detail {
+            derived_fact_unit_ids.push(id.clone());
         }
         units.push(TypedMeaningUnit {
             id,
@@ -7187,35 +7197,79 @@ fn relation_atomic_explanation_request(
     let mut ordered_rules = proof_rules.clone();
     ordered_rules.sort_by(|left, right| left.id.cmp(&right.id));
     for rule in &ordered_rules {
-        let premises = std::iter::once(&rule.premise)
-            .chain(rule.additional_premises.iter())
-            .map(describe)
-            .collect::<Vec<_>>()
-            .join(" かつ ");
         let id = unit_id("rule", &rule.id)?;
         rule_units.insert(rule.id.clone(), id.clone());
+    }
+    for rule in &ordered_rules {
+        let id = rule_units.get(&rule.id).cloned().ok_or_else(|| {
+            failure(
+                "CONTENT_PROOF_MAPPING",
+                "a verified proof rule is missing its content unit ID",
+            )
+        })?;
         let mut evidence_ids = vec![rule.id.clone()];
         evidence_ids.extend(rule.dependencies.iter().cloned());
         evidence_ids.sort();
         evidence_ids.dedup();
+        let composed = rule.source_input == "derived:proof-composition-v1";
+        let (role, text, dependencies) = if composed {
+            if rule.dependencies.len() != 2 {
+                return Err(failure(
+                    "CONTENT_PROOF_MAPPING",
+                    "a proof-composition rule must retain exactly two parent rule IDs",
+                ));
+            }
+            let parent_units = rule
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    rule_units.get(dependency).cloned().ok_or_else(|| {
+                        failure(
+                            "CONTENT_PROOF_MAPPING",
+                            "a proof-composition parent rule is absent from the verified proof",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let parent_ids = rule.dependencies.join("、");
+            (
+                MeaningRole::Detail,
+                format!(
+                    "Coreが親規則から合成した短縮規則をこの証明で使用しています（短縮規則ID: {}; 親規則ID: {}）。",
+                    rule.id, parent_ids
+                ),
+                parent_units,
+            )
+        } else {
+            let premises = std::iter::once(&rule.premise)
+                .chain(rule.additional_premises.iter())
+                .map(describe)
+                .collect::<Vec<_>>()
+                .join(" かつ ");
+            (
+                MeaningRole::Rule,
+                format!(
+                    "保存規則「{}」ならば「{}」です（範囲: {}; 規則ID: {}）。",
+                    premises,
+                    describe(&rule.conclusion),
+                    rule.conclusion.scope,
+                    rule.id
+                ),
+                direct_fact_unit_ids.clone(),
+            )
+        };
         units.push(TypedMeaningUnit {
             id,
-            role: MeaningRole::Rule,
-            text: format!(
-                "保存規則「{}」ならば「{}」です（範囲: {}; 規則ID: {}）。",
-                premises,
-                describe(&rule.conclusion),
-                rule.conclusion.scope,
-                rule.id
-            ),
+            role,
+            text,
             evidence_ids,
-            dependencies: direct_fact_unit_ids.clone(),
+            dependencies,
         });
     }
 
     let rule_unit_ids = rule_units.values().cloned().collect::<Vec<_>>();
     for unit in &mut units {
-        if unit.role == MeaningRole::Detail {
+        if derived_fact_unit_ids.contains(&unit.id) {
             let mut dependencies = direct_fact_unit_ids.clone();
             dependencies.extend(rule_unit_ids.iter().cloned());
             dependencies.sort();

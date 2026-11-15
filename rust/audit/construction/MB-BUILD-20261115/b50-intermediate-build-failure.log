@@ -1,0 +1,22 @@
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+error[E0505]: cannot move out of `value` because it is borrowed
+    --> crates/minidora-engine/src/core.rs:6917:83
+     |
+6882 |         let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+     |             ----- binding `value` declared here
+6883 |         let artifact_kind = value.get("kind").and_then(serde_json::Value::as_str);
+     |                             ----- borrow of `value` occurs here
+...
+6917 |             let artifact: CoreComputationArtifactContent = serde_json::from_value(value)?;
+     |                                                                                   ^^^^^ move out of `value` occurs here
+...
+6942 |             if artifact_kind != Some(artifact.kind.as_str())
+     |                ------------- borrow later used here
+     |
+help: consider cloning the value if the performance cost is acceptable
+     |
+6883 |         let artifact_kind = value.clone().get("kind").and_then(serde_json::Value::as_str);
+     |                                  ++++++++
+
+For more information about this error, try `rustc --explain E0505`.
+error: could not compile `minidora-engine` (lib) due to 1 previous error
