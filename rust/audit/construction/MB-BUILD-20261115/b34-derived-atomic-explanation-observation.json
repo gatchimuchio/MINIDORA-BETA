@@ -1,0 +1,144 @@
+{
+  "run": {
+    "command": "cargo test --locked -p minidora-engine --test core_atomic_explanation_34 -- --nocapture",
+    "exit_code": 0,
+    "main_base_head": "f1b41b98e5f6d6dbae6435506e2a58677d04a459",
+    "core_implementation_commit": "fe39adbb0e7952536baccec5eecf32a2b1cc4eaa",
+    "harness": "crates/minidora-engine/tests/core_atomic_explanation_34.rs added in this batch",
+    "product_source_changed": false,
+    "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "test_result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.75s"
+  },
+  "observation": {
+    "denied_write": {
+      "action_count": 0,
+      "content_plan_id": "cd97372f75416f9d010ff4f68c28e1bcec47f9cf6c0adf39292e053e5fdd31e7",
+      "lifecycle": "SUSPEND",
+      "reason": "WRITE_PERMISSION_MISSING: 指定ファイルへの書込権限がありません。",
+      "receipt_count": 0,
+      "render_status": "RENDERED",
+      "requested_target_filename": "derived-unauthorized-output.txt",
+      "result_id": "375cdbb5bfa3e9390d5af72d504a3bafdff73ed72d41b88da3c90c4842acd41e",
+      "target_exists": false,
+      "typed_proposition": {
+        "negative": false,
+        "object": "reliable",
+        "predicate": "is",
+        "scope": "derived-atomic-explanation-lab",
+        "subject": "Vela"
+      },
+      "write_grant_count": 0
+    },
+    "missing_evidence": {
+      "content_plan_adopted": false,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: 範囲「derived-atomic-explanation-lab」の「Velaはconductiveである」を説明する有効な前提または導出経路がありません。",
+      "render_created": false,
+      "result_id": "559ff809905ada1f49f60d8c87712826ee98d3eba88f215b095b4cc5c87b0835",
+      "typed_proposition": {
+        "negative": false,
+        "object": "conductive",
+        "predicate": "is",
+        "scope": "derived-atomic-explanation-lab",
+        "subject": "Vela"
+      }
+    },
+    "os": "linux",
+    "producer": "Engine::compose_atomic_explanation",
+    "schema": "MINIDORA_CORE_DERIVED_ATOMIC_EXPLANATION_RUNTIME_TRACE_V1",
+    "seed": {
+      "actor_id": "b34-derived-atomic-explanation",
+      "calibrated": {
+        "input_id": "vela-calibrated",
+        "original_text": "[scope=derived-atomic-explanation-lab]Vela is calibrated",
+        "proof_id": "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+        "result_id": "e12c923acfd9720e8e0d43a17c0029f83d5b0a861bf642d96d38c056e1100180"
+      },
+      "case_id": "atomic-derived-seed",
+      "conclusion_user_premise_present": false,
+      "rule": {
+        "input_id": "reliable-rule",
+        "original_text": "If [scope=derived-atomic-explanation-lab]X is a sensor and calibrated then [scope=derived-atomic-explanation-lab]X is reliable",
+        "result_id": "5ee692f5b75710efbe4ca1d8212419f7d43696dd5b77f9bc20d1ad6aee210552",
+        "rule_id": "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+      },
+      "sensor": {
+        "input_id": "vela-sensor",
+        "original_text": "[scope=derived-atomic-explanation-lab]Vela is a sensor",
+        "proof_id": "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+        "result_id": "1e79ff5033bfb87f011af8643df8cb4143f70fd319703273c49f3018b8173a0e"
+      }
+    },
+    "supported": {
+      "case_id": "atomic-derived-supported",
+      "content_plan": {
+        "dependencies": [
+          "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+          "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+          "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+          "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911",
+          "043e747a414585949902f61248f081b5672563c50eac877d902b47a6994faf3f"
+        ],
+        "id": "cd97372f75416f9d010ff4f68c28e1bcec47f9cf6c0adf39292e053e5fdd31e7",
+        "model_artifact_ref": "43d2d8fd575593e4abdd39504c13a609858fecfda15cc224bb07a35681d5a144",
+        "model_observation_ref": "05b0b5e412e0373b5daa56d9d05f2eed430d40320177be3e341fff0724718ee6",
+        "model_revision": "f3e47b80f36df9976b6d9581e28194772c3f282f8565cd87bf948d0c4328b3a1",
+        "required_units": [
+          "提示された証拠が支える結論: Velaはreliableである（範囲: derived-atomic-explanation-lab）。",
+          "直接提示された前提: Velaはsensorである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）",
+          "直接提示された前提: Velaはcalibratedである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）",
+          "導出された事実: Velaはreliableである（範囲: derived-atomic-explanation-lab; 導出ID: fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c; 依存ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd, fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20, rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）",
+          "適用規則（範囲: derived-atomic-explanation-lab）: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである（規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）",
+          "この説明は範囲「derived-atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+        ],
+        "text": "提示された証拠が支える結論: Velaはreliableである（範囲: derived-atomic-explanation-lab）。\n根拠のつながりは次のとおりです。\n直接提示された前提: Velaはsensorである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）\n直接提示された前提: Velaはcalibratedである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）\n導出された事実: Velaはreliableである（範囲: derived-atomic-explanation-lab; 導出ID: fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c; 依存ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd, fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20, rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）\n適用規則（範囲: derived-atomic-explanation-lab）: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである（規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）\nこの説明は範囲「derived-atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+      },
+      "fingerprint": "1b52d97f83193de1476e61ba24419a1c509ad410d07805bc059cc6ca7f218bf8",
+      "input_id": "explain-vela-reliable",
+      "input_version": 1,
+      "parser_version": "core-typed-atomic-meaning-v1",
+      "raw_sha256": "a1298c9997e6cc487c7a4390288a6d2c1aa0804b8f7c1490db40141f498ec474",
+      "render": {
+        "actual_sha256": "09918d063c451ec988bcb6c1822bec0dd660004f957ac8a3a3b7c482530a7d28",
+        "byte_length": 1310,
+        "plan_id": "cd97372f75416f9d010ff4f68c28e1bcec47f9cf6c0adf39292e053e5fdd31e7",
+        "renderer_version": "utf8-bytes-v1",
+        "status": "RENDERED",
+        "utf8_text": "提示された証拠が支える結論: Velaはreliableである（範囲: derived-atomic-explanation-lab）。\n根拠のつながりは次のとおりです。\n直接提示された前提: Velaはsensorである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）\n直接提示された前提: Velaはcalibratedである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）\n導出された事実: Velaはreliableである（範囲: derived-atomic-explanation-lab; 導出ID: fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c; 依存ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd, fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20, rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）\n適用規則（範囲: derived-atomic-explanation-lab）: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである（規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）\nこの説明は範囲「derived-atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+      },
+      "result": {
+        "dependencies": [
+          "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+          "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+          "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+          "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+        ],
+        "execution_graph_ref": "a3acda25175955a61ffb636259c5bf6c2a3dce7e5959610810da2ed0b987d87c",
+        "guarantee": "DERIVED",
+        "id": "e2448094b545b184fc5e3769c16b127098c8fabe6aea037042117ebdcb0dd4dd",
+        "lifecycle": "COMMIT",
+        "text": "提示された証拠が支える結論: Velaはreliableである（範囲: derived-atomic-explanation-lab）。\n根拠のつながりは次のとおりです。\n直接提示された前提: Velaはsensorである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）\n直接提示された前提: Velaはcalibratedである（範囲: derived-atomic-explanation-lab; 根拠ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）\n導出された事実: Velaはreliableである（範囲: derived-atomic-explanation-lab; 導出ID: fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c; 依存ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd, fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20, rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）\n適用規則（範囲: derived-atomic-explanation-lab）: $xはsensorである かつ $xはcalibratedである ならば $xはreliableである（規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）\nこの説明は範囲「derived-atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+      },
+      "sealed_request_text": "{\"schema\":\"CORE_TYPED_ATOMIC_MEANING_V1\",\"purpose\":\"explain\",\"proposition\":{\"subject\":\"Vela\",\"predicate\":\"is\",\"object\":\"reliable\",\"negative\":false,\"scope\":\"derived-atomic-explanation-lab\"},\"source_ids\":[\"fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c\",\"fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd\",\"fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20\",\"rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911\"]}",
+      "semantic_signature": "403cdf56219287e35f354727d12ae07859338da31c9e295fb20175f454ba8aee",
+      "source_kind": "CORE_TYPED_ATOMIC_MEANING_V1",
+      "typed_input": {
+        "proposition": {
+          "negative": false,
+          "object": "reliable",
+          "predicate": "is",
+          "scope": "derived-atomic-explanation-lab",
+          "subject": "Vela"
+        },
+        "purpose": "explain",
+        "schema": "CORE_TYPED_ATOMIC_MEANING_V1",
+        "source_ids": [
+          "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+          "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+          "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+          "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+        ]
+      }
+    }
+  }
+}
