@@ -1,0 +1,153 @@
+{
+  "schema": "MINIDORA_B52_VALIDATION_V1",
+  "work_item": "Exact temporal premise correction through the direct Core relation path",
+  "base_head": "9d1c59296e9cb4cfddd985a96bc06ccdc3e682cc",
+  "software_version": "0.7.0-alpha.9",
+  "schema_version": "minidora-rust/0.7.0-alpha.9",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "rust/target"
+  },
+  "producer_consumer": [
+    "Engine::correct_atomic_relation seals exact superseded/replacement propositions as CORE_TYPED_RELATION_CORRECTION_V1.",
+    "Core revalidates the sealed CorrectPremise, selects only the exact active direct USER_PREMISE, invalidates its dependent records, appends the old negative premise and replacement, and saves one memory revision.",
+    "After Engine reopen, compose_atomic_explanation rechecks the same old-time derivation and the corrected-time, other-time, and other-subject controls."
+  ],
+  "gate_assessment": {
+    "CORE-G01": "PARTIAL; exact temporal correction and dependent-query change are observed for one typed scope/rule fixture. Distinct world-scope and independently queried negation/condition cases remain open.",
+    "CORE-G03": "PARTIAL; not reassessed.",
+    "other_core_gates": "NOT_REASSESSED",
+    "input_machine_construction": "NOT_STARTED; seven Core gates are not all PASS."
+  },
+  "verification": [
+    {
+      "command": "cargo test --locked -p minidora-engine --test core_temporal_correction_52 -- --nocapture",
+      "result": "PASS",
+      "passed": 1,
+      "failed": 0,
+      "log": "b52-focused-tests.log",
+      "trace_schema": "MINIDORA_CORE_TEMPORAL_CORRECTION_TRACE_V1"
+    },
+    {
+      "command": "cargo test --locked -p minidora-engine --test core_temporal_scope_51 --test core_construction_observation_07 -- --nocapture",
+      "result": "PASS",
+      "passed": 2,
+      "failed": 0,
+      "log": "b52-related-regressions.log"
+    },
+    {
+      "command": "cargo check --locked -p minidora-engine --all-targets",
+      "result": "PASS",
+      "log": "b52-engine-all-target-check.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "retained_initial_failure": {
+    "command": "cargo fmt --all",
+    "exit_code": 127,
+    "cause": "The initial shell PATH did not contain cargo; source code was not executed.",
+    "log": "b52-initial-format-path-failure.log",
+    "resolution": "Reran with the pinned Rust 1.99.1 toolchain bin on PATH; format and format check passed."
+  },
+  "r4_source_integrity": {
+    "manifest_sha256_values_rechecked": {
+      "01_施工仕様書.md": "eb2ca32bea74e88f5d82e370d33b2f62f2f4f6aeadbc2375fc78f428342ab0b7",
+      "02_施工工程表.md": "a4a2aba0af11f8cccd86c45e4ab2dc280cbea9be155b949cd863a156f8585fbf",
+      "03_Codex施工指示書.md": "ac5484a5ce2272c91227ae36e9c18a1dcaa152e80004c6c87bf40c9a95c7c4c0",
+      "MINIDORA-BETA_3DOC_R4_20261115.zip": "fc7822f6fb3a734990dc208dc8dc264b49607d8b6476c9695bd5660dccf270ee"
+    },
+    "markdown_zip_manifest_match": true,
+    "r4_markdown_or_archive_modified": false,
+    "r2_modified": false
+  },
+  "not_run": [
+    "Full engine or workspace runtime suite, Clippy, workspace-wide all-target check/build",
+    "Ordinary CLI/HTTP correction and natural-language temporal parsing",
+    "Distinct world-scope, standalone negation, explicit condition-reference, broad unseen-subject fixtures",
+    "Chronology/interval operators, other operating systems, power-loss/crash validation",
+    "Complete CORE-G01 predicate and CORE-G02/G04/G05/G06/G07 re-assessment",
+    "Input/output machine, T01-T03, all 93 requirements, QC, independent QA, release/deployment"
+  ],
+  "case_trace": {
+    "actor": "b52-temporal-correction",
+    "after_correction": {
+      "other_subject_query": {
+        "dependencies": [
+          "fact:c0b9cc7ac8a033c1c5ec180e95b1ab4a26c39f7ee2c2befdd099bda49338a216",
+          "fact:e1e408a25e4f90db20f3b1cd167fac38a3f0b310be3324bda7a5998f4b8e6ec1",
+          "rule:4706383d22f28d6366ce49570dd97c2ea5bfeecc0993fe8a7a9f3d34087f3ff8"
+        ],
+        "guarantee": "DERIVED",
+        "lifecycle": "COMMIT"
+      },
+      "other_time_query": {
+        "dependencies": [
+          "fact:52aaa838ccb7f14d28de056bb32ffd21c90e99d1615ab474e52528e302d10519"
+        ],
+        "lifecycle": "COMMIT"
+      },
+      "prior_result_retained_in_memory": true,
+      "replacement_time_query": {
+        "dependencies": [
+          "fact:16da8195bf894dbb3e1d5095f983f684879b9a31a018d394f9c07f045403b447"
+        ],
+        "guarantee": "USER_PREMISE",
+        "lifecycle": "COMMIT"
+      },
+      "same_time_derived_query": {
+        "content_plan": false,
+        "lifecycle": "SUSPEND",
+        "reason": "MISSING_PREMISES: 範囲「b52-materials-lab」の「Neraはrefined oreである（時刻範囲: 2026-11-15T08:00Z）」を説明する有効な前提または導出経路がありません。",
+        "render": false
+      }
+    },
+    "case": "b52-temporal-correction-case",
+    "correction": {
+      "dependencies": [
+        "fact:af7f600a2710a0b308359475e967cb467a8adde7c4127f7b83ac71b5fe89792b",
+        "fact:6ccdf14a045bfac2004001f413527241ef47be5465a34d19fd5d7c3022ef806b",
+        "fact:16da8195bf894dbb3e1d5095f983f684879b9a31a018d394f9c07f045403b447"
+      ],
+      "lifecycle": "COMMIT",
+      "raw_sha256": "84cf69f9742ba683287814e0d229edac5a10d87b2193bb6ecd97119bb3f5e2fd",
+      "result_id": "fe25d0168d9678e9bec6d99248c4119cb64a377602841308c7552c1039fddcae",
+      "source_kind": "CORE_TYPED_RELATION_CORRECTION_V1"
+    },
+    "evening_control_valid_after": true,
+    "old_fact_id": "fact:af7f600a2710a0b308359475e967cb467a8adde7c4127f7b83ac71b5fe89792b",
+    "old_fact_valid_after": false,
+    "original_proof": {
+      "dependencies": [
+        "fact:51ecf80aebb53dfc387a93797e9ec96489179fcee8ef4c50ccf161ed86e0d54f",
+        "fact:af7f600a2710a0b308359475e967cb467a8adde7c4127f7b83ac71b5fe89792b",
+        "rule:4706383d22f28d6366ce49570dd97c2ea5bfeecc0993fe8a7a9f3d34087f3ff8"
+      ],
+      "guarantee": "DERIVED",
+      "lifecycle": "COMMIT",
+      "render": "RENDERED",
+      "result_id": "047085399b45753ab09794304c96a350a37d7db4bfdbe8c2e1a0ada32ee137ee"
+    },
+    "original_temporal_scope": "2026-11-15T08:00Z",
+    "other_subject_control_valid_after": true,
+    "r4_documents_modified": false,
+    "r4_scope": "direct typed Core correction only; no natural-language timestamp parser or chronology solver",
+    "reopened_memory_revision_after": 5,
+    "reopened_memory_revision_before": 4,
+    "replacement_temporal_scope": "2026-11-15T12:00Z",
+    "rule_id": "rule:4706383d22f28d6366ce49570dd97c2ea5bfeecc0993fe8a7a9f3d34087f3ff8",
+    "same_subject_control_temporal_scope": "2026-11-15T18:00Z",
+    "schema": "MINIDORA_CORE_TEMPORAL_CORRECTION_TRACE_V1",
+    "software_schema": "minidora-rust/0.7.0-alpha.9",
+    "world_scope": "b52-materials-lab"
+  },
+  "external_effects": "None; only isolated local Core state and temporary test storage were used."
+}

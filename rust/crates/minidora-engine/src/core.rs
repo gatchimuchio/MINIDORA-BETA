@@ -21,6 +21,8 @@ const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
 const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
 const DIRECT_TYPED_RELATION_ASSERTION_KIND: &str = "CORE_TYPED_RELATION_ASSERTION_V1";
 const DIRECT_TYPED_RELATION_ASSERTION_PARSER: &str = "core-typed-relation-assertion-v1";
+const DIRECT_TYPED_RELATION_CORRECTION_KIND: &str = "CORE_TYPED_RELATION_CORRECTION_V1";
+const DIRECT_TYPED_RELATION_CORRECTION_PARSER: &str = "core-typed-relation-correction-v1";
 const DIRECT_TYPED_RELATION_RULE_KIND: &str = "CORE_TYPED_RELATION_RULE_V1";
 const DIRECT_TYPED_RELATION_RULE_PARSER: &str = "core-typed-relation-rule-v1";
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
@@ -40,6 +42,14 @@ struct DirectAtomicMeaningInput {
 struct DirectTypedRelationAssertionInput {
     schema: String,
     proposition: Proposition,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectTypedRelationCorrectionInput {
+    schema: String,
+    superseded: Proposition,
+    replacement: Proposition,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -762,6 +772,53 @@ impl Engine {
             ));
         }
         let bundle = direct_typed_relation_assertion_bundle(&request, &input)?;
+        self.execute_with_bundle(actor, request, Some(bundle))
+    }
+
+    /// Correct one exact typed premise through Core's versioned correction
+    /// path. The superseded proposition is matched with its full identity,
+    /// including world and temporal scope; descendants are invalidated before
+    /// the replacement is adopted. This entry does not parse natural language.
+    pub fn correct_atomic_relation(
+        &mut self,
+        actor: &str,
+        mut request: RequestEnvelope,
+        superseded: Proposition,
+        replacement: Proposition,
+    ) -> Result<ResultRecord> {
+        validate_direct_relation_request(actor, &request)?;
+        relations::validate(&superseded)?;
+        relations::validate(&replacement)?;
+        if !relations::is_ground(&superseded) || !relations::is_ground(&replacement) {
+            return Err(failure(
+                "UNBOUND_VARIABLE",
+                "a typed relation correction requires bound subjects and objects",
+            ));
+        }
+        if superseded.negative
+            || replacement.negative
+            || superseded.subject != replacement.subject
+            || superseded.predicate != replacement.predicate
+            || superseded == replacement
+        {
+            return Err(failure(
+                "INVALID_RELATION_CORRECTION",
+                "a typed relation correction needs distinct positive propositions for one subject and predicate",
+            ));
+        }
+        let input = DirectTypedRelationCorrectionInput {
+            schema: DIRECT_TYPED_RELATION_CORRECTION_KIND.into(),
+            superseded,
+            replacement,
+        };
+        request.text = serde_json::to_string(&input)?;
+        if request.text.len() > request.budget.max_input_bytes {
+            return Err(failure(
+                "INPUT_LIMIT",
+                "typed relation correction exceeds the request byte budget",
+            ));
+        }
+        let bundle = direct_typed_relation_correction_bundle(&request, &input)?;
         self.execute_with_bundle(actor, request, Some(bundle))
     }
 
@@ -4136,6 +4193,7 @@ impl Engine {
                 superseded,
                 replacement,
             } => {
+                let _ = direct_typed_relation_correction_input(&bundle, superseded, replacement)?;
                 let mut memory = self.store.load_memory(actor)?;
                 let targets = active_direct_premise_ids(&memory, superseded);
                 if targets.is_empty() {
@@ -6713,6 +6771,22 @@ fn direct_typed_relation_assertion_bundle(
     )
 }
 
+fn direct_typed_relation_correction_bundle(
+    request: &RequestEnvelope,
+    input: &DirectTypedRelationCorrectionInput,
+) -> Result<InputBundle> {
+    direct_typed_relation_bundle(
+        request,
+        DIRECT_TYPED_RELATION_CORRECTION_KIND,
+        DIRECT_TYPED_RELATION_CORRECTION_PARSER,
+        "typed-relation-correction",
+        Intent::CorrectPremise {
+            superseded: input.superseded.clone(),
+            replacement: input.replacement.clone(),
+        },
+    )
+}
+
 fn direct_typed_relation_rule_bundle(
     request: &RequestEnvelope,
     input: &DirectTypedRelationRuleInput,
@@ -6758,6 +6832,29 @@ fn direct_typed_relation_assertion_input(
         return Err(failure(
             "TYPED_RELATION_SEAL_INVALID",
             "typed relation assertion or sealed bundle does not match",
+        ));
+    }
+    Ok(Some(input))
+}
+
+fn direct_typed_relation_correction_input(
+    bundle: &InputBundle,
+    superseded: &Proposition,
+    replacement: &Proposition,
+) -> Result<Option<DirectTypedRelationCorrectionInput>> {
+    if bundle.meaning.source_kind != DIRECT_TYPED_RELATION_CORRECTION_KIND {
+        return Ok(None);
+    }
+    let input: DirectTypedRelationCorrectionInput = serde_json::from_str(&bundle.request.text)?;
+    if input.schema != DIRECT_TYPED_RELATION_CORRECTION_KIND
+        || input.superseded != *superseded
+        || input.replacement != *replacement
+        || serde_json::to_string(&input)? != bundle.request.text
+        || direct_typed_relation_correction_bundle(&bundle.request, &input)? != *bundle
+    {
+        return Err(failure(
+            "TYPED_RELATION_CORRECTION_SEAL_INVALID",
+            "typed relation correction or sealed bundle does not match",
         ));
     }
     Ok(Some(input))

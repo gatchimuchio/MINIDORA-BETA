@@ -1,0 +1,5 @@
+$ cargo fmt --all
+/bin/bash: line 1: cargo: command not found
+exit status: 127
+
+The shell PATH omitted the pinned Rust toolchain. No source was formatted or executed. The same format command was rerun with the Rust 1.99.1 toolchain bin on PATH and completed successfully.
