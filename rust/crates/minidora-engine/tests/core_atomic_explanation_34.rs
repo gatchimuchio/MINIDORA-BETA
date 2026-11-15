@@ -1,7 +1,10 @@
 use minidora_domain::{Guarantee, Intent, Lifecycle, Proposition, RequestEnvelope};
 use minidora_engine::{
     Engine,
-    language::{ModelEmission, SequenceModel, rational_text},
+    language::{
+        MeaningCompositionReport, MeaningCompositionRequest, MeaningRole, ModelEmission,
+        SequenceModel,
+    },
     store::Store,
 };
 use serde_json::Value;
@@ -203,80 +206,97 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
         serde_json::from_slice(&emission_bytes).expect("deserialize stored emission observation");
     assert_eq!(emission.model_revision, plan.model_revision);
     assert_eq!(emission.text, plan.text);
-    let authorized_surfaces = emission
-        .authorized_surfaces
-        .as_ref()
-        .expect("Core supplied a finite set of equivalent surfaces");
-    assert_eq!(authorized_surfaces.len(), 2);
-    let connective_a = "根拠のつながりは次のとおりです。";
-    let connective_b = "結論を支える記録を順に示します。";
-    assert_eq!(authorized_surfaces[0].matches(connective_a).count(), 1);
-    assert_eq!(authorized_surfaces[1].matches(connective_b).count(), 1);
-    assert_eq!(
-        authorized_surfaces[0].replace(connective_a, "{model-selected-transition}"),
-        authorized_surfaces[1].replace(connective_b, "{model-selected-transition}"),
-        "authorized alternatives must preserve the same factual and proof text"
-    );
-    for surface in authorized_surfaces {
-        for required_unit in &plan.required_units {
-            assert!(
-                surface.contains(required_unit),
-                "authorized alternative dropped Core-required content: {required_unit}"
-            );
-        }
-    }
-    let candidate_scores = authorized_surfaces
-        .iter()
-        .map(|surface| {
-            (
-                surface.clone(),
-                model
-                    .lossless_sequence_probability(surface.as_bytes())
-                    .expect("score a Core-authorized candidate with the stored model"),
-            )
-        })
-        .collect::<Vec<_>>();
-    let expected_surface = candidate_scores
-        .iter()
-        .max_by(|(left_text, left_score), (right_text, right_score)| {
-            left_score
-                .cmp(right_score)
-                .then_with(|| right_text.cmp(left_text))
-        })
-        .map(|(text, _)| text)
-        .expect("at least one authorized surface");
-    assert_eq!(
-        &emission.text, expected_surface,
-        "stored emission must select the maximum-scoring authorized surface"
-    );
-    let selected_score = candidate_scores
-        .iter()
-        .find(|(surface, _)| surface == &emission.text)
-        .expect("selected surface has a computed exact score");
-    assert_eq!(
-        emission.sequence_probability,
-        Some(rational_text(&selected_score.1))
-    );
+    assert!(emission.authorized_surfaces.is_none());
+    assert!(emission.sequence_probability.is_none());
     let replay = model
-        .realize_supported(authorized_surfaces, 2_000_000)
-        .expect("replay the same authorized set from the stored model");
+        .realize_supported(std::slice::from_ref(&plan.text), 2_000_000)
+        .expect("replay the Core-composed surface through the stored K4 model");
     assert_eq!(
         serde_json::to_value(replay).expect("serialize deterministic model replay"),
         serde_json::to_value(&emission).expect("serialize retained model emission"),
-        "same model and candidate set must reproduce the retained emission"
+        "the stored K4 projection must reproduce the retained emission"
     );
-    let candidate_observations = candidate_scores
+    let compute_ref = plan
+        .dependencies
+        .last()
+        .expect("content plan retains the computation artifact")
+        .clone();
+    let compute_bytes = artifact_store
+        .get_bytes(actor, &bundle.request.case_id, &compute_ref)
+        .expect("read the atomic content computation artifact");
+    assert_eq!(minidora_domain::digest(&compute_bytes), compute_ref);
+    let compute_value: Value =
+        serde_json::from_slice(&compute_bytes).expect("stored content computation JSON");
+    assert_eq!(
+        compute_value["kind"],
+        "minidora.core-computation.relation-meaning.v2"
+    );
+    let composition_request: MeaningCompositionRequest =
+        serde_json::from_value(compute_value["content_request"].clone())
+            .expect("stored Core-authored typed content plan");
+    let composition: MeaningCompositionReport =
+        serde_json::from_value(compute_value["content_composition"].clone())
+            .expect("stored native composition report");
+    assert_eq!(
+        engine
+            .compose_typed_meaning(&composition_request)
+            .expect("replay the stored Core semantic plan"),
+        composition
+    );
+    assert_eq!(composition.text, plan.text);
+    assert_eq!(composition.guarantee, Guarantee::Unknown);
+    assert_eq!(composition.factual_status, "TYPED_INPUT_UNVERIFIED");
+    assert_eq!(
+        composition.steps.first().map(|step| step.role),
+        Some(MeaningRole::Claim)
+    );
+    assert_eq!(
+        composition.steps.last().map(|step| step.role),
+        Some(MeaningRole::Limitation)
+    );
+    let evidence_step = composition
+        .steps
         .iter()
-        .enumerate()
-        .map(|(index, (surface, score))| {
-            serde_json::json!({
-                "candidate_index": index,
-                "text": surface,
-                "sequence_probability": rational_text(score),
-                "selected": surface == &emission.text,
-            })
+        .position(|step| step.role == MeaningRole::Evidence)
+        .expect("new plan includes source evidence content");
+    let rule_step = composition
+        .steps
+        .iter()
+        .position(|step| step.role == MeaningRole::Rule)
+        .expect("new plan includes the applied rule content");
+    assert!(evidence_step < rule_step);
+    assert_eq!(
+        composition
+            .evidence_ids
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        supported
+            .dependencies
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+    let units_by_id = composition_request
+        .units
+        .iter()
+        .map(|unit| (unit.id.as_str(), unit.text.as_str()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let planned_units = composition
+        .required_unit_ids
+        .iter()
+        .map(|id| {
+            units_by_id
+                .get(id.as_str())
+                .expect("plan unit exists")
+                .to_string()
         })
         .collect::<Vec<_>>();
+    assert_eq!(planned_units, plan.required_units);
+    assert!(plan.text.contains("保存された前提と規則から"));
+    assert!(plan.text.contains("保存規則"));
+    assert!(plan.text.contains("現実世界の真偽"));
+    assert!(!plan.text.contains("提示された証拠が支える結論"));
 
     let direct_input: Value =
         serde_json::from_str(&bundle.request.text).expect("sealed typed request JSON");
@@ -345,11 +365,11 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
         .to_string_lossy()
         .into_owned();
     println!(
-        "MINIDORA_B35_TRACE={}",
+        "MINIDORA_B37_TRACE={}",
         serde_json::json!({
-            "schema": "MINIDORA_CORE_DERIVED_ATOMIC_MODEL_SELECTION_OBSERVATION_V1",
+            "schema": "MINIDORA_CORE_ATOMIC_MEANING_CONTENT_PLAN_OBSERVATION_V1",
             "os": std::env::consts::OS,
-            "producer": "Engine::compose_atomic_explanation",
+            "producer": "Core relation proof -> native typed content plan -> ContentPlan -> K7",
             "seed": {
                 "actor_id": actor,
                 "case_id": case,
@@ -395,14 +415,21 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
                     "serialized_artifact": model_value,
                     "revision": &plan.model_revision,
                     "validated": true,
-                    "replayed_emission_matches": true,
-                    "authorized_candidates": candidate_observations,
+                    "singleton_projection_replayed": true,
                     "emission": {
                         "artifact_ref": &plan.model_observation_ref,
                         "artifact_sha256": minidora_domain::digest(&emission_bytes),
                         "artifact_bytes": emission_bytes.len(),
                         "serialized_artifact": emission_value,
                     },
+                },
+                "core_content_artifact": {
+                    "artifact_ref": compute_ref,
+                    "artifact_sha256": minidora_domain::digest(&compute_bytes),
+                    "artifact_bytes": compute_bytes.len(),
+                    "serialized_artifact": compute_value,
+                    "typed_request": composition_request,
+                    "composition_report": composition,
                 },
                 "render": {
                     "plan_id": &render.plan_id,

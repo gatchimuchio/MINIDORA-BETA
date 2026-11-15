@@ -1,0 +1,4598 @@
+{
+  "denied_write": {
+    "action_count": 0,
+    "content_plan_id": "b4187054b5ab65df7e35aadfa9fd2a0ab2fee7caf2aa25d1ca34b45d1a27d3fa",
+    "lifecycle": "SUSPEND",
+    "reason": "WRITE_PERMISSION_MISSING: 指定ファイルへの書込権限がありません。",
+    "receipt_count": 0,
+    "render_status": "RENDERED",
+    "requested_target_filename": "derived-unauthorized-output.txt",
+    "result_id": "8ba9195983d30dccb01b0c1e991d7d4547fcc873f643e39d8c8218fccbcc298b",
+    "target_exists": false,
+    "typed_proposition": {
+      "negative": false,
+      "object": "reliable",
+      "predicate": "is",
+      "scope": "derived-atomic-explanation-lab",
+      "subject": "Vela"
+    },
+    "write_grant_count": 0
+  },
+  "missing_evidence": {
+    "content_plan_adopted": false,
+    "lifecycle": "SUSPEND",
+    "reason": "MISSING_PREMISES: 範囲「derived-atomic-explanation-lab」の「Velaはconductiveである」を説明する有効な前提または導出経路がありません。",
+    "render_created": false,
+    "result_id": "559ff809905ada1f49f60d8c87712826ee98d3eba88f215b095b4cc5c87b0835",
+    "typed_proposition": {
+      "negative": false,
+      "object": "conductive",
+      "predicate": "is",
+      "scope": "derived-atomic-explanation-lab",
+      "subject": "Vela"
+    }
+  },
+  "os": "linux",
+  "producer": "Core relation proof -> native typed content plan -> ContentPlan -> K7",
+  "schema": "MINIDORA_CORE_ATOMIC_MEANING_CONTENT_PLAN_OBSERVATION_V1",
+  "seed": {
+    "actor_id": "b34-derived-atomic-explanation",
+    "calibrated": {
+      "input_id": "vela-calibrated",
+      "original_text": "[scope=derived-atomic-explanation-lab]Vela is calibrated",
+      "proof_id": "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+      "result_id": "e12c923acfd9720e8e0d43a17c0029f83d5b0a861bf642d96d38c056e1100180"
+    },
+    "case_id": "atomic-derived-seed",
+    "conclusion_user_premise_present": false,
+    "rule": {
+      "input_id": "reliable-rule",
+      "original_text": "If [scope=derived-atomic-explanation-lab]X is a sensor and calibrated then [scope=derived-atomic-explanation-lab]X is reliable",
+      "result_id": "5ee692f5b75710efbe4ca1d8212419f7d43696dd5b77f9bc20d1ad6aee210552",
+      "rule_id": "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+    },
+    "sensor": {
+      "input_id": "vela-sensor",
+      "original_text": "[scope=derived-atomic-explanation-lab]Vela is a sensor",
+      "proof_id": "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+      "result_id": "1e79ff5033bfb87f011af8643df8cb4143f70fd319703273c49f3018b8173a0e"
+    }
+  },
+  "supported": {
+    "case_id": "atomic-derived-supported",
+    "content_plan": {
+      "dependencies": [
+        "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+        "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+        "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+        "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911",
+        "3cfa9309455a5af5ee4c41fe4fee159d6819eafcbb7fc0ca75f45cc69c2f79ee"
+      ],
+      "id": "b4187054b5ab65df7e35aadfa9fd2a0ab2fee7caf2aa25d1ca34b45d1a27d3fa",
+      "model_artifact_ref": "2b43a8de11ed4376ce2357594a086c18a5e40bb7d523f6da2f54566cfaafb8ba",
+      "model_observation_ref": "b9e6a522bae6edcabe184870c65de3bedaf7d0d139b8c918aa454eefbfcc153c",
+      "model_revision": "9c42c76953a9ac7de55bcd4874141a55b8fe647bcbee6fe9f35ed8d51b84db6c",
+      "required_units": [
+        "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。",
+        "保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。",
+        "保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。",
+        "保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。",
+        "この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+      ],
+      "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。根拠として、保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。根拠として、保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。規則に照らすと、保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。ただし、この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+    },
+    "core_content_artifact": {
+      "artifact_bytes": 9962,
+      "artifact_ref": "3cfa9309455a5af5ee4c41fe4fee159d6819eafcbb7fc0ca75f45cc69c2f79ee",
+      "artifact_sha256": "3cfa9309455a5af5ee4c41fe4fee159d6819eafcbb7fc0ca75f45cc69c2f79ee",
+      "composition_report": {
+        "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+        "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+        "context_state_sha256": "ffea587ec2fc63831a5567c05e2ec225b12542defee47e1daaa2e642f50645fa",
+        "decoder_version": "finite-role-trie-exact-v1",
+        "evidence_ids": [
+          "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+          "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+          "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+          "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+        ],
+        "factual_status": "TYPED_INPUT_UNVERIFIED",
+        "format": "PARAGRAPH",
+        "guarantee": "UNKNOWN",
+        "literal_fallback_version": "literal-raw-byte-fallback-v1",
+        "model_context_count": 538,
+        "model_document_count": 44,
+        "model_revision": "8f052d3fba48b7ea4b61618abfbafbbe8ce2b5ecc7595fd1676b37c54afe7448",
+        "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+        "model_transition_count": 1056,
+        "model_vocabulary_size": 134,
+        "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+        "purpose": "EXPLAIN",
+        "required_unit_ids": [
+          "claim_072296dc9b2e63f417149c47945a85c5db42901a",
+          "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920",
+          "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+          "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155",
+          "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+        ],
+        "sequence_token_count": 646,
+        "steps": [
+          {
+            "admissible_continuations": [
+              {
+                "connector": "",
+                "unit_id": "claim_072296dc9b2e63f417149c47945a85c5db42901a"
+              }
+            ],
+            "connector": "",
+            "context_state_sha256": "569eb29beaa793fbd1f4a58ea496c6a1ac423562897d3630bfb6ce05e5a9a0fe",
+            "evidence_ids": [
+              "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c"
+            ],
+            "role": "CLAIM",
+            "selected_probability": "1",
+            "unit_id": "claim_072296dc9b2e63f417149c47945a85c5db42901a"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "根拠として、",
+                "unit_id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+              },
+              {
+                "connector": "資料からは、",
+                "unit_id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+              },
+              {
+                "connector": "根拠として、",
+                "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+              },
+              {
+                "connector": "資料からは、",
+                "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+              }
+            ],
+            "connector": "根拠として、",
+            "context_state_sha256": "2ac5d6157407db414c7afbee071a30fe44bba2438f87ac7de061e74b5e218e4d",
+            "evidence_ids": [
+              "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20"
+            ],
+            "role": "EVIDENCE",
+            "selected_probability": "3/10",
+            "unit_id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "根拠として、",
+                "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+              },
+              {
+                "connector": "資料からは、",
+                "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+              }
+            ],
+            "connector": "根拠として、",
+            "context_state_sha256": "25c57dd8c62ae5422981af6cb8bc783560601f7ff24399cff1690dcd00167c52",
+            "evidence_ids": [
+              "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd"
+            ],
+            "role": "EVIDENCE",
+            "selected_probability": "3/5",
+            "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "規則に照らすと、",
+                "unit_id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+              },
+              {
+                "connector": "規則を適用すると、",
+                "unit_id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+              }
+            ],
+            "connector": "規則に照らすと、",
+            "context_state_sha256": "e3b3da594f7c8f9a6b16c3d9173b42d094898f673b084efb4167bc7d54cd4410",
+            "evidence_ids": [
+              "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+            ],
+            "role": "RULE",
+            "selected_probability": "1/2",
+            "unit_id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+          },
+          {
+            "admissible_continuations": [
+              {
+                "connector": "ただし、",
+                "unit_id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+              },
+              {
+                "connector": "なお、",
+                "unit_id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+              }
+            ],
+            "connector": "ただし、",
+            "context_state_sha256": "0bc01fd9f2b8d46e527cdeefc1c65e2be4f3e1b6014b65f4a9e86ecc7f9d901c",
+            "evidence_ids": [],
+            "role": "LIMITATION",
+            "selected_probability": "6/11",
+            "unit_id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+          }
+        ],
+        "style": "NEUTRAL",
+        "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。根拠として、保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。根拠として、保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。規則に照らすと、保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。ただし、この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。",
+        "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+        "token_space_version": "typed-japanese-character-space-v1",
+        "training_corpus_revision": "11667650839f0a87977c06b1a1769b9706c9138cc30374b3589352fc17d7c842",
+        "transform_order": 3,
+        "transform_smoothing": 1,
+        "transform_version": "inherited-char-ngram-v1"
+      },
+      "serialized_artifact": {
+        "calculation": null,
+        "content_composition": {
+          "composition_grammar_version": "typed-role-single-sentence-boundary-v1",
+          "conditional_distribution_version": "exact-rational-support-backoff-char-trie-v2",
+          "context_state_sha256": "ffea587ec2fc63831a5567c05e2ec225b12542defee47e1daaa2e642f50645fa",
+          "decoder_version": "finite-role-trie-exact-v1",
+          "evidence_ids": [
+            "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+            "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+            "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+            "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+          ],
+          "factual_status": "TYPED_INPUT_UNVERIFIED",
+          "format": "PARAGRAPH",
+          "guarantee": "UNKNOWN",
+          "literal_fallback_version": "literal-raw-byte-fallback-v1",
+          "model_context_count": 538,
+          "model_document_count": 44,
+          "model_revision": "8f052d3fba48b7ea4b61618abfbafbbe8ce2b5ecc7595fd1676b37c54afe7448",
+          "model_training_lineage": "ephemeral per-request fit over supplied semantic-unit text and the versioned role-by-style connective lexicon, retaining lexicon multiplicity; no cross-request learning",
+          "model_transition_count": 1056,
+          "model_vocabulary_size": 134,
+          "objective": "greedy maximum exact probability over the next finite admissible segment at each role-eligible step; require one terminal sentence per unit; preserve every typed unit exactly once; satisfy dependency and semantic-role order; add connectors only at sentence boundaries or bullets; obey output byte/token budgets",
+          "purpose": "EXPLAIN",
+          "required_unit_ids": [
+            "claim_072296dc9b2e63f417149c47945a85c5db42901a",
+            "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920",
+            "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+            "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155",
+            "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+          ],
+          "sequence_token_count": 646,
+          "steps": [
+            {
+              "admissible_continuations": [
+                {
+                  "connector": "",
+                  "unit_id": "claim_072296dc9b2e63f417149c47945a85c5db42901a"
+                }
+              ],
+              "connector": "",
+              "context_state_sha256": "569eb29beaa793fbd1f4a58ea496c6a1ac423562897d3630bfb6ce05e5a9a0fe",
+              "evidence_ids": [
+                "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c"
+              ],
+              "role": "CLAIM",
+              "selected_probability": "1",
+              "unit_id": "claim_072296dc9b2e63f417149c47945a85c5db42901a"
+            },
+            {
+              "admissible_continuations": [
+                {
+                  "connector": "根拠として、",
+                  "unit_id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+                },
+                {
+                  "connector": "資料からは、",
+                  "unit_id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+                },
+                {
+                  "connector": "根拠として、",
+                  "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+                },
+                {
+                  "connector": "資料からは、",
+                  "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+                }
+              ],
+              "connector": "根拠として、",
+              "context_state_sha256": "2ac5d6157407db414c7afbee071a30fe44bba2438f87ac7de061e74b5e218e4d",
+              "evidence_ids": [
+                "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20"
+              ],
+              "role": "EVIDENCE",
+              "selected_probability": "3/10",
+              "unit_id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+            },
+            {
+              "admissible_continuations": [
+                {
+                  "connector": "根拠として、",
+                  "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+                },
+                {
+                  "connector": "資料からは、",
+                  "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+                }
+              ],
+              "connector": "根拠として、",
+              "context_state_sha256": "25c57dd8c62ae5422981af6cb8bc783560601f7ff24399cff1690dcd00167c52",
+              "evidence_ids": [
+                "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd"
+              ],
+              "role": "EVIDENCE",
+              "selected_probability": "3/5",
+              "unit_id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15"
+            },
+            {
+              "admissible_continuations": [
+                {
+                  "connector": "規則に照らすと、",
+                  "unit_id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+                },
+                {
+                  "connector": "規則を適用すると、",
+                  "unit_id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+                }
+              ],
+              "connector": "規則に照らすと、",
+              "context_state_sha256": "e3b3da594f7c8f9a6b16c3d9173b42d094898f673b084efb4167bc7d54cd4410",
+              "evidence_ids": [
+                "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+              ],
+              "role": "RULE",
+              "selected_probability": "1/2",
+              "unit_id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+            },
+            {
+              "admissible_continuations": [
+                {
+                  "connector": "ただし、",
+                  "unit_id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+                },
+                {
+                  "connector": "なお、",
+                  "unit_id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+                }
+              ],
+              "connector": "ただし、",
+              "context_state_sha256": "0bc01fd9f2b8d46e527cdeefc1c65e2be4f3e1b6014b65f4a9e86ecc7f9d901c",
+              "evidence_ids": [],
+              "role": "LIMITATION",
+              "selected_probability": "6/11",
+              "unit_id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39"
+            }
+          ],
+          "style": "NEUTRAL",
+          "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。根拠として、保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。根拠として、保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。規則に照らすと、保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。ただし、この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。",
+          "tie_policy": "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID",
+          "token_space_version": "typed-japanese-character-space-v1",
+          "training_corpus_revision": "11667650839f0a87977c06b1a1769b9706c9138cc30374b3589352fc17d7c842",
+          "transform_order": 3,
+          "transform_smoothing": 1,
+          "transform_version": "inherited-char-ngram-v1"
+        },
+        "content_request": {
+          "format": "PARAGRAPH",
+          "max_output_bytes": 8192,
+          "max_tokens": 8192,
+          "prior_sequence": [],
+          "purpose": "EXPLAIN",
+          "style": "NEUTRAL",
+          "units": [
+            {
+              "dependencies": [],
+              "evidence_ids": [
+                "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c"
+              ],
+              "id": "claim_072296dc9b2e63f417149c47945a85c5db42901a",
+              "role": "CLAIM",
+              "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。"
+            },
+            {
+              "dependencies": [],
+              "evidence_ids": [
+                "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd"
+              ],
+              "id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+              "role": "EVIDENCE",
+              "text": "保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。"
+            },
+            {
+              "dependencies": [],
+              "evidence_ids": [
+                "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20"
+              ],
+              "id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920",
+              "role": "EVIDENCE",
+              "text": "保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。"
+            },
+            {
+              "dependencies": [
+                "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+                "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+              ],
+              "evidence_ids": [
+                "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+              ],
+              "id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155",
+              "role": "RULE",
+              "text": "保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。"
+            },
+            {
+              "dependencies": [
+                "claim_072296dc9b2e63f417149c47945a85c5db42901a",
+                "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920",
+                "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+                "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+              ],
+              "evidence_ids": [],
+              "id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39",
+              "role": "LIMITATION",
+              "text": "この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+            }
+          ]
+        },
+        "dependencies": [
+          "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+          "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+          "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+          "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+        ],
+        "evidence": [],
+        "kind": "minidora.core-computation.relation-meaning.v2",
+        "relation_meaning": {
+          "negative": false,
+          "object": "reliable",
+          "predicate": "is",
+          "scope": "derived-atomic-explanation-lab",
+          "subject": "Vela"
+        },
+        "relation_proof_dependencies": [
+          "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+          "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+          "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+          "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+        ],
+        "units": [
+          "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。",
+          "保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。",
+          "保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。",
+          "保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。",
+          "この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+        ]
+      },
+      "typed_request": {
+        "format": "PARAGRAPH",
+        "max_output_bytes": 8192,
+        "max_tokens": 8192,
+        "prior_sequence": [],
+        "purpose": "EXPLAIN",
+        "style": "NEUTRAL",
+        "units": [
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c"
+            ],
+            "id": "claim_072296dc9b2e63f417149c47945a85c5db42901a",
+            "role": "CLAIM",
+            "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd"
+            ],
+            "id": "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+            "role": "EVIDENCE",
+            "text": "保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。"
+          },
+          {
+            "dependencies": [],
+            "evidence_ids": [
+              "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20"
+            ],
+            "id": "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920",
+            "role": "EVIDENCE",
+            "text": "保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。"
+          },
+          {
+            "dependencies": [
+              "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+              "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920"
+            ],
+            "evidence_ids": [
+              "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+            ],
+            "id": "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155",
+            "role": "RULE",
+            "text": "保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。"
+          },
+          {
+            "dependencies": [
+              "claim_072296dc9b2e63f417149c47945a85c5db42901a",
+              "premise_5aaf00192d1cb6536ea5c271696f7673f4f87920",
+              "premise_e0324e25cb41d9aa6dc0acfe207959f447ea9a15",
+              "rule_4c6cfebb2dee987c5dc6868a53d77f5d74900155"
+            ],
+            "evidence_ids": [],
+            "id": "limitation_32d5b361997d9d6548925a7643a9ad8efc490b39",
+            "role": "LIMITATION",
+            "text": "この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+          }
+        ]
+      }
+    },
+    "fingerprint": "1b52d97f83193de1476e61ba24419a1c509ad410d07805bc059cc6ca7f218bf8",
+    "input_id": "explain-vela-reliable",
+    "input_version": 1,
+    "model": {
+      "artifact_bytes": 4637,
+      "artifact_ref": "2b43a8de11ed4376ce2357594a086c18a5e40bb7d523f6da2f54566cfaafb8ba",
+      "artifact_sha256": "2b43a8de11ed4376ce2357594a086c18a5e40bb7d523f6da2f54566cfaafb8ba",
+      "emission": {
+        "artifact_bytes": 68950,
+        "artifact_ref": "b9e6a522bae6edcabe184870c65de3bedaf7d0d139b8c918aa454eefbfcc153c",
+        "artifact_sha256": "b9e6a522bae6edcabe184870c65de3bedaf7d0d139b8c918aa454eefbfcc153c",
+        "serialized_artifact": {
+          "context_hashes": [
+            "7667e8f3bb5de645cf8ee40716b5be02e97613bfdbed4407a01605e959534ed5",
+            "44100fa6e25ae5da190e4164d01d1c9b007128da978f73ff45bb285acf82c68d",
+            "7373cf5cf82b1478c20b612e15b2b6acd2b7b9453a62ae2cf0c4543739ac556b",
+            "05256ee35d5421cf6412ce3163e55ba035557704d369dc297423d32af78add07",
+            "796ff211a925882e5c7556988bf1c8e0a923d966cb1064fa37b78137f1c7e03a",
+            "32bc134cb763665b18cd9c9bbde5d020c1d292bb518a8fcbd5df9d1f020cb682",
+            "bd9aed4d114215ed664093fe6ce30ed8106b20d037207fa5c027c1b0cd6a248d",
+            "29fbf5f36f5ee6d32b4672f79fa6f9cd2aec28da0f0fa79ecacdebe3e4969872",
+            "429c8925fe40fe120274f04606f1978c60b81edf898f26171fcdfe3112d57c26",
+            "0f938ceeca999a1dea6d1625bd68eb2aa60f20c0c0d807e1093c548bf7361f06",
+            "138d0cb12fd374fa71a33eb86c60b26c8ff44f0fbc4d0ab58914420dfb73df4e",
+            "6ee0340d50bc4240f2226847cfb67ccf57721ed00884e01dca57bc968d11299d",
+            "70770331a31b41b95f0c3032c866d62a6fe047ebc555bedbe84fa6d4562d1f6f",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "84342dd5a8a51cca5a2266cab42329b0509b8f07dcf1615052962bb5eabff74e",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "0e4a55627b87169605996d942f705a5f7a24da711d0c7cc81e1b1e7b7f537491",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "8511a21d3490b01a71c2c69f7975ea968b8792222cc6e8d4f852643b6a1a276a",
+            "5354c893b84a973942288c8881ee9c4fd44fe6627eab066b85a71c3d52e6b09b",
+            "6ee0340d50bc4240f2226847cfb67ccf57721ed00884e01dca57bc968d11299d",
+            "796ff211a925882e5c7556988bf1c8e0a923d966cb1064fa37b78137f1c7e03a",
+            "dfae299618699454cd4ae0b533817fde01d85be5fe773019e78b893b9e2dca93",
+            "4ee5d36347d3951e2719ef8c5e1e5fe4ef3b711b9dca939751284d43d1f52efc",
+            "3f22bc2f87371dd54d1483f562ccac80645f4acea1743450c03d73b42f149520",
+            "b8f6a57c32ef82c60b2bc9fca0cf6bb998918a4d630cc6430ee1fdff5b9294dc",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "356d8eab09c5b76b86113c01bbbe673864bfe8eeb6d8cfa66c4b38546f28d964",
+            "e5e03b0080d25dcf509a69497b0b26fd9684927560d77c5613fa56203305a7df",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "52c812ea551948af07a3ca1be375c3528f98df472436122a753b97e2a737303f",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "a81dbd4c3cfbd1e28705cdc403b7a0e1f5de7e0a8af1c7fdcc7d212f2d99bda6",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "e5205e425768365a247b8119ab13f68746f94e9a62d152021de3be7ae88797b4",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "6883ec5d5ee7efc24c7281c674d6e83ba07d497fb28deb926e7e9f6cc309e74d",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "429c8925fe40fe120274f04606f1978c60b81edf898f26171fcdfe3112d57c26",
+            "ef874d23df3c466074aa47bcc94438ee6f878ddd9321d6d33d0dee50551c2e4a",
+            "dfae299618699454cd4ae0b533817fde01d85be5fe773019e78b893b9e2dca93",
+            "2a23ef7ef4a952fae75a7fd997929b6da6ba0f5c282bd715d00b5f76af4a128f",
+            "44100fa6e25ae5da190e4164d01d1c9b007128da978f73ff45bb285acf82c68d",
+            "7373cf5cf82b1478c20b612e15b2b6acd2b7b9453a62ae2cf0c4543739ac556b",
+            "bd9aed4d114215ed664093fe6ce30ed8106b20d037207fa5c027c1b0cd6a248d",
+            "29fbf5f36f5ee6d32b4672f79fa6f9cd2aec28da0f0fa79ecacdebe3e4969872",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "84342dd5a8a51cca5a2266cab42329b0509b8f07dcf1615052962bb5eabff74e",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "0e4a55627b87169605996d942f705a5f7a24da711d0c7cc81e1b1e7b7f537491",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "356d8eab09c5b76b86113c01bbbe673864bfe8eeb6d8cfa66c4b38546f28d964",
+            "e5e03b0080d25dcf509a69497b0b26fd9684927560d77c5613fa56203305a7df",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "52c812ea551948af07a3ca1be375c3528f98df472436122a753b97e2a737303f",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "a81dbd4c3cfbd1e28705cdc403b7a0e1f5de7e0a8af1c7fdcc7d212f2d99bda6",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "e5205e425768365a247b8119ab13f68746f94e9a62d152021de3be7ae88797b4",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "23dc2c9f2efbd27ba5aa3bda252cd23184f32102175a9623c7c84d5537b00c04",
+            "de94e2b50700e1281485b572a2e5fafa3085f1ff093c7e0016617c7dccd802ce",
+            "be565442f9a3b979d894eca66d7f94e20315998f6f76766d3bf51467f3def79a",
+            "1721cd30f6c130cd10d23db9fc5fa2a09f17bffd8f9c769b188f71ec3ee7c6d6",
+            "4acab91e236addf457b77c1ac6be9d841a9d9e8662cfa5bf39b2f75b74996de6",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "b8f6a57c32ef82c60b2bc9fca0cf6bb998918a4d630cc6430ee1fdff5b9294dc",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "bd9aed4d114215ed664093fe6ce30ed8106b20d037207fa5c027c1b0cd6a248d",
+            "29fbf5f36f5ee6d32b4672f79fa6f9cd2aec28da0f0fa79ecacdebe3e4969872",
+            "b7998e82831e302a3b4bc74378c97193e23ceb458e3fdf569a4c6ebb05625719",
+            "af83ae91f8ab3f1797c1806ea0d7c97801f0c7411ca4909941178c558309c08e",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "6883ec5d5ee7efc24c7281c674d6e83ba07d497fb28deb926e7e9f6cc309e74d",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "429c8925fe40fe120274f04606f1978c60b81edf898f26171fcdfe3112d57c26",
+            "ef874d23df3c466074aa47bcc94438ee6f878ddd9321d6d33d0dee50551c2e4a",
+            "dfae299618699454cd4ae0b533817fde01d85be5fe773019e78b893b9e2dca93",
+            "2a23ef7ef4a952fae75a7fd997929b6da6ba0f5c282bd715d00b5f76af4a128f",
+            "44100fa6e25ae5da190e4164d01d1c9b007128da978f73ff45bb285acf82c68d",
+            "7373cf5cf82b1478c20b612e15b2b6acd2b7b9453a62ae2cf0c4543739ac556b",
+            "bd9aed4d114215ed664093fe6ce30ed8106b20d037207fa5c027c1b0cd6a248d",
+            "29fbf5f36f5ee6d32b4672f79fa6f9cd2aec28da0f0fa79ecacdebe3e4969872",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "84342dd5a8a51cca5a2266cab42329b0509b8f07dcf1615052962bb5eabff74e",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "9c41113056f4310f05f11e9b4253452e2a91884e1d756a698ab0b56446f499ba",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "9c41113056f4310f05f11e9b4253452e2a91884e1d756a698ab0b56446f499ba",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "0e4a55627b87169605996d942f705a5f7a24da711d0c7cc81e1b1e7b7f537491",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "356d8eab09c5b76b86113c01bbbe673864bfe8eeb6d8cfa66c4b38546f28d964",
+            "e5e03b0080d25dcf509a69497b0b26fd9684927560d77c5613fa56203305a7df",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "52c812ea551948af07a3ca1be375c3528f98df472436122a753b97e2a737303f",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "a81dbd4c3cfbd1e28705cdc403b7a0e1f5de7e0a8af1c7fdcc7d212f2d99bda6",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "e5205e425768365a247b8119ab13f68746f94e9a62d152021de3be7ae88797b4",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "23dc2c9f2efbd27ba5aa3bda252cd23184f32102175a9623c7c84d5537b00c04",
+            "de94e2b50700e1281485b572a2e5fafa3085f1ff093c7e0016617c7dccd802ce",
+            "be565442f9a3b979d894eca66d7f94e20315998f6f76766d3bf51467f3def79a",
+            "1721cd30f6c130cd10d23db9fc5fa2a09f17bffd8f9c769b188f71ec3ee7c6d6",
+            "4acab91e236addf457b77c1ac6be9d841a9d9e8662cfa5bf39b2f75b74996de6",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "b8f6a57c32ef82c60b2bc9fca0cf6bb998918a4d630cc6430ee1fdff5b9294dc",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "bd9aed4d114215ed664093fe6ce30ed8106b20d037207fa5c027c1b0cd6a248d",
+            "29fbf5f36f5ee6d32b4672f79fa6f9cd2aec28da0f0fa79ecacdebe3e4969872",
+            "b7998e82831e302a3b4bc74378c97193e23ceb458e3fdf569a4c6ebb05625719",
+            "af83ae91f8ab3f1797c1806ea0d7c97801f0c7411ca4909941178c558309c08e",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "6883ec5d5ee7efc24c7281c674d6e83ba07d497fb28deb926e7e9f6cc309e74d",
+            "0f938ceeca999a1dea6d1625bd68eb2aa60f20c0c0d807e1093c548bf7361f06",
+            "138d0cb12fd374fa71a33eb86c60b26c8ff44f0fbc4d0ab58914420dfb73df4e",
+            "3b6064dffdfabe68e25f803a0459009056d66009c87ba5e110fdb3218bbfacb3",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "70770331a31b41b95f0c3032c866d62a6fe047ebc555bedbe84fa6d4562d1f6f",
+            "b8f6a57c32ef82c60b2bc9fca0cf6bb998918a4d630cc6430ee1fdff5b9294dc",
+            "429c8925fe40fe120274f04606f1978c60b81edf898f26171fcdfe3112d57c26",
+            "2a23ef7ef4a952fae75a7fd997929b6da6ba0f5c282bd715d00b5f76af4a128f",
+            "44100fa6e25ae5da190e4164d01d1c9b007128da978f73ff45bb285acf82c68d",
+            "7373cf5cf82b1478c20b612e15b2b6acd2b7b9453a62ae2cf0c4543739ac556b",
+            "0f938ceeca999a1dea6d1625bd68eb2aa60f20c0c0d807e1093c548bf7361f06",
+            "138d0cb12fd374fa71a33eb86c60b26c8ff44f0fbc4d0ab58914420dfb73df4e",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "50b2676e7c4d5e2de1f1030347a2751b61d852e56c71b2f608fdcbfaeb71be6f",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "9c41113056f4310f05f11e9b4253452e2a91884e1d756a698ab0b56446f499ba",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "9c41113056f4310f05f11e9b4253452e2a91884e1d756a698ab0b56446f499ba",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "0e4a55627b87169605996d942f705a5f7a24da711d0c7cc81e1b1e7b7f537491",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "6ee0340d50bc4240f2226847cfb67ccf57721ed00884e01dca57bc968d11299d",
+            "fae4bf84501cb83020a9df4eb888aaa709e78c9c713811e2850d8f3e74c2d1c1",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "50b2676e7c4d5e2de1f1030347a2751b61d852e56c71b2f608fdcbfaeb71be6f",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "0e4a55627b87169605996d942f705a5f7a24da711d0c7cc81e1b1e7b7f537491",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "695fea216b80453ce1306ad006c38c398f41f2776683fa7b569cb36f757e1e0d",
+            "70770331a31b41b95f0c3032c866d62a6fe047ebc555bedbe84fa6d4562d1f6f",
+            "2a49553ab65cad916a04a7b047129962ca9c740705cf899f31a12883c823af5b",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "50b2676e7c4d5e2de1f1030347a2751b61d852e56c71b2f608fdcbfaeb71be6f",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "0e4a55627b87169605996d942f705a5f7a24da711d0c7cc81e1b1e7b7f537491",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "b8f6a57c32ef82c60b2bc9fca0cf6bb998918a4d630cc6430ee1fdff5b9294dc",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "356d8eab09c5b76b86113c01bbbe673864bfe8eeb6d8cfa66c4b38546f28d964",
+            "e5e03b0080d25dcf509a69497b0b26fd9684927560d77c5613fa56203305a7df",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "52c812ea551948af07a3ca1be375c3528f98df472436122a753b97e2a737303f",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "a81dbd4c3cfbd1e28705cdc403b7a0e1f5de7e0a8af1c7fdcc7d212f2d99bda6",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "e5205e425768365a247b8119ab13f68746f94e9a62d152021de3be7ae88797b4",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "24052a4b1f88768f59f0adf0157bcb49e7e602d749110768010b84b6c9247254",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "0f938ceeca999a1dea6d1625bd68eb2aa60f20c0c0d807e1093c548bf7361f06",
+            "138d0cb12fd374fa71a33eb86c60b26c8ff44f0fbc4d0ab58914420dfb73df4e",
+            "b7998e82831e302a3b4bc74378c97193e23ceb458e3fdf569a4c6ebb05625719",
+            "af83ae91f8ab3f1797c1806ea0d7c97801f0c7411ca4909941178c558309c08e",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "d0ddf17443e164aa77f6877799a7d8c9376f48b7041be4fa22b6a3e10edf6632",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "4bd4986cdba05eefc15a4904c27ade06ac8c33358c72fb9055a9b58263fe6bef",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "eb0c29bd19c6dec96129889b0f63d6da8e4001e3cdf5d1d2597cc9eda68f4c5e",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "27b5c9b2aec2a2d2a9c135e852f4e462a9ba0769382159d54f656a3f653bd715",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "1a1b1530b83d8e7aed572c534b2f41675a06ea9297f941c30cc4430865462cd5",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "eca4734420e71071aa62804a1c5106ac4d573c3d3339bf547e5f773367ecf80e",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "4c3cdbc915fadb53d83edebb9ce1a9565567dabffbbe120f01d0d080a30b152f",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "ee65ef2f99a338c4b4cc17db731ad9ef1443ec8f10deb93e3c595c1ca57e23a6",
+            "4a9d8c1d6fc0f21e484828cdc8623b8b400eae84865f33ae7896eb36620a57bc",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "751231128d2bb5783918cdfe8b97ebd2ea96f105dd3696ce15c43d1d5353407e",
+            "9faff5685e3f3177a2064c2596167d9d943b4bfa21e57b1e79e68bd70963d885",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "751a92105929a2676bf02866174fb0cbc6856eadbc42c18defe74b7f207f0783",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "42f3bd0cec5183de96d4c490eca55d5908692eba7f7cef5639afce2ff121bb73",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "aaa037d7a8304080dc2ab2689f63c431996bd8d399490ffbc129f7b8527d5935",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "6883ec5d5ee7efc24c7281c674d6e83ba07d497fb28deb926e7e9f6cc309e74d",
+            "32bc134cb763665b18cd9c9bbde5d020c1d292bb518a8fcbd5df9d1f020cb682",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "4adc6f5bff0a688dbdff52e1f611f3b0bdee39c34b6f9894a8a30f8193182efb",
+            "ef874d23df3c466074aa47bcc94438ee6f878ddd9321d6d33d0dee50551c2e4a",
+            "2a23ef7ef4a952fae75a7fd997929b6da6ba0f5c282bd715d00b5f76af4a128f",
+            "b58e7c88e096e0e0b076696b6e1530b1dc19475ae4ddc1ebbfb05114409b6bb5",
+            "23dc2c9f2efbd27ba5aa3bda252cd23184f32102175a9623c7c84d5537b00c04",
+            "2cb8bcfc105682d5fb8154bb84a0171f74595b7036344123b7c8805f8d72bf1f",
+            "cfe2f9e4f696fc8b18c8459055310c0ed7960a74ed25fed4bbf3529785c554fb",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "356d8eab09c5b76b86113c01bbbe673864bfe8eeb6d8cfa66c4b38546f28d964",
+            "e5e03b0080d25dcf509a69497b0b26fd9684927560d77c5613fa56203305a7df",
+            "70b99286771da61164a364b7501b75af12cb0531235446eae5eb544c32ff3a54",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "498523470d6191cf8278c9f59fc14a60909eeb176da0c4f1071deb6aa49e8566",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "52c812ea551948af07a3ca1be375c3528f98df472436122a753b97e2a737303f",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "9ddaa197e31aa6872f2c9e192f9f84a3b7ef07305ba15b026fa07a07142270ef",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "a81dbd4c3cfbd1e28705cdc403b7a0e1f5de7e0a8af1c7fdcc7d212f2d99bda6",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "4691041fc8e621da7b0d5a317f043f1f86bd10f59e2656372a498c1dd2a9018c",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "23e71ccf6217b021874f3e271a146708df7e5ccbf54eb92f46388431f313d169",
+            "76f52d411ffc296ada6a7906713fff975902b9082c8c8e5d8e70586bd86dc7b6",
+            "e5205e425768365a247b8119ab13f68746f94e9a62d152021de3be7ae88797b4",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "2ecf49d772bf339512772b03f0b20de6524dac5c1826f34f56be98bdef14b2c2",
+            "f940f1dc0210846404e619ee3113149f4ed7a226f4cb24b3a0a3279211fc1f94",
+            "e84a232360286c35298c75d9e75edbf6549b25d25a56d908342752f066208bcc",
+            "ac41890d70aa47f655c3a1f4288f001b6502bb6a95aaaeecc8c887d9646e4f15",
+            "12f89190a60137e177bd4612f368c55d7a29048f1a949cd7de7699df703eeb74",
+            "b7619ad2d358056d79441154b234f2d8a964e1d9adae74780fc6146c76e41a93",
+            "df0619d0592a9609a799a60a9e91e1ba60cf2679e378d6ec2886dfb160af679f",
+            "614b8f62fa4dc1551558cfd7b01e4eace2dbc4683d51f87d7515b9b8eb449532",
+            "6e40e0b1f189f2288b01875b3aabb16458dbea649878b961397cde584975542a",
+            "23dc2c9f2efbd27ba5aa3bda252cd23184f32102175a9623c7c84d5537b00c04",
+            "7bd241adeb4c05098a3ac19d7d656ee2424321c133b5afddc979a59af124270c",
+            "63682fa30d01f2e059c1c20038ea509453b2915d2de5675dd810746d6e018f90",
+            "695fea216b80453ce1306ad006c38c398f41f2776683fa7b569cb36f757e1e0d",
+            "44100fa6e25ae5da190e4164d01d1c9b007128da978f73ff45bb285acf82c68d",
+            "7373cf5cf82b1478c20b612e15b2b6acd2b7b9453a62ae2cf0c4543739ac556b",
+            "1721cd30f6c130cd10d23db9fc5fa2a09f17bffd8f9c769b188f71ec3ee7c6d6",
+            "4acab91e236addf457b77c1ac6be9d841a9d9e8662cfa5bf39b2f75b74996de6",
+            "3b6064dffdfabe68e25f803a0459009056d66009c87ba5e110fdb3218bbfacb3",
+            "6097673ca4a81c7d2939bf697dd3dd5663ef0afe14b545ea89426f49f2241113",
+            "70770331a31b41b95f0c3032c866d62a6fe047ebc555bedbe84fa6d4562d1f6f",
+            "796ff211a925882e5c7556988bf1c8e0a923d966cb1064fa37b78137f1c7e03a",
+            "2a23ef7ef4a952fae75a7fd997929b6da6ba0f5c282bd715d00b5f76af4a128f",
+            "df8ea72a69bfe44382f1068ad60f0d829e543f72f7bf27616fc85206bd17d411",
+            "e4e3660187adc89494041a4ec5318d8e4879ef68232fb820e259c61c439d4667",
+            "ad0a74a6007621eaf70a53507c53ea2bba66853025193cea833613543da1a40d",
+            "221ae23129a20fbfe25fc7014d772a23f0fd968aae476eb5caac033c7a605016",
+            "23dc2c9f2efbd27ba5aa3bda252cd23184f32102175a9623c7c84d5537b00c04",
+            "ccc8755c95dfe6abd17d67c1e37f8841d275a0a0d475b71cfbb503a5318fbfa5",
+            "c1f83ab18cdb8d35c8197a9b28fc1735d84cd0c76320b856be56967a597c22a1",
+            "e403dea79148d815b411509a9986334a4c2d225a1716503713048ffe05af3fc3",
+            "651a0a4c505f4c8629af9ab822513859bbc33694402b9c82bd164b7451c0eb2d",
+            "8e9142e9baff72214d8e5ea480bb1b190ef5849bb47e1b16f2be86a4711597dd",
+            "ef874d23df3c466074aa47bcc94438ee6f878ddd9321d6d33d0dee50551c2e4a",
+            "32bc134cb763665b18cd9c9bbde5d020c1d292bb518a8fcbd5df9d1f020cb682",
+            "253d2a2522323ffcd1edaeda3eafa9b664287046dd12069d4be23240e0f4274f",
+            "23dc2c9f2efbd27ba5aa3bda252cd23184f32102175a9623c7c84d5537b00c04",
+            "f486611d4ff19200106d5a746ebaa583ed4978659ac92eddb570b70969c7a877",
+            "52cfacf07d32e74582f72633b1fb1c1e1a5d407c4ebbc60b1442ec2578289e6e",
+            "8202177cee349fab6ea9c0a0c6687437e2da586109f6f8f0f3257ffe75fcfedf",
+            "bea98cb2cad56e4e35a08919dec1d3784430725ca664c43e1d4e801d72736dcd",
+            "3f22bc2f87371dd54d1483f562ccac80645f4acea1743450c03d73b42f149520",
+            "f0393971700130d52420f6afcec5de9bbbcd46ac975ae3f89323d73b75e8920e",
+            "fade5e51993ba70e374ed198809b19c992d73eb2cb192bc06ffe9e187383a584"
+          ],
+          "decoder_version": "bounded-finite-surface-literal-singleton-v1",
+          "lossless_projection": {
+            "raw_sha256": "5dd0c1fa9a23f0b1b24be845b7fd0aac00e1ad95b391f22c9d2d07d4695eb93b",
+            "tokens": [
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "保"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "存"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "さ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "れ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "た"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "前"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "提"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "と"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "規"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "則"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "か"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ら"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "V"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "る"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "が"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "導"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "か"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "れ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "て"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "い"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ま"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "す"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 136
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "範"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "囲"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "v"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "m"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "p"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 137
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "。"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 230
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 160
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 185
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 230
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 139
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 160
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "と"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "し"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "て"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "、"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "保"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "存"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "前"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "提"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "V"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "る"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "範"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "囲"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "v"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "m"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "p"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "の"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "入"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "力"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "記"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "録"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "す"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 136
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "前"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "提"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "I"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "D"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 137
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "。"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 230
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 160
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 185
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 230
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 139
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 160
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "と"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "し"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "て"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "、"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "保"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "存"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "前"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "提"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "V"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "s"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "s"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "る"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "範"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "囲"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "v"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "m"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "p"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "の"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "入"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "力"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "記"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "録"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "す"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 136
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "前"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "提"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "I"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "D"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 137
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "。"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "規"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "則"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "に"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 231
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 133
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 167
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ら"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "す"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "と"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "、"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "保"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "存"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "規"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "則"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "$"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "s"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "s"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "る"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "か"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "つ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "$"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "る"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "な"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ら"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ば"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "$"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "る"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "す"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 136
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "範"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "囲"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "v"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "m"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "p"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ";"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "規"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "則"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "I"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "D"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": " "
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "u"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": ":"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "6"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "5"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "7"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "3"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "8"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "f"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "2"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "0"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "4"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "9"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "1"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 239
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 188
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 137
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "。"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "た"
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 227
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 129
+              },
+              {
+                "kind": "LITERAL_BYTE",
+                "value": 160
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "し"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "、"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "こ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "の"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "説"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "明"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "範"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "囲"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "「"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "r"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "v"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "d"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "m"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "c"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "e"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "x"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "p"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "t"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "i"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "o"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "n"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "-"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "l"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "a"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "b"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "」"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "の"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "有"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "効"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "な"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "保"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "存"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "記"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "録"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "に"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "限"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ら"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "れ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "、"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "現"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "実"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "世"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "界"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "の"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "真"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "偽"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "を"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "確"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "認"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "し"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "た"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "も"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "の"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "で"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "は"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "あ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "り"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ま"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "せ"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "ん"
+              },
+              {
+                "kind": "KNOWN_CHAR",
+                "symbol": "。"
+              }
+            ],
+            "version": "literal-raw-byte-fallback-v1"
+          },
+          "model_revision": "9c42c76953a9ac7de55bcd4874141a55b8fe647bcbee6fe9f35ed8d51b84db6c",
+          "objective": "single candidate preserved losslessly; candidate ranking was not applicable",
+          "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。根拠として、保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。根拠として、保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。規則に照らすと、保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。ただし、この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。",
+          "token_count": 658
+        }
+      },
+      "revision": "9c42c76953a9ac7de55bcd4874141a55b8fe647bcbee6fe9f35ed8d51b84db6c",
+      "serialized_artifact": {
+        "counts": {
+          "[\" \"]": {
+            "$": 1,
+            "d": 2,
+            "f": 2,
+            "r": 1,
+            "か": 1,
+            "規": 1
+          },
+          "[\"$\"]": {
+            "x": 3
+          },
+          "[\"(\"]": {
+            "前": 2,
+            "範": 2
+          },
+          "[\")\"]": {
+            "。": 4
+          },
+          "[\"-\"]": {
+            "a": 5,
+            "e": 5,
+            "l": 5
+          },
+          "[\"0\"]": {
+            ")": 1,
+            "2": 2,
+            "3": 1,
+            "7": 1,
+            "8": 1,
+            "9": 1,
+            "e": 2
+          },
+          "[\"1\"]": {
+            ")": 1,
+            "1": 2,
+            "4": 1,
+            "5": 1,
+            "7": 1,
+            "9": 2,
+            "a": 3,
+            "d": 1,
+            "e": 2,
+            "f": 1
+          },
+          "[\"2\"]": {
+            "0": 2,
+            "3": 1,
+            "4": 2,
+            "5": 1,
+            "6": 1,
+            "d": 4,
+            "e": 1
+          },
+          "[\"3\"]": {
+            "1": 1,
+            "2": 2,
+            "5": 2,
+            "a": 1,
+            "c": 2,
+            "e": 1
+          },
+          "[\"4\"]": {
+            "3": 1,
+            "5": 1,
+            "6": 1,
+            "7": 2,
+            "9": 1,
+            "a": 3,
+            "b": 1
+          },
+          "[\"5\"]": {
+            "0": 1,
+            "1": 1,
+            "2": 1,
+            "4": 1,
+            "8": 1,
+            "9": 2,
+            "a": 1,
+            "b": 2,
+            "c": 3,
+            "f": 3
+          },
+          "[\"6\"]": {
+            "8": 2,
+            "b": 2,
+            "c": 1,
+            "e": 1,
+            "f": 1
+          },
+          "[\"7\"]": {
+            "1": 3,
+            "4": 1,
+            "5": 1,
+            "6": 1,
+            "b": 1,
+            "c": 1,
+            "e": 1,
+            "f": 1
+          },
+          "[\"8\"]": {
+            "0": 1,
+            "1": 1,
+            "4": 1,
+            "5": 1,
+            "8": 1,
+            "9": 1,
+            "a": 1,
+            "c": 1,
+            "d": 1,
+            "f": 1
+          },
+          "[\"9\"]": {
+            "1": 3,
+            "2": 2,
+            "4": 1,
+            "6": 1,
+            "7": 2,
+            "b": 1,
+            "c": 1,
+            "d": 2
+          },
+          "[\":\"]": {
+            " ": 5,
+            "0": 1,
+            "8": 2
+          },
+          "[\";\"]": {
+            " ": 1
+          },
+          "[\"<BOS>\"]": {
+            "こ": 1,
+            "保": 4
+          },
+          "[\"D\"]": {
+            ":": 3
+          },
+          "[\"I\"]": {
+            "D": 3
+          },
+          "[\"V\"]": {
+            "e": 3
+          },
+          "[\"a\"]": {
+            "0": 1,
+            "2": 1,
+            "4": 1,
+            "5": 3,
+            "7": 1,
+            "9": 2,
+            "a": 1,
+            "b": 7,
+            "c": 2,
+            "d": 1,
+            "f": 1,
+            "l": 2,
+            "n": 5,
+            "t": 12,
+            "は": 3
+          },
+          "[\"b\"]": {
+            ")": 1,
+            "0": 1,
+            "1": 1,
+            "6": 1,
+            "7": 2,
+            "9": 1,
+            ";": 1,
+            "a": 1,
+            "b": 1,
+            "c": 1,
+            "d": 1,
+            "f": 2,
+            "l": 2,
+            "r": 2,
+            "」": 3
+          },
+          "[\"c\"]": {
+            "-": 5,
+            "3": 1,
+            "4": 2,
+            "5": 1,
+            "6": 1,
+            "7": 1,
+            "8": 2,
+            "9": 1,
+            "a": 2,
+            "b": 1,
+            "c": 1,
+            "d": 2,
+            "e": 1,
+            "f": 2,
+            "t": 2
+          },
+          "[\"d\"]": {
+            ")": 1,
+            "-": 5,
+            "1": 1,
+            "2": 2,
+            "3": 2,
+            "5": 2,
+            "6": 1,
+            "9": 1,
+            "b": 2,
+            "c": 3,
+            "e": 6,
+            "で": 2
+          },
+          "[\"e\"]": {
+            "1": 1,
+            "2": 1,
+            "3": 2,
+            "8": 1,
+            "9": 1,
+            ":": 1,
+            "a": 1,
+            "c": 2,
+            "d": 8,
+            "f": 1,
+            "l": 5,
+            "n": 2,
+            "r": 5,
+            "x": 5,
+            "で": 2
+          },
+          "[\"f\"]": {
+            "0": 2,
+            "1": 1,
+            "2": 1,
+            "3": 1,
+            "5": 3,
+            "a": 2,
+            "b": 1,
+            "d": 3,
+            "e": 1,
+            "f": 1
+          },
+          "[\"i\"]": {
+            "a": 2,
+            "b": 2,
+            "c": 5,
+            "o": 5,
+            "v": 5
+          },
+          "[\"l\"]": {
+            "a": 13,
+            "e": 3,
+            "i": 4
+          },
+          "[\"m\"]": {
+            "i": 5
+          },
+          "[\"n\"]": {
+            "-": 5,
+            "a": 5,
+            "s": 2
+          },
+          "[\"o\"]": {
+            "m": 5,
+            "n": 5,
+            "r": 2
+          },
+          "[\"p\"]": {
+            "l": 5
+          },
+          "[\"r\"]": {
+            "a": 2,
+            "e": 2,
+            "i": 5,
+            "u": 1,
+            "で": 2
+          },
+          "[\"s\"]": {
+            "e": 2,
+            "o": 2
+          },
+          "[\"t\"]": {
+            ":": 2,
+            "e": 2,
+            "i": 5,
+            "o": 5
+          },
+          "[\"u\"]": {
+            "l": 1
+          },
+          "[\"v\"]": {
+            "e": 5
+          },
+          "[\"x\"]": {
+            "p": 5,
+            "は": 3
+          },
+          "[\"、\"]": {
+            "現": 1
+          },
+          "[\"。\"]": {
+            "<EOS>": 5
+          },
+          "[\"「\"]": {
+            "$": 2,
+            "V": 3,
+            "d": 3
+          },
+          "[\"」\"]": {
+            "が": 1,
+            "で": 1,
+            "な": 1,
+            "の": 3,
+            "は": 2
+          },
+          "[\"あ\"]": {
+            "り": 1,
+            "る": 6
+          },
+          "[\"い\"]": {
+            "ま": 1
+          },
+          "[\"か\"]": {
+            "つ": 1,
+            "ら": 1,
+            "れ": 1
+          },
+          "[\"が\"]": {
+            "導": 1
+          },
+          "[\"こ\"]": {
+            "の": 1
+          },
+          "[\"さ\"]": {
+            "れ": 1
+          },
+          "[\"し\"]": {
+            "た": 1
+          },
+          "[\"す\"]": {
+            "(": 4
+          },
+          "[\"せ\"]": {
+            "ん": 1
+          },
+          "[\"た\"]": {
+            "も": 1,
+            "前": 1
+          },
+          "[\"つ\"]": {
+            " ": 1
+          },
+          "[\"て\"]": {
+            "い": 1
+          },
+          "[\"で\"]": {
+            "あ": 6,
+            "す": 3,
+            "は": 1
+          },
+          "[\"と\"]": {
+            "規": 1
+          },
+          "[\"な\"]": {
+            "ら": 1,
+            "保": 1
+          },
+          "[\"に\"]": {
+            "限": 1
+          },
+          "[\"の\"]": {
+            "で": 1,
+            "入": 2,
+            "有": 1,
+            "真": 1,
+            "説": 1
+          },
+          "[\"は\"]": {
+            "c": 2,
+            "r": 2,
+            "s": 2,
+            "あ": 1,
+            "範": 3
+          },
+          "[\"ば\"]": {
+            "「": 1
+          },
+          "[\"ま\"]": {
+            "す": 1,
+            "せ": 1
+          },
+          "[\"も\"]": {
+            "の": 1
+          },
+          "[\"ら\"]": {
+            "「": 1,
+            "ば": 1,
+            "れ": 1
+          },
+          "[\"り\"]": {
+            "ま": 1
+          },
+          "[\"る\"]": {
+            " ": 1,
+            "」": 5
+          },
+          "[\"れ\"]": {
+            "、": 1,
+            "た": 1,
+            "て": 1
+          },
+          "[\"を\"]": {
+            "確": 1
+          },
+          "[\"ん\"]": {
+            "。": 1
+          },
+          "[\"世\"]": {
+            "界": 1
+          },
+          "[\"保\"]": {
+            "存": 5
+          },
+          "[\"偽\"]": {
+            "を": 1
+          },
+          "[\"入\"]": {
+            "力": 2
+          },
+          "[\"則\"]": {
+            "I": 1,
+            "「": 1,
+            "か": 1
+          },
+          "[\"前\"]": {
+            "提": 5
+          },
+          "[\"力\"]": {
+            "記": 2
+          },
+          "[\"効\"]": {
+            "な": 1
+          },
+          "[\"囲\"]": {
+            ":": 2,
+            "「": 3
+          },
+          "[\"存\"]": {
+            "さ": 1,
+            "前": 2,
+            "規": 1,
+            "記": 1
+          },
+          "[\"実\"]": {
+            "世": 1
+          },
+          "[\"導\"]": {
+            "か": 1
+          },
+          "[\"提\"]": {
+            "I": 2,
+            "「": 2,
+            "と": 1
+          },
+          "[\"明\"]": {
+            "は": 1
+          },
+          "[\"有\"]": {
+            "効": 1
+          },
+          "[\"現\"]": {
+            "実": 1
+          },
+          "[\"界\"]": {
+            "の": 1
+          },
+          "[\"真\"]": {
+            "偽": 1
+          },
+          "[\"確\"]": {
+            "認": 1
+          },
+          "[\"範\"]": {
+            "囲": 5
+          },
+          "[\"規\"]": {
+            "則": 3
+          },
+          "[\"記\"]": {
+            "録": 3
+          },
+          "[\"認\"]": {
+            "し": 1
+          },
+          "[\"説\"]": {
+            "明": 1
+          },
+          "[\"録\"]": {
+            "で": 2,
+            "に": 1
+          },
+          "[\"限\"]": {
+            "ら": 1
+          },
+          "[]": {
+            " ": 8,
+            "$": 3,
+            "(": 4,
+            ")": 4,
+            "-": 15,
+            "0": 9,
+            "1": 15,
+            "2": 12,
+            "3": 9,
+            "4": 10,
+            "5": 16,
+            "6": 7,
+            "7": 10,
+            "8": 10,
+            "9": 13,
+            ":": 8,
+            ";": 1,
+            "<EOS>": 5,
+            "D": 3,
+            "I": 3,
+            "V": 3,
+            "a": 43,
+            "b": 21,
+            "c": 25,
+            "d": 28,
+            "e": 38,
+            "f": 16,
+            "i": 19,
+            "l": 20,
+            "m": 5,
+            "n": 12,
+            "o": 12,
+            "p": 5,
+            "r": 12,
+            "s": 4,
+            "t": 14,
+            "u": 1,
+            "v": 5,
+            "x": 8,
+            "、": 1,
+            "。": 5,
+            "「": 8,
+            "」": 8,
+            "あ": 7,
+            "い": 1,
+            "か": 3,
+            "が": 1,
+            "こ": 1,
+            "さ": 1,
+            "し": 1,
+            "す": 4,
+            "せ": 1,
+            "た": 2,
+            "つ": 1,
+            "て": 1,
+            "で": 10,
+            "と": 1,
+            "な": 2,
+            "に": 1,
+            "の": 6,
+            "は": 10,
+            "ば": 1,
+            "ま": 2,
+            "も": 1,
+            "ら": 3,
+            "り": 1,
+            "る": 6,
+            "れ": 3,
+            "を": 1,
+            "ん": 1,
+            "世": 1,
+            "保": 5,
+            "偽": 1,
+            "入": 2,
+            "則": 3,
+            "前": 5,
+            "力": 2,
+            "効": 1,
+            "囲": 5,
+            "存": 5,
+            "実": 1,
+            "導": 1,
+            "提": 5,
+            "明": 1,
+            "有": 1,
+            "現": 1,
+            "界": 1,
+            "真": 1,
+            "確": 1,
+            "範": 5,
+            "規": 3,
+            "記": 3,
+            "認": 1,
+            "説": 1,
+            "録": 3,
+            "限": 1
+          }
+        },
+        "document_count": 5,
+        "order": 2,
+        "smoothing": 1,
+        "version": "inherited-char-ngram-v1",
+        "vocabulary": [
+          " ",
+          "$",
+          "(",
+          ")",
+          "-",
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          ":",
+          ";",
+          "<EOS>",
+          "<UNK>",
+          "D",
+          "I",
+          "V",
+          "a",
+          "b",
+          "c",
+          "d",
+          "e",
+          "f",
+          "i",
+          "l",
+          "m",
+          "n",
+          "o",
+          "p",
+          "r",
+          "s",
+          "t",
+          "u",
+          "v",
+          "x",
+          "、",
+          "。",
+          "「",
+          "」",
+          "あ",
+          "い",
+          "か",
+          "が",
+          "こ",
+          "さ",
+          "し",
+          "す",
+          "せ",
+          "た",
+          "つ",
+          "て",
+          "で",
+          "と",
+          "な",
+          "に",
+          "の",
+          "は",
+          "ば",
+          "ま",
+          "も",
+          "ら",
+          "り",
+          "る",
+          "れ",
+          "を",
+          "ん",
+          "世",
+          "保",
+          "偽",
+          "入",
+          "則",
+          "前",
+          "力",
+          "効",
+          "囲",
+          "存",
+          "実",
+          "導",
+          "提",
+          "明",
+          "有",
+          "現",
+          "界",
+          "真",
+          "確",
+          "範",
+          "規",
+          "記",
+          "認",
+          "説",
+          "録",
+          "限"
+        ]
+      },
+      "singleton_projection_replayed": true,
+      "validated": true
+    },
+    "parser_version": "core-typed-atomic-meaning-v1",
+    "raw_sha256": "a1298c9997e6cc487c7a4390288a6d2c1aa0804b8f7c1490db40141f498ec474",
+    "render": {
+      "actual_sha256": "5dd0c1fa9a23f0b1b24be845b7fd0aac00e1ad95b391f22c9d2d07d4695eb93b",
+      "byte_length": 1004,
+      "plan_id": "b4187054b5ab65df7e35aadfa9fd2a0ab2fee7caf2aa25d1ca34b45d1a27d3fa",
+      "renderer_version": "utf8-bytes-v1",
+      "status": "RENDERED",
+      "utf8_text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。根拠として、保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。根拠として、保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。規則に照らすと、保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。ただし、この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+    },
+    "result": {
+      "dependencies": [
+        "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+        "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+        "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+        "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+      ],
+      "execution_graph_ref": "115d2729503a4480187e4790b90eeb6e5a6482752498f23ff14dc126e8f2a60e",
+      "guarantee": "DERIVED",
+      "id": "e2448094b545b184fc5e3769c16b127098c8fabe6aea037042117ebdcb0dd4dd",
+      "lifecycle": "COMMIT",
+      "text": "保存された前提と規則から「Velaはreliableである」が導かれています（範囲: derived-atomic-explanation-lab）。根拠として、保存前提「Velaはcalibratedである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20）。根拠として、保存前提「Velaはsensorである」は範囲「derived-atomic-explanation-lab」の入力記録です（前提ID: fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd）。規則に照らすと、保存規則「$xはsensorである かつ $xはcalibratedである」ならば「$xはreliableである」です（範囲: derived-atomic-explanation-lab; 規則ID: rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911）。ただし、この説明は範囲「derived-atomic-explanation-lab」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。"
+    },
+    "sealed_request_text": "{\"schema\":\"CORE_TYPED_ATOMIC_MEANING_V1\",\"purpose\":\"explain\",\"proposition\":{\"subject\":\"Vela\",\"predicate\":\"is\",\"object\":\"reliable\",\"negative\":false,\"scope\":\"derived-atomic-explanation-lab\"},\"source_ids\":[\"fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c\",\"fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd\",\"fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20\",\"rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911\"]}",
+    "semantic_signature": "403cdf56219287e35f354727d12ae07859338da31c9e295fb20175f454ba8aee",
+    "source_kind": "CORE_TYPED_ATOMIC_MEANING_V1",
+    "typed_input": {
+      "proposition": {
+        "negative": false,
+        "object": "reliable",
+        "predicate": "is",
+        "scope": "derived-atomic-explanation-lab",
+        "subject": "Vela"
+      },
+      "purpose": "explain",
+      "schema": "CORE_TYPED_ATOMIC_MEANING_V1",
+      "source_ids": [
+        "fact:5af776a114d022922cf9dc586aac98ec4b80f0e891846d38af94b245f0c2cb0c",
+        "fact:889235cf5c4a92dc476bfd26bb71a591a715cc7ba4ad1ffb1e3197f5a07519cd",
+        "fact:8a5bc35f2d9746e1e3c6811496ce25f3a245085b684a59db7ed3cb02d58cfd20",
+        "rule:0e8032d543eaf0efd6fec5f524717cd32ec8de9bdc91aa9dbf1dc8f02094b911"
+      ]
+    }
+  }
+}

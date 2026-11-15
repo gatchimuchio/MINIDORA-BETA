@@ -14,7 +14,8 @@ struct CalculationSequenceStepArtifact {
     consumed: Vec<language::CalculationReferenceUse>,
 }
 
-const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v1";
+const CORE_COMPUTATION_ARTIFACT_KIND_V1: &str = "minidora.core-computation.relation-meaning.v1";
+const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v2";
 const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
 const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
@@ -51,6 +52,20 @@ struct CoreComputationArtifact {
     dependencies: Vec<String>,
     relation_meaning: Proposition,
     relation_proof_dependencies: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreComputationArtifactV2 {
+    kind: String,
+    calculation: Option<Calculation>,
+    units: Vec<String>,
+    evidence: Vec<EvidencePacket>,
+    dependencies: Vec<String>,
+    relation_meaning: Proposition,
+    relation_proof_dependencies: Vec<String>,
+    content_request: language::MeaningCompositionRequest,
+    content_composition: language::MeaningCompositionReport,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1743,6 +1758,8 @@ impl Engine {
         let mut approved_surfaces = None;
         let mut adopted_relation_meaning = None;
         let mut relation_proof_dependencies = None;
+        let mut content_request = None;
+        let mut content_composition = None;
         match &bundle.meaning.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
@@ -4995,13 +5012,91 @@ impl Engine {
                         );
                     }
                 }
-                let explanation_units =
-                    relation_why_explanation_units(&memory, proposition, &answer)?;
-                approved_surfaces =
-                    Some(language::relation_explanation_surfaces(&explanation_units));
-                units.extend(explanation_units);
-                result.dependencies = answer_dependencies;
-                result.guarantee = answer_guarantee;
+                result.dependencies = answer_dependencies.clone();
+                result.guarantee = answer_guarantee.clone();
+                state.result = Some(result.clone());
+                if direct_input.is_some() {
+                    let Some(explained) = relation_explanation_target(proposition, &answer) else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_PREMISES",
+                            "根拠付き説明を型付き意味として確定できません。",
+                        );
+                    };
+                    let composition_request = match relation_atomic_explanation_request(
+                        &memory,
+                        proposition,
+                        &explained,
+                        &answer,
+                        &answer_dependencies,
+                        request.budget.max_evidence_bytes,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTENT_PLAN_UNAVAILABLE",
+                                &error.to_string(),
+                            );
+                        }
+                    };
+                    let composition = match language::compose_typed_meaning(&composition_request) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTENT_PLAN_UNAVAILABLE",
+                                &error.to_string(),
+                            );
+                        }
+                    };
+                    let represented = composition
+                        .evidence_ids
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    let expected = answer_dependencies.iter().cloned().collect::<BTreeSet<_>>();
+                    if represented != expected {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTENT_PROOF_MAPPING",
+                            "新しい内容計画の根拠参照が関係proofと一致しません。",
+                        );
+                    }
+                    let planned_units = composition
+                        .required_unit_ids
+                        .iter()
+                        .map(|id| {
+                            composition_request
+                                .units
+                                .iter()
+                                .find(|unit| &unit.id == id)
+                                .map(|unit| unit.text.clone())
+                        })
+                        .collect::<Option<Vec<_>>>();
+                    let Some(planned_units) = planned_units else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTENT_PLAN_INVALID",
+                            "生成traceが未知の意味単位を参照しています。",
+                        );
+                    };
+                    units = planned_units;
+                    approved_surfaces = Some(vec![composition.text.clone()]);
+                    content_request = Some(composition_request);
+                    content_composition = Some(composition);
+                } else {
+                    let explanation_units =
+                        relation_why_explanation_units(&memory, proposition, &answer)?;
+                    approved_surfaces =
+                        Some(language::relation_explanation_surfaces(&explanation_units));
+                    units.extend(explanation_units);
+                }
                 if direct_input.is_some() {
                     let Some(adopted_meaning) = relation_explanation_target(proposition, &answer)
                     else {
@@ -5892,10 +5987,20 @@ impl Engine {
         let compute_artifact = if let (Some(relation_meaning), Some(relation_proof_dependencies)) =
             (adopted_relation_meaning, relation_proof_dependencies)
         {
+            let (Some(content_request), Some(content_composition)) =
+                (content_request, content_composition)
+            else {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "CONTENT_PLAN_ARTIFACT_MISSING",
+                    "原子的関係説明の内容計画traceが保存できません。",
+                );
+            };
             self.store.put_artifact(
                 actor,
                 &request.case_id,
-                &CoreComputationArtifact {
+                &CoreComputationArtifactV2 {
                     kind: CORE_COMPUTATION_ARTIFACT_KIND.into(),
                     calculation: result.calculation.clone(),
                     units: units.clone(),
@@ -5903,6 +6008,8 @@ impl Engine {
                     dependencies: result.dependencies.clone(),
                     relation_meaning,
                     relation_proof_dependencies,
+                    content_request,
+                    content_composition,
                 },
             )?
         } else {
@@ -6545,6 +6652,7 @@ pub(crate) fn previous_relation_meaning(
         let artifact_kind = value.get("kind").and_then(serde_json::Value::as_str);
         if artifact_kind.is_some_and(|kind| {
             kind.starts_with("minidora.core-computation.relation-meaning.")
+                && kind != CORE_COMPUTATION_ARTIFACT_KIND_V1
                 && kind != CORE_COMPUTATION_ARTIFACT_KIND
         }) {
             return Err(failure(
@@ -6552,9 +6660,9 @@ pub(crate) fn previous_relation_meaning(
                 "the prior relation meaning uses an unsupported computation artifact version",
             ));
         }
-        if artifact_kind == Some(CORE_COMPUTATION_ARTIFACT_KIND) {
+        if artifact_kind == Some(CORE_COMPUTATION_ARTIFACT_KIND_V1) {
             let artifact: CoreComputationArtifact = serde_json::from_value(value)?;
-            if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND
+            if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND_V1
                 || artifact.calculation != previous.calculation
                 || artifact.units != plan.required_units
                 || artifact.evidence != previous.evidence
@@ -6563,7 +6671,54 @@ pub(crate) fn previous_relation_meaning(
             {
                 return Err(failure(
                     "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
-                    "the retained relation meaning does not match its committed computation",
+                    "the retained legacy relation meaning does not match its committed computation",
+                ));
+            }
+            return Ok(Some(PriorRelationMeaning::AdoptedConclusion {
+                proposition: artifact.relation_meaning,
+                proof_dependencies: artifact.relation_proof_dependencies,
+            }));
+        }
+        if artifact_kind == Some(CORE_COMPUTATION_ARTIFACT_KIND) {
+            let artifact: CoreComputationArtifactV2 = serde_json::from_value(value)?;
+            let replay = language::compose_typed_meaning(&artifact.content_request).ok();
+            let by_id = artifact
+                .content_request
+                .units
+                .iter()
+                .map(|unit| (unit.id.as_str(), unit.text.as_str()))
+                .collect::<BTreeMap<_, _>>();
+            let replayed_units = artifact
+                .content_composition
+                .required_unit_ids
+                .iter()
+                .map(|id| by_id.get(id.as_str()).map(|text| (*text).to_owned()))
+                .collect::<Option<Vec<_>>>();
+            let proof_ids = artifact
+                .relation_proof_dependencies
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let composed_evidence = artifact
+                .content_composition
+                .evidence_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND
+                || artifact.calculation != previous.calculation
+                || artifact.units != plan.required_units
+                || artifact.evidence != previous.evidence
+                || artifact.dependencies != previous.dependencies
+                || artifact.relation_proof_dependencies != previous.dependencies
+                || replay.as_ref() != Some(&artifact.content_composition)
+                || replayed_units.as_ref() != Some(&artifact.units)
+                || artifact.content_composition.text != previous.text
+                || composed_evidence != proof_ids
+            {
+                return Err(failure(
+                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
+                    "the retained relation meaning and content plan do not match their committed computation",
                 ));
             }
             return Ok(Some(PriorRelationMeaning::AdoptedConclusion {
@@ -6644,6 +6799,260 @@ pub(crate) fn relation_why_explanation_units(
         "提示された証拠が支える結論",
     ));
     Ok(units)
+}
+
+/// Build Core-owned content units from one already-verified relation proof.
+/// The input is the typed proposition and proof graph; no finished explanation
+/// sentences are supplied to the content planner.
+fn relation_atomic_explanation_request(
+    memory: &MemoryState,
+    asked: &Proposition,
+    explained: &Proposition,
+    answer: &relations::QueryOutcome,
+    proof_dependencies: &[String],
+    max_output_bytes: usize,
+) -> Result<language::MeaningCompositionRequest> {
+    use language::{
+        MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle, MeaningRole,
+        TypedMeaningUnit,
+    };
+
+    if !matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED") {
+        return Err(failure(
+            "RELATION_EXPLANATION_UNSUPPORTED",
+            "only a supported or refuted relation has a content plan",
+        ));
+    }
+
+    let expected = proof_dependencies.iter().cloned().collect::<BTreeSet<_>>();
+    let mut proof_facts_by_id = memory
+        .facts
+        .iter()
+        .filter(|fact| expected.contains(&fact.id) && fact.valid)
+        .map(|fact| (fact.id.clone(), fact.clone()))
+        .collect::<BTreeMap<_, _>>();
+    for fact in &answer.facts {
+        if expected.contains(&fact.id) && fact.valid {
+            proof_facts_by_id.insert(fact.id.clone(), fact.clone());
+        }
+    }
+    let proof_facts = proof_facts_by_id.into_values().collect::<Vec<_>>();
+    let proof_rules = memory
+        .rules
+        .iter()
+        .filter(|rule| expected.contains(&rule.id) && rule.valid)
+        .cloned()
+        .collect::<Vec<_>>();
+    let target_facts = proof_facts
+        .iter()
+        .filter(|fact| fact.proposition == *explained)
+        .cloned()
+        .collect::<Vec<_>>();
+    if target_facts.is_empty() {
+        return Err(failure(
+            "CONTENT_PROOF_MAPPING",
+            "the selected explanation target is absent from the verified relation proof",
+        ));
+    }
+
+    let unit_id = |kind: &str, source: &str| -> Result<String> {
+        let fingerprint = identity(&("core-relation-content-unit-v1", kind, source))?;
+        Ok(format!("{kind}_{}", &fingerprint[..40]))
+    };
+    let mut units = Vec::<TypedMeaningUnit>::new();
+    let mut rule_units = BTreeMap::<String, String>::new();
+
+    let claim_text = if answer.status == "CONTRADICTED" {
+        format!(
+            "質問された関係「{}」は支持されず、反対の「{}」が保存記録で支えられています（範囲: {}）。",
+            describe(asked),
+            describe(explained),
+            explained.scope
+        )
+    } else {
+        match relations::answer_guarantee(answer) {
+            Guarantee::UserPremise => format!(
+                "有効な保存前提には「{}」が記録されています（範囲: {}）。",
+                describe(explained),
+                explained.scope
+            ),
+            Guarantee::Derived => format!(
+                "保存された前提と規則から「{}」が導かれています（範囲: {}）。",
+                describe(explained),
+                explained.scope
+            ),
+            _ => format!(
+                "保存された根拠は「{}」を支えています（範囲: {}）。",
+                describe(explained),
+                explained.scope
+            ),
+        }
+    };
+    let claim_id = unit_id(
+        "claim",
+        &identity(&(asked, explained, answer.status.as_str()))?,
+    )?;
+    units.push(TypedMeaningUnit {
+        id: claim_id,
+        role: MeaningRole::Claim,
+        text: claim_text,
+        evidence_ids: target_facts.iter().map(|fact| fact.id.clone()).collect(),
+        dependencies: Vec::new(),
+    });
+
+    let mut direct_fact_unit_ids = Vec::new();
+    let mut ordered_facts = proof_facts.clone();
+    ordered_facts.sort_by(|left, right| left.id.cmp(&right.id));
+    for fact in &ordered_facts {
+        if fact.proposition == *explained && fact.guarantee != Guarantee::UserPremise {
+            continue;
+        }
+        let (kind, role, text) = match fact.guarantee {
+            Guarantee::UserPremise if fact.dependencies.is_empty() => (
+                "premise",
+                MeaningRole::Evidence,
+                format!(
+                    "保存前提「{}」は範囲「{}」の入力記録です（前提ID: {}）。",
+                    describe(&fact.proposition),
+                    fact.proposition.scope,
+                    fact.id
+                ),
+            ),
+            Guarantee::Derived => (
+                "derived",
+                MeaningRole::Detail,
+                format!(
+                    "証明に含まれる導出記録は「{}」です（範囲: {}; 導出ID: {}）。",
+                    describe(&fact.proposition),
+                    fact.proposition.scope,
+                    fact.id
+                ),
+            ),
+            Guarantee::UserPremise => {
+                return Err(failure(
+                    "CONTENT_PROOF_MAPPING",
+                    "a proof premise has an unexpected dependency chain",
+                ));
+            }
+            _ => {
+                return Err(failure(
+                    "CONTENT_PROOF_MAPPING",
+                    "the relation proof contains a guarantee without a supported content role",
+                ));
+            }
+        };
+        let id = unit_id(kind, &fact.id)?;
+        if role == MeaningRole::Evidence {
+            direct_fact_unit_ids.push(id.clone());
+        }
+        units.push(TypedMeaningUnit {
+            id,
+            role,
+            text,
+            evidence_ids: vec![fact.id.clone()],
+            dependencies: Vec::new(),
+        });
+    }
+
+    let mut ordered_rules = proof_rules.clone();
+    ordered_rules.sort_by(|left, right| left.id.cmp(&right.id));
+    for rule in &ordered_rules {
+        let premises = std::iter::once(&rule.premise)
+            .chain(rule.additional_premises.iter())
+            .map(describe)
+            .collect::<Vec<_>>()
+            .join(" かつ ");
+        let id = unit_id("rule", &rule.id)?;
+        rule_units.insert(rule.id.clone(), id.clone());
+        let mut evidence_ids = vec![rule.id.clone()];
+        evidence_ids.extend(rule.dependencies.iter().cloned());
+        evidence_ids.sort();
+        evidence_ids.dedup();
+        units.push(TypedMeaningUnit {
+            id,
+            role: MeaningRole::Rule,
+            text: format!(
+                "保存規則「{}」ならば「{}」です（範囲: {}; 規則ID: {}）。",
+                premises,
+                describe(&rule.conclusion),
+                rule.conclusion.scope,
+                rule.id
+            ),
+            evidence_ids,
+            dependencies: direct_fact_unit_ids.clone(),
+        });
+    }
+
+    let rule_unit_ids = rule_units.values().cloned().collect::<Vec<_>>();
+    for unit in &mut units {
+        if unit.role == MeaningRole::Detail {
+            let mut dependencies = direct_fact_unit_ids.clone();
+            dependencies.extend(rule_unit_ids.iter().cloned());
+            dependencies.sort();
+            dependencies.dedup();
+            unit.dependencies = dependencies;
+        }
+    }
+
+    let represented_record_ids = ordered_facts
+        .iter()
+        .map(|fact| fact.id.clone())
+        .chain(rule_units.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    for reference in expected.difference(&represented_record_ids) {
+        let mut dependencies = direct_fact_unit_ids.clone();
+        dependencies.extend(rule_unit_ids.iter().cloned());
+        dependencies.sort();
+        dependencies.dedup();
+        units.push(TypedMeaningUnit {
+            id: unit_id("proofref", reference)?,
+            role: MeaningRole::Detail,
+            text: format!("証明に使われた参照記録IDは「{}」です。", reference),
+            evidence_ids: vec![reference.clone()],
+            dependencies,
+        });
+    }
+
+    let mut limitation_dependencies = units.iter().map(|unit| unit.id.clone()).collect::<Vec<_>>();
+    limitation_dependencies.sort();
+    limitation_dependencies.dedup();
+    units.push(TypedMeaningUnit {
+        id: unit_id("limitation", &identity(&(explained.scope.as_str(), &expected))?)?,
+        role: MeaningRole::Limitation,
+        text: format!(
+            "この説明は範囲「{}」の有効な保存記録に限られ、現実世界の真偽を確認したものではありません。",
+            explained.scope
+        ),
+        evidence_ids: Vec::new(),
+        dependencies: limitation_dependencies,
+    });
+
+    let represented = units
+        .iter()
+        .flat_map(|unit| unit.evidence_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    if represented != expected {
+        return Err(failure(
+            "CONTENT_PROOF_MAPPING",
+            "Core content units do not represent the complete relation proof dependency set",
+        ));
+    }
+    let max_output_bytes = max_output_bytes.min(8192);
+    if max_output_bytes == 0 {
+        return Err(failure(
+            "CONTENT_PLAN_UNAVAILABLE",
+            "the request has no output byte budget for a relation explanation",
+        ));
+    }
+    Ok(language::MeaningCompositionRequest {
+        purpose: MeaningCompositionPurpose::Explain,
+        format: MeaningCompositionFormat::Paragraph,
+        style: MeaningCompositionStyle::Neutral,
+        units,
+        prior_sequence: Vec::new(),
+        max_output_bytes,
+        max_tokens: max_output_bytes,
+    })
 }
 
 fn relation_inventory_in_scope(
