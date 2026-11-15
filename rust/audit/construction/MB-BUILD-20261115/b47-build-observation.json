@@ -1,0 +1,83 @@
+{
+  "schema": "MINIDORA_B47_ACTOR_PROOF_INVALIDATION_OBSERVATION_V1",
+  "batch": "B47",
+  "base_commit": "3108c733bbbfda9943fbbdc504201ec50162ffc7",
+  "test_source": {
+    "path": "rust/crates/minidora-engine/tests/core_atomic_relation_comparison_47.rs",
+    "sha256": "eadc61c344bb9e479c5919896120b5f94a7c3c98f9ae37c3fe1e675c3639ca36",
+    "test_name": "invalidating_one_actor_rule_does_not_change_another_actors_saved_v4_proof"
+  },
+  "execution": {
+    "command": "cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_47 -- --nocapture",
+    "exit_code": 0,
+    "tests_passed": 1,
+    "tests_failed": 0,
+    "format_check": "PASS",
+    "metadata_check": "PASS; 3 workspace members",
+    "r4_archive_manifest_check": "PASS",
+    "log": "rust/audit/construction/MB-BUILD-20261115/b47-focused-tests.log"
+  },
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "cargo_target_dir": "/workspace/.minidora-cloud/rust-target",
+    "workspace_members": 3
+  },
+  "producer_consumer": "two independently actor-scoped memories -> Core relation comparison and saved V4 artifacts -> actor A Engine::execute invalidation -> reopened Engine -> A stale-proof suspension / B selected-proof replay",
+  "trace": {
+    "actor_a": {
+      "actor_id": "b47-rule-owner-a",
+      "artifact_ref": "58886a42b41788d936d3902cd5d682e58389fcddf24528de37c0da55b41ed8d3",
+      "artifact_sha256": "58886a42b41788d936d3902cd5d682e58389fcddf24528de37c0da55b41ed8d3",
+      "case_id": "b47-actor-a-comparison",
+      "content_plan_created": false,
+      "dependent_rule_ids_retained_invalid": [
+        "rule:7f68c2a9cc9d8eb31ed381e8e87654eb7cfb065f72a3eff93acc65e4d84f7ea7"
+      ],
+      "follow_up_result_id": "d43eacd66ceaa4dba69371c0c4ce526097e23887e77a71090977b820769b8e45",
+      "lifecycle": "SUSPEND",
+      "memory_revision_after": 5,
+      "memory_revision_before": 4,
+      "reason": "CONTEXT_PROOF_CHANGED: 前回比較の左右いずれかの保存根拠・競合状態が変わっています。新しい比較を行ってください。",
+      "render_created": false,
+      "root_rule_id": "rule:bb734101fc840ef91e53c8006f014e6abf5e7b6eb78e42dd03d8c8b40cf072a6"
+    },
+    "actor_b": {
+      "actor_id": "b47-independent-owner-b",
+      "artifact_ref": "bc5edd9a20fe3613aea603a549aba250f6171bcbce934d2b9ece53013feb4531",
+      "artifact_sha256": "bc5edd9a20fe3613aea603a549aba250f6171bcbce934d2b9ece53013feb4531",
+      "case_id": "b47-actor-b-comparison",
+      "dependent_rule_ids_still_valid": [
+        "rule:1ba6dfec545949b4a1605331e0dd676b1d3dc41960a4269ba38a6033c2b51653"
+      ],
+      "follow_up_result_id": "ce8ec4ab25b7d30b4e2cfdf355acbddac9d9771588d48d1acc295029a0d0cb8b",
+      "lifecycle": "COMMIT",
+      "memory_revision_after_actor_a_invalidation": 4,
+      "memory_revision_before": 4,
+      "memory_unchanged_after_replay": true,
+      "render_sha256": "63101b090dfdbeda401225e1a3bde5a90e85fa6d852784e10d66fb9a8755bc74",
+      "render_status": "RENDERED",
+      "root_rule_id": "rule:510d025885b40cca6b0ed0113d10be8b36702760ca7e0359efe36e7cf86dc172",
+      "second_rule_id": "rule:485900cf1b0c67f671d41a071c17df635f2578573b68468c0f4c1bd34195b366",
+      "selected_result_id": "8c715e7d4f043e6110bcea06e120ac69485a001c5f54b0ee25e7779653d5bc90"
+    },
+    "engine_reopened_after_invalidation": true,
+    "migration_or_concurrency": "not checked",
+    "outside_world_truth": "not checked",
+    "proof_ids_disjoint_by_actor": true,
+    "rule_ids_disjoint_by_actor": true,
+    "schema": "MINIDORA_CORE_ACTOR_ISOLATED_V4_PROOF_INVALIDATION_TRACE_V1",
+    "scope": "b47-shared-semantic-scope"
+  },
+  "limits": [
+    "same isolated store, two actors, two globally unique cases, one shared semantic scope, one invalidation",
+    "no concurrency or migration check",
+    "no normal CLI/HTTP route check",
+    "outside-world truth not checked",
+    "full CAP-D13 acceptance remains UNVERIFIED",
+    "CORE-G03 remains PARTIAL"
+  ],
+  "release": "NOT_RELEASED"
+}
