@@ -651,6 +651,7 @@ fn canonical_rule_variables(premises: &mut [Proposition], conclusion: &mut Propo
         }
     }
 }
+
 fn compose(left: &RelationRule, right: &RelationRule) -> Result<Vec<RelationRule>> {
     // Declared parent rules have one or two premises. Never recursively
     // flatten a previously composed shortcut into another shortcut.
@@ -822,6 +823,151 @@ pub(crate) fn query_hypothetical(
     query_internal(memory, proposition, max_steps, Some(allowed_hypotheses))
 }
 
+fn direct_fact_matches(
+    patterns: &[Proposition],
+    known: &BTreeMap<Proposition, Fact>,
+) -> Option<Vec<Fact>> {
+    fn match_from(
+        index: usize,
+        patterns: &[Proposition],
+        candidates: &[&Fact],
+        known: &BTreeMap<Proposition, Fact>,
+        bindings: &BTreeMap<String, String>,
+        selected: &mut Vec<Fact>,
+    ) -> Option<Vec<Fact>> {
+        if index == patterns.len() {
+            return Some(selected.clone());
+        }
+        for candidate in candidates {
+            if known.contains_key(&opposition(&candidate.proposition)) {
+                continue;
+            }
+            let Some(next_bindings) =
+                matches_with_bindings(&patterns[index], &candidate.proposition, bindings)
+            else {
+                continue;
+            };
+            selected.push((*candidate).clone());
+            if let Some(result) = match_from(
+                index + 1,
+                patterns,
+                candidates,
+                known,
+                &next_bindings,
+                selected,
+            ) {
+                return Some(result);
+            }
+            selected.pop();
+        }
+        None
+    }
+
+    let candidates: Vec<_> = known
+        .values()
+        .filter(|fact| {
+            fact.dependencies.is_empty()
+                && !matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown)
+        })
+        .collect();
+    match_from(
+        0,
+        patterns,
+        &candidates,
+        known,
+        &BTreeMap::new(),
+        &mut Vec::new(),
+    )
+}
+
+/// Select a composed proof without also expanding its two parent rules when
+/// the actor's active rules in that scope are exactly the isolated proof pair
+/// plus its shortcut. When the intermediate conclusion is explicitly
+/// contradicted, discard that shortcut and let the original path stop at the
+/// conflict. More complex rule graphs retain the existing closure behavior.
+fn isolated_composition_plan(
+    proposition: &Proposition,
+    known: &BTreeMap<Proposition, Fact>,
+    rules: &[&RelationRule],
+    rule_map: &BTreeMap<&str, &RelationRule>,
+    allowed_hypotheses: Option<&BTreeSet<String>>,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut disabled_shortcuts = BTreeSet::new();
+    let mut elided_parent_rules = BTreeSet::new();
+    if allowed_hypotheses.is_some()
+        || known.values().any(|fact| {
+            matches(proposition, &fact.proposition).is_some()
+                || matches(&opposition(proposition), &fact.proposition).is_some()
+        })
+    {
+        return (disabled_shortcuts, elided_parent_rules);
+    }
+
+    for shortcut in rules.iter().copied().filter(|rule| {
+        rule.dependencies.len() == 2
+            && (matches(&rule.conclusion, proposition).is_some()
+                || matches(&rule.conclusion, &opposition(proposition)).is_some())
+    }) {
+        let Some(left) = rule_map.get(shortcut.dependencies[0].as_str()).copied() else {
+            continue;
+        };
+        let Some(right) = rule_map.get(shortcut.dependencies[1].as_str()).copied() else {
+            continue;
+        };
+        if !left.dependencies.is_empty() || !right.dependencies.is_empty() {
+            continue;
+        }
+        let same_scope_rules: Vec<_> = rules
+            .iter()
+            .copied()
+            .filter(|rule| {
+                rule.premise.scope == proposition.scope
+                    && rule.conclusion.scope == proposition.scope
+                    && rule
+                        .additional_premises
+                        .iter()
+                        .all(|premise| premise.scope == proposition.scope)
+            })
+            .collect();
+        let expected = BTreeSet::from([shortcut.id.as_str(), left.id.as_str(), right.id.as_str()]);
+        let actual: BTreeSet<_> = same_scope_rules
+            .iter()
+            .map(|rule| rule.id.as_str())
+            .collect();
+        if same_scope_rules.len() != 3 || actual != expected {
+            continue;
+        }
+
+        let shortcut_premises: Vec<_> = std::iter::once(&shortcut.premise)
+            .chain(shortcut.additional_premises.iter())
+            .cloned()
+            .collect();
+        let Some(matched_facts) = direct_fact_matches(&shortcut_premises, known) else {
+            continue;
+        };
+        let left_premises: Vec<_> = std::iter::once(&left.premise)
+            .chain(left.additional_premises.iter())
+            .collect();
+        let left_bindings = left_premises.iter().zip(&matched_facts).try_fold(
+            BTreeMap::new(),
+            |bindings, (pattern, fact)| {
+                matches_with_bindings(pattern, &fact.proposition, &bindings)
+            },
+        );
+        let Some(left_bindings) = left_bindings else {
+            continue;
+        };
+        let intermediate = substitute(&left.conclusion, &left_bindings);
+        if known.contains_key(&opposition(&intermediate)) {
+            disabled_shortcuts.insert(shortcut.id.clone());
+        } else {
+            elided_parent_rules.insert(left.id.clone());
+            elided_parent_rules.insert(right.id.clone());
+        }
+    }
+    (disabled_shortcuts, elided_parent_rules)
+}
+
 fn query_internal(
     memory: &MemoryState,
     proposition: &Proposition,
@@ -871,6 +1017,14 @@ fn query_internal(
                 .or_insert_with(|| fact.clone());
         }
     }
+    let (disabled_shortcuts, elided_parent_rules) =
+        isolated_composition_plan(proposition, &known, &rules, &rule_map, allowed_hypotheses);
+    let rules: Vec<_> = rules
+        .into_iter()
+        .filter(|rule| {
+            !disabled_shortcuts.contains(&rule.id) && !elided_parent_rules.contains(&rule.id)
+        })
+        .collect();
     let mut steps = 0u32;
     let mut applied_single = BTreeSet::new();
     let mut joined_conjunctive = BTreeSet::<(String, Vec<String>)>::new();
@@ -1465,12 +1619,19 @@ mod conjunctive_rule_tests {
         );
         let feathers =
             assert_fact(&mut memory, p("osprey", "feathered"), "new-feather-input").unwrap();
+        let mut roots_only = memory.clone();
+        roots_only.rules.retain(|rule| rule.dependencies.is_empty());
+        let uncomposed = query(&roots_only, &p("osprey", "animal"), 32).unwrap();
+        assert_eq!(uncomposed.status, "SUPPORTED");
+        assert_eq!(uncomposed.steps, 2);
+
         let answer = query(&memory, &p("osprey", "animal"), 32).unwrap();
         assert_eq!(answer.status, "SUPPORTED");
         assert_eq!(
-            answer.steps, 3,
-            "each matching relation rule path is charged once"
+            answer.steps, 1,
+            "the isolated shortcut is used without expanding its parent rules"
         );
+        assert_eq!(query(&memory, &p("osprey", "animal"), 1).unwrap().steps, 1);
         assert_eq!(answer_guarantee(&answer), Guarantee::Derived);
         let dependencies = answer_dependencies(&answer);
         assert!(dependencies.contains(&bird.id));
@@ -1485,6 +1646,34 @@ mod conjunctive_rule_tests {
             "UNKNOWN",
             "invalidating either antecedent must remove the joined proof"
         );
+    }
+
+    #[test]
+    fn a_composed_shortcut_does_not_bypass_a_contradicted_intermediate() {
+        let mut memory = MemoryState::default();
+        add_rule(
+            &mut memory,
+            p("$x", "bird"),
+            p("$x", "warm-blooded"),
+            "root-bird-rule",
+        )
+        .unwrap();
+        add_rule_with_premises(
+            &mut memory,
+            vec![p("$x", "warm-blooded"), p("$x", "mammal")],
+            p("$x", "animal"),
+            "root-animal-rule",
+        )
+        .unwrap();
+        assert_fact(&mut memory, p("osprey", "bird"), "osprey-bird").unwrap();
+        assert_fact(&mut memory, p("osprey", "mammal"), "osprey-mammal").unwrap();
+        let mut contradicted = p("osprey", "warm-blooded");
+        contradicted.negative = true;
+        assert_fact(&mut memory, contradicted, "osprey-not-warm-blooded").unwrap();
+
+        let answer = query(&memory, &p("osprey", "animal"), 32).unwrap();
+        assert_eq!(answer.status, "UNKNOWN");
+        assert!(answer.facts.is_empty());
     }
 
     #[test]

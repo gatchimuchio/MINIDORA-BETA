@@ -1,0 +1,16 @@
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.94s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-83738a8fdfe35d75)
+
+running 9 tests
+test relations::conjunctive_rule_tests::declared_relation_rules_remain_limited_to_two_explicit_premises ... ok
+test relations::conjunctive_rule_tests::older_serialized_relation_rules_default_to_single_premise ... ok
+test relations::conjunctive_rule_tests::a_composed_shortcut_does_not_bypass_a_contradicted_intermediate ... ok
+test relations::conjunctive_rule_tests::shared_variable_join_binds_a_new_conclusion_subject ... ok
+test relations::conjunctive_rule_tests::a_single_rule_before_a_two_premise_rule_keeps_the_other_antecedent ... ok
+test relations::conjunctive_rule_tests::single_premise_rule_identity_stays_compatible ... ok
+test relations::conjunctive_rule_tests::single_premise_composition_identity_stays_compatible ... ok
+test relations::conjunctive_rule_tests::two_premise_join_transfers_to_a_new_subject_and_keeps_every_dependency ... ok
+test relations::conjunctive_rule_tests::two_two_premise_rules_compose_to_a_bounded_three_antecedent_shortcut ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 240 filtered out; finished in 0.00s

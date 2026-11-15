@@ -1,0 +1,172 @@
+{
+  "schema": "MINIDORA_B49_PROOF_COMPOSITION_LEARNING_OBSERVATION_V1",
+  "batch": "B49",
+  "base_commit": "798cee4cfe9a338c7e628e0a16641d5cacdf04ef",
+  "requirements": [
+    "R2 §10.1 proof-preserving rule composition and path deduplication",
+    "CORE-G05",
+    "CAP-D05"
+  ],
+  "production_source": {
+    "path": "rust/crates/minidora-engine/src/relations.rs",
+    "sha256": "16542f55c4ffa74d4a5a3d9f79db32f762db323c6503cbe1c3d1df5477ec2cdc",
+    "change": "For a bounded isolated same-scope proof pair, choose the composed shortcut without also expanding its two parent rules; disable that shortcut when its intermediate conclusion is explicitly contradicted."
+  },
+  "test_source": {
+    "path": "rust/crates/minidora-engine/tests/core_proof_composition_learning_49.rs",
+    "sha256": "3f34ca76d6c8443c2779af1e6ddc08bbbd2a5140b342d1b2ae2e5f4435548dfd",
+    "test_name": "proof_composition_changes_a_direct_core_result_and_uses_the_shorter_path"
+  },
+  "execution": {
+    "workspace": "rust/",
+    "commands": [
+      {
+        "command": "cargo test --locked -p minidora-engine --lib conjunctive_rule_tests -- --nocapture",
+        "exit_code": 0,
+        "tests_passed": 9,
+        "tests_failed": 0,
+        "log": "rust/audit/construction/MB-BUILD-20261115/b49-relation-unit-tests.log"
+      },
+      {
+        "command": "cargo test --locked -p minidora-engine --test core_proof_composition_learning_49 -- --nocapture",
+        "exit_code": 0,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "log": "rust/audit/construction/MB-BUILD-20261115/b49-core-integration-pass.log"
+      },
+      {
+        "command": "cargo test --locked -p minidora-engine --test core_construction_observation_05 --test core_atomic_relation_comparison_40 --test core_atomic_relation_comparison_41 -- --nocapture",
+        "exit_code": 0,
+        "tests_passed": 3,
+        "tests_failed": 0,
+        "log": "rust/audit/construction/MB-BUILD-20261115/b49-relation-regressions.log"
+      },
+      {
+        "command": "cargo check --locked -p minidora-engine --all-targets",
+        "exit_code": 0,
+        "result": "PASS",
+        "log": "rust/audit/construction/MB-BUILD-20261115/b49-engine-all-target-check.log"
+      },
+      {
+        "command": "cargo fmt --all -- --check",
+        "exit_code": 0,
+        "result": "PASS",
+        "log": "rust/audit/construction/MB-BUILD-20261115/b49-format-check.log"
+      },
+      {
+        "command": "git diff --check",
+        "exit_code": 0,
+        "result": "PASS",
+        "log": "rust/audit/construction/MB-BUILD-20261115/b49-git-diff-check.log"
+      }
+    ],
+    "initial_attempt": {
+      "outcome": "FAIL before the learning result assertion",
+      "cause": "The fixture constrained RequestEnvelope budget.max_actions to one, while the full Core request also required compute, content and render actions.",
+      "disposition": "Use the default request budget for the Core commit and independently compare relation-query budgets (2 steps for the roots, 1 for the composed proof).",
+      "log": "rust/audit/construction/MB-BUILD-20261115/b49-initial-action-budget-failure.log"
+    },
+    "format_and_diff_logs": [
+      "rust/audit/construction/MB-BUILD-20261115/b49-format-check.log",
+      "rust/audit/construction/MB-BUILD-20261115/b49-git-diff-check.log"
+    ]
+  },
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "workspace_members": 3,
+    "cargo_invocation": "Commands ran from rust/ with the installed toolchain bin directories added to PATH.",
+    "cargo_target_dirs": [
+      "/workspace/.minidora-cloud/rust-target (8.1G)",
+      "rust/target (7.5G)"
+    ],
+    "cache_assets": [
+      "/home/agent/.cargo (155M)",
+      "/home/agent/.rustup (617M)"
+    ]
+  },
+  "producer_consumer": "Same semantic query enters minidora_engine::Engine::execute before and after two scoped declared root rules are composed -> Engine is reopened -> the query produces a derived committed/rendered result with the direct facts, both root rules and composed shortcut in its dependency lineage -> a new subject reuses the proof -> a later correction invalidates the original source fact and the original subject query suspends.",
+  "trace": {
+    "actor_id": "b49-proof-composition-actor",
+    "after_learning": {
+      "dependencies": [
+        "fact:3b3e0cc06cc7e26fcb1c58377fe53df30e67f02ffe7c5e7cee9e223e8c967509",
+        "fact:7533c71b77bdc24c584a2014349cecdfd399b1ceb03d2bb161723bbe3fc893a9",
+        "fact:a0b8cc1038eb0b4e031eff345f2ddd2efc66c52d96cbead013ddddc389ae3454",
+        "rule:2d71fd8cd80576f50aa283374d4ea60c63ec1e96c5bdf488eb86e69c7899d64b",
+        "rule:3e4b49066abd7dc4075e987941a516b2309ef5e10303d68ba75e12231514dc27",
+        "rule:da048d6eb029da58175e0461f67fffad70542bb5e2e8f725ba0162034b7c6d53"
+      ],
+      "guarantee": "DERIVED",
+      "lifecycle": "COMMIT",
+      "render_status": "RENDERED",
+      "result_id": "7d62705af279ec50d97a382e59ae0d6d7cec687a769bf064f3a7e1e10bd51385"
+    },
+    "before_learning": {
+      "content_plan_created": false,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: 範囲「materials-lab」の「Asterはcrackedである」を判定する有効な前提または導出経路がありません。"
+    },
+    "case_id": "b49-proof-composition-case",
+    "core_reopened_after_composition": true,
+    "empirical_hypothesis_learning": "not exercised",
+    "later_counterexample": {
+      "invalidated_fact_id": "fact:a0b8cc1038eb0b4e031eff345f2ddd2efc66c52d96cbead013ddddc389ae3454",
+      "lifecycle": "COMMIT",
+      "prior_derived_result_retained": true,
+      "same_query_after_correction": "SUSPEND",
+      "same_query_reason": "MISSING_PREMISES: 範囲「materials-lab」の「Asterはcrackedである」を判定する有効な前提または導出経路がありません。",
+      "unaffected_unseen_subject_still_derived": true
+    },
+    "measured_query_steps": {
+      "composed_shortcut": 1,
+      "core_commit_with_default_request_budget": true,
+      "root_rules_only": 2
+    },
+    "normal_cli_http_and_full_cap_d05_acceptance": "not checked",
+    "out_of_domain_scope": {
+      "content_plan_created": false,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: 範囲「other-lab」の「Rookはcrackedである」を判定する有効な前提または導出経路がありません。",
+      "scope": "other-lab"
+    },
+    "outside_world_truth": "not checked",
+    "root_rule_ids": [
+      "rule:2d71fd8cd80576f50aa283374d4ea60c63ec1e96c5bdf488eb86e69c7899d64b",
+      "rule:da048d6eb029da58175e0461f67fffad70542bb5e2e8f725ba0162034b7c6d53"
+    ],
+    "schema": "MINIDORA_CORE_PROOF_COMPOSITION_LEARNING_TRACE_V1",
+    "scope": "materials-lab",
+    "shortcut_id": "rule:3e4b49066abd7dc4075e987941a516b2309ef5e10303d68ba75e12231514dc27",
+    "unseen_subject_after_learning": {
+      "guarantee": "DERIVED",
+      "lifecycle": "COMMIT",
+      "shortcut_dependency_retained": true,
+      "subject": "Cyra"
+    }
+  },
+  "regressions": {
+    "B14_core_construction_observation_05": "PASS; retains same-subject correction and stale-result stop coverage",
+    "B40_relation_comparison_v3": "PASS",
+    "B41_relation_comparison_v4": "PASS",
+    "explicitly_contradicted_intermediate_unit_case": "PASS; composed shortcut is not allowed to bypass the contradiction"
+  },
+  "gate_assessment": {
+    "CORE-G05": "PASS for the bounded proof-preserving composition path observed through direct Engine::execute",
+    "CORE-G03": "PARTIAL",
+    "CAP-D05": "UNVERIFIED; ordinary CLI/HTTP route and full acceptance remain unverified"
+  },
+  "not_run": [
+    "normal CLI and HTTP proof-composition route",
+    "empirical hypothesis learning",
+    "outside-world truth validation",
+    "full CAP-D05 / BB-LEARN acceptance",
+    "full workspace runtime suite",
+    "workspace Clippy and workspace build",
+    "migration and concurrent-writer behavior",
+    "independent QA, release and deployment"
+  ],
+  "release": "NOT_RELEASED"
+}

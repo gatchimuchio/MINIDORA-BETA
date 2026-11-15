@@ -1,0 +1,21 @@
+   Compiling minidora-engine v0.7.0-alpha.8 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.71s
+     Running tests/core_proof_composition_learning_49.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_proof_composition_learning_49-e5db10f4b7f746c8)
+
+running 1 test
+
+thread 'proof_composition_changes_a_direct_core_result_and_uses_the_shorter_path' (441323) panicked at crates/minidora-engine/tests/core_proof_composition_learning_49.rs:62:5:
+assertion `left == right` failed: ResultRecord { id: "a313c41d495be17ed2321e1888ab3dc0668b135f197cbc6fc8db6bdf8917396b", input_id: "aster-cracked-after-learning", input_version: 1, lifecycle: Suspend, text: "必須成果の残件: [\"compute\", \"content\", \"render\"]", reason: Some("ACTION_BUDGET_EXHAUSTED: 必須成果の残件: [\"compute\", \"content\", \"render\"]"), guarantee: Unknown, calculation: None, content_plan: None, render: None, receipts: [], evidence: [], dependencies: [], execution_graph_ref: None }
+  left: Suspend
+ right: Commit
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test proof_composition_changes_a_direct_core_result_and_uses_the_shorter_path ... FAILED
+
+failures:
+
+failures:
+    proof_composition_changes_a_direct_core_result_and_uses_the_shorter_path
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s
+
+error: test failed, to rerun pass `-p minidora-engine --test core_proof_composition_learning_49`
