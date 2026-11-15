@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Checking minidora-engine v0.7.0-alpha.10 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.06s
+
+command: cargo check --locked -p minidora-engine --all-targets
+exit 0
