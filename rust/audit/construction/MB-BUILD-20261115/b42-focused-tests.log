@@ -1,0 +1,29 @@
+Base source: 82763c4eb6cfd9d980b415b31582ff7936cb6d19 (B41)
+Toolchain: rustc 1.99.1 (58cf8f9c3 2026-10-13); cargo 1.99.1 (5f94df478 2026-08-27); Linux
+
+Command:
+CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_42 -- --nocapture
+Result: PASS (1 test)
+Observed: V1 report artifact; 17 V2 / 18 V3-V4 reconstructed candidate units; 309-byte maximum V2 fact evidence; 9 proof IDs retained; K7 RENDERED; reopened follow-up COMMIT and RENDERED.
+
+Initial repository-root invocations of `cargo fmt --all -- --check` and `cargo check --locked -p minidora-engine --all-targets` stopped before execution because the Cargo workspace is under `rust/`. Corrected invocations from `rust/`:
+`/workspace/.cargo/bin/cargo fmt --all -- --check`
+PASS.
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo check --locked -p minidora-engine --all-targets`
+PASS. Compile check only.
+`git diff --check`
+PASS.
+`python3 -m json.tool rust/audit/construction/MB-BUILD-20261115/b42-build-observation.json`
+PASS.
+Temporary test directory scan: 0 matching directories.
+
+After adding explicit assertions for the adopted ContentPlan, render/plan binding, and reopened follow-up ContentPlan, the focused test was rerun:
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo test --locked -p minidora-engine --test core_atomic_relation_comparison_42 -- --nocapture`
+PASS (1 test; 0 failed). The deterministic comparison ContentPlan ID was `49084cc427495d35c75ad3f3c78d525b9ec7c6124f3f5d1d56c45c1d491fef86`; report, render, proof, and reopened follow-up IDs/hashes matched the observation JSON.
+
+Final checks repeated after the last test edit:
+`/workspace/.cargo/bin/cargo fmt --all -- --check` from `rust/`: PASS.
+`CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target /workspace/.cargo/bin/cargo check --locked -p minidora-engine --all-targets` from `rust/`: PASS (compile check only).
+`git diff --check`: PASS.
+`python3 -m json.tool rust/audit/construction/MB-BUILD-20261115/b42-build-observation.json`: PASS.
+Temporary test directory scan: 0 matching directories.

@@ -1,0 +1,68 @@
+{
+  "schema": "MINIDORA_CORE_ATOMIC_RELATION_COMPARISON_BUILD_OBSERVATION_V1",
+  "batch": "B42",
+  "base_commit": "82763c4eb6cfd9d980b415b31582ff7936cb6d19",
+  "os": "linux",
+  "toolchain": {
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)"
+  },
+  "fixture": {
+    "subjects": ["Aster", "Beryl"],
+    "scope": "b42-comparison-unit-boundary-lab",
+    "declared_rule_count": 1,
+    "direct_fact_count": 6,
+    "inventory_fact_count": 8,
+    "relation_key_count": 5,
+    "max_actions": 256
+  },
+  "candidate_bounds": {
+    "composer_max_units": 16,
+    "v2_candidate_units": 17,
+    "v3_v4_candidate_units": 18,
+    "max_v2_fact_evidence_bytes": 309,
+    "max_fact_unit_bytes": 384,
+    "proof_reference_units": 0
+  },
+  "comparison": {
+    "lifecycle": "COMMIT",
+    "result_id": "dcaa11e15faa7685892be2a411c8a4657880919901ddf088e0e2ad30568c2825",
+    "content_plan_id": "49084cc427495d35c75ad3f3c78d525b9ec7c6124f3f5d1d56c45c1d491fef86",
+    "artifact_kind": "minidora.relation-comparison-report.v1",
+    "artifact_sha256": "afa4ecc8133957da9f61626fade11b8f198d67e0a9467d668772f1062d46cd25",
+    "proof_ids": [
+      "fact:266925614a83ae68b4c13acb1d3b2a9ba13a4b65e3f998dc0cf0f4839d6bb03e",
+      "fact:43ed8ff0d27241e52ead93ae1234f749f9ea466f00db3ffbf6ebaed69bd16092",
+      "fact:64301bfbffd63d0f7b112168f91ca8db6949af1fd433c59df3f2fa93060d0270",
+      "fact:71d8044f0a087077d5859840da773e6d9f0b99b9d180283ec50747fdde260c03",
+      "fact:9ba3a572b1d7f045c005436f9c11d1c64945ddfa3c845076ac4cfe2dfa26fd74",
+      "fact:9bea146c22ed16f1d0badbac77885581726b5be4b6ef852c44310adc532f31bc",
+      "fact:b45b601a4a54e1891fe7afe59ef027bbe9cffa99d769910aa497b2017e900d92",
+      "fact:ea0f24b55027780362f90408645c3f24d51de326d71a5f8cd060d9c6263a0efc",
+      "rule:0883fe98113ff9e2305078b90272a8068fbbb78cb2847dce6d3f27b9e153d465"
+    ],
+    "render_status": "RENDERED",
+    "render_sha256": "19084d843f7d7c103940a1eafdaeb9bbdb20bc70158994f86004f81d1c2833c4",
+    "render_bytes": 2482,
+    "all_proofs_retained_in_inventories": true
+  },
+  "reopened_followup": {
+    "result_id": "6d017744f28054a0c8b67ca6629430f5e44a918a0339e3007063b4762cfe679a",
+    "lifecycle": "COMMIT",
+    "prior_comparison_consumed": true,
+    "render_status": "RENDERED",
+    "max_actions": 256
+  },
+  "focused_checks": {
+    "b42_integration_test": "PASS",
+    "cargo_fmt_check": "PASS",
+    "cargo_check_engine_all_targets": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "outside_world_truth": "not checked",
+  "gate_status": {
+    "CORE-G03": "PARTIAL"
+  },
+  "full_engine_suite": "NOT_RUN",
+  "release_or_deployment": "NOT_RUN"
+}
