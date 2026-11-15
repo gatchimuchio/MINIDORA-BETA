@@ -1,0 +1,123 @@
+{
+  "run": {
+    "command": "cargo test --locked -p minidora-engine --test core_atomic_explanation_31 -- --nocapture",
+    "exit_code": 0,
+    "main_base_head": "5fe4c8a36d64c99ea263e0a21654bb5d9261da83",
+    "core_implementation_commit": "fe39adbb0e7952536baccec5eecf32a2b1cc4eaa",
+    "harness_parent_head": "5fe4c8a36d64c99ea263e0a21654bb5d9261da83",
+    "harness_change": "structured runtime trace output and explicit zero-write-grant/action-count observations; no product source changed",
+    "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "test_result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s"
+  },
+  "observation": {
+    "denied_write": {
+      "action_count": 0,
+      "case_id": "atomic-explanation-denied-write",
+      "content_plan_id": "6600827ff83948490fac9e258debbb1931bce47a46d95dea47956c39a2eb77b7",
+      "lifecycle": "SUSPEND",
+      "reason": "WRITE_PERMISSION_MISSING: 指定ファイルへの書込権限がありません。",
+      "receipt_count": 0,
+      "render_status": "RENDERED",
+      "requested_target_filename": "unauthorized-output.txt",
+      "result_id": "9f88c86a6f071db16aecf951e6a86faca45588541c3b46f4091e4cb82daf8ec4",
+      "target_exists": false,
+      "typed_proposition": {
+        "negative": false,
+        "object": "bird",
+        "predicate": "is",
+        "scope": "atomic-explanation-lab",
+        "subject": "Momo"
+      },
+      "write_grant_count": 0
+    },
+    "missing_evidence": {
+      "case_id": "atomic-explanation-missing",
+      "content_plan_adopted": false,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: 範囲「atomic-explanation-lab」の「Momoはmammalである」を説明する有効な前提または導出経路がありません。",
+      "render_created": false,
+      "result_id": "0ed5375845a7f86798dcce9e86e4bca9729ee8a313f6925adc8f4cc1074d77a6",
+      "typed_proposition": {
+        "negative": false,
+        "object": "mammal",
+        "predicate": "is",
+        "scope": "atomic-explanation-lab",
+        "subject": "Momo"
+      }
+    },
+    "os": "linux",
+    "producer": "Engine::compose_atomic_explanation",
+    "schema": "MINIDORA_CORE_ATOMIC_EXPLANATION_RUNTIME_TRACE_V1",
+    "seed": {
+      "dependencies": [
+        "fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b"
+      ],
+      "guarantee": "USER_PREMISE",
+      "input_id": "momo-bird-premise",
+      "lifecycle": "COMMIT",
+      "original_text": "[scope=atomic-explanation-lab]Momo is a bird",
+      "proof_id": "fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b",
+      "result_id": "c6e4f0830a994e67d4b7cecf75657dc341b628371d953c72dee497330a7c4880"
+    },
+    "supported": {
+      "case_id": "atomic-explanation-supported",
+      "consumer": "AskWhy -> CoreComputationArtifact -> ContentPlan -> K7 adoption -> renderer",
+      "content_plan": {
+        "dependencies": [
+          "fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b",
+          "f9f1277ae6e3d39b16841090a36f15074e4d0c077c221e3aefce9c0048b45d3f"
+        ],
+        "id": "6600827ff83948490fac9e258debbb1931bce47a46d95dea47956c39a2eb77b7",
+        "model_artifact_ref": "5bffb11b81f293d333472a59849a743093c9fab9ed81226cbc0d3fee6d95e099",
+        "model_observation_ref": "ff3096adb9dfea7f99d105c81b8e2394bbcfcc4e6d1da15cc8f82687c01a5a98",
+        "model_revision": "c2a2b3b414fb3060b7ffee53d62f5e60a7c54229ec885cf8487573a81d8379aa",
+        "required_units": [
+          "提示された証拠が支える結論: Momoはbirdである（範囲: atomic-explanation-lab）。",
+          "直接提示された前提: Momoはbirdである（範囲: atomic-explanation-lab; 根拠ID: fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b）",
+          "この説明は範囲「atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+        ],
+        "text": "提示された証拠が支える結論: Momoはbirdである（範囲: atomic-explanation-lab）。\n根拠のつながりは次のとおりです。\n直接提示された前提: Momoはbirdである（範囲: atomic-explanation-lab; 根拠ID: fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b）\nこの説明は範囲「atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+      },
+      "fingerprint": "0e20ecba9af2b47ec34adec85835104a92163eac6fdd999b9ab37dc012cc9e80",
+      "input_id": "explain-momo",
+      "input_version": 1,
+      "parser_version": "core-typed-atomic-meaning-v1",
+      "raw_sha256": "51c64908db92d4d2ea6a21237007cb4c32885fa17a64e2640c336118d4a522f5",
+      "render": {
+        "actual_sha256": "0c9598c8f401294da0123e19f8164c6825e0df7fad85d26bfdc4e48d5a2c7c9f",
+        "byte_length": 474,
+        "plan_id": "6600827ff83948490fac9e258debbb1931bce47a46d95dea47956c39a2eb77b7",
+        "renderer_version": "utf8-bytes-v1",
+        "status": "RENDERED",
+        "utf8_text": "提示された証拠が支える結論: Momoはbirdである（範囲: atomic-explanation-lab）。\n根拠のつながりは次のとおりです。\n直接提示された前提: Momoはbirdである（範囲: atomic-explanation-lab; 根拠ID: fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b）\nこの説明は範囲「atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+      },
+      "result": {
+        "dependencies": [
+          "fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b"
+        ],
+        "execution_graph_ref": "3dfc3c38be826422b413aa76a1782758329b34cd6e5ba6a62ae94b24b82d931a",
+        "guarantee": "USER_PREMISE",
+        "id": "11145643f51b19e49a8e7af03c49d5f95f730cf4af8cf758439ffbf8f6f7039c",
+        "lifecycle": "COMMIT",
+        "text": "提示された証拠が支える結論: Momoはbirdである（範囲: atomic-explanation-lab）。\n根拠のつながりは次のとおりです。\n直接提示された前提: Momoはbirdである（範囲: atomic-explanation-lab; 根拠ID: fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b）\nこの説明は範囲「atomic-explanation-lab」の有効な提示前提・規則に基づきます。現実世界での真偽確認ではありません。"
+      },
+      "sealed_request_text": "{\"schema\":\"CORE_TYPED_ATOMIC_MEANING_V1\",\"purpose\":\"explain\",\"proposition\":{\"subject\":\"Momo\",\"predicate\":\"is\",\"object\":\"bird\",\"negative\":false,\"scope\":\"atomic-explanation-lab\"},\"source_ids\":[\"fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b\"]}",
+      "semantic_signature": "cbf608d2a2830a03fd005f033606b00e3b72f8496634c3b3e160b20b4fa50bca",
+      "source_kind": "CORE_TYPED_ATOMIC_MEANING_V1",
+      "typed_input": {
+        "proposition": {
+          "negative": false,
+          "object": "bird",
+          "predicate": "is",
+          "scope": "atomic-explanation-lab",
+          "subject": "Momo"
+        },
+        "purpose": "explain",
+        "schema": "CORE_TYPED_ATOMIC_MEANING_V1",
+        "source_ids": [
+          "fact:92013583edd5439e3cfb9458f00468f140e95ed0c41c633880cd3ec40177eb4b"
+        ]
+      }
+    }
+  }
+}

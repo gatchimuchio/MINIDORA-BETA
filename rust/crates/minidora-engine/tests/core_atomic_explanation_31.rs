@@ -144,6 +144,8 @@ fn typed_atomic_explanation_reaches_k7_and_stops_without_evidence_or_write_autho
     let forbidden_path = directory.path().join("unauthorized-output.txt");
     let mut denied_request = request("atomic-explanation-denied-write", "explain-write", actor);
     denied_request.output_path = Some(forbidden_path.clone());
+    let denied_write_grant_count = denied_request.permissions.write_paths.len();
+    assert_eq!(denied_write_grant_count, 0);
     let denied = engine
         .compose_atomic_explanation(actor, denied_request, proposition("bird"))
         .expect("unauthorized write returns a terminal result");
@@ -163,11 +165,94 @@ fn typed_atomic_explanation_reaches_k7_and_stops_without_evidence_or_write_autho
     );
     assert!(denied.receipts.is_empty());
     assert!(!forbidden_path.exists());
-    assert!(
-        Store::open(directory.path())
-            .expect("open isolated action ledger")
-            .actions(actor, "atomic-explanation-denied-write")
-            .expect("read denied write action ledger")
-            .is_empty()
+    let denied_actions = Store::open(directory.path())
+        .expect("open isolated action ledger")
+        .actions(actor, "atomic-explanation-denied-write")
+        .expect("read denied write action ledger");
+    assert!(denied_actions.is_empty());
+
+    let rendered_text = String::from_utf8(render.bytes.clone()).expect("rendered output is UTF-8");
+    let forbidden_target_name = forbidden_path
+        .file_name()
+        .expect("test output path has a filename")
+        .to_string_lossy()
+        .into_owned();
+    println!(
+        "MINIDORA_B33_TRACE={}",
+        serde_json::json!({
+            "schema": "MINIDORA_CORE_ATOMIC_EXPLANATION_RUNTIME_TRACE_V1",
+            "os": std::env::consts::OS,
+            "producer": "Engine::compose_atomic_explanation",
+            "seed": {
+                "input_id": "momo-bird-premise",
+                "original_text": "[scope=atomic-explanation-lab]Momo is a bird",
+                "result_id": &seed.id,
+                "lifecycle": &seed.lifecycle,
+                "guarantee": &seed.guarantee,
+                "proof_id": &premise_id,
+                "dependencies": &seed.dependencies,
+            },
+            "supported": {
+                "case_id": &supported_bundle.request.case_id,
+                "input_id": &supported_bundle.request.input_id,
+                "input_version": supported_bundle.request.input_version,
+                "sealed_request_text": &supported_bundle.request.text,
+                "typed_input": &direct_input,
+                "source_kind": &supported_bundle.meaning.source_kind,
+                "parser_version": &supported_bundle.meaning.parser_version,
+                "raw_sha256": &supported_bundle.raw_sha256,
+                "fingerprint": &supported_bundle.fingerprint,
+                "semantic_signature": &supported_bundle.semantic_signature,
+                "consumer": "AskWhy -> CoreComputationArtifact -> ContentPlan -> K7 adoption -> renderer",
+                "result": {
+                    "id": &supported.id,
+                    "lifecycle": &supported.lifecycle,
+                    "guarantee": &supported.guarantee,
+                    "text": &supported.text,
+                    "dependencies": &supported.dependencies,
+                    "execution_graph_ref": &supported.execution_graph_ref,
+                },
+                "content_plan": {
+                    "id": &plan.id,
+                    "text": &plan.text,
+                    "required_units": &plan.required_units,
+                    "dependencies": &plan.dependencies,
+                    "model_revision": &plan.model_revision,
+                    "model_artifact_ref": &plan.model_artifact_ref,
+                    "model_observation_ref": &plan.model_observation_ref,
+                },
+                "render": {
+                    "plan_id": &render.plan_id,
+                    "renderer_version": &render.renderer_version,
+                    "status": &render.status,
+                    "actual_sha256": &render.actual_sha256,
+                    "byte_length": render.bytes.len(),
+                    "utf8_text": rendered_text,
+                },
+            },
+            "missing_evidence": {
+                "case_id": "atomic-explanation-missing",
+                "typed_proposition": proposition("mammal"),
+                "result_id": &missing.id,
+                "lifecycle": &missing.lifecycle,
+                "reason": &missing.reason,
+                "content_plan_adopted": missing.content_plan.is_some(),
+                "render_created": missing.render.is_some(),
+            },
+            "denied_write": {
+                "case_id": "atomic-explanation-denied-write",
+                "typed_proposition": proposition("bird"),
+                "requested_target_filename": forbidden_target_name,
+                "write_grant_count": denied_write_grant_count,
+                "result_id": &denied.id,
+                "lifecycle": &denied.lifecycle,
+                "reason": &denied.reason,
+                "content_plan_id": denied.content_plan.as_ref().map(|plan| &plan.id),
+                "render_status": denied.render.as_ref().map(|render| &render.status),
+                "receipt_count": denied.receipts.len(),
+                "target_exists": forbidden_path.exists(),
+                "action_count": denied_actions.len(),
+            },
+        })
     );
 }
