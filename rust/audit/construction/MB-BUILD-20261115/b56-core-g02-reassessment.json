@@ -1,0 +1,165 @@
+{
+  "schema": "MINIDORA_CORE_G02_REASSESSMENT_V1",
+  "work_item": "Current-HEAD re-evaluation of CORE-G02 using conjunctive proof and typed counterfactual routes",
+  "base_head": "6d9ec1d31d7541e2e70e1fc0a1681542a3fe549d",
+  "observed_head": "6d9ec1d31d7541e2e70e1fc0a1681542a3fe549d",
+  "software_version": "0.7.0-alpha.10",
+  "schema_version": "minidora-rust/0.7.0-alpha.10",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "rust/target"
+  },
+  "command": "cargo test --locked -p minidora-engine --test core_construction_observation_02 --test core_conjunctive_proof_55 -- --nocapture",
+  "command_exit_code": 0,
+  "tests": {
+    "core_construction_observation_02": "PASS: 1 integration test",
+    "core_conjunctive_proof_55": "PASS: 1 integration test"
+  },
+  "conjunctive_proof": {
+    "actor": "b55-conjunctive-proof",
+    "case": "b55-conjunctive-proof-case",
+    "scope": "b55-calibration-world",
+    "rule_id": "rule:dea9237fa1106448afdc2ceebf03b7ee2a2e4221647ef2bcc99acab20ff94403",
+    "first_fact_id": "fact:e6ea7dd2845970c00a91b200df4e17144846bad10d6f687fe5b8ede0cdbf1841",
+    "second_fact_id": "fact:fa5f6b9950caeab995c1fbf3b99f29f19572cf1ca317fc0b7a5356457d6b7738",
+    "contrary_fact_id": "fact:2618d088eeb5e2605cab7f2378085e86144a84b2dd2878d3fb75847a2f21e482",
+    "missing_second_premise": {
+      "content_plan": false,
+      "lifecycle": "SUSPEND",
+      "reason": "MISSING_PREMISES: 範囲「b55-calibration-world」の「Velaはsafeである」を説明する有効な前提または導出経路がありません。",
+      "render": false
+    },
+    "with_both_premises": {
+      "dependencies": [
+        "fact:3cdc5dc4841b10c9f8eaef01893a31af862f90cbade5e37fc59d8c6dfe2fad45",
+        "fact:e6ea7dd2845970c00a91b200df4e17144846bad10d6f687fe5b8ede0cdbf1841",
+        "fact:fa5f6b9950caeab995c1fbf3b99f29f19572cf1ca317fc0b7a5356457d6b7738",
+        "rule:dea9237fa1106448afdc2ceebf03b7ee2a2e4221647ef2bcc99acab20ff94403"
+      ],
+      "guarantee": "DERIVED",
+      "lifecycle": "COMMIT",
+      "plan_dependencies": [
+        "fact:3cdc5dc4841b10c9f8eaef01893a31af862f90cbade5e37fc59d8c6dfe2fad45",
+        "fact:e6ea7dd2845970c00a91b200df4e17144846bad10d6f687fe5b8ede0cdbf1841",
+        "fact:fa5f6b9950caeab995c1fbf3b99f29f19572cf1ca317fc0b7a5356457d6b7738",
+        "rule:dea9237fa1106448afdc2ceebf03b7ee2a2e4221647ef2bcc99acab20ff94403",
+        "702f8f3301b34745f24cce9afb3f81761a77c2f7f67400f1bb2ce9efaa5d6464"
+      ],
+      "render_status": "RENDERED",
+      "rendered_bytes_match_plan": true
+    },
+    "after_contradiction": {
+      "contested_premise_lifecycle": "SUSPEND",
+      "contested_premise_reason": "CONFLICTING_PREMISES: 範囲「b55-calibration-world」の「Velaはpower stableである」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
+      "contested_query_has_plan_or_render": false,
+      "derived_query_has_plan_or_render": false,
+      "derived_query_lifecycle": "SUSPEND",
+      "derived_query_reason": "MISSING_PREMISES: 範囲「b55-calibration-world」の「Velaはsafeである」を説明する有効な前提または導出経路がありません。"
+    }
+  },
+  "core_observation_02": {
+    "entry": "in-process minidora_engine::Engine::execute",
+    "case_id": "core-observation-two",
+    "rule_id": "rule:f5248bb4561441e0e543dbeaba6b02be2040a34505c2c5f4fe25739a9b6606a3",
+    "observed_result_count": 19,
+    "supported_two_premise_derivation": {
+      "lifecycle": "COMMIT",
+      "guarantee": "DERIVED",
+      "reason": null,
+      "dependencies": [
+        "fact:84e82051f124a02e873b486af820bdbe1ed6b418554b5ace0baa02100f2563c8",
+        "fact:869ba5ac846b58b506cdcfc9f4c86be3e8d4b75cbe057ec0da2d866023b7763a",
+        "fact:90ce5c0577f6bc00c190efe64c7065797c5d578cd89c536e0c082b86ec6d50a4",
+        "rule:f5248bb4561441e0e543dbeaba6b02be2040a34505c2c5f4fe25739a9b6606a3"
+      ],
+      "content_plan_present": true,
+      "render_present": true
+    },
+    "missing_second_premise": {
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "reason": "MISSING_PREMISES: 範囲「virtual-lab」の「Toviはreliableである」を判定する有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "content_plan_present": false,
+      "render_present": false
+    },
+    "ordinary_conflict": {
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "reason": "CONFLICTING_PREMISES: 範囲「virtual-lab」の「Neraはreliableである」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
+      "dependencies": [],
+      "content_plan_present": false,
+      "render_present": false
+    },
+    "scenario_missing_condition": {
+      "lifecycle": "SUSPEND",
+      "guarantee": "UNKNOWN",
+      "reason": "MISSING_PREMISES: 範囲「virtual-lab」の「Neraはreliableである」を判定する有効な前提または導出経路がありません。",
+      "dependencies": [],
+      "content_plan_present": false,
+      "render_present": false
+    },
+    "counterfactual": {
+      "status": "SUPPORTED",
+      "guarantee": "HYPOTHESIS",
+      "dependencies": [
+        "fact:04da3983e4f39b723328ee8b210f9c93ada6012de4f993c18d7bab45b2f056be",
+        "fact:3665e6da23dff69ad7a92ad1a15ed85a33e8088918b2dfc076b61cce7584d40d",
+        "hypothesis:3e39c65754af1c1443e9bb8fd66159cb5239a34f26fc4ef4de1b9da19f83e2ab",
+        "rule:0ace63dc1a74244734f8bb6484916d7e1b2dbf1ed510364ffafe22dc2f330f39"
+      ],
+      "hypothesis_ids": [
+        "hypothesis:3e39c65754af1c1443e9bb8fd66159cb5239a34f26fc4ef4de1b9da19f83e2ab"
+      ],
+      "hypothesis_ids_used": [
+        "hypothesis:3e39c65754af1c1443e9bb8fd66159cb5239a34f26fc4ef4de1b9da19f83e2ab"
+      ],
+      "superseded_fact_ids": [
+        "fact:c525631c2b0c2ea304150cf7c8074be0baa4560b94757246fd60428c52799242"
+      ],
+      "invalidated_record_ids": [
+        "fact:c525631c2b0c2ea304150cf7c8074be0baa4560b94757246fd60428c52799242"
+      ],
+      "base_memory_revision": 4,
+      "scenario_memory_revision": 6,
+      "saved_memory_before_equals_after": true,
+      "normal_query_after": {
+        "lifecycle": "SUSPEND",
+        "guarantee": "UNKNOWN",
+        "reason": "MISSING_PREMISES: 範囲「virtual-lab」の「Neraはreliableではない」を判定する有効な前提または導出経路がありません。",
+        "dependencies": [],
+        "content_plan_present": false,
+        "render_present": false
+      },
+      "natural_language_counterfactual": "CAPABILITY_UNAVAILABLE; no counterfactual result was adopted",
+      "unrelated_fact_id": "fact:9a929305bbe87349524327186a193360ec4517b5af3a496e3363df16ef801479",
+      "conflicting_assumption_report": {
+        "status": "CONFLICT",
+        "guarantee": "UNKNOWN",
+        "dependencies": [
+          "fact:c525631c2b0c2ea304150cf7c8074be0baa4560b94757246fd60428c52799242",
+          "hypothesis:5f5db91c39ba90e0e9dc9cf185a05efeabd12c2fc71c0cbc6f2d391983cfa157"
+        ]
+      },
+      "invalid_override": "COUNTERFACTUAL_OVERRIDE_INVALID"
+    }
+  },
+  "gate_assessment": {
+    "CORE-G02": "PASS: the current Core distinguishes supported multi-premise derivation, missing premise, ordinary contradiction and a typed HYPOTHESIS counterfactual with exact dependencies and scenario-only invalidation.",
+    "CORE-G01": "PARTIAL; not reassessed in B56",
+    "CORE-G03": "PARTIAL; not reassessed in B56",
+    "CORE-G04": "NOT_REASSESSED",
+    "CORE-G05": "existing scoped PASS retained; not reassessed in B56",
+    "CORE-G06": "NOT_REASSESSED",
+    "CORE-G07": "NOT_REASSESSED"
+  },
+  "limitations": [
+    "Construction gate evidence is limited to direct Engine and typed counterfactual APIs.",
+    "Natural-language counterfactual requests remain CAPABILITY_UNAVAILABLE.",
+    "This does not establish general causal inference, full R2 acceptance, or the 93-row capability population.",
+    "Full workspace tests, Clippy, all-target compile check, full QC/QA, release and deployment were not run in B56."
+  ],
+  "release": "NOT_RELEASED"
+}
