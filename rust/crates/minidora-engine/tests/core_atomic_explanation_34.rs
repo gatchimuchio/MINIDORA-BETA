@@ -1,5 +1,9 @@
 use minidora_domain::{Guarantee, Intent, Lifecycle, Proposition, RequestEnvelope};
-use minidora_engine::{Engine, store::Store};
+use minidora_engine::{
+    Engine,
+    language::{ModelEmission, SequenceModel, rational_text},
+    store::Store,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -169,6 +173,111 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
             proposition: target.clone()
         }
     );
+
+    let artifact_store = Store::open(directory.path()).expect("open scoped artifact store");
+    let model_bytes = artifact_store
+        .get_bytes(actor, &bundle.request.case_id, &plan.model_artifact_ref)
+        .expect("read the exact Core-trained model artifact");
+    assert_eq!(
+        minidora_domain::digest(&model_bytes),
+        plan.model_artifact_ref,
+        "model artifact reference must identify its exact stored bytes"
+    );
+    let model_value: Value =
+        serde_json::from_slice(&model_bytes).expect("stored model artifact JSON");
+    let model: SequenceModel =
+        serde_json::from_slice(&model_bytes).expect("deserialize stored model artifact");
+    model.validate().expect("stored model validates");
+
+    let emission_bytes = artifact_store
+        .get_bytes(actor, &bundle.request.case_id, &plan.model_observation_ref)
+        .expect("read the exact Core model-emission observation");
+    assert_eq!(
+        minidora_domain::digest(&emission_bytes),
+        plan.model_observation_ref,
+        "emission reference must identify its exact stored bytes"
+    );
+    let emission_value: Value =
+        serde_json::from_slice(&emission_bytes).expect("stored emission observation JSON");
+    let emission: ModelEmission =
+        serde_json::from_slice(&emission_bytes).expect("deserialize stored emission observation");
+    assert_eq!(emission.model_revision, plan.model_revision);
+    assert_eq!(emission.text, plan.text);
+    let authorized_surfaces = emission
+        .authorized_surfaces
+        .as_ref()
+        .expect("Core supplied a finite set of equivalent surfaces");
+    assert_eq!(authorized_surfaces.len(), 2);
+    let connective_a = "根拠のつながりは次のとおりです。";
+    let connective_b = "結論を支える記録を順に示します。";
+    assert_eq!(authorized_surfaces[0].matches(connective_a).count(), 1);
+    assert_eq!(authorized_surfaces[1].matches(connective_b).count(), 1);
+    assert_eq!(
+        authorized_surfaces[0].replace(connective_a, "{model-selected-transition}"),
+        authorized_surfaces[1].replace(connective_b, "{model-selected-transition}"),
+        "authorized alternatives must preserve the same factual and proof text"
+    );
+    for surface in authorized_surfaces {
+        for required_unit in &plan.required_units {
+            assert!(
+                surface.contains(required_unit),
+                "authorized alternative dropped Core-required content: {required_unit}"
+            );
+        }
+    }
+    let candidate_scores = authorized_surfaces
+        .iter()
+        .map(|surface| {
+            (
+                surface.clone(),
+                model
+                    .lossless_sequence_probability(surface.as_bytes())
+                    .expect("score a Core-authorized candidate with the stored model"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected_surface = candidate_scores
+        .iter()
+        .max_by(|(left_text, left_score), (right_text, right_score)| {
+            left_score
+                .cmp(right_score)
+                .then_with(|| right_text.cmp(left_text))
+        })
+        .map(|(text, _)| text)
+        .expect("at least one authorized surface");
+    assert_eq!(
+        &emission.text, expected_surface,
+        "stored emission must select the maximum-scoring authorized surface"
+    );
+    let selected_score = candidate_scores
+        .iter()
+        .find(|(surface, _)| surface == &emission.text)
+        .expect("selected surface has a computed exact score");
+    assert_eq!(
+        emission.sequence_probability,
+        Some(rational_text(&selected_score.1))
+    );
+    let replay = model
+        .realize_supported(authorized_surfaces, 2_000_000)
+        .expect("replay the same authorized set from the stored model");
+    assert_eq!(
+        serde_json::to_value(replay).expect("serialize deterministic model replay"),
+        serde_json::to_value(&emission).expect("serialize retained model emission"),
+        "same model and candidate set must reproduce the retained emission"
+    );
+    let candidate_observations = candidate_scores
+        .iter()
+        .enumerate()
+        .map(|(index, (surface, score))| {
+            serde_json::json!({
+                "candidate_index": index,
+                "text": surface,
+                "sequence_probability": rational_text(score),
+                "selected": surface == &emission.text,
+            })
+        })
+        .collect::<Vec<_>>();
+
     let direct_input: Value =
         serde_json::from_str(&bundle.request.text).expect("sealed typed request JSON");
     for expected in [&rule_id, &sensor_id, &calibrated_id] {
@@ -236,9 +345,9 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
         .to_string_lossy()
         .into_owned();
     println!(
-        "MINIDORA_B34_TRACE={}",
+        "MINIDORA_B35_TRACE={}",
         serde_json::json!({
-            "schema": "MINIDORA_CORE_DERIVED_ATOMIC_EXPLANATION_RUNTIME_TRACE_V1",
+            "schema": "MINIDORA_CORE_DERIVED_ATOMIC_MODEL_SELECTION_OBSERVATION_V1",
             "os": std::env::consts::OS,
             "producer": "Engine::compose_atomic_explanation",
             "seed": {
@@ -278,6 +387,22 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
                     "model_revision": &plan.model_revision,
                     "model_artifact_ref": &plan.model_artifact_ref,
                     "model_observation_ref": &plan.model_observation_ref,
+                },
+                "model": {
+                    "artifact_ref": &plan.model_artifact_ref,
+                    "artifact_sha256": minidora_domain::digest(&model_bytes),
+                    "artifact_bytes": model_bytes.len(),
+                    "serialized_artifact": model_value,
+                    "revision": &plan.model_revision,
+                    "validated": true,
+                    "replayed_emission_matches": true,
+                    "authorized_candidates": candidate_observations,
+                    "emission": {
+                        "artifact_ref": &plan.model_observation_ref,
+                        "artifact_sha256": minidora_domain::digest(&emission_bytes),
+                        "artifact_bytes": emission_bytes.len(),
+                        "serialized_artifact": emission_value,
+                    },
                 },
                 "render": {
                     "plan_id": &render.plan_id,
