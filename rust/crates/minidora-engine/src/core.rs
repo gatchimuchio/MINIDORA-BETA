@@ -15,6 +15,17 @@ struct CalculationSequenceStepArtifact {
 }
 
 const CORE_COMPUTATION_ARTIFACT_KIND: &str = "minidora.core-computation.relation-meaning.v1";
+const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
+const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DirectAtomicMeaningInput {
+    schema: String,
+    purpose: String,
+    proposition: Proposition,
+    source_ids: Vec<String>,
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -559,8 +570,95 @@ impl Engine {
         })
     }
 
+    /// Build and adopt an explanation from one atomic, typed relation.
+    /// Core resolves the supporting record IDs from actor memory, seals the
+    /// typed input, then sends it through the same compute, content, render,
+    /// and result lifecycle used by ordinary requests. This is a construction
+    /// entry point; it does not parse natural language or accept finished prose.
+    /// `request.text` must be empty; the method stores its canonical typed input
+    /// there while retaining the envelope's identity, budget, and permissions.
+    pub fn compose_atomic_explanation(
+        &mut self,
+        actor: &str,
+        mut request: RequestEnvelope,
+        proposition: Proposition,
+    ) -> Result<ResultRecord> {
+        if actor != request.actor_id {
+            return Err(failure(
+                "ACTOR_MISMATCH",
+                "authenticated actor and request actor differ",
+            ));
+        }
+        if request.context_ref.is_some() {
+            return Err(failure(
+                "DIRECT_CONTEXT_UNSUPPORTED",
+                "atomic explanation accepts a proposition and resolves its proof from actor memory",
+            ));
+        }
+        if !request.text.is_empty() {
+            return Err(failure(
+                "DIRECT_TEXT_FORBIDDEN",
+                "direct atomic explanation accepts typed relation fields, not text",
+            ));
+        }
+        if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+            return Err(failure(
+                "DIRECT_LOCALE_UNSUPPORTED",
+                "the atomic explanation surface currently supports Japanese",
+            ));
+        }
+        relations::validate(&proposition)?;
+        if !relations::is_ground(&proposition) {
+            return Err(failure(
+                "UNBOUND_VARIABLE",
+                "atomic explanation requires bound subject and object",
+            ));
+        }
+
+        // Record the actual proof selected before execution. The normal Core
+        // path rechecks these exact IDs immediately before generating content,
+        // so a changed memory revision cannot silently substitute evidence.
+        let mut source_ids = if request.budget.max_actions == 0 {
+            Vec::new()
+        } else {
+            let memory = self.store.load_memory(actor)?;
+            let answer = relations::query(&memory, &proposition, request.budget.max_actions)?;
+            if matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED") {
+                relations::answer_dependencies(&answer)
+            } else {
+                Vec::new()
+            }
+        };
+        source_ids.sort();
+        source_ids.dedup();
+        let direct_input = DirectAtomicMeaningInput {
+            schema: DIRECT_ATOMIC_MEANING_KIND.into(),
+            purpose: "explain".into(),
+            proposition: proposition.clone(),
+            source_ids,
+        };
+        request.text = serde_json::to_string(&direct_input)?;
+        if request.text.is_empty() || request.text.len() > request.budget.max_input_bytes {
+            return Err(failure(
+                "INPUT_LIMIT",
+                "typed atomic meaning exceeds the request byte budget",
+            ));
+        }
+        let bundle = direct_atomic_meaning_bundle(&request, &direct_input)?;
+        self.execute_with_bundle(actor, request, Some(bundle))
+    }
+
     pub fn execute(&mut self, actor: &str, request: RequestEnvelope) -> Result<ResultRecord> {
-        let attempt = self.execute_inner(actor, request.clone());
+        self.execute_with_bundle(actor, request, None)
+    }
+
+    fn execute_with_bundle(
+        &mut self,
+        actor: &str,
+        request: RequestEnvelope,
+        direct_bundle: Option<InputBundle>,
+    ) -> Result<ResultRecord> {
+        let attempt = self.execute_inner(actor, request.clone(), direct_bundle);
         match attempt {
             Ok(value) => Ok(value),
             Err(error) => {
@@ -595,7 +693,12 @@ impl Engine {
             }
         }
     }
-    fn execute_inner(&mut self, actor: &str, request: RequestEnvelope) -> Result<ResultRecord> {
+    fn execute_inner(
+        &mut self,
+        actor: &str,
+        request: RequestEnvelope,
+        direct_bundle: Option<InputBundle>,
+    ) -> Result<ResultRecord> {
         if actor != request.actor_id || actor.is_empty() {
             return Ok(rejected(
                 &request,
@@ -663,7 +766,7 @@ impl Engine {
                 Lifecycle::Received | Lifecycle::Sealed | Lifecycle::Running | Lifecycle::Adopted
             )
         });
-        if pending {
+        if pending && direct_bundle.is_none() {
             let interpreted =
                 input::seal(&request, latest.as_ref().and_then(|s| s.result.as_ref()))?;
             if matches!(interpreted.meaning.intent, Intent::Cancel) {
@@ -695,6 +798,15 @@ impl Engine {
                 .iter()
                 .any(|a| matches!(a.phase, EffectPhase::Unknown | EffectPhase::Attempted))
         {
+            if direct_bundle.is_some() {
+                let mut r = rejected(
+                    &request,
+                    "EXTERNAL_EFFECT_UNKNOWN",
+                    "既存作用の結果が未確定です。同一identityを再照合するまで新しい実行を開始しません。",
+                );
+                r.lifecycle = Lifecycle::Suspend;
+                return Ok(r);
+            }
             let candidate = early_bundle.take().map_or_else(
                 || input::seal(&request, latest.as_ref().and_then(|s| s.result.as_ref())),
                 Ok,
@@ -762,7 +874,13 @@ impl Engine {
         };
         self.store.append_case(actor, &state)?;
         let started = Instant::now();
-        let sealed = early_bundle.map_or_else(|| input::seal(&request, previous), Ok);
+        let sealed = if let Some(bundle) = early_bundle {
+            Ok(bundle)
+        } else if let Some(bundle) = direct_bundle {
+            Ok(bundle)
+        } else {
+            input::seal(&request, previous)
+        };
         let bundle = match sealed {
             Ok(v) => v,
             Err(e) => {
@@ -4706,6 +4824,7 @@ impl Engine {
                 result.guarantee = answer.guarantee;
             }
             Intent::AskWhy { proposition } => {
+                let direct_input = direct_atomic_meaning_input(&bundle, proposition)?;
                 let memory = self.store.load_memory(actor)?;
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
                 let answer_dependencies = relations::answer_dependencies(&answer);
@@ -4737,6 +4856,19 @@ impl Engine {
                         );
                     }
                 }
+                if let Some(direct_input) = &direct_input {
+                    let mut actual_source_ids = answer_dependencies.clone();
+                    actual_source_ids.sort();
+                    actual_source_ids.dedup();
+                    if direct_input.source_ids != actual_source_ids {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "ATOMIC_MEANING_EVIDENCE_CHANGED",
+                            "内容生成前に根拠集合が変化しました。元の証拠参照を差し替えず保留します。",
+                        );
+                    }
+                }
                 let explanation_units =
                     relation_why_explanation_units(&memory, proposition, &answer)?;
                 approved_surfaces =
@@ -4744,6 +4876,19 @@ impl Engine {
                 units.extend(explanation_units);
                 result.dependencies = answer_dependencies;
                 result.guarantee = answer_guarantee;
+                if direct_input.is_some() {
+                    let Some(adopted_meaning) = relation_explanation_target(proposition, &answer)
+                    else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_PREMISES",
+                            "根拠付き説明を型付き意味として確定できません。",
+                        );
+                    };
+                    adopted_relation_meaning = Some(adopted_meaning);
+                    relation_proof_dependencies = Some(result.dependencies.clone());
+                }
             }
             Intent::InspectPremises { subject } => {
                 let memory = self.store.load_memory(actor)?;
@@ -5926,6 +6071,65 @@ impl Engine {
         Ok(result)
     }
 }
+
+fn direct_atomic_meaning_bundle(
+    request: &RequestEnvelope,
+    input: &DirectAtomicMeaningInput,
+) -> Result<InputBundle> {
+    let parser_version = DIRECT_ATOMIC_MEANING_PARSER;
+    let context_sha256 = identity(&None::<&ResultRecord>)?;
+    let raw_sha256 = digest(request.text.as_bytes());
+    let source_span = SourceSpan {
+        start: 0,
+        end: request.text.len(),
+        text: request.text.clone(),
+    };
+    let meaning = MeaningIR {
+        parser_version: parser_version.into(),
+        intent: Intent::AskWhy {
+            proposition: input.proposition.clone(),
+        },
+        spans: vec![source_span.clone()],
+        source_roles: BTreeMap::from([("atomic-meaning".into(), vec![source_span])]),
+        unresolved: Vec::new(),
+        source_kind: DIRECT_ATOMIC_MEANING_KIND.into(),
+        context_result_ref: None,
+    };
+    let fingerprint = identity(&(request, &raw_sha256, &context_sha256, parser_version))?;
+    let semantic_signature = identity(&meaning)?;
+    Ok(InputBundle {
+        request: request.clone(),
+        raw_sha256,
+        context_sha256,
+        fingerprint,
+        meaning,
+        semantic_signature,
+    })
+}
+
+fn direct_atomic_meaning_input(
+    bundle: &InputBundle,
+    proposition: &Proposition,
+) -> Result<Option<DirectAtomicMeaningInput>> {
+    if bundle.meaning.source_kind != DIRECT_ATOMIC_MEANING_KIND {
+        return Ok(None);
+    }
+    let input: DirectAtomicMeaningInput = serde_json::from_str(&bundle.request.text)?;
+    if input.schema != DIRECT_ATOMIC_MEANING_KIND
+        || input.purpose != "explain"
+        || input.proposition != *proposition
+        || input.source_ids.windows(2).any(|pair| pair[0] >= pair[1])
+        || serde_json::to_string(&input)? != bundle.request.text
+        || direct_atomic_meaning_bundle(&bundle.request, &input)? != *bundle
+    {
+        return Err(failure(
+            "ATOMIC_MEANING_SEAL_INVALID",
+            "typed atomic meaning, source references, or sealed bundle do not match",
+        ));
+    }
+    Ok(Some(input))
+}
+
 fn active_direct_premise_ids(memory: &MemoryState, proposition: &Proposition) -> Vec<String> {
     memory
         .facts

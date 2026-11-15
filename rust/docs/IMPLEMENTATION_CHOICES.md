@@ -50,6 +50,12 @@ A sparse context trie, beam decoder, grammar model or another non-neural archite
 
 This closes one bounded direct-Core construction observation only. Supplied evidence labels and proposition text remain unverified (`Guarantee::Unknown`); the API does not parse natural language, persist/adopt a `ContentPlan`, or connect to the normal user request route. R2-17 and A01–A03 remain `UNVERIFIED`; no cross-request learning or general language quality is established.
 
+### Atomic relation explanation through Core adoption — 2026-11-15
+
+`Engine::compose_atomic_explanation` adds a separate construction entry that accepts a typed `Proposition`, with no finished claim or explanation sentence; its `RequestEnvelope.text` must be empty. It resolves the current actor-memory proof IDs, seals the typed source as a direct Core input, and rechecks the same sorted proof IDs in the ordinary Core computation before producing text. The existing proof-derived explanation units and bounded `SequenceModel` then feed the existing `ContentPlan`, K7 adoption, renderer, and result lifecycle. A changed proof set suspends before content adoption. No natural-language input grammar changed.
+
+This first connected slice supports one grounded Japanese relation and the `explain` purpose. It does not yet compose multiple atomic relations, implement comparison/short composition from atoms, or expose this construction route through the ordinary CLI/HTTP user input. The implementation compiles, but this route has not yet been exercised with a fresh runtime case; `CORE-G03` therefore remains `PARTIAL`, and this batch is not gate-pass evidence.
+
 ## SQLite reference adapter and immutable blobs instead of an ad hoc state log
 
 The store uses SQLite with verified foreign keys, WAL, full synchronization, bounded lock waiting and explicit immediate transactions. Case revisions, input identity, action phases and event references have checked relationships. Content-addressed immutable blobs are written and flushed before their logical references commit. A pre-transaction published orphan is different from a committed revision pointing to a missing blob.
