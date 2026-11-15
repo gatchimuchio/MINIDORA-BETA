@@ -2,6 +2,8 @@
 
 This directory records the identity and availability of the public predecessor population. It does **not** certify semantic inheritance or Rust acceptance. AST declarations, file presence and matching hashes are metadata evidence only.
 
+The active 2026-11-15 Japanese-base Rust construction documents are indexed at [the construction register](construction/README.md); the effective set is [`MB-BUILD-20261115`](construction/MB-BUILD-20261115/README.md). Earlier construction packages and their observations remain historical evidence. This audit inventory is not a competing construction instruction or authority to advance past unpassed Core gates.
+
 The baseline is `gatchimuchio/MINIDORA-BETA` at `1c546e77007afa0a9eeb3a44f07da99d84c383eb`. The upstream extraction reference is `gatchimuchio/NOTNN-LLM-MINIDORA` at `9307d7e2b1799750ecef1957d85128fcbe403d02`. The original checkout, release manifest and historical checksums are unchanged.
 
 ## Observed population

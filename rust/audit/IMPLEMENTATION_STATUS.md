@@ -4,6 +4,15 @@ The current development identity is `0.7.0-alpha.8`, schema `minidora-rust/0.7.0
 
 **Full requested successor acceptance: not established.** This is an implementation inventory for ongoing work, not permission to exclude requirements, a release acceptance certificate, a deployment claim or independent third-party audit. The [93-row baseline requirements](requirements.tsv) remain baseline observations; actual successor evidence must be recorded separately. The [full implementation obligations](implementation-obligations.md) remain controlling for coverage.
 
+## 2026-11-15 現行施工へのゲート再判定（履歴は保持）
+
+- 現行施工3点セット＝[`MB-BUILD-20261115`／日本語基底R4](construction/MB-BUILD-20261115/README.md)。上位論理正本＝R2。統治＝ルート`AGENTS.md`。施工ゲート`CORE-G01`〜`CORE-G07`と既存R2要求`C01`〜`C13`は**別の識別子と別の受入対象**。B01〜B30の当時のコード・試験・判断・SHAは消去・改竄しない。以下は**今回の施工工程移行の判定**であって過去試験の結果変更ではない。
+- B12の`Engine::compose_typed_meaning`は既成の意味単位文面の順序・接続句を選ぶ限定構成であり、**初見原子的意味→新内容計画→新文面→通常中核K7採用**を示さない。`CORE-G03=PARTIAL`（2026-11-14基線HEAD `47106eca`の証拠による暫定）。
+- B14はR2が認める**証明保存型合成**の正規学習候補。既存規則の合成・別主体への適用・反例後の失効は局所観測済み。ただし同じ直接中核入口による学習前後の未見別問題の実比較、領域外例、後続矛盾を含むCORE-G05全述語の証拠は未成立として、`CORE-G05=PARTIAL`（同基線の暫定）。観測起点の仮説形成も別の経路として保持するが、二経路同時成立をCORE-G05の条件へ勝手に追加しない。
+- B16の「七つの直接観測を完了」は**CORE-G01〜CORE-G07の成立述語全件PASSではない**。他五ゲートの全述語のPASSも現時点で断定しない。B17〜B30の入力文法・原文span・履歴・テストは実績として保存するが、工程移行の根拠にはしない。
+- 施工の現在工程＝**中核K1〜K7の未成立箇所の是正とCORE-G01〜CORE-G07全件ゲート判定**。七件PASS前の入力機局所拡張、通常三機T01〜T03前の新専門能力拡張、躯体未完成での体系QC/QAへの移行を停止。旧ソースを消さず、中核→必要最小入力→必要最小出力→通常三機→全体系→QC→QAの順で実consumerを接続する。
+- ゲートの真値は次回施工開始時に**その時点のGit SHA・実コード・実入出力・版と契約**を再観測して更新する。今回の変更は施工文書の整合改訂であり、Rustコード変更・新しい実行試験・七ゲートPASS・全要件受入を主張しない。
+
 ## Implemented mechanisms and current evidence boundary
 
 | Mechanism | Actual implementation | What this establishes from source inspection | Remaining acceptance boundary |

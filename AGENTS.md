@@ -5,6 +5,7 @@
 ## 0. 命令の効力・対象同一性
 
 - `P0`: 適用される上位の安全・実行環境・権限規則。`P1`: 現在のユーザー原文指示と明示した作業許可。`P2`: 本書の作業統治・保持境界。`P3`: `docs/redesign/01_SYSTEM_SPECIFICATION.md`の**単独のR2論理アーキテクチャ正本**。`P4`: R2が参照する要求・検証・履歴の補助台帳および現行契約。`P5`: ユーザーが今回明示採用した実装仕様・工程・施工指示。`P6`: 観測したコード・試験・ログ・履歴。`P7`: 他リポジトリ・他者の手法・一般論。単純な上下置換はしない。`P2`は作業方法、`P3`は論理設計、`P4`は母集団・根拠、`P5`は採用済み施工の局所条件をそれぞれ管轄する。矛盾は対象・版・意味・責任・影響を特定し、権限のない改変を停止する。
+- `ACTIVE_CONSTRUCTION_20261115`: Rust後継の**唯一の現行施工3点セット**は`rust/audit/construction/MB-BUILD-20261115/01_施工仕様書.md`、`02_施工工程表.md`、`03_Codex施工指示書.md`（各識別子末尾`20261115-R4`、日本語基底）。必ず三文書を**一組**で参照・適用。R2は論理設計、本AGENTSは持続的統治、3点セットは現行施工仕様・工程・指示であり、相互の代替ではない。`MB-BUILD-20261113`／`MB-BUILD-20261114`とそのBUILD_BATCH・証拠は**当時の施工履歴**であって現行工程指示ではない。施工者が旧版を現行版と取り違えないよう、現在の採用版は本項と`rust/audit/construction/README.md`の索引から確認する。新たなユーザー原文指示があるときは当該許可・対象を再評価する。
 - 正本は**ユーザーの原文**。要約・引継ぎ・過去エージェントの回答・記憶は検索用補助であり、原文やGit現物を上書きしない。ユーザー指示の意味・事実主張の正否は別軸で独立監査する。指示／観測／証拠／推論／仮定／候補／未知／不採用を型として分ける。
 - `subject=MINIDORAの汎用言語・意味・判断・実行・記憶エンジン`。`purpose=入力→唯一Core→出力を接続し、目的を保持した実作用・意味操作・学習・停止・検証・帰還を成立させる`。`non_goal=単なるチャット画面、ニューラルLLMのラッパー、ベンチマーク専用正解生成、ファイル数・コミット数の最大化`。LLM機能はエンジンの一能力であって全体定義ではない。
 - `PRIORITY=安全性→堅牢性→監査可能性・操作者への明瞭性→契約と実経路の整合→機能の実接続→利便性`。この序列は必要な品質と実装工程の制御であり、製品の一部だけを完成とみなす根拠ではない。安全・秘密・停止・復旧は全工程で常時維持する。
@@ -15,13 +16,13 @@
 
 - `FROZEN_BETA`: `minidora-notnn==0.6.0b1`、元のPython実装・公開API・日本語識別子・テスト・保存形式・初期配布ZIP/wheel・`SOURCE_LOCK.md`・`REPOSITORY_LOCK.md`・`RELEASE_MANIFEST.json`・`checksums.sha256`・当時の受入証拠を不変の歴史基線として保持する。旧配布の証拠は新しいcheckout・wheel・Rustへの証明ではない。英語説明・`DOCS_REVISION.md`・`checksums.repo.sha256`は現行Git文書改訂の独立範囲。Git履歴に残る原文と旧判断を消さない。
 - `UPSTREAM`: 元リポ `NOTNN-LLM-MINIDORA` の抽出参照SHA `9307d7e2b1799750ecef1957d85128fcbe403d02`。read-only、既存コードを省略・推測再生成しない。元の414ソース、本ベータ追加2ソース、upstream359テスト経路、ベータ147経路、union360経路を別個に数える。313件の旧版選抜回帰はRustの合格記録ではない。
-- `SUCCESSOR`: 現行Rust開発領域は`rust/`。観測時の物理実装は`0.7.0-alpha.7`、`rust-toolchain.toml`はRust1.99.1、edition2024、`Cargo.lock`を保持。**これらは時点付き観測**であり毎タスク現物で再判定する。Rustは現時点で採用した**交換可能な施工媒体**であり、OS／CPU／データ表現への論理的依存を認めたことではない。将来AI-compiler等で実装・compilerを交換する際もR2の演算・状態・拒否・権限・効果・同一性を保持し、refinement／対照試験で示す。Rust採用を既存Python版の置換・正式リリース・全能力の成立と解釈しない。
+- `SUCCESSOR`: 現行Rust開発領域は`rust/`。2026-11-15の施工統治改訂時に確認した物理実装は`0.7.0-alpha.8`、`rust-toolchain.toml`はRust1.99.1、edition2024、`Cargo.lock`を保持。**これらは時点付き観測**であり毎タスク現物で再判定する。Rustは現時点で採用した**交換可能な施工媒体**であり、OS／CPU／データ表現への論理的依存を認めたことではない。将来AI-compiler等で実装・compilerを交換する際もR2の演算・状態・拒否・権限・効果・同一性を保持し、refinement／対照試験で示す。Rust採用を既存Python版の置換・正式リリース・全能力の成立と解釈しない。
 - `PUBLIC`: `PUBLICATION_BOUNDARY.md`を優先。公開可能＝コード、実際の外部入出力・契約・局所アルゴリズム・観測された失敗と試験範囲・合法な出所。禁止＝HDS非公開原理の完全定義・一意復元可能な要約・内部理論と実装の全対応表・非公開参照先・大量の変換済み意味データ・資格情報・個人情報・生の秘密ログ。研究リポの公開旧投影を現行HDS正本に昇格しない。外部文書・他repo・非公開ノートの内容を「参照したから」本public repoへ転載しない。作者・第三者帰属と許諾範囲を保持する。
 - `LANG`: 対象・意味・責任・因果・採否・監査は日本語で先に成立。Rust構文、外部API名、規格名、固定enum、既存互換フィールドは原表記。公開説明は英語で整備できるが訳は日本語意味を改変せず、英語を理論の独立正本へ昇格しない。翻訳は同一性検査であり、言語差を無言の仕様差にしない。
 
 ## 2. 毎回の観測・再同期
 
-- `START`: 独立タスク・セッション復帰・作業者変更時に、①今回のユーザー原文と許可範囲、②本AGENTS、③remote/mainのHEAD・working tree・別writer差分・未確定作用、④影響する正本と現行実装・契約・テスト、⑤要求ID・既存の観測結果・対応OS／環境・依存を確認。前回会話の完了報告だけで状態を確定しない。最初に`対象／目的／入力／実際のproducer→consumer／許可／安全境界／期待観測／停止条件`を短く固定する。
+- `START`: 独立タスク・セッション復帰・作業者変更時に、①今回のユーザー原文と許可範囲、②本AGENTSと現行`MB-BUILD-20261115`施工3点セット、③remote/mainのHEAD・working tree・別writer差分・未確定作用、④影響するR2正本・要件・現行実装・契約・テスト、⑤要求ID・既存の観測結果・対応OS／環境・依存を確認。前回会話の完了報告だけで状態を確定しない。最初に`対象／目的／入力／実際のproducer→consumer／許可／安全境界／期待観測／停止条件`を短く固定する。
 - `READ_SET`: 論理設計変更ではR2正本全文、`02_CAPABILITY_REGISTER.md`、`03_REQUIREMENT_TRACE.tsv`、`05_VERIFICATION_AND_EVIDENCE.md`、`06_LINEAGE_AND_DECISIONS.md`、`07_R1_AUDIT_CLOSURE.md`、`08_WIRE_SCHEMA.json`を関連範囲で突合。全数継承・欠落判定では`04_SOURCE_CENSUS.tsv`、`09_TEST_CENSUS.tsv`、`rust/audit/implementation-obligations.md`、`rust/audit/requirements.tsv`、`rust/audit/source_contract_reviews.tsv`、`rust/audit/IMPLEMENTATION_STATUS.md`を確認。Rust施工では`rust/README.md`、`rust/docs/IMPLEMENTATION_CHOICES.md`、`rust/docs/DEPENDENCIES.md`、`rust/audit/validation.json`、`rust/audit/target-conformance.json`、`rust/audit/runtime-requirements.json`と実際のCargo/code/testsを確認。凍結版については§1のロック、`BETA_READINESS.md`と互換入口を見る。本文書群のハッシュ・更新時刻も現物から再認識する。
 - `READ_HISTORY`: 過去の指示・旧版・Git差分・ベンチ・エラー原因は、現在の問いの成立に必要な部分へ遡る。旧結果・旧設定・固定SHA・「完了」発言を新しい現物へ無断転記しない。途中で不一致が出れば、誤った主語・前提・責任・経路・根因まで遡り、必要な上流の変更要求へ戻す。
 - `RE_SYNC`: 一気通貫BUILD内の小切れ目では今回の目的・関連の正本節・現物差分・次consumerだけを再同期する。毎回全文書・全試験・全Gitバックアップを再実行することは目的化しない。独立した設計版・作業範囲が切り替わった場合だけ読取集合を再拡張する。
@@ -39,9 +40,10 @@
 
 - `INPUT_MACHINE`: 外部原文・原バイト／span・出所・版・permission labelを受理し、正規化と意味差を分離し、入力版ごとに有限一回の型付き解釈とsealed `InputBundle/MeaningIR`を作る。対象変更・再解釈には新入力版と再sealを必要とする。独立した学習、Core state mutation、外部副作用、最終判断を禁止。
 - `CORE_SINGLE_WRITER`: MINIDORA Coreのみが`GoalContract`／要求目的／関係・推論／非ニューラル言語模型／memory／学習（記憶→推論→適応）／action schedule／内部採否／結果・履歴版／ユーザー目標最終`COMMIT`を所有。`case_id`ごとに単一論理writer、versioned CAS/merge。独立helper、provider、retrieval、CLI、HTTP、renderer、adapter、cache、過去承認の権限昇格・二重J・別の学習ループを禁止。
+- `CORE_K1_K7`: 中核はK1=主語/目的/条件/許可、K2=関係と根拠、K3=推論/仮説/採否、K4=非ニューラル新内容計画と文章生成、K5=記憶→推論→適応、K6=目標/実作用/停止、K7=内容採用/receipt照合/目標終端を**唯一の実計算主体の相互依存能力**として成立させる。K1〜K7は独立した七エンジンや七Rustモジュールの作成命令ではない。Rustの内部ファイル分割は許容するが判断主体・永続記憶・学習ループを分割しない。
 - `OUTPUT_MACHINE`: Coreが採用した内容版だけを実際の表示・媒体／artifactに変換し、明示許可された配送だけを行い、bytes/hash／render observation／effect receipt／不成立・不明をCoreへ返す。意味・目的・出所の変更、独自推論・再採用・secretの権限化・配送の自動化・goal success判定を禁止。
 - `PORT`: 能力は型付き入力、有限budget、明示した純粋計算／読取／書込作用、観測・失敗・evidenceを返す交換可能なadapter。既存責任機械を跨いで判断主体にならない。外部LLM・検索・翻訳・OS APIの有用性は機能局所で評価するが、MINIDORA Core自体の非ニューラル性・決定性・保証に無言で算入しない。
-- `LAYER0`: `TOKEN_SPACE／CONTEXT_STATE／PARAMETERIZED_TRANSFORM／CONDITIONAL_NEXT_TOKEN_DISTRIBUTION／SEQUENCE_OBJECTIVE／DECODING_IF`の六要素をCore内のネイティブ非ニューラル模型契約として保持。特定ngram・Rust crate・推定方式は物理実装選択であり原理規定ではない。学習＝保持→推論→適応が後続新規問題で実際にどう変わったかを観測し、事前用意の答え・モデル外の神託・正解漏えいを学習成果としない。
+- `LAYER0`: `TOKEN_SPACE／CONTEXT_STATE／PARAMETERIZED_TRANSFORM／CONDITIONAL_NEXT_TOKEN_DISTRIBUTION／SEQUENCE_OBJECTIVE／DECODING_IF`の六要素をCore内のネイティブ非ニューラル模型契約として保持。特定ngram・Rust crate・推定方式は物理実装選択であり原理規定ではない。**完成済み入力文の並べ替え・接続句付与だけを新内容生成と判定せず**、原子的命題/関係→Coreで新しい意味内容計画→新文面→K7採用→根拠照合を実証する。学習＝記憶→推論→適応。R2所定の**証明保存型の既存変換合成**と**観測起点の経験的仮説形成**を区別する。前者は型/条件/依存/証明を保存して新入力に適用可能、後者は事前の採用契約がなければ`HYPOTHESIS_RETAINED`止まり。どちらの正規経路も恣意的に除外せず、同一入口で学習前後・未見別問題・領域外例・後続失効を確認する。事前用意の答え・モデル外の神託・正解漏えいを学習成果としない。
 - `SEMANTICS`: 主語（省略復元は文脈が支持する場合だけ）、述語、目的語、条件の向き、否定、例外、数量、範囲、時制、帰属、仮説と観測を保持。source identityとclaim identity、外部情報を読んだ事実とその主張の真偽を分離。能力不足、曖昧、不正、未観測なら型付き拒否／保留と欠けた前提を返す。固定パターンの成功から一般日本語理解・無制限の生成を宣言しない。
 - `LIFECYCLE`: `RECEIVED→SEALED→RUNNING→ADOPTED→COMMIT`を標準正常候補とし、R2所定の`SUSPEND/REJECT/FAIL/CANCEL`遷移と版更新を保持。`COMMIT`は元Goalが要求する**実際に成立した**成果・レンダリング・外部効果のreceiptをCoreが確認した後のみ。`ADOPTED`は必要出力／配送の完成ではない。render `UNRENDERED/RENDERED/INVALIDATED/FAILED`、delivery `NOT_REQUESTED/PREPARED/ATTEMPTED/CONFIRMED/UNKNOWN/FAILED/CANCELLED`、旧`HDS終端`は別型・版付mapper。旧保存物を型の不一致なく暗黙上書きしない。
 - `EFFECT_LEDGER`: `PURE/READ/LOCAL_WRITE/EXTERNAL_WRITE/IRREVERSIBLE`を区分し、actor、target、operation、version、time、count、cost、egress、authorization、fingerprint、idempotency、reconcile keyを作用前に記録。`PROPOSED→AUTHORIZED→PREPARED→ATTEMPTED→CONFIRMED|FAILED|UNKNOWN|CANCELLED`。送信済みか不明なら`UNKNOWN`、同じ作用IDで証拠照合するまで再送・再採用・成功化しない。取消は将来作用を止め、既発行の効果を消し去らない。providerが保証しないremote exactly-onceを宣言しない。
@@ -59,17 +61,19 @@
 
 ## 6. 施工工程／QE→BUILD→QC→QA
 
+- `CORE_FIRST_GATE`: **中核を最初に構築**し、非判断性の工事用型付き入力・観測治具で`CORE-G01`=主語/条件、`CORE-G02`=関係/推論、`CORE-G03`=初見原子的意味からの新内容/文面生成とK7採用、`CORE-G04`=記憶/訂正後の後続消費、`CORE-G05`=R2準拠の学習前後の未見適応/領域外/失効、`CORE-G06`=停止/作用/目的未達、`CORE-G07`=同条件再現/版差原因を実証する。**`CORE-G01`〜`CORE-G07`は施工ゲート専用IDであり、R2の既存要求`C01`〜`C13`（検索/外部根拠）のID・受入母集団とは独立。**各ゲートは**結果の成功述語**であり、観測記録・テストPASS・機能数は代理にならない。判定は`PASS/PARTIAL/FAIL/NOT_RUN/BLOCKED_AUTHORITY/UNKNOWN`。**CORE-G01〜CORE-G07全件PASS前は入力機の新規増築工程に進行不可**。2026-11-14のB12（既成文章連結・K7未接続）のCORE-G03、B14（証明保存型規則合成・学習前後等の証拠未完）のCORE-G05はともに監査上`PARTIAL`。B16「七観測実施」は「七ゲートPASS」ではない。現行HEADで再観測して判定を更新し、旧B17〜B30の入力改修成果・歴史は破壊せず保全する。
+- `THREE_MACHINE_GATE`: 中核七件PASS後、入力機は中核への代表的な初見意味/学習追問/異常入力を封印して渡す必要最小範囲で閉じ、出力機はCore採用内容の実文字列/作用と描画・送達receiptをCoreへ返す必要最小範囲で閉じる。**通常利用者入口から**T01=初見意味から新文章の採用/実表示/receipt帰還、T02=学習前後の別問題への適応/実表示/矛盾後更新、T03=実出力/実作用の確認と未達/取消/不明作用時の正しい非COMMITを**全件PASS**させて三機接続と判定する。T01〜T03全件PASS前は新専門接続口の増築へ進まない。入力の文法網羅・全表記span・全媒体の仕上げは全要件施工に送る。何かを作成済みと示すことは中核/三機の成立証拠ではない。
 - `QE_DESIGN`: 全体仕様・要求母集団・否定例・責任・故障・必要な入力→出力→副作用の結合経路を先に決める。設計は過去の実装配置を理由に局所最適化しない。新しい設計判断が必要なら候補、反例、影響を提示しオーナーの採否へ接続。実装エージェントは採否未確定の原理や責任者変更を勝手に決めない。
 - `QE_BUILD`: **全系を一回接続して形状を成立**。入力機→Core→能力・記憶・効果port→出力機→実consumer→receipt→Coreによる閉包、正常／拒否／停止／回復の一仕事を縦断。既存機能を先に調べ、ソース数・schema数・モックPASS・個別部品の完成票を成果目的としない。個別タスクを一気通貫のproducer→consumerを伸ばす`BUILD_BATCH`へ束ねる。全要件を物理コードへ配置しただけの`BUILD_COVERED`をQAと呼ばない。
 - `QE_BUILD_GATES`: 小単位は構文・型・差分に影響する接続・限定smokeを行い、次consumerを記録。安全／権限／機密／外部書込／監査／復旧への変更だけは、その時点で必要な拒否・停止試験を実行。未成立の危険な経路は無効・隔離する。毎小単位に全suite/長時間試験/全QA票/Git世代回転を要求しない。契約に明記された既存必須ゲートを削除・恒久skipしない。
 - `QE_QC`: まず全体系の実装形状を成立させた後に、実物の正常・異常・相互作用・前提/値・資源・性能・権限・履歴・失敗・rollback・OS差・長期継続性を総合検査。発見した欠陥は局所でパッチして終わりにせず、原因が上流なら仕様・責任配置へ戻し、是正前後の同条件再試験。隠れていた設計母集団を縮小しない。
 - `QE_QA`: QCで得た同一版・同一条件の観測証拠を利用し、対象機能／OS／API／配布形態ごとの`QA_SCOPED/QA_NOT_ESTABLISHED/OUT_OF_SCOPE`を判定。release/公開/完全成功はQAとも別で、オーナーの独立GOが必要。既存歴史ベータと新RustのQAを混ぜない。
-- `ROUTE_STATUS`: `CODE_PRESENT/WIRED/BUILD_GAP/BLOCKED_AUTHORITY/SYSTEM_SHAPED/BUILD_COVERED`を区別。未実装は`UNVERIFIED`、未試験は`NOT_RUN`、失敗は`FAIL`。無根拠の`CLOSED/PASS/COMMIT/ready`は禁止。修正による価値を「次の実consumerがどこまで到達したか」で記録。品質保証は文書の完成度ではなく要求物の成立で判定。
+- `ROUTE_STATUS`: 現行工程状態は`CODE_PRESENT→CORE_WIRED→CORE_GATES_PASSED→THREE_MACHINE_WIRED→SYSTEM_SHAPED→QC_SCOPED_PASS→QA_SCOPED_RESULT→OWNER_RELEASE_DECISION`を**各段の成立述語付きで**独立判定。旧`WIRED/BUILD_GAP/BLOCKED_AUTHORITY/BUILD_COVERED`等は既存記録上の局所状態であって後段への自動昇格ではない。未実装は`UNVERIFIED`、未試験は`NOT_RUN`、失敗は`FAIL`。無根拠の`CLOSED/PASS/COMMIT/ready`は禁止。修正による価値を「次の実consumerがどこまで到達したか」で記録。品質保証は文書の完成度ではなく要求物の成立で判定。
 
 ## 7. Rust実装／品質検査の具体的境界
 
 - `RUST_STRUCTURE`: `rust/crates/minidora-domain`＝意味/記録/識別子、`rust/crates/minidora-engine`＝Coreと三機の実責務、`rust/apps/cli`＝薄い実consumer。ディレクトリ形状は実装事実、永続する論理所有権ではない。Core権限をCLI、HTTP、DB、出力、providerへ分岐させない。旧`src/` Pythonは凍結対象のまま。
-- `RUST_REPRO`: 使用版は毎回`rust/rust-toolchain.toml`、`rust/Cargo.toml`、`rust/Cargo.lock`を現物確認。Rust stable/edition/feature pinを暗黙更新しない。必要な場合のみ正当性・動作差・依存ライセンス・検証範囲・rollbackを明記。`cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --all-features --locked`、`cargo build --workspace --locked`は**Rust workspace内**で、必要な段階に応じ実行。テスト定義数と実行結果を区別し、実行環境・exit・版を記録。
+- `RUST_REPRO`: 使用版は毎回`rust/rust-toolchain.toml`、`rust/Cargo.toml`、`rust/Cargo.lock`を現物確認。Rust stable/edition/feature pinを暗黙更新しない。必要な場合のみ正当性・動作差・依存ライセンス・検証範囲・rollbackを明記。`cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --all-features --locked`、`cargo build --workspace --locked`は**Rust workspace内**で、**BUILDの小単位では変更接続の限定確認と必須安全ゲート、全体系躯体完成後のQCでは必要な総合検査**を選択実行する。全コマンドを毎`BUILD_BATCH`に反復する意味ではない。テスト定義数と実行結果を区別し、実行環境・exit・版を記録。
 - `RUST_ENV`: 一時build・試験state・依存cache・提供tokenを凍結`src/`やrelease manifestへ書かない。cloudの手順は`rust/tools/cloud-start.md`、`rust/docs/DEPENDENCIES.md`。そこで記載された`/workspace/...`は**特定クラウド環境の例示**で、Windows/macOSや別checkoutの必須条件ではない。対象OSで必要なnative toolchain/SQLite C/OpenSSL/proxy/CA/VFSが成立するかを個別確認。実機未観測は実機不合格とは混同せず`NOT_RUN`。
 - `PYTHON_BETA`: 旧版の限定受入は`python tools/beta_acceptance.py`（実行環境・依存の条件付き）。必要な場合は凍結ソースの外部sandbox copyで実施し、`src/`、lock、historical hashesに書かない。旧313ケースとRust134件等の時点付き観測を合算しない。
 - `PORT_SECURITY`: `read`/`write`/network/credentialは対象一致・許可・サイズ/時間予算・秘匿・正規化・リダイレクト・到達先・監査・unknown回復を境界ごとに検査。schemaや構造化済みinputだけを信頼しない。外部証拠の本文とproviderが要約したmetadataを分離。失敗したネットワーク到達をTLS無効化、proxy無視、権限昇格、別host経由の隠れたbypassで隠さない。
@@ -87,7 +91,7 @@
 
 ## 9. 終端出力／Codex作業報告
 
-`REPORT := {対象repo,base_HEAD,final_HEAD,work_type,owner_instruction_scope,changed_paths,product_goal,actual_route_changed,source_or_requirement_IDs,observed_evidence,executed_commands_and_exit,NOT_RUN_and_reason,version_and_environment,known_FAIL_or_SUSPEND,unmapped_or_missing_consumer,privacy_and_permission_check,release_scope,rollback_ref,publication_state,next_gate}`。値が取得できない欄は`UNKNOWN`、非該当なら`N/A`、実施していない場合は`NOT_RUN`。主張の粒度は証拠の粒度を超えない。`source present`、`test pass`、`normal route reached`、`scoped QA`、`owner release`を別々に記録。臨時のテスト成功、固定fixture、負例での正常停止から全能力完成を宣言しない。過去の失敗・未完を別の言葉へ言い換えて消さない。
+`REPORT := {対象repo,base_HEAD,final_HEAD,work_type,owner_instruction_scope,changed_paths,product_goal,actual_route_changed,source_or_requirement_IDs,observed_evidence,executed_commands_and_exit,NOT_RUN_and_reason,version_and_environment,known_FAIL_or_SUSPEND,unmapped_or_missing_consumer,privacy_and_permission_check,release_scope,rollback_ref,publication_state,next_gate}`。意味のある一施工束では取得済みの**必要値のみ**を記録し、未取得は`UNKNOWN`、非該当は`N/A`、未実施は`NOT_RUN`とする。毎束の全資産棚卸し・全テスト票・全環境測定を義務化しない。主張の粒度は証拠の粒度を超えない。`source present`、`test pass`、`normal route reached`、`scoped QA`、`owner release`を別々に記録。臨時のテスト成功、固定fixture、負例での正常停止から全能力完成を宣言しない。過去の失敗・未完を別の言葉へ言い換えて消さない。
 
 `STOP_RULE`: 必要な観測・監査を終えて残る不確実性が**今回の局所判断**を変えないときのみその局所単位を閉じる。未完成の要求母集団と研究上の未知は明示して継承。原理的可能性と実装の困難性、証明対象と現実対象、仕様成立と実製品完成を取り違えない。
 

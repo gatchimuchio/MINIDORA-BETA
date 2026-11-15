@@ -13,6 +13,7 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 | If you want to… | Read |
 |---|---|
 | Explore the **R2 logical successor design, rejected R1 audit and remaining source/evidence gates** | [Whole-system redesign register](docs/redesign/README.md) |
+| Follow the **current Japanese-base Rust construction contract** | [2026-11-15 three-document construction set](rust/audit/construction/MB-BUILD-20261115/README.md), [root agent governance](AGENTS.md) and [observed status](rust/audit/IMPLEMENTATION_STATUS.md) |
 | Understand the engine without reading Japanese | [English onboarding guide](docs/ENGLISH_ONBOARDING.md) |
 | See the public interface and Japanese-to-English API glossary | [API and terminology guide](docs/API_GUIDE.md) |
 | Check what passed, under what conditions | [Beta acceptance evidence](BETA_READINESS.md) |
@@ -20,16 +21,16 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 | Contribute without altering the baseline | [Contributing](CONTRIBUTING.md) and [Agent instructions](AGENTS.md) |
 | Review publication and licensing restrictions | [Publication boundary](PUBLICATION_BOUNDARY.md), [LICENSE](LICENSE), [NOTICE](NOTICE) |
 
-## Future architecture: comprehensive redesign (design only)
+## R2 logical design and separate Rust construction
 
-The next proposed MINIDORA generation has a **single normative logical architecture specification**, reconsidered from first principles across inherited public capabilities and emerging requirements. **R1 failed independent design review**; R2 addresses its 22 identified contract flaws. A requirement trace and source/file metadata census now accompany R2, but semantic routes, algorithm alternatives and full acceptance are **not yet closed**. The objective is one connected execution system, not a chatbot-only feature backlog or an assumption that the current module tree is final.
+The successor MINIDORA generation has a **single normative logical architecture specification**, reconsidered from first principles across inherited public capabilities and emerging requirements. **R1 failed independent design review**; R2 addresses its 22 identified contract flaws. A separately versioned **Rust development alpha** already exists under [`rust/`](rust/README.md), but its current components, scoped tests and historical BUILD observations **do not establish the seven Core construction gates, complete three-machine operation, or full successor acceptance**. The active Japanese-base [construction specification, schedule and Codex work order](rust/audit/construction/MB-BUILD-20261115/README.md) require the Core gates first, then the minimum input/output route, then the whole-system build, QC and QA. Prior 2026-11-13/14 sets and B01–B30 remain historical evidence. The objective is one connected execution system, not a chatbot-only feature backlog or an assumption that the current module tree is final.
 
 - [Unified engine specification R2](docs/redesign/01_SYSTEM_SPECIFICATION.md): three-machine responsibility, **OS/CPU/format-independent abstract execution semantics**, typed records, native non-neural language/relation/learning, logical durable revisions, actual rendering/effect receipts, and scope-limited deterministic replay. **Python, SQLite, JSON, model implementation and numeric resource targets are not logical necessities**.
 - [Provisional capability/gap register](docs/redesign/02_CAPABILITY_REGISTER.md), [93-item machine-readable trace](docs/redesign/03_REQUIREMENT_TRACE.tsv) and [414-source file census](docs/redesign/04_SOURCE_CENSUS.tsv): planned owners, exact source identity and explicit unknown actual routes/acceptance.
 - [Verification contract](docs/redesign/05_VERIFICATION_AND_EVIDENCE.md) and [historical decision record](docs/redesign/06_LINEAGE_AND_DECISIONS.md): keep observed baseline, old experiments, proposals and current results distinct.
 - [R1 audit correction ledger](docs/redesign/07_R1_AUDIT_CLOSURE.md) and [test-file census](docs/redesign/09_TEST_CENSUS.tsv): 22 named findings with correction/evidence separation and 359 upstream/147 beta test path identities.
 
-**This is a documentation-only design candidate**, not a change to the frozen `0.6.0b1` runtime or a claim that every listed ability is implemented or accepted. The upstream repository is used for read-only evidence and is not changed by this work. New executable behavior requires a new, independently evidenced version.
+**R2 remains a logical design contract**, not by itself a change to the frozen `0.6.0b1` runtime or a claim that every listed ability is implemented or accepted. The Rust alpha is an **independently evidenced, still incomplete implementation**, not the frozen beta distribution or an accepted release. The upstream repository is used for read-only evidence and is not changed by this work.
 
 ### Broader source capability inventory
 
