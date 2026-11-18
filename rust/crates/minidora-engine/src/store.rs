@@ -236,6 +236,21 @@ impl MemoryIndexSnapshot<'_, '_> {
         Ok(records.into_values().collect())
     }
 
+    /// Select active relation records whose indexed conclusion belongs to one
+    /// exact scope. Core filters mixed-scope Rules before using them as
+    /// comparison inventory seeds.
+    pub(crate) fn relation_scope_candidates(
+        &self,
+        scope: &str,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        self.select_records(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_scope WHERE actor_id=?1 AND valid=1 AND scope=?2 AND record_kind IN ('FACT','RULE') ORDER BY record_kind,ordinal LIMIT ?3",
+            params![self.actor, scope, memory_index_limit(max_records)?],
+            max_records,
+        )
+    }
+
     /// Select the subject-local records that can seed a saved relation profile.
     /// Variable-subject Rules remain eligible because Core binds them to the
     /// requested subject before evaluating their proof closure.
@@ -2240,6 +2255,8 @@ CREATE INDEX IF NOT EXISTS memory_index_relation_lookup
  ON memory_index_record(actor_id,valid,record_kind,predicate,scope,temporal_scope,condition_refs,subject,object);
 CREATE INDEX IF NOT EXISTS memory_index_common_subject_scope
  ON memory_index_record(actor_id,valid,scope,subject,record_kind);
+CREATE INDEX IF NOT EXISTS memory_index_scope
+ ON memory_index_record(actor_id,valid,scope,record_kind,ordinal);
 CREATE INDEX IF NOT EXISTS memory_index_profile_subject
  ON memory_index_record(actor_id,valid,subject,record_kind);
 CREATE INDEX IF NOT EXISTS memory_index_condition_evidence

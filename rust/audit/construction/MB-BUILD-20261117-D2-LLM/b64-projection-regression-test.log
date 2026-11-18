@@ -1,0 +1,14 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 8 tests
+test core::active_relation_projection_tests::indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory ... ok
+test core::active_relation_projection_tests::indexed_ask_projection_keeps_only_the_goal_and_condition_closure ... ok
+test core::active_relation_projection_tests::indexed_previous_relation_resolves_only_prior_dependencies_before_projection ... ok
+test core::active_relation_projection_tests::indexed_common_relations_use_bounded_subject_candidates_and_preserve_artifacts ... ok
+test core::active_relation_projection_tests::indexed_conjunction_projects_each_clause_within_the_shared_budget ... ok
+test core::active_relation_projection_tests::indexed_relation_comparison_selects_only_the_requested_scope_on_the_normal_route ... ok
+test core::active_relation_projection_tests::indexed_relation_object_query_uses_only_the_goal_and_rule_closure ... ok
+test core::active_relation_projection_tests::indexed_relation_profile_uses_bounded_subject_candidates_and_preserves_inventory ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 265 filtered out; finished in 3.16s

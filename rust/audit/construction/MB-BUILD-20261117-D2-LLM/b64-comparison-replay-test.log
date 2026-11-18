@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/core_atomic_relation_comparison_42.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_42-dc93a92e90ba2cde)
+
+running 1 test
+test overfull_rule_comparison_uses_legacy_report_and_replays_all_proofs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.14s
+
+     Running tests/core_atomic_relation_comparison_46.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_46-dfcd3800ee255f04)
+
+running 1 test
+test v4_saved_comparison_stops_after_rule_invalidation_while_v1_control_replays ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.19s
+
+     Running tests/core_atomic_relation_comparison_47.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_47-df5b29918f590b05)
+
+running 1 test
+test invalidating_one_actor_rule_does_not_change_another_actors_saved_v4_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.98s

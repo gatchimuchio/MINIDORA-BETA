@@ -1752,6 +1752,98 @@ pub(crate) fn active_relation_inventory_projection(
         }
     }
 
+    let (inventory, actions, _supporting_rules) =
+        active_relation_inventory_from_seeds(index, subject, max_actions, actions, seeds)?;
+    Ok((inventory, actions))
+}
+
+/// Build the comparison inventory from active relation records in the exact
+/// requested scope. Rules with any premise outside that scope are discarded,
+/// matching the snapshot comparison projection.
+pub(crate) fn active_scoped_relation_inventory_projection(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    scope: &str,
+    max_actions: u32,
+) -> Result<(RelationInventory, u32, Vec<RelationRule>)> {
+    if max_actions == 0 {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "relation-comparison projection budget must be positive",
+        ));
+    }
+
+    let mut actions = 1_u32;
+    let remaining = max_actions - actions;
+    let candidates =
+        index.relation_scope_candidates(scope, usize::try_from(remaining).unwrap_or(usize::MAX))?;
+    actions = actions
+        .checked_add(u32::try_from(candidates.len()).map_err(|_| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-comparison candidate count overflowed",
+            )
+        })?)
+        .ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-comparison candidate action count overflowed",
+            )
+        })?;
+
+    let mut facts = Vec::new();
+    let mut rules = Vec::new();
+    for candidate in candidates {
+        match candidate.value {
+            IndexedMemoryValue::Fact(fact) if fact.proposition.scope == scope => {
+                facts.push((candidate.ordinal, fact));
+            }
+            IndexedMemoryValue::Fact(_) => {}
+            IndexedMemoryValue::Rule(rule)
+                if rule.conclusion.scope == scope
+                    && rule.premise.scope == scope
+                    && rule
+                        .additional_premises
+                        .iter()
+                        .all(|premise| premise.scope == scope) =>
+            {
+                rules.push((candidate.ordinal, rule));
+            }
+            IndexedMemoryValue::Rule(_) => {}
+            IndexedMemoryValue::Condition(_) => {
+                return Err(failure(
+                    "MEMORY_INDEX_CORRUPT",
+                    "relation-scope candidate lookup returned a condition record",
+                ));
+            }
+        }
+    }
+    facts.sort_by_key(|(ordinal, _)| *ordinal);
+    rules.sort_by_key(|(ordinal, _)| *ordinal);
+    let seeds = MemoryState {
+        revision: index.revision(),
+        facts: facts.into_iter().map(|(_, fact)| fact).collect(),
+        rules: rules.into_iter().map(|(_, rule)| rule).collect(),
+        ..MemoryState::default()
+    };
+
+    active_relation_inventory_from_seeds(index, subject, max_actions, actions, seeds)
+}
+
+fn active_relation_inventory_from_seeds(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    max_actions: u32,
+    mut actions: u32,
+    seeds: MemoryState,
+) -> Result<(RelationInventory, u32, Vec<RelationRule>)> {
+    if actions > max_actions {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "relation candidate scan exceeds the sealed action budget",
+        ));
+    }
+
     let remaining = max_actions.checked_sub(actions).ok_or_else(|| {
         failure(
             "RELATION_BUDGET",
@@ -1780,6 +1872,7 @@ pub(crate) fn active_relation_inventory_projection(
 
     let mut dependencies = BTreeSet::new();
     let mut reported_facts = BTreeMap::new();
+    let mut supporting_rules = BTreeMap::new();
     let mut contested_fact_ids = BTreeSet::new();
     let mut has_conflict = false;
     let query_count = usize::try_from(query_count).unwrap_or(usize::MAX);
@@ -1802,6 +1895,9 @@ pub(crate) fn active_relation_inventory_projection(
 
         let (projected, projection_actions) =
             active_relation_projection(index, &shape, per_query_budget - 1)?;
+        for rule in &projected.rules {
+            supporting_rules.insert(rule.id.clone(), rule.clone());
+        }
         actions = actions.checked_add(projection_actions).ok_or_else(|| {
             failure(
                 "RELATION_BUDGET",
@@ -1888,6 +1984,7 @@ pub(crate) fn active_relation_inventory_projection(
             guarantee,
         },
         actions,
+        supporting_rules.into_values().collect(),
     ))
 }
 

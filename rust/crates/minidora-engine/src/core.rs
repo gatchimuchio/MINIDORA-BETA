@@ -603,6 +603,13 @@ pub(crate) struct RelationProfileAnswer {
     pub(crate) guarantee: Guarantee,
 }
 
+struct RelationComparisonInventories {
+    revision: u64,
+    inventory_a: Result<relations::RelationInventory>,
+    inventory_b: Result<relations::RelationInventory>,
+    comparison_rules: Vec<RelationRule>,
+}
+
 pub(crate) fn relation_profile_answer(
     memory: &MemoryState,
     subject: &str,
@@ -2205,19 +2212,21 @@ impl Engine {
         let (mut source_ids_a, mut source_ids_b) = if per_subject_actions == 0 {
             (Vec::new(), Vec::new())
         } else {
-            let memory = self.store.load_memory(actor)?;
-            let resolve_source_ids = |subject: &str| -> Result<Vec<String>> {
-                match relation_comparison_inventory(&memory, subject, scope, per_subject_actions) {
-                    Ok(inventory) => Ok(inventory.dependencies),
-                    Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
-                        Ok(Vec::new())
-                    }
-                    Err(error) => Err(error),
-                }
+            let inventories = self.active_relation_comparison_inventories(
+                actor,
+                subject_a,
+                subject_b,
+                scope,
+                per_subject_actions,
+            )?;
+            let resolve_source_ids = |result: Result<relations::RelationInventory>| match result {
+                Ok(inventory) => Ok(inventory.dependencies),
+                Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => Ok(Vec::new()),
+                Err(error) => Err(error),
             };
             (
-                resolve_source_ids(subject_a)?,
-                resolve_source_ids(subject_b)?,
+                resolve_source_ids(inventories.inventory_a)?,
+                resolve_source_ids(inventories.inventory_b)?,
             )
         };
         source_ids_a.sort();
@@ -2427,6 +2436,95 @@ impl Engine {
         // this request's immutable snapshot as its safe fallback.
         let inventory = relations::inventory_about(&memory, subject, max_actions);
         Ok((memory.revision, inventory))
+    }
+
+    fn indexed_relation_comparison_inventories(
+        &self,
+        actor: &str,
+        subject_a: &str,
+        subject_b: &str,
+        scope: &str,
+        per_subject_actions: u32,
+    ) -> Result<Option<RelationComparisonInventories>> {
+        self.store.with_relation_index(actor, |index| {
+            let indexed_a = relation_comparison_inventory_from_index(
+                index,
+                subject_a,
+                scope,
+                per_subject_actions,
+            );
+            let indexed_b = relation_comparison_inventory_from_index(
+                index,
+                subject_b,
+                scope,
+                per_subject_actions,
+            );
+            let mut comparison_rules = BTreeMap::new();
+            if let (Ok((_, rules_a)), Ok((_, rules_b))) = (&indexed_a, &indexed_b) {
+                for rule in rules_a.iter().chain(rules_b) {
+                    comparison_rules.insert(rule.id.clone(), rule.clone());
+                }
+            }
+            Ok(RelationComparisonInventories {
+                revision: index.revision(),
+                inventory_a: indexed_a.map(|(inventory, _rules)| inventory),
+                inventory_b: indexed_b.map(|(inventory, _rules)| inventory),
+                comparison_rules: comparison_rules.into_values().collect(),
+            })
+        })
+    }
+
+    fn active_relation_comparison_inventories(
+        &self,
+        actor: &str,
+        subject_a: &str,
+        subject_b: &str,
+        scope: &str,
+        per_subject_actions: u32,
+    ) -> Result<RelationComparisonInventories> {
+        if let Some(inventories) = self.indexed_relation_comparison_inventories(
+            actor,
+            subject_a,
+            subject_b,
+            scope,
+            per_subject_actions,
+        )? {
+            return Ok(inventories);
+        }
+
+        // Rebuild a cold or stale derived index once from the authenticated
+        // snapshot, then retry both subjects against one indexed revision.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(inventories) = self.indexed_relation_comparison_inventories(
+            actor,
+            subject_a,
+            subject_b,
+            scope,
+            per_subject_actions,
+        )? {
+            return Ok(inventories);
+        }
+
+        // A concurrent head advance preserves this request's immutable source
+        // snapshot as the safe fallback for both inventories.
+        let inventory_a =
+            relation_comparison_inventory(&memory, subject_a, scope, per_subject_actions);
+        let inventory_b =
+            relation_comparison_inventory(&memory, subject_b, scope, per_subject_actions);
+        let comparison_rules = match (&inventory_a, &inventory_b) {
+            (Ok(inventory_a), Ok(inventory_b)) => {
+                relation_comparison_supporting_rules(&memory.rules, inventory_a, inventory_b)
+            }
+            _ => Vec::new(),
+        };
+        Ok(RelationComparisonInventories {
+            revision: memory.revision,
+            inventory_a,
+            inventory_b,
+            comparison_rules,
+        })
     }
 
     fn active_conjunction_relation_queries(
@@ -5088,14 +5186,15 @@ impl Engine {
                             "左右の保存関係を再検証する推論予算が不足しています。",
                         );
                     }
-                    let memory = self.store.load_memory(actor)?;
-                    result.actor_memory_revision = Some(memory.revision);
-                    let inventory_a = match relation_comparison_inventory(
-                        &memory,
+                    let inventories = self.active_relation_comparison_inventories(
+                        actor,
                         &artifact.subject_a,
+                        &artifact.subject_b,
                         &artifact.scope,
                         per_subject_actions,
-                    ) {
+                    )?;
+                    result.actor_memory_revision = Some(inventories.revision);
+                    let inventory_a = match inventories.inventory_a {
                         Ok(value) => value,
                         Err(Error::Contract { code, message }) => {
                             let code = if code == "RELATION_BUDGET" {
@@ -5107,12 +5206,7 @@ impl Engine {
                         }
                         Err(error) => return Err(error),
                     };
-                    let inventory_b = match relation_comparison_inventory(
-                        &memory,
-                        &artifact.subject_b,
-                        &artifact.scope,
-                        per_subject_actions,
-                    ) {
+                    let inventory_b = match inventories.inventory_b {
                         Ok(value) => value,
                         Err(Error::Contract { code, message }) => {
                             let code = if code == "RELATION_BUDGET" {
@@ -5155,7 +5249,7 @@ impl Engine {
                                     &artifact.scope,
                                     &inventory_a,
                                     &inventory_b,
-                                    &memory.rules,
+                                    &inventories.comparison_rules,
                                     content_request.max_output_bytes,
                                 )?
                             }
@@ -5166,7 +5260,7 @@ impl Engine {
                                     &artifact.scope,
                                     &inventory_a,
                                     &inventory_b,
-                                    &memory.rules,
+                                    &inventories.comparison_rules,
                                     content_request.max_output_bytes,
                                 )?
                             }
@@ -6578,14 +6672,15 @@ impl Engine {
                 }
                 let direct_input =
                     direct_relation_comparison_input(&bundle, subject_a, subject_b, scope)?;
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
-                let inventory_a = match relation_comparison_inventory(
-                    &memory,
+                let inventories = self.active_relation_comparison_inventories(
+                    actor,
                     subject_a,
+                    subject_b,
                     scope,
                     per_subject_actions,
-                ) {
+                )?;
+                result.actor_memory_revision = Some(inventories.revision);
+                let inventory_a = match inventories.inventory_a {
                     Ok(value) => value,
                     Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
                         return self.stop(
@@ -6600,12 +6695,7 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 };
-                let inventory_b = match relation_comparison_inventory(
-                    &memory,
-                    subject_b,
-                    scope,
-                    per_subject_actions,
-                ) {
+                let inventory_b = match inventories.inventory_b {
                     Ok(value) => value,
                     Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
                         return self.stop(
@@ -6649,7 +6739,7 @@ impl Engine {
                 let mut comparison_units = vec![report.clone()];
                 let artifact_bytes;
                 let (content_request, content_kind) = relation_comparison_content_request(
-                    &memory,
+                    &inventories.comparison_rules,
                     subject_a,
                     subject_b,
                     scope,
@@ -10786,6 +10876,28 @@ fn relation_comparison_inventory(
     }
 }
 
+fn relation_comparison_inventory_from_index(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    scope: &str,
+    max_actions: u32,
+) -> Result<(relations::RelationInventory, Vec<RelationRule>)> {
+    match relations::active_scoped_relation_inventory_projection(index, subject, scope, max_actions)
+    {
+        Err(Error::Contract { code, .. }) if code == "MISSING_PREMISES" => Ok((
+            relations::RelationInventory {
+                facts: Vec::new(),
+                contested_fact_ids: BTreeSet::new(),
+                has_conflict: false,
+                dependencies: Vec::new(),
+                guarantee: Guarantee::Unknown,
+            },
+            Vec::new(),
+        )),
+        other => other.map(|(inventory, _actions, rules)| (inventory, rules)),
+    }
+}
+
 type RelationComparisonKey = (
     String,
     String,
@@ -10842,8 +10954,21 @@ fn relation_comparison_proof_ids(
         .collect()
 }
 
+fn relation_comparison_supporting_rules(
+    rules: &[RelationRule],
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+) -> Vec<RelationRule> {
+    let proof_ids = relation_comparison_proof_ids(inventory_a, inventory_b);
+    rules
+        .iter()
+        .filter(|rule| proof_ids.contains(&rule.id))
+        .cloned()
+        .collect()
+}
+
 fn relation_comparison_content_request(
-    memory: &MemoryState,
+    rules: &[RelationRule],
     subject_a: &str,
     subject_b: &str,
     scope: &str,
@@ -10852,8 +10977,7 @@ fn relation_comparison_content_request(
     max_output_bytes: usize,
 ) -> Result<(Option<language::MeaningCompositionRequest>, &'static str)> {
     let proof_ids = relation_comparison_proof_ids(inventory_a, inventory_b);
-    let comparison_rules = memory
-        .rules
+    let comparison_rules = rules
         .iter()
         .filter(|rule| proof_ids.contains(&rule.id))
         .cloned()
@@ -11499,7 +11623,7 @@ pub(crate) fn verify_relation_comparison_memory_result(
         ));
     }
     let (content_request, content_kind) = relation_comparison_content_request(
-        memory,
+        &memory.rules,
         replay.subject_a,
         replay.subject_b,
         replay.scope,
@@ -13336,6 +13460,138 @@ mod active_relation_projection_tests {
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated test store");
+    }
+
+    #[test]
+    fn indexed_relation_comparison_selects_only_the_requested_scope_on_the_normal_route() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-relation-comparison-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request =
+            RequestEnvelope::new("active-comparison-seed-case", "seed", "alice", "保存関係");
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register comparison source");
+
+        let mut full_memory = MemoryState::default();
+        let nera_shared = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "likes", "tea"),
+            &source_input,
+        )
+        .expect("Nera shared relation");
+        let nera_unique = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "owns", "boat"),
+            &source_input,
+        )
+        .expect("Nera one-sided relation");
+        let miko_shared = relations::assert_fact(
+            &mut full_memory,
+            proposition("Miko", "likes", "tea"),
+            &source_input,
+        )
+        .expect("Miko shared relation");
+        let miko_unique = relations::assert_fact(
+            &mut full_memory,
+            proposition("Miko", "owns", "cup"),
+            &source_input,
+        )
+        .expect("Miko one-sided relation");
+        for ordinal in 0..80 {
+            relations::assert_fact(
+                &mut full_memory,
+                Proposition {
+                    scope: format!("archive-{ordinal}"),
+                    ..proposition(
+                        &format!("unrelated-{ordinal}"),
+                        "is",
+                        &format!("unrelated-{ordinal}"),
+                    )
+                },
+                &source_input,
+            )
+            .expect("off-scope retained history");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let full_inventory_a = relation_comparison_inventory(&full_memory, "Nera", "lab", 10_000)
+            .expect("full-snapshot Nera comparison reference");
+        let full_inventory_b = relation_comparison_inventory(&full_memory, "Miko", "lab", 10_000)
+            .expect("full-snapshot Miko comparison reference");
+        assert!(matches!(
+            relation_comparison_inventory(&full_memory, "Nera", "lab", 64),
+            Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+        ));
+
+        let indexed = engine
+            .store
+            .with_relation_index("alice", |index| {
+                let candidates = index.relation_scope_candidates("lab", 8)?;
+                let candidate_ids = candidates
+                    .into_iter()
+                    .map(|record| record.value.id().to_owned())
+                    .collect::<BTreeSet<_>>();
+                let inventory_a =
+                    relation_comparison_inventory_from_index(index, "Nera", "lab", 64)?;
+                let inventory_b =
+                    relation_comparison_inventory_from_index(index, "Miko", "lab", 64)?;
+                Ok((index.revision(), candidate_ids, inventory_a, inventory_b))
+            })
+            .expect("read scoped relation index")
+            .expect("save_memory creates the current relation index");
+        assert_eq!(indexed.0, full_memory.revision);
+        assert_eq!(
+            indexed.1,
+            BTreeSet::from([
+                nera_shared.id.clone(),
+                nera_unique.id.clone(),
+                miko_shared.id.clone(),
+                miko_unique.id.clone(),
+            ])
+        );
+        assert_eq!(indexed.2.0, full_inventory_a);
+        assert_eq!(indexed.3.0, full_inventory_b);
+
+        // Force the typed Core comparison through its cold-index rebuild path.
+        let connection = rusqlite::Connection::open(directory.join("state.sqlite3"))
+            .expect("open derived index for cold-start setup");
+        connection
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .expect("mark actor index cold");
+        drop(connection);
+
+        let mut request =
+            RequestEnvelope::new("active-comparison-case", "compare-input", "alice", "");
+        request.budget.max_actions = 128;
+        let result = engine
+            .compose_atomic_relation_comparison("alice", request, "Nera", "Miko", "lab")
+            .expect("run ordinary typed comparison through Core");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.actor_memory_revision, Some(full_memory.revision));
+        let plan = result
+            .content_plan
+            .as_ref()
+            .expect("Core adopted the relation comparison");
+        assert!(plan.text.contains("likes"), "{}", plan.text);
+        assert!(plan.text.contains("owns"), "{}", plan.text);
+        assert!(result.dependencies.contains(&nera_shared.id));
+        assert!(result.dependencies.contains(&nera_unique.id));
+        assert!(result.dependencies.contains(&miko_shared.id));
+        assert!(result.dependencies.contains(&miko_unique.id));
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated comparison store");
     }
 }
 
