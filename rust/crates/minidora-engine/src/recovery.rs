@@ -7949,6 +7949,125 @@ mod tests {
     }
 
     #[test]
+    fn saved_previous_relation_explanation_rejects_missing_actor_memory_snapshot_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        assert_eq!(premise.lifecycle, Lifecycle::Commit, "{premise:?}");
+        let premise_id = premise.dependencies[0].clone();
+
+        let explicit_answer = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            explicit_answer.lifecycle,
+            Lifecycle::Commit,
+            "{explicit_answer:?}"
+        );
+        assert!(explicit_answer.dependencies.contains(&premise_id));
+
+        let mut prior_relation_request =
+            RequestEnvelope::new("case", "prior-relation-why", "alice", "なぜそれは鳥ですか");
+        prior_relation_request.budget.max_actions = 64;
+        let prior_relation = engine.execute("alice", prior_relation_request).unwrap();
+        assert_eq!(
+            prior_relation.lifecycle,
+            Lifecycle::Commit,
+            "{prior_relation:?}"
+        );
+        assert!(prior_relation.dependencies.contains(&premise_id));
+        let pinned_revision = prior_relation
+            .actor_memory_revision
+            .expect("the prior relation result records its actor-memory revision");
+        assert!(
+            engine
+                .store
+                .load_memory_revision("alice", pinned_revision)
+                .unwrap()
+                .is_some()
+        );
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation_request.budget.max_actions = 64;
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior_relation.text);
+
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let current_memory = engine.store.load_memory("alice").unwrap();
+        let missing_revision = current_memory
+            .revision
+            .checked_add(1)
+            .expect("the temporary fixture revision is in range");
+        assert!(
+            engine
+                .store
+                .load_memory_revision("alice", missing_revision)
+                .unwrap()
+                .is_none()
+        );
+
+        let mut missing_revision_pointer = retained.clone();
+        let previous = missing_revision_pointer
+            .prior_results
+            .get_mut(&prior_relation.id)
+            .expect("the retained case keeps its AskPreviousRelation result");
+        assert_eq!(previous.id, prior_relation.id);
+        assert_eq!(previous.input_id, prior_relation.input_id);
+        assert_eq!(previous.input_version, prior_relation.input_version);
+        assert_eq!(previous.actor_memory_revision, Some(pinned_revision));
+        previous.actor_memory_revision = Some(missing_revision);
+
+        let (_, prior_bundle) = engine
+            .store
+            .get_input_bundle("alice", "case", &previous.input_id, previous.input_version)
+            .unwrap()
+            .expect("the exact sealed prior input remains available");
+        assert_eq!(identity(&prior_bundle.request).unwrap(), previous.id);
+
+        let error = inspect(
+            &engine.store,
+            "alice",
+            &missing_revision_pointer,
+            &retained_result,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_MEMORY_REVISION_MISSING"),
+            "{error:?}"
+        );
+        assert_eq!(engine.latest("alice", "case").unwrap().unwrap(), retained);
+        assert_eq!(engine.store.load_memory("alice").unwrap(), current_memory);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
     fn conjunction_explanation_rechecks_the_current_memory_revision() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
