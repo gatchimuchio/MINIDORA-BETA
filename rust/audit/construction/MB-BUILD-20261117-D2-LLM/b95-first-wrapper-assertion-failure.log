@@ -1,0 +1,19 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.51s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+
+thread 'recovery::tests::common_relations_explanation_rejects_missing_actor_memory_snapshot_revision' (295691) panicked at crates/minidora-engine/src/recovery.rs:8810:9:
+Contract { code: "RECOVERY_MEMORY_REVISION_MISSING", message: "the actor-memory revision used by Core is no longer retained" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test recovery::tests::common_relations_explanation_rejects_missing_actor_memory_snapshot_revision ... FAILED
+
+failures:
+
+failures:
+    recovery::tests::common_relations_explanation_rejects_missing_actor_memory_snapshot_revision
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 288 filtered out; finished in 2.88s
+
+error: test failed, to rerun pass `-p minidora-engine --lib`
