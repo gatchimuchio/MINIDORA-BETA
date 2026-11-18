@@ -496,6 +496,39 @@ fn verify_common_relations_memory_result(
     Ok(())
 }
 
+fn verify_relation_profile_memory_result(
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Intent::DraftRelationProfile { subject } = &goal.intent else {
+        return Ok(());
+    };
+    let answer = crate::core::relation_profile_answer(
+        memory,
+        subject,
+        goal.budget.max_actions,
+        goal.budget.max_evidence_bytes,
+    )
+    .map_err(|error| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            format!("the retained relation profile cannot be replayed: {error}"),
+        )
+    })?;
+    if answer.dependencies != result.dependencies
+        || answer.guarantee != result.guarantee
+        || answer.units != plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained relation profile does not match its actor-memory revision",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_result_memory_provenance(
     store: &Store,
     actor: &str,
@@ -550,6 +583,9 @@ fn verify_result_memory_provenance(
         }
         Intent::AskCommonRelations { .. } => {
             verify_common_relations_memory_result(store, actor, case, &memory, result, plan, goal)?;
+        }
+        Intent::DraftRelationProfile { .. } => {
+            verify_relation_profile_memory_result(&memory, result, plan, goal)?;
         }
         Intent::InspectPremises { subject } => {
             let (dependencies, guarantee) =
@@ -1443,6 +1479,20 @@ fn inspect(
                 )
             })?;
     }
+    if matches!(goal.intent, Intent::DraftRelationProfile { .. })
+        && result.actor_memory_revision.is_some()
+    {
+        // Rebuild from the current actor memory separately from the exact
+        // snapshot replay above. Changed or invalidated profile evidence must
+        // stop recovery before the original file bytes are confirmed.
+        let memory = store.load_memory(actor)?;
+        verify_relation_profile_memory_result(&memory, result, plan, &goal).map_err(|error| {
+            failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                format!("the original relation-profile proof is no longer valid: {error}"),
+            )
+        })?;
+    }
     if matches!(goal.intent, Intent::AskConjunction { .. }) {
         // The original immutable snapshot was checked above. Before confirming
         // pending bytes, ensure the conjunction is still true of the current
@@ -1804,29 +1854,32 @@ fn inspect(
                     Some(language::relation_explanation_surfaces(&explanation_units))
                 }
                 (Intent::DraftRelationProfile { subject }, None) => {
-                    let memory = store.load_memory(actor)?;
-                    let inventory = crate::relations::inventory_about(
+                    let memory = match result_memory_snapshot(store, actor, result)? {
+                        Some(memory) => memory,
+                        None => store.load_memory(actor)?,
+                    };
+                    let answer = crate::core::relation_profile_answer(
                         &memory,
                         subject,
                         goal.budget.max_actions,
+                        goal.budget.max_evidence_bytes,
                     )
                     .map_err(|_| {
                         failure(
                             "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                            "the current actor-scoped relation inventory is unavailable",
+                            "the retained actor-scoped relation inventory is unavailable",
                         )
                     })?;
-                    let profile_units = crate::core::relation_profile_units(subject, &inventory);
-                    if inventory.dependencies != result.dependencies
-                        || result.guarantee != Guarantee::Hypothesis
-                        || profile_units != plan.required_units
+                    if answer.dependencies != result.dependencies
+                        || answer.guarantee != result.guarantee
+                        || answer.units != plan.required_units
                     {
                         return Err(failure(
                             "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                            "the current relation inventory differs from the adopted profile draft",
+                            "the retained relation inventory differs from the adopted profile draft",
                         ));
                     }
-                    Some(language::relation_profile_surfaces(&profile_units))
+                    Some(language::relation_profile_surfaces(&answer.units))
                 }
                 _ => None,
             };
@@ -3722,6 +3775,92 @@ mod tests {
                     "invalidate-common-relation",
                     "alice",
                     &format!("{mike_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn relation_profile_recovery_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let premise_id = premise.dependencies[0].clone();
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "relation-profile",
+            "alice",
+            "ココについて保存されている情報をもとに短い紹介文を書いて",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let profile = engine.execute("alice", request).unwrap();
+        assert_eq!(profile.lifecycle, Lifecycle::Commit);
+        assert_eq!(profile.guarantee, Guarantee::Hypothesis);
+        assert!(profile.text.contains("紹介文案"));
+        assert!(profile.dependencies.contains(&rule_id));
+        assert!(profile.dependencies.contains(&premise_id));
+        let memory_revision = profile
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the profile");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the profile's actor-memory revision is retained");
+        assert!(original_memory.rules.iter().any(|rule| rule.id == rule_id));
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == premise_id)
+        );
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate-profile-rule",
+                    "alice",
+                    &format!("{rule_id}を無効化して"),
                 ),
             )
             .unwrap();

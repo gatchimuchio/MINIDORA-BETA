@@ -375,6 +375,39 @@ pub(crate) fn relation_objects_answer(
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RelationProfileAnswer {
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) guarantee: Guarantee,
+}
+
+pub(crate) fn relation_profile_answer(
+    memory: &MemoryState,
+    subject: &str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+) -> Result<RelationProfileAnswer> {
+    let inventory = relations::inventory_about(memory, subject, max_actions)?;
+    let units = relation_profile_units(subject, &inventory);
+    let profile_bytes = units.iter().try_fold(0usize, |total, unit| {
+        total
+            .checked_add(unit.len())
+            .and_then(|size| size.checked_add(1))
+    });
+    if profile_bytes.is_none_or(|size| size > max_evidence_bytes) {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "根拠付き紹介文案が要求の証拠予算を超えています。",
+        ));
+    }
+    Ok(RelationProfileAnswer {
+        units,
+        dependencies: inventory.dependencies,
+        guarantee: Guarantee::Hypothesis,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CommonRelationsReportArtifact {
@@ -6022,12 +6055,14 @@ impl Engine {
             }
             Intent::DraftRelationProfile { subject } => {
                 let memory = self.store.load_memory(actor)?;
-                let inventory = match relations::inventory_about(
+                result.actor_memory_revision = Some(memory.revision);
+                let answer = match relation_profile_answer(
                     &memory,
                     subject,
                     request.budget.max_actions,
+                    request.budget.max_evidence_bytes,
                 ) {
-                    Ok(inventory) => inventory,
+                    Ok(answer) => answer,
                     Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
                         return self.stop(
                             &mut state,
@@ -6044,31 +6079,20 @@ impl Engine {
                             "この対象について紹介文の根拠にできる有効な保存記録がありません。",
                         );
                     }
+                    Err(Error::Contract { code, message }) if code == "RESOURCE_LIMIT" => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
                     Err(Error::Contract { code, message }) => {
                         return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
                     }
                     Err(error) => return Err(error),
                 };
-                let profile_units = relation_profile_units(subject, &inventory);
-                let profile_bytes = profile_units.iter().try_fold(0usize, |total, unit| {
-                    total
-                        .checked_add(unit.len())
-                        .and_then(|size| size.checked_add(1))
-                });
-                if profile_bytes.is_none_or(|size| size > request.budget.max_evidence_bytes) {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "根拠付き紹介文案が要求の証拠予算を超えています。",
-                    );
-                }
-                approved_surfaces = Some(language::relation_profile_surfaces(&profile_units));
-                units.extend(profile_units);
-                result.dependencies = inventory.dependencies;
+                approved_surfaces = Some(language::relation_profile_surfaces(&answer.units));
+                units.extend(answer.units);
+                result.dependencies = answer.dependencies;
                 // The proof lineage remains attached, while completeness and
                 // outside-world truth of a requested profile are unverified.
-                result.guarantee = Guarantee::Hypothesis;
+                result.guarantee = answer.guarantee;
             }
             Intent::Invalidate { id } => {
                 let mut memory = self.store.load_memory(actor)?;
