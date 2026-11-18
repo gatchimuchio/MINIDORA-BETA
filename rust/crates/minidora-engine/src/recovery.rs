@@ -266,6 +266,18 @@ fn verify_previous_relation_context(
     if previous.calculation.is_some() {
         return Ok(());
     }
+    if crate::core::previous_relation_profile_request(store, actor, case, previous)?.is_some() {
+        let memory = store.load_memory(actor)?;
+        return verify_explain_previous_relation_profile_memory_result(
+            store, state, &memory, previous, result, plan, goal,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!("the saved relation profile behind the explanation changed: {error}"),
+            )
+        });
+    }
     if crate::core::is_saved_relation_comparison_result(previous) {
         let memory = store.load_memory(actor)?;
         return verify_explain_previous_relation_comparison_memory_result(
@@ -1183,6 +1195,18 @@ fn verify_explain_previous_relation_memory_result(
             "the exact prior relation result is not a committed relation answer",
         ));
     }
+    if crate::core::previous_relation_profile_request(
+        store,
+        &state.actor_id,
+        &state.case_id,
+        previous,
+    )?
+    .is_some()
+    {
+        return verify_explain_previous_relation_profile_memory_result(
+            store, state, memory, previous, result, plan, goal,
+        );
+    }
     if crate::core::is_saved_relation_comparison_result(previous) {
         return verify_explain_previous_relation_comparison_memory_result(
             store, state, memory, previous, result, plan, goal,
@@ -1258,6 +1282,99 @@ fn verify_explain_previous_relation_memory_result(
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the prior-answer explanation does not match its actor-memory proof revision",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_explain_previous_relation_profile_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation-profile result reference is missing",
+            )
+        })?;
+    if previous.id != previous_id
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation-profile result is not committed",
+        ));
+    }
+    let previous_memory =
+        result_memory_snapshot(store, &state.actor_id, previous)?.ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_REVISION_MISSING",
+                "the original profile actor-memory revision is not retained",
+            )
+        })?;
+    let (subject, original_answer) = crate::core::relation_profile_result_from_memory(
+        store,
+        &state.actor_id,
+        &state.case_id,
+        previous,
+        &previous_memory,
+    )?;
+    let current_answer = crate::core::relation_profile_answer(
+        memory,
+        &subject,
+        goal.budget.max_actions,
+        goal.budget.max_evidence_bytes,
+    )
+    .map_err(|error| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            format!("the saved relation profile cannot be replayed in this memory: {error}"),
+        )
+    })?;
+    let previous_memory_revision = previous.actor_memory_revision.ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_REVISION_MISSING",
+            "the original profile actor-memory revision is missing",
+        )
+    })?;
+    let expected_units = crate::core::relation_profile_explanation_units(
+        &previous.id,
+        previous_memory_revision,
+        &current_answer,
+    );
+    let expected_dependencies = std::iter::once(previous.id.clone())
+        .chain(previous.dependencies.iter().cloned())
+        .collect::<Vec<_>>();
+    if current_answer != original_answer
+        || result.actor_memory_revision.is_none()
+        || result.dependencies != expected_dependencies
+        || result.guarantee != previous.guarantee
+        || result.guarantee != current_answer.guarantee
+        || result.calculation.is_some()
+        || plan.text != result.text
+        || plan.guarantee != result.guarantee
+        || plan.required_units != expected_units
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+        || expected_units.join("\n").len() > goal.budget.max_evidence_bytes
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation-profile explanation differs from its original or current proof",
         ));
     }
     Ok(())
@@ -1969,6 +2086,22 @@ fn inspect(
             .as_deref()
             .and_then(|id| state.prior_results.get(id))
             .is_some_and(crate::core::is_saved_relation_comparison_result);
+    let saved_relation_profile_explanation = if matches!(&goal.intent, Intent::ExplainPrevious) {
+        match bundle
+            .meaning
+            .context_result_ref
+            .as_deref()
+            .and_then(|id| state.prior_results.get(id))
+        {
+            Some(previous) => {
+                crate::core::previous_relation_profile_request(store, actor, case, previous)?
+                    .is_some()
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
     if plan.id != identity(&unsigned_plan)?
@@ -1988,7 +2121,8 @@ fn inspect(
                     | Intent::CompareRelationInventories { .. }
                     | Intent::DraftRelationProfile { .. }
             )
-            && !saved_comparison_explanation)
+            && !saved_comparison_explanation
+            && !saved_relation_profile_explanation)
         || !validate_render(plan, render)
     {
         return Err(failure(

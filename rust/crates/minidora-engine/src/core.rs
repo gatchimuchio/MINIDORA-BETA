@@ -534,6 +534,144 @@ pub(crate) fn relation_profile_answer(
     })
 }
 
+pub(crate) fn previous_relation_profile_request(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<(String, u32, usize)>> {
+    let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        return Ok(None);
+    };
+    let Intent::DraftRelationProfile { subject } = &prior_bundle.meaning.intent else {
+        return Ok(None);
+    };
+    if prior_bundle.request.actor_id != actor
+        || prior_bundle.request.case_id != case
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RELATION_PROFILE_CONTEXT_INVALID",
+            "the saved profile input and committed result identities differ",
+        ));
+    }
+    Ok(Some((
+        subject.clone(),
+        prior_bundle.request.budget.max_actions,
+        prior_bundle.request.budget.max_evidence_bytes,
+    )))
+}
+
+pub(crate) fn relation_profile_result_from_memory(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+) -> Result<(String, RelationProfileAnswer)> {
+    let Some((subject, max_actions, max_evidence_bytes)) =
+        previous_relation_profile_request(store, actor, case, previous)?
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior result is not a typed relation profile",
+        ));
+    };
+    if previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+        || previous.actor_memory_revision.is_none()
+        || previous.guarantee != Guarantee::Hypothesis
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation profile is not a pinned committed hypothesis",
+        ));
+    }
+    let answer = relation_profile_answer(memory, &subject, max_actions, max_evidence_bytes)?;
+    let plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation profile has no retained content plan",
+        )
+    })?;
+    let render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation profile has no retained render record",
+        )
+    })?;
+    let mut unsigned_plan = plan.clone();
+    unsigned_plan.id.clear();
+    if previous.id.is_empty()
+        || plan.id != identity(&unsigned_plan)?
+        || plan.text != previous.text
+        || plan.guarantee != previous.guarantee
+        || plan.required_units != answer.units
+        || plan.dependencies.get(..previous.dependencies.len())
+            != Some(previous.dependencies.as_slice())
+        || answer.dependencies != previous.dependencies
+        || answer.guarantee != previous.guarantee
+        || !validate_render(plan, render)
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved relation profile differs from its actor-memory revision",
+        ));
+    }
+    let plan_bytes = canonical(plan)?;
+    let render_bytes = canonical(render)?;
+    for (reference, expected) in [
+        (digest(&plan_bytes), plan_bytes),
+        (digest(&render_bytes), render_bytes),
+    ] {
+        match store.get_bytes_if_present(actor, case, &reference)? {
+            Some(stored) if stored == expected => {}
+            Some(_) => {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the saved relation profile plan or render differs from its artifact",
+                ));
+            }
+            None => {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the saved relation profile plan or render artifact is missing",
+                ));
+            }
+        }
+    }
+    Ok((subject, answer))
+}
+
+pub(crate) fn relation_profile_explanation_units(
+    previous_result_id: &str,
+    previous_memory_revision: u64,
+    answer: &RelationProfileAnswer,
+) -> Vec<String> {
+    let mut units = vec![format!(
+        "前回の保存済み紹介文案を説明します（結果ID: {previous_result_id}）。"
+    )];
+    units.push(format!(
+        "採用時のactor-memory revision {previous_memory_revision}から再計算し、本文・依存ID・保証を照合しました。"
+    ));
+    units.push("前回の紹介文案と根拠付き記述:".into());
+    units.extend(answer.units.iter().cloned());
+    units.push(format!(
+        "今回再確認した根拠依存ID: {}",
+        if answer.dependencies.is_empty() {
+            "なし".to_string()
+        } else {
+            answer.dependencies.join(", ")
+        }
+    ));
+    units.push(
+        "この草稿は同じ利用者の有効な保存記録に基づきます。現実世界の真偽や記録の網羅性は確認していません。".into(),
+    );
+    units
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CommonRelationsReportArtifact {
@@ -3709,6 +3847,25 @@ impl Engine {
                     } else {
                         None
                     };
+                let prior_relation_profile = if prior.calculation.is_none()
+                    && prior_relation.is_none()
+                    && prior_relation_objects.is_none()
+                {
+                    match previous_relation_profile_request(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        prior,
+                    ) {
+                        Ok(profile) => profile,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    None
+                };
                 if let Some(ref calculation) = prior.calculation {
                     units.push(format!("計算式: {}", calculation.expression));
                     units.extend(calculation.steps.clone());
@@ -3830,6 +3987,112 @@ impl Engine {
                             return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                         }
                     }
+                } else if let Some((subject, _, _)) = prior_relation_profile.as_ref() {
+                    if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_RELATION_PROFILE_CONTEXT",
+                            "説明対象として固定された直前の紹介文案がありません。",
+                        );
+                    }
+                    let Some(previous_memory_revision) = prior.actor_memory_revision else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_PROFILE_MEMORY_REVISION_MISSING",
+                            "前回の紹介文案に採用時のactor-memory revisionがありません。",
+                        );
+                    };
+                    let Some(original_memory) = self
+                        .store
+                        .load_memory_revision(actor, previous_memory_revision)?
+                    else {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_PROFILE_MEMORY_REVISION_MISSING",
+                            "前回の紹介文案が参照した記憶版を取得できません。",
+                        );
+                    };
+                    let (verified_subject, original_answer) =
+                        match relation_profile_result_from_memory(
+                            &self.store,
+                            actor,
+                            &request.case_id,
+                            prior,
+                            &original_memory,
+                        ) {
+                            Ok(value) => value,
+                            Err(Error::Contract { code, message }) => {
+                                return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                            }
+                            Err(error) => return Err(error),
+                        };
+                    if &verified_subject != subject {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RELATION_PROFILE_CONTEXT_INVALID",
+                            "前回入力の対象と紹介文案の対象が一致しません。",
+                        );
+                    }
+                    let current_memory = self.store.load_memory(actor)?;
+                    result.actor_memory_revision = Some(current_memory.revision);
+                    let current_answer = match relation_profile_answer(
+                        &current_memory,
+                        subject,
+                        request.budget.max_actions,
+                        request.budget.max_evidence_bytes,
+                    ) {
+                        Ok(answer) => answer,
+                        Err(Error::Contract { code, message })
+                            if code == "RELATION_BUDGET" || code == "RESOURCE_LIMIT" =>
+                        {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RESOURCE_LIMIT",
+                                &message,
+                            );
+                        }
+                        Err(Error::Contract { .. }) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTEXT_PROOF_CHANGED",
+                                "紹介文案の根拠を現在のactor memoryで再確認できません。",
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    if current_answer != original_answer {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "CONTEXT_PROOF_CHANGED",
+                            "紹介文案の内容または依存根拠が現在のactor memoryと一致しません。",
+                        );
+                    }
+                    let explanation = relation_profile_explanation_units(
+                        &prior.id,
+                        previous_memory_revision,
+                        &current_answer,
+                    );
+                    if explanation.join("\n").len() > request.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "紹介文案の説明が今回の証拠予算を超えています。",
+                        );
+                    }
+                    units.extend(explanation);
+                    result.dependencies = vec![prior.id.clone()];
+                    result
+                        .dependencies
+                        .extend(prior.dependencies.iter().cloned());
+                    result.guarantee = original_answer.guarantee;
                 } else if prior.text.starts_with(RELATION_COMPARISON_REPORT_HEADER)
                     || prior.text.starts_with(RELATION_COMPARISON_CONTENT_HEADER)
                 {
