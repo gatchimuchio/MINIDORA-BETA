@@ -1,0 +1,201 @@
+{
+  "schema": "MINIDORA_E1_W10_CONJUNCTION_RELATION_PROJECTION_B60_V1",
+  "work_item": "Goal-related bounded projection for ordinary Japanese AskConjunction Core route",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "5eb15653bff34c93162b3834257ca46068451b28",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "environment": {
+    "platform": "Linux x86_64",
+    "kernel": "Linux 6.18.57",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "tested_source_diff_sha256": "25d7b3a149e32feb6ebcb3ee0434decd81f538e4d3d56635389a065de35e19a8",
+  "scope": {
+    "route": "Engine::execute Intent::AskConjunction for ordinary Japanese two- or three-clause relation queries",
+    "selection": "Project each relation clause through the existing Store relation index within one revision-matched transaction, then pass clause evaluations to existing Core conjunction handling.",
+    "ownership": "Store supplies revision-checked derived records. Existing Core owns clause interpretation, condition/proof evaluation, stop behavior, answer construction and adoption; no new decision authority or parser grammar was added.",
+    "budget": "The request action allowance is divided among clauses; each clause shares its allowance across projection, proof evaluation and out-of-scope diagnosis.",
+    "memory_revision": "Committed answers and projection budget stops retain the actor-memory revision used by the indexed evaluations.",
+    "index_fallback": "A missing or stale index is rebuilt from the authenticated loaded current snapshot. That rebuild reads the full snapshot once; if a concurrent writer advances the head during rebuild, the immutable full-snapshot fallback remains.",
+    "recovery": "Existing Recovery replays the exact retained memory revision and checks current proof validity. B60 does not establish bounded selection for every Recovery or other Core/learning consumer."
+  },
+  "fixtures": {
+    "three_clause_projection": {
+      "stored_records": {
+        "facts": 76,
+        "rules": 1,
+        "conditions": 0
+      },
+      "unrelated_facts": 72,
+      "selected_per_clause": {
+        "mineral": {
+          "facts": 1,
+          "rules": 1,
+          "conditions": 0
+        },
+        "ore": {
+          "facts": 1,
+          "rules": 0,
+          "conditions": 0
+        },
+        "life": {
+          "facts": 1,
+          "rules": 0,
+          "conditions": 0
+        }
+      },
+      "normal_japanese_engine_route": true,
+      "proof_status_matches_full_snapshot": true,
+      "guarantee_matches_full_snapshot": true,
+      "dependency_ids_match_full_snapshot": true,
+      "unrelated_facts_in_dependencies": false
+    },
+    "out_of_scope_stop": {
+      "request": "[scope=lab]Neraは鉱物かつ希少ですか",
+      "lifecycle": "SUSPEND",
+      "reason_code": "OUT_OF_SCOPE",
+      "retains_out_of_scope_archive_fact": true,
+      "retains_first_clause_support_dependencies": true
+    },
+    "budget_stop": {
+      "action_budget": 4,
+      "clause_count": 2,
+      "per_clause_allowance": 2,
+      "lifecycle": "SUSPEND",
+      "reason_code": "RESOURCE_LIMIT",
+      "result_actor_memory_revision": 1
+    },
+    "recovery": {
+      "exact_memory_revision_survives_engine_reopen": true,
+      "invalidated_supporting_fact_prevents_old_answer_confirmation": true
+    }
+  },
+  "checks": [
+    {
+      "command": "cargo test -p minidora-engine --locked indexed_conjunction_projects_each_clause_within_the_shared_budget -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: 3-clause projection, full-snapshot parity, out-of-scope and budget stop",
+      "log": "b60-focused-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked conjunction_answer_recovery_pins_and_rechecks_its_memory_revision -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: exact revision replay after Engine reopen and stale-answer invalidation recheck",
+      "log": "b60-conjunction-recovery-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --test core_conjunctive_proof_55 --locked -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: existing conjunction proof integration",
+      "log": "b60-conjunctive-proof-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "exit_code": 0,
+      "result": "PASS: 269 unit tests, 37 integration cases across 33 harnesses, 0 doc tests",
+      "log": "b60-engine-tests.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b60-format.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b60-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b60-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "result": "BLOCKED by unchanged clippy::too_many_arguments in comparison test helpers _45 and _46",
+      "log": "b60-all-target-clippy.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b60-diff-check.log"
+    }
+  ],
+  "iteration_notes": [
+    {
+      "initial_attempt": "The initial max_actions=2 probe stopped at the scheduler minimum before reaching clause projection.",
+      "correction": "Retain the failure log and use max_actions=4 to exercise the projection budget stop.",
+      "log": "b60-focused-test-initial-failure.log"
+    },
+    {
+      "iteration": "The focused and full-suite logs for the prior two-clause fixture are retained as iteration evidence.",
+      "log": "b60-focused-test-two-clause-pass.log; b60-engine-tests-two-clause-baseline.log"
+    },
+    {
+      "iteration": "The fixture was expanded to three clauses; the final focused and full package suite were rerun.",
+      "log": "b60-focused-test.log; b60-engine-tests.log"
+    }
+  ],
+  "gate_assessment": {
+    "E1-W10": "PARTIAL: one ordinary AskConjunction bounded projection slice",
+    "CAP-D02": "UNVERIFIED: complete long-history acceptance predicate not established",
+    "E1_exit": "NOT_CLAIMED"
+  },
+  "asset_closure": {
+    "retained": [
+      "rust/crates/minidora-engine/src/core.rs"
+    ],
+    "stored": [
+      "BUILD_BATCH_60.md",
+      "b60-build-observation.json",
+      "CAP-D02 requirement trace, requirements inventory and implementation status updates",
+      "CAP-D02 machine-readable requirement observation update",
+      "B60 focused Core/Recovery/proof, full engine, format, workspace check, Clippy and diff-check logs",
+      "two-clause iteration logs and initial budget failure log"
+    ],
+    "active": [
+      "revision-matched clause projection in ordinary Core AskConjunction route",
+      "/workspace/.minidora-cloud/rust-target retained Rust build cache"
+    ],
+    "moved_to_trash": [],
+    "pending": [
+      "remaining E1-W10 consumers and broad CAP-D02 acceptance",
+      "cold-index rebuild full-snapshot read and concurrent-write fallback costs",
+      "large-history resource population and derived cache/model versioning",
+      "unchanged all-target Clippy argument-count findings in comparison test helpers _45 and _46"
+    ],
+    "tracked_path_inventory": {
+      "base_tracked_paths": 1114,
+      "base_paths_unchanged": 1109,
+      "retained_paths_including_updated_core": 1110,
+      "modified_audit_paths_stored": 4,
+      "new_batch_paths_stored": 15,
+      "stored_paths_total": 19,
+      "final_tracked_paths": 1129
+    }
+  },
+  "limitations": [
+    "Cold-index rebuild still reads the entire loaded current snapshot once.",
+    "A concurrent writer that advances the head during index rebuild uses the immutable full-snapshot fallback; B60 does not exercise this race.",
+    "B60 does not establish bounded selection for every Core, Recovery, relation-list, explanation, learning, cache, summary or model-adaptation consumer.",
+    "Broad fresh-process/session/model-revision reuse and large-history resource populations remain unverified.",
+    "All-target Clippy remains blocked by unchanged too_many_arguments findings in comparison test helpers _45 and _46.",
+    "Full CAP-D02 acceptance, E1 exit, release and deployment are not established."
+  ],
+  "release": "NOT_RELEASED"
+}

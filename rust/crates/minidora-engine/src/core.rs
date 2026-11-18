@@ -242,6 +242,98 @@ pub(crate) struct RelationObjectsReplay<'a> {
     pub(crate) max_evidence_bytes: usize,
 }
 
+struct RelationClauseEvaluation {
+    answer: relations::QueryOutcome,
+    out_of_scope_facts: Vec<Fact>,
+}
+
+struct ConjunctionRelationQueries {
+    memory_revision: u64,
+    outcomes: Result<Vec<RelationClauseEvaluation>>,
+}
+
+fn indexed_relation_evaluation(
+    index: &crate::store::MemoryIndexSnapshot<'_, '_>,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<(MemoryState, RelationClauseEvaluation)> {
+    let (mut memory, projection_actions) =
+        relations::active_relation_projection(index, proposition, max_actions)?;
+    let query_budget = max_actions.checked_sub(projection_actions).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "active memory projection exhausted the relation action budget",
+        )
+    })?;
+    let mut answer = relations::query(&memory, proposition, query_budget)?;
+    let mut actions = projection_actions
+        .checked_add(answer.steps)
+        .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+    let mut out_of_scope_facts = Vec::new();
+    if answer.status == "UNKNOWN"
+        && answer
+            .condition_status
+            .is_none_or(|status| status == ConditionStatus::True)
+    {
+        let classification_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "proof query exhausted the out-of-scope classification budget",
+            )
+        })?;
+        let (facts, classification_actions) =
+            relations::active_out_of_scope_facts(index, proposition, classification_budget)?;
+        memory.facts.extend(facts.iter().cloned());
+        out_of_scope_facts = facts;
+        actions = actions
+            .checked_add(classification_actions)
+            .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+    }
+    answer.steps = actions;
+    Ok((
+        memory,
+        RelationClauseEvaluation {
+            answer,
+            out_of_scope_facts,
+        },
+    ))
+}
+
+fn full_snapshot_relation_evaluation(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<RelationClauseEvaluation> {
+    let mut answer = relations::query(memory, proposition, max_actions)?;
+    let mut actions = answer.steps;
+    let out_of_scope_facts = if answer.status == "UNKNOWN"
+        && answer
+            .condition_status
+            .is_none_or(|status| status == ConditionStatus::True)
+    {
+        let classification_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "proof query exhausted the out-of-scope classification budget",
+            )
+        })?;
+        let facts =
+            relations::direct_out_of_scope_premises(memory, proposition, classification_budget)?;
+        let scanned_facts = u32::try_from(memory.facts.len()).unwrap_or(u32::MAX);
+        actions = actions
+            .checked_add(scanned_facts)
+            .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+        facts
+    } else {
+        Vec::new()
+    };
+    answer.steps = actions;
+    Ok(RelationClauseEvaluation {
+        answer,
+        out_of_scope_facts,
+    })
+}
+
 pub(crate) fn relation_objects_answer(
     memory: &MemoryState,
     subject: &str,
@@ -1889,41 +1981,68 @@ impl Engine {
         max_actions: u32,
     ) -> Result<Option<(MemoryState, relations::QueryOutcome)>> {
         self.store.with_relation_index(actor, |index| {
-            let (mut memory, projection_actions) =
-                relations::active_relation_projection(index, proposition, max_actions)?;
-            let query_budget = max_actions.checked_sub(projection_actions).ok_or_else(|| {
-                failure(
-                    "RELATION_BUDGET",
-                    "active memory projection exhausted the relation action budget",
-                )
-            })?;
-            let mut answer = relations::query(&memory, proposition, query_budget)?;
-            let mut actions = projection_actions
-                .checked_add(answer.steps)
-                .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
-            if answer.status == "UNKNOWN"
-                && answer
-                    .condition_status
-                    .is_none_or(|status| status == ConditionStatus::True)
-            {
-                let classification_budget = max_actions.checked_sub(actions).ok_or_else(|| {
-                    failure(
-                        "RELATION_BUDGET",
-                        "proof query exhausted the out-of-scope classification budget",
-                    )
-                })?;
-                let (facts, classification_actions) = relations::active_out_of_scope_facts(
-                    index,
-                    proposition,
-                    classification_budget,
-                )?;
-                memory.facts.extend(facts);
-                actions = actions.checked_add(classification_actions).ok_or_else(|| {
-                    failure("RELATION_BUDGET", "relation action count overflowed")
-                })?;
-            }
-            answer.steps = actions;
-            Ok((memory, answer))
+            let (memory, evaluation) =
+                indexed_relation_evaluation(index, proposition, max_actions)?;
+            Ok((memory, evaluation.answer))
+        })
+    }
+
+    fn indexed_conjunction_relation_queries(
+        &self,
+        actor: &str,
+        propositions: &[Proposition],
+        per_relation_budget: u32,
+    ) -> Result<Option<ConjunctionRelationQueries>> {
+        self.store.with_relation_index(actor, |index| {
+            let outcomes = propositions
+                .iter()
+                .map(|proposition| {
+                    indexed_relation_evaluation(index, proposition, per_relation_budget)
+                        .map(|(_, evaluation)| evaluation)
+                })
+                .collect();
+            Ok(ConjunctionRelationQueries {
+                memory_revision: index.revision(),
+                outcomes,
+            })
+        })
+    }
+
+    fn active_conjunction_relation_queries(
+        &self,
+        actor: &str,
+        propositions: &[Proposition],
+        per_relation_budget: u32,
+    ) -> Result<ConjunctionRelationQueries> {
+        if let Some(queries) =
+            self.indexed_conjunction_relation_queries(actor, propositions, per_relation_budget)?
+        {
+            return Ok(queries);
+        }
+
+        // Rebuild a cold or stale derived index from the authenticated current
+        // snapshot once, then retry all clauses against one indexed revision.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(queries) =
+            self.indexed_conjunction_relation_queries(actor, propositions, per_relation_budget)?
+        {
+            return Ok(queries);
+        }
+
+        // A concurrent writer may advance the head during rebuild. Keep the
+        // loaded immutable snapshot as the safe, bounded fallback for all
+        // clauses in this request.
+        let outcomes = propositions
+            .iter()
+            .map(|proposition| {
+                full_snapshot_relation_evaluation(&memory, proposition, per_relation_budget)
+            })
+            .collect();
+        Ok(ConjunctionRelationQueries {
+            memory_revision: memory.revision,
+            outcomes,
         })
     }
 
@@ -5926,14 +6045,31 @@ impl Engine {
                         "すべての関係を確認するための推論予算が不足しています。",
                     );
                 }
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
+                let queries = self.active_conjunction_relation_queries(
+                    actor,
+                    propositions,
+                    per_relation_budget,
+                )?;
+                result.actor_memory_revision = Some(queries.memory_revision);
+                state.result = Some(result.clone());
+                let evaluations = match queries.outcomes {
+                    Ok(evaluations) => evaluations,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
                 let mut dependencies = BTreeSet::new();
                 let mut all_supported = true;
                 let mut any_derived = false;
                 let mut conclusions = Vec::with_capacity(propositions.len());
-                for proposition in propositions {
-                    let answer = relations::query(&memory, proposition, per_relation_budget)?;
+                for (proposition, evaluation) in propositions.iter().zip(evaluations) {
+                    let answer = evaluation.answer;
                     retain_relation_answer_dependencies(&mut result, &answer);
                     state.result = Some(result.clone());
                     if let Some((lifecycle, code, message)) = condition_block(&answer) {
@@ -5972,12 +6108,11 @@ impl Engine {
                             result.dependencies.sort();
                             result.dependencies.dedup();
                             state.result = Some(result.clone());
-                            return self.stop_unresolved_relation(
+                            return self.stop_unresolved_relation_with_facts(
                                 &mut state,
                                 &mut result,
-                                &memory,
                                 proposition,
-                                request.budget.max_actions,
+                                &evaluation.out_of_scope_facts,
                                 &format!(
                                     "範囲「{}」の「{}」を判定する有効な前提または導出経路がありません。",
                                     proposition.scope,
@@ -7950,6 +8085,23 @@ impl Engine {
                 }
                 Err(error) => return Err(error),
             };
+        self.stop_unresolved_relation_with_facts(
+            state,
+            result,
+            proposition,
+            &out_of_scope,
+            missing_message,
+        )
+    }
+
+    fn stop_unresolved_relation_with_facts(
+        &self,
+        state: &mut CaseRevision,
+        result: &mut ResultRecord,
+        proposition: &Proposition,
+        out_of_scope: &[Fact],
+        missing_message: &str,
+    ) -> Result<ResultRecord> {
         if out_of_scope.is_empty() {
             return self.stop(
                 state,
@@ -11721,6 +11873,238 @@ mod active_relation_projection_tests {
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated test store");
+    }
+
+    #[test]
+    fn indexed_conjunction_projects_each_clause_within_the_shared_budget() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-conjunction-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request = RequestEnvelope::new(
+            "active-conjunction-seed-case",
+            "active-conjunction-seed-input",
+            "alice",
+            "保存関係",
+        );
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register relation source");
+
+        let mut full_memory = MemoryState::default();
+        let direct_ore = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "鉱石"),
+            &source_input,
+        )
+        .expect("direct conjunction premise");
+        let direct_life = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "生物"),
+            &source_input,
+        )
+        .expect("third direct conjunction premise");
+        let rock = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "岩石"),
+            &source_input,
+        )
+        .expect("premise for the derived conjunction clause");
+        let mineral_rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "is", "岩石"),
+            proposition("$subject", "is", "鉱物"),
+            &source_input,
+        )
+        .expect("rule for the derived conjunction clause");
+        let mut out_of_scope_rare = proposition("Nera", "is", "希少");
+        out_of_scope_rare.scope = "archive".into();
+        let rare = relations::assert_fact(&mut full_memory, out_of_scope_rare, &source_input)
+            .expect("out-of-scope diagnostic premise");
+        for ordinal in 0..72 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(
+                    &format!("unrelated-{ordinal}"),
+                    "is",
+                    &format!("unrelated-{ordinal}"),
+                ),
+                &source_input,
+            )
+            .expect("unrelated retained history");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let mineral = proposition("Nera", "is", "鉱物");
+        let ore = proposition("Nera", "is", "鉱石");
+        let life = proposition("Nera", "is", "生物");
+        let per_relation_budget = 16;
+        let (
+            mineral_projection,
+            mineral_projection_actions,
+            ore_projection,
+            ore_projection_actions,
+            life_projection,
+            life_projection_actions,
+        ) = engine
+            .store
+            .with_relation_index("alice", |index| {
+                let (mineral_memory, mineral_actions) =
+                    relations::active_relation_projection(index, &mineral, per_relation_budget)?;
+                let (ore_memory, ore_actions) =
+                    relations::active_relation_projection(index, &ore, per_relation_budget)?;
+                let (life_memory, life_actions) =
+                    relations::active_relation_projection(index, &life, per_relation_budget)?;
+                Ok((
+                    mineral_memory,
+                    mineral_actions,
+                    ore_memory,
+                    ore_actions,
+                    life_memory,
+                    life_actions,
+                ))
+            })
+            .expect("read one revision-matched relation index")
+            .expect("save_memory creates the current relation index");
+        assert_eq!(mineral_projection.revision, full_memory.revision);
+        assert_eq!(ore_projection.revision, full_memory.revision);
+        assert_eq!(life_projection.revision, full_memory.revision);
+        assert_eq!(mineral_projection.facts.len(), 1);
+        assert_eq!(mineral_projection.rules.len(), 1);
+        assert_eq!(ore_projection.facts.len(), 1);
+        assert!(ore_projection.rules.is_empty());
+        assert_eq!(life_projection.facts.len(), 1);
+        assert!(life_projection.rules.is_empty());
+        assert!(mineral_projection_actions < per_relation_budget);
+        assert!(ore_projection_actions < per_relation_budget);
+        assert!(life_projection_actions < per_relation_budget);
+        assert!(
+            mineral_projection
+                .facts
+                .iter()
+                .all(|fact| fact.id == rock.id)
+        );
+        assert!(
+            mineral_projection
+                .rules
+                .iter()
+                .all(|rule| rule.id == mineral_rule.id)
+        );
+        assert!(
+            ore_projection
+                .facts
+                .iter()
+                .all(|fact| fact.id == direct_ore.id)
+        );
+        assert!(
+            life_projection
+                .facts
+                .iter()
+                .all(|fact| fact.id == direct_life.id)
+        );
+
+        let full_mineral = relations::query(&full_memory, &mineral, per_relation_budget)
+            .expect("full-snapshot mineral reference");
+        let full_ore = relations::query(&full_memory, &ore, per_relation_budget)
+            .expect("full-snapshot ore reference");
+        let full_life = relations::query(&full_memory, &life, per_relation_budget)
+            .expect("full-snapshot life reference");
+        assert_eq!(full_mineral.status, "SUPPORTED");
+        assert_eq!(full_ore.status, "SUPPORTED");
+        assert_eq!(full_life.status, "SUPPORTED");
+
+        let mut request = RequestEnvelope::new(
+            "active-conjunction-query-case",
+            "active-conjunction-query-input",
+            "alice",
+            "[scope=lab]Neraは鉱物かつ鉱石かつ生物ですか",
+        );
+        request.budget.max_actions = per_relation_budget * 3;
+        let result = engine
+            .execute("alice", request)
+            .expect("run a normal Japanese AskConjunction through Core");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.actor_memory_revision, Some(full_memory.revision));
+        assert_eq!(result.guarantee, Guarantee::Derived);
+        let mut full_dependencies = relations::answer_dependencies(&full_mineral);
+        full_dependencies.extend(relations::answer_dependencies(&full_ore));
+        full_dependencies.extend(relations::answer_dependencies(&full_life));
+        full_dependencies.sort();
+        full_dependencies.dedup();
+        assert_eq!(result.dependencies, full_dependencies);
+        assert!(result.dependencies.contains(&rock.id));
+        assert!(result.dependencies.contains(&mineral_rule.id));
+        assert!(result.dependencies.contains(&direct_ore.id));
+        assert!(result.dependencies.contains(&direct_life.id));
+        assert!(
+            !result
+                .dependencies
+                .iter()
+                .any(|id| id.contains("unrelated"))
+        );
+
+        let mut out_of_scope_request = RequestEnvelope::new(
+            "active-conjunction-out-of-scope-case",
+            "active-conjunction-out-of-scope-input",
+            "alice",
+            "[scope=lab]Neraは鉱物かつ希少ですか",
+        );
+        out_of_scope_request.budget.max_actions = per_relation_budget * 2;
+        let out_of_scope = engine
+            .execute("alice", out_of_scope_request)
+            .expect("classify one unresolved clause from the same indexed revision");
+        assert_eq!(
+            out_of_scope.lifecycle,
+            Lifecycle::Suspend,
+            "{out_of_scope:?}"
+        );
+        assert_eq!(
+            out_of_scope.actor_memory_revision,
+            Some(full_memory.revision)
+        );
+        assert!(
+            out_of_scope
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("OUT_OF_SCOPE:"))
+        );
+        assert!(out_of_scope.dependencies.contains(&rare.id));
+        assert!(out_of_scope.dependencies.contains(&rock.id));
+        assert!(out_of_scope.dependencies.contains(&mineral_rule.id));
+
+        let mut budget_request = RequestEnvelope::new(
+            "active-conjunction-budget-case",
+            "active-conjunction-budget-input",
+            "alice",
+            "[scope=lab]Neraは鉱物かつ鉱石ですか",
+        );
+        budget_request.budget.max_actions = 4;
+        let budget_stop = engine
+            .execute("alice", budget_request)
+            .expect("suspend when each clause cannot fit the shared budget");
+        assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
+        assert_eq!(
+            budget_stop.actor_memory_revision,
+            Some(full_memory.revision)
+        );
+        assert!(
+            budget_stop
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("RESOURCE_LIMIT:"))
+        );
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated conjunction store");
     }
 
     #[test]
