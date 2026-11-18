@@ -3893,6 +3893,68 @@ fn natural_relation_profile_uses_current_proofs_and_feeds_a_follow_up_consumer()
 }
 
 #[test]
+fn natural_relation_profile_explanation_replays_the_prior_result_in_the_cli() {
+    let scratch = Scratch::new();
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "profile-explanation-rule",
+            "もしXは鳥ならXは動物",
+        ],
+    ));
+    let premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "profile-explanation-premise", "ココは鳥"],
+    ));
+    let profile = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "profile-explanation-source",
+            "ココについて保存されている情報をもとに短い紹介文を書いて",
+        ],
+    ));
+    assert_eq!(profile["lifecycle"], "COMMIT");
+    assert_eq!(profile["guarantee"], "HYPOTHESIS");
+
+    let explanation = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "profile-explanation-follow-up", "詳しく説明して"],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    let explanation_text = explanation["text"].as_str().unwrap();
+    for marker in [
+        "前回の保存済み紹介文案を説明します",
+        profile["id"].as_str().unwrap(),
+        "会話で提示された前提は「ココは鳥である」",
+        "保存された規則による導出は「ココは動物である」",
+        "現実世界の真偽や記録の網羅性は確認していません",
+    ] {
+        assert!(explanation_text.contains(marker), "missing {marker:?}");
+    }
+    for dependency in [
+        profile["id"].as_str().unwrap(),
+        rule["dependencies"][0].as_str().unwrap(),
+        premise["dependencies"][0].as_str().unwrap(),
+    ] {
+        assert!(
+            explanation["dependencies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str() == Some(dependency)),
+            "missing dependency {dependency}"
+        );
+    }
+}
+
+#[test]
 fn natural_premise_correction_invalidates_only_exact_scope_and_dependents() {
     let scratch = Scratch::new();
     let mammal = record(&execute(

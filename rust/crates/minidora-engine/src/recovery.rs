@@ -5374,6 +5374,111 @@ mod tests {
     }
 
     #[test]
+    fn relation_profile_explanation_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let premise_id = premise.dependencies[0].clone();
+
+        let mut profile_request = RequestEnvelope::new(
+            "case",
+            "relation-profile",
+            "alice",
+            "ココについて保存されている情報をもとに短い紹介文を書いて",
+        );
+        profile_request.output_path = Some(fixture.target.clone());
+        profile_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let profile = engine.execute("alice", profile_request).unwrap();
+        assert_eq!(profile.lifecycle, Lifecycle::Commit);
+        assert_eq!(profile.guarantee, Guarantee::Hypothesis);
+        let profile_memory_revision = profile
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the profile");
+
+        let explanation_target = fixture.target.with_file_name("profile-explanation.txt");
+        let mut explanation_request =
+            RequestEnvelope::new("case", "profile-explanation", "alice", "詳しく説明して");
+        explanation_request.output_path = Some(explanation_target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(explanation_target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.guarantee, Guarantee::Hypothesis);
+        assert_eq!(
+            explanation.actor_memory_revision,
+            Some(profile_memory_revision)
+        );
+        for marker in [
+            "前回の保存済み紹介文案を説明します",
+            profile.id.as_str(),
+            "会話で提示された前提は「ココは鳥である」",
+            "保存された規則による導出は「ココは動物である」",
+            "現実世界の真偽や記録の網羅性は確認していません",
+        ] {
+            assert!(explanation.text.contains(marker), "missing {marker:?}");
+        }
+        let mut expected_dependencies = vec![profile.id.clone()];
+        expected_dependencies.extend(profile.dependencies.iter().cloned());
+        assert_eq!(explanation.dependencies, expected_dependencies);
+        assert!(explanation.dependencies.contains(&rule_id));
+        assert!(explanation.dependencies.contains(&premise_id));
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert!(matches!(
+            retained.bundle.as_ref().unwrap().meaning.intent,
+            Intent::ExplainPrevious
+        ));
+        inspect(&engine.store, "alice", &retained, &retained_result)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let explanation_bytes = fs::read(&explanation_target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert!(
+            engine
+                .store
+                .load_memory_revision("alice", profile_memory_revision)
+                .unwrap()
+                .is_some()
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-profile-explanation-rule",
+                    "alice",
+                    &format!("{rule_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert_eq!(fs::read(&explanation_target).unwrap(), explanation_bytes);
+    }
+
+    #[test]
     fn interrupted_actual_write_reconciles_same_identity_without_resending() {
         let fixture = attempted_prefix();
         let original = fs::read(&fixture.target).unwrap();
