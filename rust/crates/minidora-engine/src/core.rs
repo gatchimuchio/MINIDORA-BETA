@@ -206,11 +206,40 @@ const RELATION_COMPARISON_CONTENT_KIND_V4: &str = "minidora.relation-comparison-
 const RELATION_COMPARISON_REPORT_HEADER: &str = "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。";
 const RELATION_COMPARISON_CONTENT_HEADER: &str = "左右の保存関係根拠を照合した比較です。";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct RelationObjectsAnswer {
     pub(crate) text: String,
     pub(crate) dependencies: Vec<String>,
     pub(crate) guarantee: Guarantee,
+    pub(crate) proofs: Vec<RelationObjectsProof>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RelationObjectsProof {
+    pub(crate) proposition: Proposition,
+    pub(crate) outcome: relations::QueryOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RelationObjectsExplanationAnswer {
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) guarantee: Guarantee,
+}
+
+pub(crate) enum RelationObjectsExplanationEvaluation {
+    Complete(RelationObjectsExplanationAnswer),
+    Blocked { code: &'static str, message: String },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RelationObjectsReplay<'a> {
+    pub(crate) subject: &'a str,
+    pub(crate) predicate: &'a str,
+    pub(crate) negative: bool,
+    pub(crate) scope: &'a str,
+    pub(crate) max_actions: u32,
+    pub(crate) max_evidence_bytes: usize,
 }
 
 pub(crate) fn relation_objects_answer(
@@ -310,9 +339,9 @@ pub(crate) fn relation_objects_answer(
         match answer.status.as_str() {
             "SUPPORTED" => {
                 let guarantee = relations::answer_guarantee(&answer);
-                supported.insert(proposition, guarantee.clone());
                 dependencies.extend(relations::answer_dependencies(&answer));
                 any_derived |= guarantee == Guarantee::Derived;
+                supported.insert(proposition, answer);
             }
             "CONFLICT" => {
                 return Err(failure(
@@ -341,7 +370,8 @@ pub(crate) fn relation_objects_answer(
     }
     let descriptions = supported
         .iter()
-        .map(|(proposition, guarantee)| {
+        .map(|(proposition, answer)| {
+            let guarantee = relations::answer_guarantee(answer);
             let origin = match guarantee {
                 Guarantee::UserPremise => "直接提示",
                 Guarantee::Derived => "規則導出",
@@ -372,7 +402,103 @@ pub(crate) fn relation_objects_answer(
         } else {
             Guarantee::UserPremise
         },
+        proofs: supported
+            .into_iter()
+            .map(|(proposition, outcome)| RelationObjectsProof {
+                proposition,
+                outcome,
+            })
+            .collect(),
     })
+}
+
+/// Rebuild one committed relation-object list and explain each listed value
+/// from the same actor-memory snapshot. Core and Recovery use this exact
+/// consumer for proof lineage, dependency order, and evidence limits.
+pub(crate) fn relation_objects_explanation(
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    replay: RelationObjectsReplay<'_>,
+) -> Result<RelationObjectsExplanationEvaluation> {
+    let answer = match relation_objects_answer(
+        memory,
+        replay.subject,
+        replay.predicate,
+        replay.negative,
+        replay.scope,
+        replay.max_actions,
+        replay.max_evidence_bytes,
+    ) {
+        Ok(answer) => answer,
+        Err(error) => {
+            let code = match &error {
+                Error::Contract { code, .. } => match code.as_str() {
+                    "RESOURCE_LIMIT" => "RESOURCE_LIMIT",
+                    "CONFLICTING_PREMISES" => "CONFLICTING_PREMISES",
+                    "MISSING_PREMISES" => "MISSING_PREMISES",
+                    _ => "RELATION_QUERY_UNAVAILABLE",
+                },
+                _ => "RELATION_QUERY_UNAVAILABLE",
+            };
+            return Ok(RelationObjectsExplanationEvaluation::Blocked {
+                // The result cannot be rebuilt under the sealed request's
+                // budget or current memory, so preserve the original typed
+                // stop when Core adopts this explanation.
+                code,
+                message: error.to_string(),
+            });
+        }
+    };
+    let Some(prior_plan) = previous.content_plan.as_ref() else {
+        return Ok(RelationObjectsExplanationEvaluation::Blocked {
+            code: "MISSING_RELATION_OBJECT_CONTEXT",
+            message: "説明対象の前回関係一覧に採用済み出力計画がありません。".into(),
+        });
+    };
+    if previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+        || previous.text != answer.text
+        || previous.dependencies != answer.dependencies
+        || previous.guarantee != answer.guarantee
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || prior_plan.required_units != vec![previous.text.clone()]
+    {
+        return Ok(RelationObjectsExplanationEvaluation::Blocked {
+            code: "CONTEXT_PROOF_CHANGED",
+            message: "前回の関係一覧と現在有効な記憶の内容または根拠が変わっています。新しい問いで確認してください。".into(),
+        });
+    }
+    let mut units = vec![format!(
+        "前回の関係一覧を詳しく説明します（結果ID: {}）。各対象の直接前提と適用規則を、同じscopeの現在有効な記憶で再確認しました。",
+        previous.id
+    )];
+    for proof in &answer.proofs {
+        units.extend(relation_explanation_lines(
+            memory,
+            &proof.proposition,
+            &proof.outcome,
+            "前回回答に含まれる関係の根拠",
+        ));
+    }
+    units.push(
+        "一覧は保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽を確認したものではありません。".into(),
+    );
+    if units.join("\n").len() > replay.max_evidence_bytes {
+        return Ok(RelationObjectsExplanationEvaluation::Blocked {
+            code: "RESOURCE_LIMIT",
+            message: "再検証した関係一覧の説明が今回の証拠予算を超えています。".into(),
+        });
+    }
+    let mut dependencies = vec![previous.id.clone()];
+    dependencies.extend(previous.dependencies.iter().cloned());
+    Ok(RelationObjectsExplanationEvaluation::Complete(
+        RelationObjectsExplanationAnswer {
+            units,
+            dependencies,
+            guarantee: previous.guarantee.clone(),
+        },
+    ))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3551,6 +3677,38 @@ impl Engine {
                 } else {
                     None
                 };
+                let prior_relation_objects =
+                    if prior.calculation.is_none() && prior_relation.is_none() {
+                        match self.store.get_input_bundle(
+                            actor,
+                            &request.case_id,
+                            &prior.input_id,
+                            prior.input_version,
+                        )? {
+                            Some((_, prior_bundle)) => {
+                                if identity(&prior_bundle.request)? != prior.id {
+                                    return self.stop(
+                                        &mut state,
+                                        Lifecycle::Suspend,
+                                        "RELATION_OBJECT_CONTEXT_INVALID",
+                                        "前回の関係一覧入力と採用結果の同一性が一致しません。",
+                                    );
+                                }
+                                match prior_bundle.meaning.intent {
+                                    Intent::AskRelationObjects {
+                                        subject,
+                                        predicate,
+                                        negative,
+                                        scope,
+                                    } => Some((subject, predicate, negative, scope)),
+                                    _ => None,
+                                }
+                            }
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
                 if let Some(ref calculation) = prior.calculation {
                     units.push(format!("計算式: {}", calculation.expression));
                     units.extend(calculation.steps.clone());
@@ -3638,6 +3796,40 @@ impl Engine {
                     result.dependencies = vec![prior.id.clone()];
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
+                } else if let Some((subject, predicate, negative, scope)) =
+                    prior_relation_objects.as_ref()
+                {
+                    if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_RELATION_OBJECT_CONTEXT",
+                            "説明対象として固定された直前の関係一覧がありません。",
+                        );
+                    }
+                    let memory = self.store.load_memory(actor)?;
+                    result.actor_memory_revision = Some(memory.revision);
+                    match relation_objects_explanation(
+                        &memory,
+                        prior,
+                        RelationObjectsReplay {
+                            subject,
+                            predicate,
+                            negative: *negative,
+                            scope,
+                            max_actions: request.budget.max_actions,
+                            max_evidence_bytes: request.budget.max_evidence_bytes,
+                        },
+                    )? {
+                        RelationObjectsExplanationEvaluation::Complete(answer) => {
+                            units.extend(answer.units);
+                            result.dependencies.extend(answer.dependencies);
+                            result.guarantee = answer.guarantee;
+                        }
+                        RelationObjectsExplanationEvaluation::Blocked { code, message } => {
+                            return self.stop(&mut state, Lifecycle::Suspend, code, &message);
+                        }
+                    }
                 } else if prior.text.starts_with(RELATION_COMPARISON_REPORT_HEADER)
                     || prior.text.starts_with(RELATION_COMPARISON_CONTENT_HEADER)
                 {

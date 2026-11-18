@@ -290,6 +290,24 @@ fn verify_previous_relation_context(
             )
         });
     }
+    if let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        && matches!(
+            prior_bundle.meaning.intent,
+            Intent::AskRelationObjects { .. }
+        )
+    {
+        let memory = store.load_memory(actor)?;
+        return verify_explain_previous_relation_objects_memory_result(
+            store, state, &memory, previous, result, plan, goal,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!("the relation-object list behind the explanation changed: {error}"),
+            )
+        });
+    }
     if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none() {
         return Ok(());
     }
@@ -303,6 +321,155 @@ fn verify_previous_relation_context(
                 ),
             )
         })
+}
+
+fn verify_explain_previous_relation_objects_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation-object result reference is missing",
+            )
+        })?;
+    if previous.id != previous_id || previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation-object result is not committed",
+        ));
+    }
+    let Some((_, prior_bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )?
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact relation-object input bundle is not retained",
+        ));
+    };
+    if prior_bundle.request.actor_id != state.actor_id
+        || prior_bundle.request.case_id != state.case_id
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the relation-object input and committed result identities differ",
+        ));
+    }
+    let Intent::AskRelationObjects {
+        subject,
+        predicate,
+        negative,
+        scope,
+    } = &prior_bundle.meaning.intent
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior input does not retain a typed relation-object request",
+        ));
+    };
+    let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the relation-object result has no retained content plan",
+        )
+    })?;
+    let prior_render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the relation-object result has no retained render record",
+        )
+    })?;
+    let mut unsigned_prior_plan = prior_plan.clone();
+    unsigned_prior_plan.id.clear();
+    if prior_plan.id != identity(&unsigned_prior_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || prior_plan.required_units != vec![previous.text.clone()]
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained relation-object result, content plan or render is invalid",
+        ));
+    }
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_plan)?;
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_render)?;
+
+    if let Some(original_memory) = result_memory_snapshot(store, &state.actor_id, previous)? {
+        let original_answer = crate::core::relation_objects_answer(
+            &original_memory,
+            subject,
+            predicate,
+            *negative,
+            scope,
+            prior_bundle.request.budget.max_actions,
+            prior_bundle.request.budget.max_evidence_bytes,
+        )?;
+        if previous.text != original_answer.text
+            || previous.dependencies != original_answer.dependencies
+            || previous.guarantee != original_answer.guarantee
+            || prior_plan.required_units != vec![original_answer.text]
+        {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained relation-object list differs from its actor-memory revision",
+            ));
+        }
+    }
+
+    let explanation = match crate::core::relation_objects_explanation(
+        memory,
+        previous,
+        crate::core::RelationObjectsReplay {
+            subject,
+            predicate,
+            negative: *negative,
+            scope,
+            max_actions: goal.budget.max_actions,
+            max_evidence_bytes: goal.budget.max_evidence_bytes,
+        },
+    )? {
+        crate::core::RelationObjectsExplanationEvaluation::Complete(answer) => answer,
+        crate::core::RelationObjectsExplanationEvaluation::Blocked { code, message } => {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                format!("the relation-object explanation cannot be replayed ({code}: {message})"),
+            ));
+        }
+    };
+    if explanation.dependencies != result.dependencies
+        || explanation.guarantee != result.guarantee
+        || explanation.guarantee != plan.guarantee
+        || explanation.units != plan.required_units
+        || plan.text != result.text
+        || result.calculation.is_some()
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the relation-object explanation differs from its exact proof, dependencies or units",
+        ));
+    }
+    Ok(())
 }
 
 fn verify_explain_previous_common_relations_memory_result(
@@ -1023,6 +1190,19 @@ fn verify_explain_previous_relation_memory_result(
     }
     if crate::core::is_common_relations_result(previous) {
         return verify_explain_previous_common_relations_memory_result(
+            store, state, memory, previous, result, plan, goal,
+        );
+    }
+    if let Some((_, prior_bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )? && matches!(
+        prior_bundle.meaning.intent,
+        Intent::AskRelationObjects { .. }
+    ) {
+        return verify_explain_previous_relation_objects_memory_result(
             store, state, memory, previous, result, plan, goal,
         );
     }
@@ -4772,6 +4952,108 @@ mod tests {
                     "invalidate-common-explanation-premise",
                     "alice",
                     &format!("{mike_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn relation_objects_explanation_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let direct = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "direct", "alice", "ミナはカッターを使う"),
+            )
+            .unwrap();
+        let direct_id = direct.dependencies[0].clone();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "rule",
+                    "alice",
+                    "もしXはカッターを使うならXは道具を使う",
+                ),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let objects = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "objects", "alice", "ミナは何を使いますか"),
+            )
+            .unwrap();
+        assert_eq!(objects.lifecycle, Lifecycle::Commit, "{objects:?}");
+        assert_eq!(objects.guarantee, Guarantee::Derived);
+        assert!(objects.dependencies.contains(&direct_id));
+        assert!(objects.dependencies.contains(&rule_id));
+        let memory_revision = objects
+            .actor_memory_revision
+            .expect("the object inventory records its actor-memory revision");
+
+        let mut request =
+            RequestEnvelope::new("case", "object-explanation", "alice", "詳しく説明して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(
+            explanation.actor_memory_revision,
+            Some(memory_revision),
+            "the explanation records the exact memory used to rebuild the object list"
+        );
+        assert!(explanation.text.contains("前回回答に含まれる関係の根拠"));
+        assert!(explanation.text.contains(&direct_id));
+        assert!(explanation.text.contains(&rule_id));
+        let mut expected_dependencies = vec![objects.id.clone()];
+        expected_dependencies.extend(objects.dependencies.iter().cloned());
+        assert_eq!(explanation.dependencies, expected_dependencies);
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the object explanation's actor-memory revision is retained");
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == direct_id)
+        );
+        assert!(original_memory.rules.iter().any(|rule| rule.id == rule_id));
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        drop(engine);
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-object-explanation-premise",
+                    "alice",
+                    &format!("{direct_id}を無効化して"),
                 ),
             )
             .unwrap();
