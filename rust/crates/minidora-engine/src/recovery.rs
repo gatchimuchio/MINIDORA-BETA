@@ -320,8 +320,54 @@ fn verify_previous_relation_context(
             )
         });
     }
-    if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none() {
+    let Some(prior_meaning) = crate::core::previous_relation_meaning(store, actor, case, previous)?
+    else {
         return Ok(());
+    };
+    let (proposition, adopted_proof_dependencies) = match prior_meaning {
+        crate::core::PriorRelationMeaning::OriginalQuestion(proposition) => (proposition, None),
+        crate::core::PriorRelationMeaning::AdoptedConclusion {
+            proposition,
+            proof_dependencies,
+        } => (proposition, Some(proof_dependencies)),
+    };
+    if let Some((memory, answer)) = crate::core::indexed_relation_query_from_store(
+        store,
+        actor,
+        &proposition,
+        goal.budget.max_actions,
+    )
+    .map_err(|error| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            format!("the relation proof behind the previous-answer explanation changed: {error}"),
+        )
+    })? {
+        let answer = answer.map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!(
+                    "the relation proof behind the previous-answer explanation changed: {error}"
+                ),
+            )
+        })?;
+        return verify_explain_previous_relation_answer(
+            &memory,
+            previous,
+            &proposition,
+            adopted_proof_dependencies,
+            &answer,
+            result,
+            plan,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!(
+                    "the relation proof behind the previous-answer explanation changed: {error}"
+                ),
+            )
+        });
     }
     let memory = store.load_memory(actor)?;
     verify_explain_previous_relation_memory_result(store, state, &memory, result, plan, goal)
@@ -1536,33 +1582,51 @@ fn verify_explain_previous_relation_memory_result(
         } => (proposition, Some(proof_dependencies)),
     };
     let answer = crate::relations::query(memory, &proposition, goal.budget.max_actions)?;
+    verify_explain_previous_relation_answer(
+        memory,
+        previous,
+        &proposition,
+        adopted_proof_dependencies,
+        &answer,
+        result,
+        plan,
+    )
+}
+
+fn verify_explain_previous_relation_answer(
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    proposition: &Proposition,
+    adopted_proof_dependencies: Option<Vec<String>>,
+    answer: &crate::relations::QueryOutcome,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
     let explained = match adopted_proof_dependencies {
-        None => {
-            crate::core::relation_explanation_target(&proposition, &answer).ok_or_else(|| {
-                failure(
-                    "RECOVERY_MEMORY_PROOF_MISMATCH",
-                    "the prior relation no longer has a supported or refuted result",
-                )
-            })?
-        }
+        None => crate::core::relation_explanation_target(proposition, answer).ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation no longer has a supported or refuted result",
+            )
+        })?,
         Some(expected_proof_dependencies) => {
             if answer.status != "SUPPORTED"
-                || crate::relations::answer_dependencies(&answer) != expected_proof_dependencies
+                || crate::relations::answer_dependencies(answer) != expected_proof_dependencies
             {
                 return Err(failure(
                     "RECOVERY_MEMORY_PROOF_MISMATCH",
                     "the adopted prior relation is no longer supported by the same proof",
                 ));
             }
-            proposition
+            proposition.clone()
         }
     };
-    let proof_dependencies = crate::relations::answer_dependencies(&answer);
-    let guarantee = crate::relations::answer_guarantee(&answer);
+    let proof_dependencies = crate::relations::answer_dependencies(answer);
+    let guarantee = crate::relations::answer_guarantee(answer);
     let mut expected_dependencies = vec![previous.id.clone()];
     expected_dependencies.extend(proof_dependencies.iter().cloned());
     let expected_units =
-        crate::core::relation_explanation_lines(memory, &explained, &answer, "前回の結論");
+        crate::core::relation_explanation_lines(memory, &explained, answer, "前回の結論");
     if proof_dependencies != previous.dependencies
         || expected_dependencies != result.dependencies
         || guarantee != previous.guarantee
@@ -5672,6 +5736,7 @@ mod tests {
         assert!(prior.dependencies.contains(&premise_id));
 
         let mut request = RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -5716,6 +5781,120 @@ mod tests {
                 .load_memory_revision("alice", memory_revision)
                 .unwrap(),
             Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "extended-history-case",
+            "previous-answer-explanation-off-scope-history",
+            "alice",
+            "前回回答説明Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        assert!(matches!(goal.intent, Intent::ExplainPrevious));
+        let previous_id = retained
+            .bundle
+            .as_ref()
+            .and_then(|bundle| bundle.meaning.context_result_ref.as_deref())
+            .expect("the sealed explanation retains its prior-result reference");
+        let previous = retained
+            .prior_results
+            .get(previous_id)
+            .expect("the exact prior relation answer remains retained");
+        let prior_meaning =
+            crate::core::previous_relation_meaning(&engine.store, "alice", "case", previous)
+                .unwrap()
+                .expect("the prior result retains its typed relation meaning");
+        let (proposition, _) = match prior_meaning {
+            crate::core::PriorRelationMeaning::OriginalQuestion(proposition) => (proposition, None),
+            crate::core::PriorRelationMeaning::AdoptedConclusion {
+                proposition,
+                proof_dependencies,
+            } => (proposition, Some(proof_dependencies)),
+        };
+        let full_answer = crate::relations::query(&current_memory, &proposition, 10_000).unwrap();
+        let (indexed_memory, indexed_answer) = crate::core::indexed_relation_query_from_store(
+            &engine.store,
+            "alice",
+            &proposition,
+            goal.budget.max_actions,
+        )
+        .unwrap()
+        .expect("the current relation index is available");
+        let indexed_answer = indexed_answer.unwrap();
+        assert_eq!(current_memory.facts.len(), 81);
+        assert_eq!(indexed_memory.revision, current_memory.revision);
+        assert_eq!(indexed_memory.facts.len(), 1);
+        assert!(indexed_memory.facts.len() < current_memory.facts.len());
+        assert!(indexed_answer.steps <= goal.budget.max_actions);
+        assert_eq!(indexed_answer.status, full_answer.status);
+        assert_eq!(indexed_answer.facts, full_answer.facts);
+        assert_eq!(indexed_answer.used_rules, full_answer.used_rules);
+        assert_eq!(
+            indexed_answer.condition_evaluations,
+            full_answer.condition_evaluations
+        );
+        assert_eq!(
+            indexed_answer.condition_status,
+            full_answer.condition_status
+        );
+        assert_eq!(
+            crate::relations::answer_dependencies(&indexed_answer),
+            crate::relations::answer_dependencies(&full_answer)
+        );
+        assert_eq!(
+            crate::relations::answer_guarantee(&indexed_answer),
+            crate::relations::answer_guarantee(&full_answer)
+        );
+        assert_eq!(
+            crate::core::relation_explanation_lines(
+                &indexed_memory,
+                &proposition,
+                &indexed_answer,
+                "前回の結論",
+            ),
+            crate::core::relation_explanation_lines(
+                &current_memory,
+                &proposition,
+                &full_answer,
+                "前回の結論",
+            )
         );
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
 

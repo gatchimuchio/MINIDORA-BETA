@@ -1,0 +1,12 @@
+Initial B73 fixture assertion failed; retained for audit.
+
+Command:
+PATH=/home/agent/.cargo/bin:$PATH CARGO_TARGET_DIR=/workspace/.minidora-cloud/rust-target cargo test -p minidora-engine --locked --lib recovery::tests::previous_answer_explanation_pins_and_rechecks_its_memory_revision -- --exact --nocapture
+
+Observed result:
+running 1 test
+recovery::tests::previous_answer_explanation_pins_and_rechecks_its_memory_revision ... FAILED
+
+The added assertion expected a full-snapshot relation query over 81 Facts to return RELATION_BUDGET at the sealed 32-action allowance. The query did not return that error because unrelated Facts were not charged as expected. Removed only this unsupported fixture expectation. The corrected regression compares the full and indexed proof/status/dependencies/guarantee/explanation units, verifies a smaller indexed projection, and exercises actual Recovery.
+
+Exit: 101
