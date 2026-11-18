@@ -1952,6 +1952,160 @@ impl Engine {
         Ok((memory, answer))
     }
 
+    fn indexed_previous_relation_query(
+        &self,
+        actor: &str,
+        previous: &ResultRecord,
+        proposition: &Proposition,
+        explicit_scope: Option<&str>,
+        max_actions: u32,
+    ) -> Result<Option<PreviousRelationQuery>> {
+        self.store.with_relation_index(actor, |index| {
+            let attempt = (|| -> Result<PreviousRelationQuery> {
+                let mut actions = 0_u32;
+                let mut anchor_facts = Vec::new();
+                let mut seen_dependencies = BTreeSet::new();
+                for dependency in &previous.dependencies {
+                    if !seen_dependencies.insert(dependency.as_str()) {
+                        continue;
+                    }
+                    actions = actions.checked_add(1).ok_or_else(|| {
+                        failure(
+                            "RELATION_BUDGET",
+                            "prior relation lookup action count overflowed",
+                        )
+                    })?;
+                    if actions > max_actions {
+                        return Err(failure(
+                            "RELATION_BUDGET",
+                            "prior relation lookup exceeds the sealed action budget",
+                        ));
+                    }
+                    if let Some(record) = index.record_by_id(dependency)?
+                        && let crate::store::IndexedMemoryValue::Fact(fact) = record.value
+                    {
+                        anchor_facts.push((record.ordinal, fact));
+                    }
+                }
+                anchor_facts.sort_by_key(|(ordinal, _)| *ordinal);
+                let resolution_memory = MemoryState {
+                    revision: index.revision(),
+                    facts: anchor_facts.into_iter().map(|(_, fact)| fact).collect(),
+                    ..MemoryState::default()
+                };
+                let resolution = resolve_previous_relation_proposition(
+                    &resolution_memory,
+                    previous,
+                    proposition,
+                    explicit_scope,
+                );
+                let PreviousRelationResolution::Resolved(resolved) = &resolution else {
+                    return Ok(PreviousRelationQuery {
+                        resolution: Some(resolution),
+                        memory: resolution_memory,
+                        answer: Ok(None),
+                    });
+                };
+
+                let projection_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+                    failure(
+                        "RELATION_BUDGET",
+                        "prior relation lookup exhausted the sealed action budget",
+                    )
+                })?;
+                let (memory, projection_actions) =
+                    relations::active_relation_projection(index, resolved, projection_budget)?;
+                actions = actions.checked_add(projection_actions).ok_or_else(|| {
+                    failure("RELATION_BUDGET", "relation action count overflowed")
+                })?;
+                let query_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+                    failure(
+                        "RELATION_BUDGET",
+                        "active memory projection exhausted the relation action budget",
+                    )
+                })?;
+                let mut answer = relations::query(&memory, resolved, query_budget)?;
+                actions = actions.checked_add(answer.steps).ok_or_else(|| {
+                    failure("RELATION_BUDGET", "relation action count overflowed")
+                })?;
+                answer.steps = actions;
+                Ok(PreviousRelationQuery {
+                    resolution: Some(resolution),
+                    memory,
+                    answer: Ok(Some(answer)),
+                })
+            })();
+            match attempt {
+                Ok(result) => Ok(result),
+                Err(error)
+                    if matches!(
+                        &error,
+                        Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                    ) =>
+                {
+                    Ok(PreviousRelationQuery {
+                        resolution: None,
+                        memory: MemoryState {
+                            revision: index.revision(),
+                            ..MemoryState::default()
+                        },
+                        answer: Err(error),
+                    })
+                }
+                Err(error) => Err(error),
+            }
+        })
+    }
+
+    fn active_previous_relation_query(
+        &self,
+        actor: &str,
+        previous: &ResultRecord,
+        proposition: &Proposition,
+        explicit_scope: Option<&str>,
+        max_actions: u32,
+    ) -> Result<PreviousRelationQuery> {
+        if let Some(result) = self.indexed_previous_relation_query(
+            actor,
+            previous,
+            proposition,
+            explicit_scope,
+            max_actions,
+        )? {
+            return Ok(result);
+        }
+
+        // Rebuild an older index from its authenticated current snapshot once.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(result) = self.indexed_previous_relation_query(
+            actor,
+            previous,
+            proposition,
+            explicit_scope,
+            max_actions,
+        )? {
+            return Ok(result);
+        }
+
+        // If a concurrent writer advances the head during rebuild, keep the
+        // loaded immutable snapshot as the safe fallback for this request.
+        let resolution =
+            resolve_previous_relation_proposition(&memory, previous, proposition, explicit_scope);
+        let answer = match &resolution {
+            PreviousRelationResolution::Resolved(resolved) => {
+                relations::query(&memory, resolved, max_actions).map(Some)
+            }
+            PreviousRelationResolution::Missing | PreviousRelationResolution::Ambiguous => Ok(None),
+        };
+        Ok(PreviousRelationQuery {
+            resolution: Some(resolution),
+            memory,
+            answer,
+        })
+    }
+
     fn indexed_relation_objects_answer(
         &self,
         actor: &str,
@@ -6091,14 +6245,34 @@ impl Engine {
                     );
                 }
 
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
-                let resolved = match resolve_previous_relation_proposition(
-                    &memory,
+                let query = self.active_previous_relation_query(
+                    actor,
                     prior,
                     proposition,
                     explicit_scope.as_deref(),
-                ) {
+                    request.budget.max_actions,
+                )?;
+                result.actor_memory_revision = Some(query.memory.revision);
+                state.result = Some(result.clone());
+                let answer = match query.answer {
+                    Ok(answer) => answer,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                let resolution = query.resolution.ok_or_else(|| {
+                    failure(
+                        "PREVIOUS_RELATION_RESOLUTION_MISSING",
+                        "a prior relation query stopped without recording its resolution",
+                    )
+                })?;
+                let resolved = match resolution {
                     PreviousRelationResolution::Resolved(proposition) => proposition,
                     PreviousRelationResolution::Missing => {
                         return self.stop(
@@ -6117,7 +6291,12 @@ impl Engine {
                         );
                     }
                 };
-                let answer = relations::query(&memory, &resolved, request.budget.max_actions)?;
+                let answer = answer.ok_or_else(|| {
+                    failure(
+                        "PREVIOUS_RELATION_QUERY_MISSING",
+                        "a resolved previous relation did not produce a proof query",
+                    )
+                })?;
                 retain_relation_answer_dependencies(&mut result, &answer);
                 state.result = Some(result.clone());
                 if let Some((lifecycle, code, message)) = condition_block(&answer) {
@@ -6126,7 +6305,7 @@ impl Engine {
                 let answer_dependencies = relations::answer_dependencies(&answer);
                 let answer_guarantee = relations::answer_guarantee(&answer);
                 if let Some(answer_units) =
-                    previous_relation_success_units(&memory, &resolved, &answer, *explain)
+                    previous_relation_success_units(&query.memory, &resolved, &answer, *explain)
                 {
                     units.extend(answer_units);
                 } else if answer.status == "CONFLICT" {
@@ -8293,6 +8472,12 @@ pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposit
         Intent::Ask { proposition } | Intent::AskWhy { proposition } => Some(proposition),
         _ => None,
     }
+}
+
+struct PreviousRelationQuery {
+    resolution: Option<PreviousRelationResolution>,
+    memory: MemoryState,
+    answer: Result<Option<relations::QueryOutcome>>,
 }
 
 pub(crate) enum PreviousRelationResolution {
@@ -11533,6 +11718,116 @@ mod active_relation_projection_tests {
             .active_relation_query("alice", &target, 128)
             .expect("query updated index revision");
         assert_eq!(after_tombstone.status, "UNKNOWN");
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated test store");
+    }
+
+    #[test]
+    fn indexed_previous_relation_resolves_only_prior_dependencies_before_projection() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-previous-relation-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request = RequestEnvelope::new(
+            "active-previous-case",
+            "active-previous-source",
+            "alice",
+            "保存関係",
+        );
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register relation source");
+
+        let mut full_memory = MemoryState::default();
+        let anchor = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "bird"),
+            &source_input,
+        )
+        .expect("direct premise referenced by the prior result");
+        let rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "is", "bird"),
+            proposition("$subject", "is", "mammal"),
+            &source_input,
+        )
+        .expect("goal-relevant inference rule");
+        for ordinal in 0..72 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(
+                    &format!("unrelated-{ordinal}"),
+                    &format!("unrelated-predicate-{ordinal}"),
+                    &format!("unrelated-value-{ordinal}"),
+                ),
+                &source_input,
+            )
+            .expect("unrelated retained history");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let mut previous = base_result(&source_request);
+        previous.lifecycle = Lifecycle::Commit;
+        previous.dependencies = vec![anchor.id.clone()];
+        let query = proposition("それ", "is", "mammal");
+        let query_result = engine
+            .active_previous_relation_query("alice", &previous, &query, None, 40)
+            .expect("resolve the prior premise and run the bounded indexed query");
+        let resolved = match query_result
+            .resolution
+            .expect("indexed query records its prior-premise resolution")
+        {
+            PreviousRelationResolution::Resolved(proposition) => proposition,
+            PreviousRelationResolution::Missing => panic!("prior premise should resolve"),
+            PreviousRelationResolution::Ambiguous => panic!("prior premise is unique"),
+        };
+        assert_eq!(resolved.subject, "Nera");
+        assert_eq!(query_result.memory.revision, full_memory.revision);
+        assert_eq!(query_result.memory.facts.len(), 1);
+        assert!(
+            query_result
+                .memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == anchor.id)
+        );
+        assert_eq!(query_result.memory.rules.len(), 1);
+        assert_eq!(query_result.memory.rules[0].id, rule.id);
+
+        let answer = query_result
+            .answer
+            .expect("bounded relation query succeeds")
+            .expect("resolved prior relation must run a proof query");
+        assert_eq!(answer.status, "SUPPORTED");
+        assert!(answer.steps <= 40);
+        let full_answer = relations::query(&full_memory, &resolved, 40)
+            .expect("run the full-snapshot reference query");
+        assert_eq!(answer.status, full_answer.status);
+        assert_eq!(
+            relations::answer_dependencies(&answer),
+            relations::answer_dependencies(&full_answer)
+        );
+        assert!(relations::answer_dependencies(&answer).contains(&anchor.id));
+        assert!(relations::answer_dependencies(&answer).contains(&rule.id));
+
+        let budget_stop = engine
+            .active_previous_relation_query("alice", &previous, &query, None, 3)
+            .expect("bounded stop retains the selected actor-memory revision");
+        assert_eq!(budget_stop.memory.revision, full_memory.revision);
+        assert!(matches!(
+            budget_stop.answer,
+            Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+        ));
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated test store");

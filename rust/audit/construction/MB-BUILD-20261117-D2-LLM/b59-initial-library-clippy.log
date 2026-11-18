@@ -1,0 +1,29 @@
+    Checking minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+error: this `match` expression can be replaced with `?`
+    --> crates/minidora-engine/src/core.rs:6248:29
+     |
+6248 |                   let query = match self.active_previous_relation_query(
+     |  _____________________________^
+6249 | |                     actor,
+6250 | |                     prior,
+6251 | |                     proposition,
+...    |
+6256 | |                     Err(error) => return Err(error),
+6257 | |                 };
+     | |_________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#question_mark
+     = note: `-D clippy::question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::question_mark)]`
+help: try instead
+     |
+6248 ~                 let query = self.active_previous_relation_query(
+6249 +                     actor,
+6250 +                     prior,
+6251 +                     proposition,
+6252 +                     explicit_scope.as_deref(),
+6253 +                     request.budget.max_actions,
+6254 ~                 )?;
+     |
+
+error: could not compile `minidora-engine` (lib) due to 1 previous error

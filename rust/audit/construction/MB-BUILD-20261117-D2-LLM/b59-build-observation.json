@@ -1,0 +1,181 @@
+{
+  "schema": "MINIDORA_E1_W10_PREVIOUS_RELATION_PROJECTION_B59_V1",
+  "work_item": "Goal-related bounded projection for the ordinary AskPreviousRelation Core route",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "8380ba7ac5bf1e66a01316f140dc6562532914f9",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "environment": {
+    "platform": "Linux x86_64",
+    "kernel": "Linux 6.18.57",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "tested_source_diff_sha256": "ab9a031cef48f506059f77de84ca50ce9402093b37e47f1dcb110cda096b48da",
+  "scope": {
+    "route": "Engine::execute Intent::AskPreviousRelation",
+    "selection": "Resolve only prior committed ResultRecord Fact dependency IDs inside a revision-matched Store relation-index transaction; then project the resolved Goal relation, applicable Facts/Rules, Rule premise closure, condition evidence and transitive proof dependencies.",
+    "ownership": "Store supplies revision-checked derived records. Existing Core owns context interpretation, condition/proof evaluation, stop behavior, answer construction and adoption; no new decision authority was added.",
+    "budget": "Distinct prior dependency-ID lookups, Goal projection and proof evaluation share the sealed relation action budget.",
+    "index_fallback": "A missing legacy index is rebuilt once from the authenticated loaded current memory snapshot. That cold-index whole-snapshot read remains; if a concurrent writer advances the head during rebuild, this request retains the loaded immutable full-snapshot fallback.",
+    "recovery": "Recovery replays against the recorded immutable full memory revision and checks current proof validity. B59 does not wire every Recovery or relation-list consumer through the Goal selector."
+  },
+  "fixtures": {
+    "indexed_projection": {
+      "stored_records": {
+        "facts": 73,
+        "rules": 1,
+        "conditions": 0
+      },
+      "unrelated_facts": 72,
+      "projected_records": {
+        "facts": 1,
+        "rules": 1,
+        "conditions": 0
+      },
+      "status_matches_full_snapshot": true,
+      "dependency_ids_match_full_snapshot": true,
+      "action_budget": 40,
+      "result_actor_memory_revision": 1
+    },
+    "normal_japanese_route": {
+      "entry": "Engine::execute AskPreviousRelation",
+      "request": "それは鳥ですか",
+      "unrelated_facts_added_after_prior_result": 72,
+      "lifecycle": "COMMIT",
+      "result_actor_memory_revision": 2,
+      "proof_dependencies_preserved": true
+    },
+    "budget_stop": {
+      "request": "それは動物ですか",
+      "rule_chain_length": 3,
+      "action_budget": 11,
+      "lifecycle": "SUSPEND",
+      "reason_code": "RESOURCE_LIMIT",
+      "result_actor_memory_revision": 2
+    },
+    "recovery": {
+      "exact_memory_revision_survives_engine_reopen": true,
+      "invalidated_supporting_fact_prevents_old_answer_confirmation": true,
+      "existing_file_bytes_preserved": true
+    }
+  },
+  "checks": [
+    {
+      "command": "cargo test -p minidora-engine --locked indexed_previous_relation_resolves_only_prior_dependencies_before_projection",
+      "exit_code": 0,
+      "result": "PASS: one supporting Fact and one Rule selected from 73 Facts/one Rule; proof status and dependency IDs match full-snapshot reference",
+      "log": "b59-focused-projection-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked previous_relation_recovery_pins_and_rechecks_its_memory_revision",
+      "exit_code": 0,
+      "result": "PASS: normal Japanese route, 72 unrelated Facts, budget-stop revision 2, Engine reopen and invalidation recheck",
+      "log": "b59-focused-recovery-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --quiet",
+      "exit_code": 0,
+      "result": "PASS: 268 unit tests, 37 integration cases across 33 harnesses, 0 doc tests",
+      "log": "b59-engine-test.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b59-format-check.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b59-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b59-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "result": "BLOCKED by existing clippy::too_many_arguments in unchanged comparison test helpers _45 and _46",
+      "log": "b59-engine-all-target-clippy.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b59-diff-check.log"
+    }
+  ],
+  "iteration_notes": [
+    {
+      "initial_attempt": "Recovery test fixture did not import BTreeSet and failed to compile.",
+      "correction": "Add the standard collections::BTreeSet test import."
+    },
+    {
+      "initial_attempt": "Appending 72 fixture Facts advanced the in-memory mutation counter many times, and Store correctly rejected saving that as several revisions in one transaction.",
+      "correction": "Set the single persisted memory snapshot to the previous head plus one before Store::save_memory."
+    },
+    {
+      "initial_attempt": "A budget-3 request stopped in required outer processing before AskPreviousRelation consumed a memory revision; a direct query at budget 4 completed.",
+      "correction": "Use a three-rule proof chain and budget 11 to reach the selector and force its own RESOURCE_LIMIT stop."
+    },
+    {
+      "initial_attempt": "The first selector budget stop returned actor_memory_revision=None because the partial ResultRecord had not yet been copied into CaseRevision state.",
+      "correction": "Persist the partial ResultRecord before handling the bounded-query error; the normal Japanese regression now asserts SUSPEND and revision 2."
+    },
+    {
+      "initial_attempt": "Warnings-denied library Clippy reported clippy::question_mark on an explicit Result match.",
+      "correction": "Use ? for non-budget infrastructure errors; the corrected library Clippy command passes.",
+      "log": "b59-initial-library-clippy.log"
+    }
+  ],
+  "gate_assessment": {
+    "E1-W10": "PARTIAL: one bounded ordinary AskPreviousRelation consumer slice",
+    "CAP-D02": "UNVERIFIED: complete long-history acceptance predicate not established",
+    "E1_exit": "NOT_CLAIMED"
+  },
+  "asset_closure": {
+    "retained": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "stored": [
+      "BUILD_BATCH_59.md",
+      "b59-build-observation.json",
+      "CAP-D02 trace, implementation status and implementation choice updates",
+      "B59 focused Core/Recovery, full engine, formatting, workspace check, Clippy and diff-check logs",
+      "initial library-Clippy failure log and pre-budget-stop successful engine log"
+    ],
+    "active": [
+      "revision-matched prior-dependency and Goal projection in normal Core AskPreviousRelation route",
+      "/workspace/.minidora-cloud/rust-target retained Rust build cache"
+    ],
+    "moved_to_trash": [],
+    "pending": [
+      "remaining E1-W10 consumers and broad CAP-D02 acceptance",
+      "cold-index rebuild full-snapshot read and large-history resource population",
+      "unchanged all-target Clippy argument-count findings in comparison test helpers _45 and _46"
+    ]
+  },
+  "limitations": [
+    "Cold-index rebuild still reads the entire loaded current snapshot once.",
+    "A concurrent writer that advances the head during index rebuild uses the immutable full-snapshot fallback; B59 does not exercise that race.",
+    "B59 does not establish bounded selection for every Core, Recovery, relation inventory, explanation, cache, summary or model-adaptation consumer.",
+    "Broad fresh-process/session/model-revision reuse and large-history resource populations remain unverified.",
+    "All-target Clippy remains blocked by unchanged too_many_arguments findings in comparison test helpers _45 and _46.",
+    "Full CAP-D02 acceptance, E1 exit, release and deployment are not established."
+  ],
+  "release": "NOT_RELEASED"
+}

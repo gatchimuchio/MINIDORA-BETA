@@ -3382,6 +3382,7 @@ mod tests {
     use crate::core::Engine;
     use rusqlite::{Connection, params};
     use std::{
+        collections::BTreeSet,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -4612,6 +4613,67 @@ mod tests {
         assert_eq!(prior.lifecycle, Lifecycle::Commit);
         assert!(prior.dependencies.contains(&premise_id));
 
+        // Add retained history after the prior result without changing the
+        // same-case context that the pronoun query must resolve.
+        let noise_request = RequestEnvelope::new(
+            "noise-case",
+            "noise-source",
+            "alice",
+            "長い履歴のテストデータ",
+        );
+        let noise_source = identity(&noise_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &noise_request, &noise_source)
+            .unwrap();
+        let mut memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = memory.revision + 1;
+        for ordinal in 0..72 {
+            crate::relations::assert_fact(
+                &mut memory,
+                Proposition {
+                    subject: format!("unrelated-{ordinal}"),
+                    predicate: format!("unrelated-predicate-{ordinal}"),
+                    object: format!("unrelated-value-{ordinal}"),
+                    negative: false,
+                    scope: "default".into(),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &noise_source,
+            )
+            .unwrap();
+        }
+        for (premise_object, conclusion_object) in
+            [("鳥", "脊椎動物"), ("脊椎動物", "生物"), ("生物", "動物")]
+        {
+            crate::relations::add_rule(
+                &mut memory,
+                Proposition {
+                    subject: "$subject".into(),
+                    predicate: "is".into(),
+                    object: premise_object.into(),
+                    negative: false,
+                    scope: "default".into(),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                Proposition {
+                    subject: "$subject".into(),
+                    predicate: "is".into(),
+                    object: conclusion_object.into(),
+                    negative: false,
+                    scope: "default".into(),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &noise_source,
+            )
+            .unwrap();
+        }
+        memory.revision = next_revision;
+        engine.store.save_memory("alice", &memory).unwrap();
+
         let mut request =
             RequestEnvelope::new("case", "prior-pronoun-query", "alice", "それは鳥ですか");
         request.output_path = Some(fixture.target.clone());
@@ -4626,17 +4688,36 @@ mod tests {
         let memory_revision = answer
             .actor_memory_revision
             .expect("Core records the actor-memory snapshot used to resolve the prior result");
+        assert_eq!(memory_revision, 2);
         let original_memory = engine
             .store
             .load_memory_revision("alice", memory_revision)
             .unwrap()
             .expect("the prior-relation actor-memory snapshot is retained");
+        assert_eq!(original_memory.facts.len(), 73);
         assert!(
             original_memory
                 .facts
                 .iter()
                 .any(|fact| fact.id == premise_id)
         );
+
+        let mut limited_request = RequestEnvelope::new(
+            "case",
+            "prior-pronoun-budget-stop",
+            "alice",
+            "それは動物ですか",
+        );
+        limited_request.budget.max_actions = 11;
+        let budget_stop = engine.execute("alice", limited_request).unwrap();
+        assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
+        assert!(
+            budget_stop
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("RESOURCE_LIMIT"))
+        );
+        assert_eq!(budget_stop.actor_memory_revision, Some(memory_revision));
 
         let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
         let snapshots: Vec<(i64, String)> = {
