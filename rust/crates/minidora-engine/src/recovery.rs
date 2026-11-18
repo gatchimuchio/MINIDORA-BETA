@@ -694,15 +694,10 @@ fn premise_memory_inventory(
     Ok((dependencies, guarantee))
 }
 
-fn verify_conjunction_memory_result(
-    memory: &MemoryState,
-    result: &ResultRecord,
-    plan: &ContentPlan,
+fn conjunction_per_relation_budget(
+    propositions: &[Proposition],
     goal: &GoalContract,
-) -> Result<()> {
-    let Intent::AskConjunction { propositions } = &goal.intent else {
-        return Ok(());
-    };
+) -> Result<u32> {
     if !(2..=3).contains(&propositions.len()) {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -722,13 +717,26 @@ fn verify_conjunction_memory_result(
             "the retained conjunction has no per-relation proof budget",
         ));
     }
+    Ok(per_relation_budget)
+}
 
+fn verify_conjunction_outcomes(
+    propositions: &[Proposition],
+    outcomes: Vec<crate::relations::QueryOutcome>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    if outcomes.len() != propositions.len() {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained conjunction has an incomplete clause evaluation",
+        ));
+    }
     let mut dependencies = std::collections::BTreeSet::new();
     let mut all_supported = true;
     let mut any_derived = false;
     let mut conclusions = Vec::with_capacity(propositions.len());
-    for proposition in propositions {
-        let answer = crate::relations::query(memory, proposition, per_relation_budget)?;
+    for (proposition, answer) in propositions.iter().zip(outcomes) {
         match answer.status.as_str() {
             "SUPPORTED" => conclusions.push(format!(
                 "- {}",
@@ -780,6 +788,47 @@ fn verify_conjunction_memory_result(
         ));
     }
     Ok(())
+}
+
+fn verify_conjunction_memory_result(
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Intent::AskConjunction { propositions } = &goal.intent else {
+        return Ok(());
+    };
+    let per_relation_budget = conjunction_per_relation_budget(propositions, goal)?;
+    let outcomes = propositions
+        .iter()
+        .map(|proposition| crate::relations::query(memory, proposition, per_relation_budget))
+        .collect::<Result<Vec<_>>>()?;
+    verify_conjunction_outcomes(propositions, outcomes, result, plan)
+}
+
+fn verify_conjunction_memory_result_with_index(
+    store: &Store,
+    actor: &str,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<()>> {
+    let Intent::AskConjunction { propositions } = &goal.intent else {
+        return Ok(Some(()));
+    };
+    let per_relation_budget = conjunction_per_relation_budget(propositions, goal)?;
+    let Some((_, outcomes)) = crate::core::indexed_conjunction_relation_answers_from_store(
+        store,
+        actor,
+        propositions,
+        per_relation_budget,
+    )?
+    else {
+        return Ok(None);
+    };
+    verify_conjunction_outcomes(propositions, outcomes?, result, plan)?;
+    Ok(Some(()))
 }
 
 fn verify_common_relations_memory_result(
@@ -2548,9 +2597,18 @@ fn inspect(
     if matches!(goal.intent, Intent::AskConjunction { .. }) {
         // The original immutable snapshot was checked above. Before confirming
         // pending bytes, ensure the conjunction is still true of the current
-        // actor memory and cannot be adopted after premise invalidation.
-        let memory = store.load_memory(actor)?;
-        verify_conjunction_memory_result(&memory, result, plan, &goal).map_err(|error| {
+        // actor memory. Use the revision-matched clause index when available;
+        // cold/stale indexes retain the authenticated full-snapshot path.
+        let current_verification = (|| match verify_conjunction_memory_result_with_index(
+            store, actor, result, plan, &goal,
+        )? {
+            Some(()) => Ok(()),
+            None => {
+                let memory = store.load_memory(actor)?;
+                verify_conjunction_memory_result(&memory, result, plan, &goal)
+            }
+        })();
+        current_verification.map_err(|error| {
             failure(
                 "RECOVERY_PROOF_INVALIDATED",
                 format!("the original conjunction proof is no longer valid: {error}"),
@@ -4697,6 +4755,7 @@ mod tests {
 
         let mut request =
             RequestEnvelope::new("case", "conjunction", "alice", "ココは鳥かつ動物ですか");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -4738,6 +4797,107 @@ mod tests {
         );
         assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
 
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "conjunction-recovery-off-scope-history",
+            "alice",
+            "連言照会Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let Intent::AskConjunction { propositions } = &goal.intent else {
+            panic!("retained conjunction lost its typed query");
+        };
+        let clause_count = u32::try_from(propositions.len()).unwrap();
+        let per_relation_budget = goal.budget.max_actions / clause_count;
+        let full_answers = propositions
+            .iter()
+            .map(|proposition| {
+                crate::relations::query(&current_memory, proposition, per_relation_budget).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let (indexed_revision, indexed_answers) =
+            crate::core::indexed_conjunction_relation_answers_from_store(
+                &engine.store,
+                "alice",
+                propositions,
+                per_relation_budget,
+            )
+            .unwrap()
+            .expect("current conjunction relation index is available");
+        let indexed_answers = indexed_answers.unwrap();
+        assert_eq!(current_memory.facts.len(), 82);
+        assert_eq!(indexed_revision, current_memory.revision);
+        assert_eq!(indexed_answers.len(), full_answers.len());
+        for (indexed, full) in indexed_answers.iter().zip(&full_answers) {
+            assert_eq!(indexed.status, full.status);
+            assert_eq!(indexed.facts, full.facts);
+            assert_eq!(indexed.used_rules, full.used_rules);
+            assert_eq!(
+                crate::relations::answer_dependencies(indexed),
+                crate::relations::answer_dependencies(full)
+            );
+            assert_eq!(
+                crate::relations::answer_guarantee(indexed),
+                crate::relations::answer_guarantee(full)
+            );
+        }
+        let projected_fact_counts = engine
+            .store
+            .with_relation_index("alice", |index| {
+                propositions
+                    .iter()
+                    .map(|proposition| {
+                        crate::relations::active_relation_projection(
+                            index,
+                            proposition,
+                            per_relation_budget,
+                        )
+                        .map(|(memory, _)| memory.facts.len())
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .unwrap()
+            .expect("current conjunction relation index remains revision-matched");
+        assert_eq!(projected_fact_counts, vec![1, 1]);
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
         let invalidation = engine
             .execute(
                 "alice",
@@ -4752,6 +4912,7 @@ mod tests {
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &retained, retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
     #[test]

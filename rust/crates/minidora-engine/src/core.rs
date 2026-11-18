@@ -334,6 +334,54 @@ pub(crate) fn indexed_relation_query_from_store(
     })
 }
 
+/// Re-evaluate every clause of a conjunction from one revision-matched Store
+/// index transaction. `None` means the index is cold or stale and the caller
+/// should use its authenticated snapshot path.
+pub(crate) fn indexed_conjunction_relation_answers_from_store(
+    store: &Store,
+    actor: &str,
+    propositions: &[Proposition],
+    per_relation_budget: u32,
+) -> Result<Option<(u64, Result<Vec<relations::QueryOutcome>>)>> {
+    let Some(queries) = indexed_conjunction_relation_queries_from_store(
+        store,
+        actor,
+        propositions,
+        per_relation_budget,
+    )?
+    else {
+        return Ok(None);
+    };
+    let outcomes = queries.outcomes.map(|evaluations| {
+        evaluations
+            .into_iter()
+            .map(|evaluation| evaluation.answer)
+            .collect()
+    });
+    Ok(Some((queries.memory_revision, outcomes)))
+}
+
+fn indexed_conjunction_relation_queries_from_store(
+    store: &Store,
+    actor: &str,
+    propositions: &[Proposition],
+    per_relation_budget: u32,
+) -> Result<Option<ConjunctionRelationQueries>> {
+    store.with_relation_index(actor, |index| {
+        let outcomes = propositions
+            .iter()
+            .map(|proposition| {
+                indexed_relation_evaluation(index, proposition, per_relation_budget)
+                    .map(|(_, evaluation)| evaluation)
+            })
+            .collect();
+        Ok(ConjunctionRelationQueries {
+            memory_revision: index.revision(),
+            outcomes,
+        })
+    })
+}
+
 fn full_snapshot_relation_evaluation(
     memory: &MemoryState,
     proposition: &Proposition,
@@ -2407,19 +2455,12 @@ impl Engine {
         propositions: &[Proposition],
         per_relation_budget: u32,
     ) -> Result<Option<ConjunctionRelationQueries>> {
-        self.store.with_relation_index(actor, |index| {
-            let outcomes = propositions
-                .iter()
-                .map(|proposition| {
-                    indexed_relation_evaluation(index, proposition, per_relation_budget)
-                        .map(|(_, evaluation)| evaluation)
-                })
-                .collect();
-            Ok(ConjunctionRelationQueries {
-                memory_revision: index.revision(),
-                outcomes,
-            })
-        })
+        indexed_conjunction_relation_queries_from_store(
+            &self.store,
+            actor,
+            propositions,
+            per_relation_budget,
+        )
     }
 
     fn indexed_common_relations_answer(
