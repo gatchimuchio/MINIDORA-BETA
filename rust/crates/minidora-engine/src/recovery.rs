@@ -244,6 +244,7 @@ fn verify_previous_relation_context(
     case: &str,
     state: &CaseRevision,
     result: &ResultRecord,
+    plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<()> {
     let Some(previous_id) = state
@@ -265,48 +266,19 @@ fn verify_previous_relation_context(
     if previous.calculation.is_some() {
         return Ok(());
     }
-    let prior_meaning = crate::core::previous_relation_meaning(store, actor, case, previous)?;
-    let Some(prior_meaning) = prior_meaning else {
+    if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none() {
         return Ok(());
-    };
-    let memory = store.load_memory(actor)?;
-    let answer = match prior_meaning {
-        crate::core::PriorRelationMeaning::OriginalQuestion(proposition) => {
-            let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
-            if crate::core::relation_explanation_target(&proposition, &answer).is_none() {
-                return Err(failure(
-                    "RECOVERY_CONTEXT_PROOF_CHANGED",
-                    "the sealed prior relation no longer has a supported or refuted result",
-                ));
-            }
-            answer
-        }
-        crate::core::PriorRelationMeaning::AdoptedConclusion { proposition, .. } => {
-            let answer = crate::relations::query(&memory, &proposition, goal.budget.max_actions)?;
-            if answer.status != "SUPPORTED" {
-                return Err(failure(
-                    "RECOVERY_CONTEXT_PROOF_CHANGED",
-                    "the adopted prior relation conclusion is no longer supported",
-                ));
-            }
-            answer
-        }
-    };
-    let answer_dependencies = crate::relations::answer_dependencies(&answer);
-    let mut expected_dependencies = vec![previous.id.clone()];
-    expected_dependencies.extend(answer_dependencies.iter().cloned());
-    let guarantee = crate::relations::answer_guarantee(&answer);
-    if answer_dependencies != previous.dependencies
-        || expected_dependencies != result.dependencies
-        || guarantee != previous.guarantee
-        || guarantee != result.guarantee
-    {
-        return Err(failure(
-            "RECOVERY_CONTEXT_PROOF_CHANGED",
-            "the relation proof behind the previous-answer explanation changed",
-        ));
     }
-    Ok(())
+    let memory = store.load_memory(actor)?;
+    verify_explain_previous_relation_memory_result(store, state, &memory, result, plan, goal)
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!(
+                    "the relation proof behind the previous-answer explanation changed: {error}"
+                ),
+            )
+        })
 }
 
 fn result_memory_snapshot(
@@ -628,6 +600,103 @@ fn verify_previous_relation_memory_result(
     Ok(())
 }
 
+fn verify_explain_previous_relation_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    if !matches!(goal.intent, Intent::ExplainPrevious) {
+        return Ok(());
+    }
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation result reference is missing",
+            )
+        })?;
+    let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation result is not retained",
+        )
+    })?;
+    if previous.id != previous_id
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation result is not a committed relation answer",
+        ));
+    }
+    let prior_meaning =
+        crate::core::previous_relation_meaning(store, &state.actor_id, &state.case_id, previous)?
+            .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the exact prior result does not retain a relation meaning",
+            )
+        })?;
+    let (proposition, adopted_proof_dependencies) = match prior_meaning {
+        crate::core::PriorRelationMeaning::OriginalQuestion(proposition) => (proposition, None),
+        crate::core::PriorRelationMeaning::AdoptedConclusion {
+            proposition,
+            proof_dependencies,
+        } => (proposition, Some(proof_dependencies)),
+    };
+    let answer = crate::relations::query(memory, &proposition, goal.budget.max_actions)?;
+    let explained = match adopted_proof_dependencies {
+        None => {
+            crate::core::relation_explanation_target(&proposition, &answer).ok_or_else(|| {
+                failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the prior relation no longer has a supported or refuted result",
+                )
+            })?
+        }
+        Some(expected_proof_dependencies) => {
+            if answer.status != "SUPPORTED"
+                || crate::relations::answer_dependencies(&answer) != expected_proof_dependencies
+            {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the adopted prior relation is no longer supported by the same proof",
+                ));
+            }
+            proposition
+        }
+    };
+    let proof_dependencies = crate::relations::answer_dependencies(&answer);
+    let guarantee = crate::relations::answer_guarantee(&answer);
+    let mut expected_dependencies = vec![previous.id.clone()];
+    expected_dependencies.extend(proof_dependencies.iter().cloned());
+    let expected_units =
+        crate::core::relation_explanation_lines(memory, &explained, &answer, "前回の結論");
+    if proof_dependencies != previous.dependencies
+        || expected_dependencies != result.dependencies
+        || guarantee != previous.guarantee
+        || guarantee != result.guarantee
+        || expected_units != plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior-answer explanation does not match its actor-memory proof revision",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_result_memory_provenance(
     store: &Store,
     actor: &str,
@@ -694,6 +763,11 @@ fn verify_result_memory_provenance(
         }
         Intent::AskPreviousRelation { .. } => {
             verify_previous_relation_memory_result(state, &memory, result, plan, goal)?;
+        }
+        Intent::ExplainPrevious => {
+            verify_explain_previous_relation_memory_result(
+                store, state, &memory, result, plan, goal,
+            )?;
         }
         Intent::InspectPremises { subject } => {
             let (dependencies, guarantee) =
@@ -1675,29 +1749,8 @@ fn inspect(
             ));
         }
     }
-    if matches!(
-        bundle.meaning.parser_version.as_str(),
-        "declarative-ja-en-v48-related-context-explanation"
-            | "declarative-ja-en-v49-why-proof-query"
-            | "declarative-ja-en-v50-code-context-explanation"
-            | "declarative-ja-en-v51-generated-code-verification"
-            | "declarative-ja-en-v52-search-candidate-body"
-            | "declarative-ja-en-v53-group-mean-query"
-            | "declarative-ja-en-v54-source-question-followup"
-            | "declarative-ja-en-v55-natural-premise-question"
-            | "declarative-ja-en-v56-natural-premise-correction"
-            | "declarative-ja-en-v57-contextual-premise-correction"
-            | "declarative-ja-en-v58-prior-result-pronoun-query"
-            | "declarative-ja-en-v59-conjunctive-relation-question"
-            | "declarative-ja-en-v60-conjunctive-relation-rule"
-            | "declarative-ja-en-v61-three-clause-relation-question"
-            | "declarative-ja-en-v62-constrained-source-summary"
-            | "declarative-ja-en-v63-previous-output-edit"
-            | "declarative-ja-en-v70-generic-transitive-verbs"
-            | "declarative-ja-en-v71-saved-relation-comparison"
-    ) && matches!(goal.intent, Intent::ExplainPrevious)
-    {
-        verify_previous_relation_context(store, actor, case, state, result, &goal)?;
+    if matches!(goal.intent, Intent::ExplainPrevious) {
+        verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
     if matches!(
         bundle.meaning.parser_version.as_str(),
@@ -3963,6 +4016,91 @@ mod tests {
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &adopted, &adopted_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn previous_answer_explanation_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let premise_id = premise.dependencies[0].clone();
+        let prior = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(prior.lifecycle, Lifecycle::Commit);
+        assert!(prior.dependencies.contains(&premise_id));
+
+        let mut request = RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert!(explanation.text.contains("前回の結論"));
+        assert!(explanation.dependencies.contains(&prior.id));
+        assert!(explanation.dependencies.contains(&premise_id));
+        let memory_revision = explanation
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the explanation");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the explanation's actor-memory revision is retained");
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == premise_id)
+        );
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
+        assert!(matches!(
+            retained.bundle.as_ref().unwrap().meaning.intent,
+            Intent::ExplainPrevious
+        ));
+        inspect(&engine.store, "alice", &retained, &retained_result)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-explanation-premise",
+                    "alice",
+                    &format!("{premise_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 

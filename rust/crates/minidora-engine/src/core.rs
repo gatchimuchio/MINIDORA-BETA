@@ -3335,6 +3335,7 @@ impl Engine {
                     prior_relation.as_ref()
                 {
                     let memory = self.store.load_memory(actor)?;
+                    result.actor_memory_revision = Some(memory.revision);
                     let answer =
                         relations::query(&memory, proposition, request.budget.max_actions)?;
                     retain_relation_answer_dependencies(&mut result, &answer);
@@ -3368,7 +3369,7 @@ impl Engine {
                         &answer,
                         "前回の結論",
                     ));
-                    result.dependencies.push(prior.id.clone());
+                    result.dependencies = vec![prior.id.clone()];
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
                 } else if let Some(PriorRelationMeaning::AdoptedConclusion {
@@ -3377,6 +3378,7 @@ impl Engine {
                 }) = prior_relation.as_ref()
                 {
                     let memory = self.store.load_memory(actor)?;
+                    result.actor_memory_revision = Some(memory.revision);
                     let answer =
                         relations::query(&memory, proposition, request.budget.max_actions)?;
                     retain_relation_answer_dependencies(&mut result, &answer);
@@ -3404,7 +3406,7 @@ impl Engine {
                         &answer,
                         "前回の結論",
                     ));
-                    result.dependencies.push(prior.id.clone());
+                    result.dependencies = vec![prior.id.clone()];
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
                 } else if prior.text.starts_with(RELATION_COMPARISON_REPORT_HEADER)
