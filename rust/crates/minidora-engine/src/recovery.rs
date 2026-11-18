@@ -438,9 +438,68 @@ fn verify_conjunction_memory_result(
     Ok(())
 }
 
+fn verify_common_relations_memory_result(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Intent::AskCommonRelations {
+        subject_a,
+        subject_b,
+        scope,
+    } = &goal.intent
+    else {
+        return Ok(());
+    };
+    let answer = match crate::core::common_relations_answer(
+        memory,
+        subject_a,
+        subject_b,
+        scope,
+        goal.budget.max_actions,
+        goal.budget.max_evidence_bytes,
+        &result.id,
+    )? {
+        crate::core::CommonRelationsEvaluation::Complete(answer) => answer,
+        crate::core::CommonRelationsEvaluation::Blocked { code, message } => {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                format!(
+                    "the retained common-relation result cannot be replayed ({code}: {message})"
+                ),
+            ));
+        }
+    };
+    let Some(report_ref) = result.dependencies.first() else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained common-relation result has no report artifact reference",
+        ));
+    };
+    let retained_artifact = store.get_bytes(actor, case, report_ref)?;
+    let mut expected_dependencies = vec![report_ref.clone()];
+    expected_dependencies.extend(answer.proof_dependencies.iter().cloned());
+    if retained_artifact != answer.artifact_bytes
+        || result.dependencies != expected_dependencies
+        || result.guarantee != answer.guarantee
+        || plan.required_units != vec![answer.report]
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained common-relation report, artifact or proof lineage differs from its actor-memory revision",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_result_memory_provenance(
     store: &Store,
     actor: &str,
+    case: &str,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
@@ -488,6 +547,9 @@ fn verify_result_memory_provenance(
         }
         Intent::AskConjunction { .. } => {
             verify_conjunction_memory_result(&memory, result, plan, goal)?;
+        }
+        Intent::AskCommonRelations { .. } => {
+            verify_common_relations_memory_result(store, actor, case, &memory, result, plan, goal)?;
         }
         Intent::InspectPremises { subject } => {
             let (dependencies, guarantee) =
@@ -1150,7 +1212,7 @@ fn inspect(
             "adopted result differs from original input",
         ));
     }
-    verify_result_memory_provenance(store, actor, result, plan, &goal)?;
+    verify_result_memory_provenance(store, actor, case, result, plan, &goal)?;
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     let previous_result_summary =
@@ -1365,6 +1427,21 @@ fn inspect(
                 "the object-answer content or proof lineage differs from the original adoption",
             ));
         }
+    }
+    if matches!(goal.intent, Intent::AskCommonRelations { .. })
+        && result.actor_memory_revision.is_some()
+    {
+        // The exact immutable snapshot was replayed above. Before confirming
+        // pending bytes, ensure the common relations still have identical
+        // current support and artifact contents.
+        let memory = store.load_memory(actor)?;
+        verify_common_relations_memory_result(store, actor, case, &memory, result, plan, &goal)
+            .map_err(|error| {
+                failure(
+                    "RECOVERY_PROOF_INVALIDATED",
+                    format!("the original common-relation proof is no longer valid: {error}"),
+                )
+            })?;
     }
     if matches!(goal.intent, Intent::AskConjunction { .. }) {
         // The original immutable snapshot was checked above. Before confirming
@@ -3560,6 +3637,96 @@ mod tests {
             .unwrap();
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &adopted, adopted_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn common_relations_recovery_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let coco = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "coco", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let coco_id = coco.dependencies[0].clone();
+        let mike = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "mike", "alice", "ミケは鳥です"),
+            )
+            .unwrap();
+        let mike_id = mike.dependencies[0].clone();
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "common-relations",
+            "alice",
+            "ココとミケの共通点は何ですか",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert_eq!(answer.guarantee, Guarantee::Derived);
+        assert!(answer.text.contains("共通関係"));
+        assert!(answer.dependencies.contains(&rule_id));
+        assert!(answer.dependencies.contains(&coco_id));
+        assert!(answer.dependencies.contains(&mike_id));
+        let memory_revision = answer
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the comparison");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the comparison's actor-memory revision is retained");
+        assert!(original_memory.rules.iter().any(|rule| rule.id == rule_id));
+        assert!(original_memory.facts.iter().any(|fact| fact.id == coco_id));
+        assert!(original_memory.facts.iter().any(|fact| fact.id == mike_id));
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate-common-relation",
+                    "alice",
+                    &format!("{mike_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
