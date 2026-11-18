@@ -1,0 +1,21 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.17s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+
+thread 'core::active_relation_projection_tests::indexed_relation_object_query_uses_only_the_goal_and_rule_closure' (142198) panicked at crates/minidora-engine/src/core.rs:11716:9:
+assertion `left == right` failed
+  left: None
+ right: Some(2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::active_relation_projection_tests::indexed_relation_object_query_uses_only_the_goal_and_rule_closure ... FAILED
+
+failures:
+
+failures:
+    core::active_relation_projection_tests::indexed_relation_object_query_uses_only_the_goal_and_rule_closure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 266 filtered out; finished in 0.30s
+
+error: test failed, to rerun pass `-p minidora-engine --lib`

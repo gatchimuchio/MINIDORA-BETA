@@ -1,0 +1,37 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+error[E0609]: no field `text` on type `std::result::Result<RelationObjectsAnswer, minidora_domain::Error>`
+     --> crates/minidora-engine/src/core.rs:11682:35
+      |
+11682 |         assert_eq!(indexed_answer.text, full_answer.text);
+      |                                   ^^^^ unknown field
+      |
+help: one of the expressions' fields has a field of the same name
+      |
+11682 |         assert_eq!(indexed_answer.unwrap().text, full_answer.text);
+      |                                   +++++++++
+
+error[E0609]: no field `dependencies` on type `std::result::Result<RelationObjectsAnswer, minidora_domain::Error>`
+     --> crates/minidora-engine/src/core.rs:11683:35
+      |
+11683 |         assert_eq!(indexed_answer.dependencies, full_answer.dependencies);
+      |                                   ^^^^^^^^^^^^ unknown field
+      |
+help: one of the expressions' fields has a field of the same name
+      |
+11683 |         assert_eq!(indexed_answer.unwrap().dependencies, full_answer.dependencies);
+      |                                   +++++++++
+
+error[E0609]: no field `guarantee` on type `std::result::Result<RelationObjectsAnswer, minidora_domain::Error>`
+     --> crates/minidora-engine/src/core.rs:11684:35
+      |
+11684 |         assert_eq!(indexed_answer.guarantee, full_answer.guarantee);
+      |                                   ^^^^^^^^^ unknown field
+      |
+help: one of the expressions' fields has a field of the same name
+      |
+11684 |         assert_eq!(indexed_answer.unwrap().guarantee, full_answer.guarantee);
+      |                                   +++++++++
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `minidora-engine` (lib test) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...

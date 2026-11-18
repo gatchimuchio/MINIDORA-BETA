@@ -782,10 +782,14 @@
       "capability_id": "CAP-D02",
       "requirement": "Working memory limited to current goal and relevant causal dependencies",
       "required_observable": "Long history increases storage without causing unbounded active computation",
-      "implementation_disposition": "UNVERIFIED",
+      "implementation_disposition": "NEW",
       "acceptance_status": "UNVERIFIED",
-      "current_rust_paths": [],
-      "evidence": "No substantive Rust implementation/normal-route acceptance established for this obligation",
+      "current_rust_paths": [
+        "crates/minidora-engine/src/core.rs",
+        "crates/minidora-engine/src/relations.rs",
+        "crates/minidora-engine/src/store.rs"
+      ],
+      "evidence": "Scoped E1-W10 implementation only: BUILD_BATCH_57 records revision-checked Store relation projection for typed Ask/AskWhy; BUILD_BATCH_58 wires ordinary Japanese Engine::execute AskRelationObjects through the same index and compares output, guarantee, and proof dependencies against the full-snapshot reference. The B58 Core regression selects 2 Facts and 1 Rule from 64 Facts/1 Rule, commits within action budget 20 where the full scan is RESOURCE_LIMIT, preserves memory revision on a budget stop and after invalidation, and suspends without stale text/dependencies after tombstoning. Cold-index rebuilding still reads the full loaded snapshot; other consumers, Recovery list replay, fresh-process/session/model-version reuse and large-history resource populations are unverified. Full CAP-D02 acceptance remains UNVERIFIED.",
       "full_acceptance_gap": "Long history increases storage without causing unbounded active computation",
       "baseline_source_route_status": "UNMAPPED",
       "scope_decision": "No scope reduction approved; requirement retained"

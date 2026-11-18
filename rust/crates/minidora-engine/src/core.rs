@@ -1952,6 +1952,101 @@ impl Engine {
         Ok((memory, answer))
     }
 
+    fn indexed_relation_objects_answer(
+        &self,
+        actor: &str,
+        replay: RelationObjectsReplay<'_>,
+    ) -> Result<Option<(MemoryState, Result<RelationObjectsAnswer>)>> {
+        let candidate_shape = Proposition {
+            subject: replay.subject.into(),
+            predicate: replay.predicate.into(),
+            object: "$relation_object".into(),
+            negative: replay.negative,
+            scope: replay.scope.into(),
+            condition_refs: BTreeSet::new(),
+            temporal_scope: None,
+        };
+        self.store.with_relation_index(actor, |index| {
+            let (memory, answer) = match relations::active_relation_projection(
+                index,
+                &candidate_shape,
+                replay.max_actions,
+            ) {
+                    Ok((memory, projection_actions)) => {
+                        let answer = replay
+                            .max_actions
+                            .checked_sub(projection_actions)
+                            .ok_or_else(|| {
+                                failure(
+                                    "RELATION_BUDGET",
+                                    "active memory projection exhausted the relation-object action budget",
+                                )
+                            })
+                            .and_then(|answer_budget| {
+                                relation_objects_answer(
+                                    &memory,
+                                    replay.subject,
+                                    replay.predicate,
+                                    replay.negative,
+                                    replay.scope,
+                                    answer_budget,
+                                    replay.max_evidence_bytes,
+                                )
+                            });
+                        (memory, answer)
+                    }
+                    Err(error)
+                        if matches!(
+                            &error,
+                            Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                        ) =>
+                    {
+                        (
+                            MemoryState {
+                                revision: index.revision(),
+                                ..MemoryState::default()
+                            },
+                            Err(error),
+                        )
+                    }
+                    Err(error) => return Err(error),
+                };
+            Ok((memory, answer))
+        })
+    }
+
+    fn active_relation_objects_answer(
+        &self,
+        actor: &str,
+        replay: RelationObjectsReplay<'_>,
+    ) -> Result<(MemoryState, Result<RelationObjectsAnswer>)> {
+        if let Some(result) = self.indexed_relation_objects_answer(actor, replay)? {
+            return Ok(result);
+        }
+
+        // Older stores may predate the derived index. Rebuild it from the
+        // authenticated current snapshot once, then use the bounded query.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(result) = self.indexed_relation_objects_answer(actor, replay)? {
+            return Ok(result);
+        }
+
+        // A concurrent writer may have advanced the source while rebuilding;
+        // the immutable snapshot loaded above remains a safe fallback.
+        let answer = relation_objects_answer(
+            &memory,
+            replay.subject,
+            replay.predicate,
+            replay.negative,
+            replay.scope,
+            replay.max_actions,
+            replay.max_evidence_bytes,
+        );
+        Ok((memory, answer))
+    }
+
     pub fn execute(&mut self, actor: &str, request: RequestEnvelope) -> Result<ResultRecord> {
         self.execute_with_bundle(actor, request, None)
     }
@@ -6118,18 +6213,38 @@ impl Engine {
                 negative,
                 scope,
             } => {
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
-                let answer = match relation_objects_answer(
-                    &memory,
-                    subject,
-                    predicate,
-                    *negative,
-                    scope,
-                    request.budget.max_actions,
-                    request.budget.max_evidence_bytes,
+                let (memory, answer) = match self.active_relation_objects_answer(
+                    actor,
+                    RelationObjectsReplay {
+                        subject,
+                        predicate,
+                        negative: *negative,
+                        scope,
+                        max_actions: request.budget.max_actions,
+                        max_evidence_bytes: request.budget.max_evidence_bytes,
+                    },
                 ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "RELATION_QUERY_UNAVAILABLE",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                result.actor_memory_revision = Some(memory.revision);
+                state.result = Some(result.clone());
+                let answer = match answer {
                     Ok(answer) => answer,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
                     Err(error) => {
                         let code = match &error {
                             Error::Contract { code, .. } => code.as_str(),
@@ -11418,6 +11533,210 @@ mod active_relation_projection_tests {
             .active_relation_query("alice", &target, 128)
             .expect("query updated index revision");
         assert_eq!(after_tombstone.status, "UNKNOWN");
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated test store");
+    }
+
+    #[test]
+    fn indexed_relation_object_query_uses_only_the_goal_and_rule_closure() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-object-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request = RequestEnvelope::new(
+            "active-object-seed-case",
+            "active-object-seed-input",
+            "alice",
+            "保存関係値",
+        );
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register source input");
+
+        let mut full_memory = MemoryState::default();
+        let direct = relations::assert_fact(
+            &mut full_memory,
+            proposition("ミナ", "use", "はさみ"),
+            &source_input,
+        )
+        .expect("direct relation object");
+        let premise = relations::assert_fact(
+            &mut full_memory,
+            proposition("ミナ", "own", "端末"),
+            &source_input,
+        )
+        .expect("rule premise for a second relation object");
+        let rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "own", "$object"),
+            proposition("$subject", "use", "$object"),
+            &source_input,
+        )
+        .expect("object-preserving relation rule");
+        relations::assert_fact(
+            &mut full_memory,
+            proposition("サキ", "use", "バス"),
+            &source_input,
+        )
+        .expect("same-scope other-subject control");
+        let mut other_scope = proposition("ミナ", "use", "布");
+        other_scope.scope = "archive".into();
+        relations::assert_fact(&mut full_memory, other_scope, &source_input)
+            .expect("out-of-scope control");
+        for ordinal in 0..60 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(
+                    &format!("unrelated-{ordinal}"),
+                    &format!("unrelated-predicate-{ordinal}"),
+                    &format!("unrelated-value-{ordinal}"),
+                ),
+                &source_input,
+            )
+            .expect("unrelated retained fact");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let full_answer =
+            relation_objects_answer(&full_memory, "ミナ", "use", false, "lab", 256, 16 * 1024)
+                .expect("full-snapshot reference answer");
+        assert!(matches!(
+            relation_objects_answer(
+                &full_memory,
+                "ミナ",
+                "use",
+                false,
+                "lab",
+                20,
+                16 * 1024,
+            ),
+            Err(Error::Contract { code, .. }) if code == "RESOURCE_LIMIT"
+        ));
+
+        let connection = rusqlite::Connection::open(directory.join("state.sqlite3"))
+            .expect("open derived index for cold-start setup");
+        connection
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .expect("mark actor index cold");
+        drop(connection);
+
+        let mut request = RequestEnvelope::new(
+            "active-object-query-case",
+            "active-object-query-input",
+            "alice",
+            "[scope=lab]ミナは何を使いますか",
+        );
+        request.budget.max_actions = 20;
+        let result = engine
+            .execute("alice", request)
+            .expect("run ordinary Japanese AskRelationObjects through Core");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.actor_memory_revision, Some(full_memory.revision));
+        assert_eq!(result.text, full_answer.text);
+        assert_eq!(result.guarantee, full_answer.guarantee);
+        assert!(result.dependencies.contains(&direct.id));
+        assert!(result.dependencies.contains(&premise.id));
+        assert!(result.dependencies.contains(&rule.id));
+        assert!(
+            !result
+                .dependencies
+                .iter()
+                .any(|id| id.contains("unrelated"))
+        );
+
+        let mut budget_limited_request = RequestEnvelope::new(
+            "active-object-budget-case",
+            "active-object-budget-input",
+            "alice",
+            "[scope=lab]ミナは何を使いますか",
+        );
+        budget_limited_request.budget.max_actions = 4;
+        let budget_stopped = engine
+            .execute("alice", budget_limited_request)
+            .expect("suspend the relation-object query when projection exceeds its budget");
+        assert_eq!(
+            budget_stopped.lifecycle,
+            Lifecycle::Suspend,
+            "{budget_stopped:?}"
+        );
+        assert_eq!(
+            budget_stopped.actor_memory_revision,
+            Some(full_memory.revision),
+            "{budget_stopped:?}"
+        );
+        assert!(
+            budget_stopped
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("RESOURCE_LIMIT:"))
+        );
+
+        let (active, indexed_answer) = engine
+            .active_relation_objects_answer(
+                "alice",
+                RelationObjectsReplay {
+                    subject: "ミナ",
+                    predicate: "use",
+                    negative: false,
+                    scope: "lab",
+                    max_actions: 20,
+                    max_evidence_bytes: 16 * 1024,
+                },
+            )
+            .expect("run warm indexed object query");
+        let indexed_answer = indexed_answer.expect("finish indexed object query");
+        assert_eq!(active.revision, full_memory.revision);
+        assert_eq!(active.facts.len(), 2);
+        assert_eq!(active.rules.len(), 1);
+        assert_eq!(indexed_answer.text, full_answer.text);
+        assert_eq!(indexed_answer.dependencies, full_answer.dependencies);
+        assert_eq!(indexed_answer.guarantee, full_answer.guarantee);
+
+        let mut next = full_memory.clone();
+        next.revision = 2;
+        for fact_id in [&direct.id, &premise.id] {
+            next.facts
+                .iter_mut()
+                .find(|fact| fact.id == *fact_id)
+                .expect("fact remains in immutable history")
+                .valid = false;
+        }
+        next.rules
+            .iter_mut()
+            .find(|current| current.id == rule.id)
+            .expect("rule remains in immutable history")
+            .valid = false;
+        engine
+            .store
+            .save_memory("alice", &next)
+            .expect("incrementally tombstone the relation proof closure");
+        let mut after_invalidation = RequestEnvelope::new(
+            "active-object-after-invalidation-case",
+            "active-object-after-invalidation-input",
+            "alice",
+            "[scope=lab]ミナは何を使いますか",
+        );
+        after_invalidation.budget.max_actions = 20;
+        let stopped = engine
+            .execute("alice", after_invalidation)
+            .expect("requery the invalidated object relations");
+        assert_eq!(stopped.lifecycle, Lifecycle::Suspend, "{stopped:?}");
+        assert_eq!(stopped.actor_memory_revision, Some(next.revision));
+        assert!(!stopped.dependencies.contains(&direct.id));
+        assert!(!stopped.dependencies.contains(&premise.id));
+        assert!(!stopped.dependencies.contains(&rule.id));
+        assert!(!stopped.text.contains("はさみ"));
+        assert!(!stopped.text.contains("端末"));
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated test store");
