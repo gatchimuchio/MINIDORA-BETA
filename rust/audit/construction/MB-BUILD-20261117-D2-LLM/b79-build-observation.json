@@ -1,0 +1,126 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_PREMISE_INVENTORY_EXPLANATION_RECOVERY_CURRENT_RECHECK_B79_V1",
+  "work_item": "Revalidate a saved InspectPremises result on current actor-memory head before confirming its ExplainPrevious result",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "512287891e7d91f4021053b10c90d98a65cc6143",
+  "implementation_commit": "48fc7a1e3d4cd2ef6202db550bf73be6ff185ecf",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "4d399df9d5a16942bb6fb8a3730b13fa879e8789f857de66f3ccc5bfb5d82403",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "512287891e7d91f4021053b10c90d98a65cc6143",
+    "origin_main": "512287891e7d91f4021053b10c90d98a65cc6143",
+    "local_base": "refs/heads/codex/backup-main=e427b1919e4513e9038b9dedaa9743a1be23c457",
+    "local_previous": "refs/heads/codex/backup-main-prev=8317652ab43f933522e66cd13867f9cce6c64745",
+    "local_tags": [
+      "refs/tags/codex/backup-main=e427b1919e4513e9038b9dedaa9743a1be23c457",
+      "refs/tags/codex/backup-main-prev=8317652ab43f933522e66cd13867f9cce6c64745"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=e427b1919e4513e9038b9dedaa9743a1be23c457",
+      "refs/tags/codex/backup-main-prev=8317652ab43f933522e66cd13867f9cce6c64745"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "512287891e7d91f4021053b10c90d98a65cc6143"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 67% used",
+    "repo_size_at_start": "81M",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33"
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "saved typed InspectPremises input and committed ResultRecord -> retained actor-memory revision inventory/render-unit replay -> revision-matched current actor-memory index or authenticated snapshot fallback -> inventory/dependency/guarantee and exact ExplainPrevious linkage checks -> RECOVERY_CONTEXT_PROOF_CHANGED on mismatch",
+    "current_head_index": "reuses indexed_premise_inventory_from_store; compares the complete RelationInventory at one revision-matched index snapshot",
+    "cold_or_stale_index": "None loads the authenticated current memory snapshot and re-evaluates the typed premise inventory",
+    "retained_revision_replay": "reconstructs the original inventory and shared Core display units from the retained actor-memory revision and checks the saved dependencies, guarantee and ContentPlan units",
+    "preserved_contracts": [
+      "prior input/result actor, case and identity",
+      "prior committed lifecycle and ContentPlan/render artifact integrity",
+      "original actor-memory revision and premise inventory proof",
+      "current inventory equality, dependencies and guarantee",
+      "ExplainPrevious output remains tied to the exact saved result",
+      "existing lazy evidence-budget stop behavior",
+      "RECOVERY_CONTEXT_PROOF_CHANGED stop boundary",
+      "no schema, API or decision-authority change"
+    ],
+    "schema_version_changed": false,
+    "runtime_behavior_verified": false
+  },
+  "test_attempts": [],
+  "verification": [
+    {
+      "command": "cargo check -p minidora-engine --all-targets --locked",
+      "result": "PASS: compile only; tests were not executed",
+      "log": "b79-engine-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b79-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b79-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b79-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "focused InspectPremises-to-ExplainPrevious Recovery test",
+    "Rust runtime tests, including current-head invalidation, cold-index fallback and target-byte preservation",
+    "full minidora-engine runtime suite, workspace all-features runtime suite and workspace build",
+    "large-history retained-revision replay, same-subject scale, condition closures and concurrent-writer populations",
+    "full CAP-D02 or E1 acceptance",
+    "E2 CORE-G01..07, E3/E4, E5, E6, E7 or E8 acceptance",
+    "Windows/macOS/other physical OS and deployment"
+  ],
+  "asset_classification": {
+    "保持": [
+      "D2 source documents, Git history, frozen beta assets and existing user assets were unchanged"
+    ],
+    "保管済み": [
+      "B79 report",
+      "B79 machine observation",
+      "four compile/static verification logs"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/recovery.rs",
+      "existing shared Cargo target cache updated by check/Clippy"
+    ],
+    "ゴミ箱移動済み": 0,
+    "保留": [],
+    "temporary_fixture": "No test fixture created; no residual temporary path and no manual deletion",
+    "windows_storage_scope": "not applicable to this Linux execution"
+  },
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}
