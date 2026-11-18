@@ -841,6 +841,66 @@ pub(crate) fn indexed_premise_inventory_from_store(
     })
 }
 
+/// Render the exact units used by the saved premise inventory result.
+/// Recovery uses this same projection when checking that a prior result still
+/// matches its retained actor-memory revision.
+pub(crate) fn premise_inventory_units<'a>(
+    subject: &'a str,
+    inventory: &'a relations::RelationInventory,
+) -> impl Iterator<Item = String> + 'a {
+    let disclosure = format!(
+        "会話に保存された「{subject}」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。"
+    );
+    let conflict = std::iter::once_with(move || {
+        inventory.has_conflict.then(|| {
+            "一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。"
+                .to_string()
+        })
+    })
+    .flatten();
+    let fact_lines = std::iter::once_with(move || {
+        let mut facts: Vec<_> = inventory.facts.iter().collect();
+        facts.sort_by(|left, right| {
+            left.proposition
+                .cmp(&right.proposition)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        facts
+    })
+    .flatten()
+    .map(move |fact| {
+        let (category, origin) = match &fact.guarantee {
+            Guarantee::UserPremise => ("提示前提", format!("提示前提ID: {}", fact.id)),
+            Guarantee::Derived => (
+                "規則導出",
+                format!(
+                    "導出ID: {}; 依存ID: {}",
+                    fact.id,
+                    fact.dependencies.join(", ")
+                ),
+            ),
+            Guarantee::Computed => ("計算記録", format!("計算記録ID: {}", fact.id)),
+            Guarantee::SourceReport => ("出典報告", format!("出典報告ID: {}", fact.id)),
+            Guarantee::Hypothesis | Guarantee::Unknown => {
+                ("未確定", format!("未確定記録ID: {}", fact.id))
+            }
+        };
+        let conflict = if inventory.contested_fact_ids.contains(&fact.id) {
+            "対立根拠として"
+        } else {
+            ""
+        };
+        format!(
+            "・{conflict}{category}: {}（範囲: {}; {origin}）",
+            describe(&fact.proposition),
+            fact.proposition.scope
+        )
+    });
+    std::iter::once(disclosure)
+        .chain(conflict)
+        .chain(fact_lines)
+}
+
 fn relation_profile_answer_from_inventory(
     subject: &str,
     inventory: relations::RelationInventory,
@@ -7471,31 +7531,11 @@ impl Engine {
                     Err(error) => return Err(error),
                 };
 
-                let disclosure = format!(
-                    "会話に保存された「{subject}」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。"
-                );
-                let mut evidence_bytes = disclosure.len();
-                if evidence_bytes > request.budget.max_evidence_bytes {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "保存済み関係の一覧が要求の証拠予算を超えました。",
-                    );
-                }
-                let mut lines = vec![disclosure];
-                let relations::RelationInventory {
-                    mut facts,
-                    contested_fact_ids,
-                    has_conflict,
-                    dependencies,
-                    guarantee,
-                } = inventory;
-                if has_conflict {
-                    let line = "一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。".to_string();
+                let mut evidence_bytes = 0usize;
+                for (index, line) in premise_inventory_units(subject, &inventory).enumerate() {
                     evidence_bytes = evidence_bytes
                         .checked_add(line.len())
-                        .and_then(|total| total.checked_add(1))
+                        .and_then(|total| total.checked_add(if index == 0 { 0 } else { 1 }))
                         .unwrap_or(usize::MAX);
                     if evidence_bytes > request.budget.max_evidence_bytes {
                         return self.stop(
@@ -7505,57 +7545,10 @@ impl Engine {
                             "保存済み関係の一覧が要求の証拠予算を超えました。",
                         );
                     }
-                    lines.push(line);
+                    units.push(line);
                 }
-                facts.sort_by(|left, right| {
-                    left.proposition
-                        .cmp(&right.proposition)
-                        .then_with(|| left.id.cmp(&right.id))
-                });
-                for fact in &facts {
-                    let (category, origin) = match &fact.guarantee {
-                        Guarantee::UserPremise => ("提示前提", format!("提示前提ID: {}", fact.id)),
-                        Guarantee::Derived => (
-                            "規則導出",
-                            format!(
-                                "導出ID: {}; 依存ID: {}",
-                                fact.id,
-                                fact.dependencies.join(", ")
-                            ),
-                        ),
-                        Guarantee::Computed => ("計算記録", format!("計算記録ID: {}", fact.id)),
-                        Guarantee::SourceReport => ("出典報告", format!("出典報告ID: {}", fact.id)),
-                        Guarantee::Hypothesis | Guarantee::Unknown => {
-                            ("未確定", format!("未確定記録ID: {}", fact.id))
-                        }
-                    };
-                    let conflict = if contested_fact_ids.contains(&fact.id) {
-                        "対立根拠として"
-                    } else {
-                        ""
-                    };
-                    let line = format!(
-                        "・{conflict}{category}: {}（範囲: {}; {origin}）",
-                        describe(&fact.proposition),
-                        fact.proposition.scope
-                    );
-                    evidence_bytes = evidence_bytes
-                        .checked_add(line.len())
-                        .and_then(|total| total.checked_add(1))
-                        .unwrap_or(usize::MAX);
-                    if evidence_bytes > request.budget.max_evidence_bytes {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESOURCE_LIMIT",
-                            "保存済み関係の一覧が要求の証拠予算を超えました。",
-                        );
-                    }
-                    lines.push(line);
-                }
-                units.extend(lines);
-                result.dependencies = dependencies;
-                result.guarantee = guarantee;
+                result.dependencies = inventory.dependencies;
+                result.guarantee = inventory.guarantee;
             }
             Intent::DraftRelationProfile { subject } => {
                 let (memory_revision, answer) = self.active_relation_profile_answer(

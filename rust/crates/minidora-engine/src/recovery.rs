@@ -339,6 +339,20 @@ fn verify_previous_relation_context(
     }
     if let Some((_, prior_bundle)) =
         store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        && matches!(prior_bundle.meaning.intent, Intent::InspectPremises { .. })
+    {
+        return verify_explain_previous_premise_inventory_memory_result(
+            store, state, previous, result, plan, goal,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!("the saved premise inventory behind the explanation changed: {error}"),
+            )
+        });
+    }
+    if let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
         && matches!(
             prior_bundle.meaning.intent,
             Intent::AskRelationObjects { .. }
@@ -585,6 +599,154 @@ fn verify_explain_previous_relation_objects_memory_result(
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the relation-object explanation differs from its exact proof, dependencies or units",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_explain_previous_premise_inventory_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior premise-inventory result reference is missing",
+            )
+        })?;
+    if previous.id != previous_id
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior premise-inventory result is not committed",
+        ));
+    }
+    let Some((_, prior_bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )?
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact premise-inventory input bundle is not retained",
+        ));
+    };
+    if prior_bundle.request.actor_id != state.actor_id
+        || prior_bundle.request.case_id != state.case_id
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the premise-inventory input and committed result identities differ",
+        ));
+    }
+    let Intent::InspectPremises { subject } = &prior_bundle.meaning.intent else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior input does not retain a typed premise-inventory request",
+        ));
+    };
+    let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the premise-inventory result has no retained content plan",
+        )
+    })?;
+    let prior_render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the premise-inventory result has no retained render record",
+        )
+    })?;
+    let mut unsigned_prior_plan = prior_plan.clone();
+    unsigned_prior_plan.id.clear();
+    if prior_plan.id != identity(&unsigned_prior_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || prior_plan.dependencies.get(..previous.dependencies.len())
+            != Some(previous.dependencies.as_slice())
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained premise-inventory result, content plan or render is invalid",
+        ));
+    }
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_plan)?;
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_render)?;
+
+    let original_memory =
+        result_memory_snapshot(store, &state.actor_id, previous)?.ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_REVISION_MISSING",
+                "the original premise-inventory actor-memory revision is missing",
+            )
+        })?;
+    let original_inventory = crate::relations::inventory_about(
+        &original_memory,
+        subject,
+        prior_bundle.request.budget.max_actions,
+    )?;
+    let original_units =
+        crate::core::premise_inventory_units(subject, &original_inventory).collect::<Vec<_>>();
+    if previous.dependencies != original_inventory.dependencies
+        || previous.guarantee != original_inventory.guarantee
+        || prior_plan.required_units != original_units
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained premise inventory does not match its actor-memory revision",
+        ));
+    }
+
+    let current_inventory = match crate::core::indexed_premise_inventory_from_store(
+        store,
+        &state.actor_id,
+        subject,
+        goal.budget.max_actions,
+    )? {
+        Some((_revision, inventory)) => inventory?,
+        None => {
+            let memory = store.load_memory(&state.actor_id)?;
+            crate::relations::inventory_about(&memory, subject, goal.budget.max_actions)?
+        }
+    };
+    if current_inventory != original_inventory {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the current premise inventory differs from the prior committed inventory",
+        ));
+    }
+
+    if result.dependencies != [previous.id.clone()]
+        || result.guarantee != previous.guarantee
+        || plan.required_units != [previous.text.clone()]
+        || plan.text != result.text
+        || result.text != previous.text
+        || plan.guarantee != result.guarantee
+        || result.calculation.is_some()
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the premise-inventory explanation differs from its exact prior result",
         ));
     }
     Ok(())
