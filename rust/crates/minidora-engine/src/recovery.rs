@@ -7620,6 +7620,100 @@ mod tests {
     }
 
     #[test]
+    fn saved_previous_relation_explanation_rejects_revisionless_result_bound_to_other_input_version()
+     {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        assert_eq!(premise.lifecycle, Lifecycle::Commit, "{premise:?}");
+
+        let prior_relation_v1 = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "prior-relation-why", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(prior_relation_v1.lifecycle, Lifecycle::Commit);
+        assert_eq!(prior_relation_v1.input_version, 1);
+
+        let mut prior_relation_request_v2 =
+            RequestEnvelope::new("case", "prior-relation-why", "alice", "なぜそれは鳥ですか");
+        prior_relation_request_v2.input_version = 2;
+        let prior_relation_v2 = engine.execute("alice", prior_relation_request_v2).unwrap();
+        assert_eq!(
+            prior_relation_v2.lifecycle,
+            Lifecycle::Commit,
+            "{prior_relation_v2:?}"
+        );
+        assert_eq!(prior_relation_v2.input_id, prior_relation_v1.input_id);
+        assert_eq!(prior_relation_v2.input_version, 2);
+        assert_ne!(prior_relation_v2.id, prior_relation_v1.id);
+        assert!(prior_relation_v2.actor_memory_revision.is_some());
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior_relation_v2.text);
+
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let mut revisionless_wrong_version = retained.clone();
+        let previous = revisionless_wrong_version
+            .prior_results
+            .get_mut(&prior_relation_v2.id)
+            .expect("the persisted case retains the version 2 AskPreviousRelation result");
+        assert_eq!(previous.id, prior_relation_v2.id);
+        assert_eq!(previous.lifecycle, Lifecycle::Commit);
+        assert_eq!(previous.input_id, prior_relation_v2.input_id);
+        assert_eq!(previous.input_version, prior_relation_v2.input_version);
+        assert!(previous.actor_memory_revision.is_some());
+        previous.actor_memory_revision = None;
+        previous.input_version = prior_relation_v1.input_version;
+
+        let (_, wrong_version_bundle) = engine
+            .store
+            .get_input_bundle("alice", "case", &previous.input_id, previous.input_version)
+            .unwrap()
+            .expect("the same input ID has an existing sealed version 1 bundle");
+        assert_ne!(
+            identity(&wrong_version_bundle.request).unwrap(),
+            previous.id
+        );
+
+        let error = inspect(
+            &engine.store,
+            "alice",
+            &revisionless_wrong_version,
+            &retained_result,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert!(
+            error
+                .to_string()
+                .contains("not bound to its sealed input identity")
+        );
+        assert_eq!(engine.latest("alice", "case").unwrap().unwrap(), retained);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
     fn conjunction_explanation_rechecks_the_current_memory_revision() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
