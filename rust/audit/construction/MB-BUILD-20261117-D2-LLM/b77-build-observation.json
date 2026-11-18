@@ -1,0 +1,138 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_RELATION_OBJECT_EXPLANATION_RECOVERY_CURRENT_RECHECK_B77_V1",
+  "work_item": "Bound saved relation-object ExplainPrevious Recovery current-head revalidation before confirming a pending file effect",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "092e88fde3998e6ded338a56d27ef1180b3ab782",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "adae9bcbfd3270a0b8dd89d3af5e4833604215b4ffc9f1a6d774538eb9fb256c",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "local_base": "refs/heads/codex/backup-main=e427b1919e4513e9038b9dedaa9743a1be23c457",
+    "local_previous": "refs/heads/codex/backup-main-prev=8317652ab43f933522e66cd13867f9cce6c64745",
+    "remote_tags": [
+      "refs/tags/codex/backup-main=e427b1919e4513e9038b9dedaa9743a1be23c457",
+      "refs/tags/codex/backup-main-prev=8317652ab43f933522e66cd13867f9cce6c64745"
+    ],
+    "remote_backup_branches_unchanged": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "092e88fde3998e6ded338a56d27ef1180b3ab782"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "workspace_capacity": "63G total / 20G available / 67% used"
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "saved AskRelationObjects result -> ExplainPrevious Recovery -> exact retained-revision replay on immutable snapshot -> current-head Core index projection -> proof/dependency/guarantee check -> pending effect decision",
+    "current_head_index": "current-context branch uses indexed_relation_objects_answer_from_store and shares its projected answer/memory with Core explanation validation",
+    "budget_accounting": "existing indexed answer subtracts projection actions before relation-object proof evaluation under the sealed action budget",
+    "cold_or_stale_index": "None loads authenticated current full snapshot fallback",
+    "retained_revision_replay": "explicit immutable retained snapshot continues through the existing full-snapshot explanation evaluator",
+    "preserved_contracts": [
+      "prior input/result actor and case identity",
+      "prior ContentPlan/render integrity and source memory replay",
+      "saved text, proof dependencies and guarantee verification",
+      "explanation dependencies, guarantee, required units and evidence budget",
+      "RECOVERY_CONTEXT_PROOF_CHANGED invalidation boundary",
+      "no schema or decision-authority change"
+    ],
+    "schema_version_changed": false
+  },
+  "fixture_observation": {
+    "intent": "ordinary Japanese relation-object request followed by ExplainPrevious",
+    "explanation_max_actions": 32,
+    "initial_memory_facts": 1,
+    "initial_memory_rules": 1,
+    "exact_retained_revision_replay_after_engine_reopen": "PASS",
+    "cold_index_fallback_on_small_snapshot": "PASS",
+    "unrelated_off_scope_facts_added": 80,
+    "current_memory_facts": 81,
+    "current_memory_rules": 1,
+    "full_snapshot_at_sealed_32_actions": "RESOURCE_LIMIT",
+    "full_snapshot_reference_at_10000_actions": "PASS",
+    "indexed_current_head_verification_at_sealed_32_actions": "PASS",
+    "premise_invalidation": "RECOVERY_CONTEXT_PROOF_CHANGED",
+    "existing_explanation_target_bytes_preserved_after_invalidation": true
+  },
+  "verification": [
+    {
+      "command": "cargo test -p minidora-engine --locked --lib recovery::tests::relation_objects_explanation_pins_and_rechecks_its_memory_revision -- --exact --nocapture",
+      "result": "PASS",
+      "cases_passed": 1,
+      "log": "b77-focused-recovery-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --lib explanation_pins_and_rechecks_its_memory_revision -- --nocapture",
+      "result": "PASS",
+      "cases_passed": 5,
+      "log": "b77-explanation-recovery-tests.log"
+    },
+    {
+      "command": "cargo check -p minidora-engine --all-targets --locked",
+      "result": "PASS",
+      "log": "b77-engine-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b77-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b77-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b77-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "full minidora-engine package runtime suite",
+    "workspace all-target Clippy",
+    "workspace all-features runtime suite and workspace build",
+    "large-history exact retained-revision replay and cold/stale fallback scaling",
+    "same-subject scale, large condition closures and concurrent-writer populations",
+    "full CAP-D02 or E1 acceptance"
+  ],
+  "asset_classification": {
+    "preserved": [
+      "no existing user or frozen-beta assets changed"
+    ],
+    "archived": [
+      "B77 report",
+      "B77 machine observation",
+      "six verification logs"
+    ],
+    "active": [
+      "Core and Recovery source changes",
+      "existing shared Cargo target cache updated by this build"
+    ],
+    "moved_to_trash": 0,
+    "pending": [],
+    "temporary_test_fixture": "test-owned TempDir removed by the test harness at completion; no residual path and no manual deletion",
+    "windows_storage_scope": "not applicable to this Linux execution"
+  },
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}

@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 5 tests
+test recovery::tests::previous_answer_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::relation_objects_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::relation_profile_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::saved_relation_comparison_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::common_relations_explanation_pins_and_rechecks_its_memory_revision ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 268 filtered out; finished in 7.16s

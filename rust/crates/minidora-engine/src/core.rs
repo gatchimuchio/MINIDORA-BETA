@@ -661,7 +661,7 @@ pub(crate) fn relation_objects_explanation(
     previous: &ResultRecord,
     replay: RelationObjectsReplay<'_>,
 ) -> Result<RelationObjectsExplanationEvaluation> {
-    let answer = match relation_objects_answer(
+    let answer = relation_objects_answer(
         memory,
         replay.subject,
         replay.predicate,
@@ -669,7 +669,35 @@ pub(crate) fn relation_objects_explanation(
         replay.scope,
         replay.max_actions,
         replay.max_evidence_bytes,
-    ) {
+    );
+    relation_objects_explanation_with_answer(memory, previous, replay, answer)
+}
+
+/// Rebuild a saved relation-object explanation from a revision-matched Store
+/// index. `None` means the index is cold or stale and the caller should use its
+/// authenticated snapshot path.
+pub(crate) fn indexed_relation_objects_explanation_from_store(
+    store: &Store,
+    actor: &str,
+    previous: &ResultRecord,
+    replay: RelationObjectsReplay<'_>,
+) -> Result<Option<(u64, Result<RelationObjectsExplanationEvaluation>)>> {
+    let Some((memory, answer)) = indexed_relation_objects_answer_from_store(store, actor, replay)?
+    else {
+        return Ok(None);
+    };
+    let revision = memory.revision;
+    let explanation = relation_objects_explanation_with_answer(&memory, previous, replay, answer);
+    Ok(Some((revision, explanation)))
+}
+
+fn relation_objects_explanation_with_answer(
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    replay: RelationObjectsReplay<'_>,
+    answer: Result<RelationObjectsAnswer>,
+) -> Result<RelationObjectsExplanationEvaluation> {
+    let answer = match answer {
         Ok(answer) => answer,
         Err(error) => {
             let code = match &error {

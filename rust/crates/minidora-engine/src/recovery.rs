@@ -344,9 +344,8 @@ fn verify_previous_relation_context(
             Intent::AskRelationObjects { .. }
         )
     {
-        let memory = store.load_memory(actor)?;
         return verify_explain_previous_relation_objects_memory_result(
-            store, state, &memory, previous, result, plan, goal,
+            store, state, None, previous, result, plan, goal,
         )
         .map_err(|error| {
             failure(
@@ -419,7 +418,7 @@ fn verify_previous_relation_context(
 fn verify_explain_previous_relation_objects_memory_result(
     store: &Store,
     state: &CaseRevision,
-    memory: &MemoryState,
+    current_memory: Option<&MemoryState>,
     previous: &ResultRecord,
     result: &ResultRecord,
     plan: &ContentPlan,
@@ -528,18 +527,30 @@ fn verify_explain_previous_relation_objects_memory_result(
         }
     }
 
-    let explanation = match crate::core::relation_objects_explanation(
-        memory,
-        previous,
-        crate::core::RelationObjectsReplay {
-            subject,
-            predicate,
-            negative: *negative,
-            scope,
-            max_actions: goal.budget.max_actions,
-            max_evidence_bytes: goal.budget.max_evidence_bytes,
-        },
-    )? {
+    let replay = crate::core::RelationObjectsReplay {
+        subject,
+        predicate,
+        negative: *negative,
+        scope,
+        max_actions: goal.budget.max_actions,
+        max_evidence_bytes: goal.budget.max_evidence_bytes,
+    };
+    let evaluation = if let Some(memory) = current_memory {
+        crate::core::relation_objects_explanation(memory, previous, replay)?
+    } else if let Some((_, evaluation)) =
+        crate::core::indexed_relation_objects_explanation_from_store(
+            store,
+            &state.actor_id,
+            previous,
+            replay,
+        )?
+    {
+        evaluation?
+    } else {
+        let memory = store.load_memory(&state.actor_id)?;
+        crate::core::relation_objects_explanation(&memory, previous, replay)?
+    };
+    let explanation = match evaluation {
         crate::core::RelationObjectsExplanationEvaluation::Complete(answer) => answer,
         crate::core::RelationObjectsExplanationEvaluation::Blocked { code, message } => {
             return Err(failure(
@@ -1655,7 +1666,13 @@ fn verify_explain_previous_relation_memory_result(
         Intent::AskRelationObjects { .. }
     ) {
         return verify_explain_previous_relation_objects_memory_result(
-            store, state, memory, previous, result, plan, goal,
+            store,
+            state,
+            Some(memory),
+            previous,
+            result,
+            plan,
+            goal,
         );
     }
     let prior_meaning =
@@ -6635,6 +6652,7 @@ mod tests {
 
         let mut request =
             RequestEnvelope::new("case", "object-explanation", "alice", "詳しく説明して");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -6665,6 +6683,8 @@ mod tests {
                 .any(|fact| fact.id == direct_id)
         );
         assert!(original_memory.rules.iter().any(|rule| rule.id == rule_id));
+        assert_eq!(original_memory.facts.len(), 1);
+        assert_eq!(original_memory.rules.len(), 1);
 
         let retained = engine.latest("alice", "case").unwrap().unwrap();
         let retained_result = retained.result.as_ref().unwrap().clone();
@@ -6678,9 +6698,102 @@ mod tests {
                 .store
                 .load_memory_revision("alice", memory_revision)
                 .unwrap(),
-            Some(original_memory)
+            Some(original_memory.clone())
         );
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "extended-history-case",
+            "objects-explanation-history",
+            "alice",
+            "関係一覧説明Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "unrelated".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let previous_id = retained
+            .bundle
+            .as_ref()
+            .and_then(|bundle| bundle.meaning.context_result_ref.as_deref())
+            .expect("the sealed explanation retains its prior-result reference");
+        let previous = retained
+            .prior_results
+            .get(previous_id)
+            .expect("the exact relation-object result remains retained");
+        let full_snapshot_error = verify_explain_previous_relation_objects_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap_err();
+        assert!(
+            full_snapshot_error.to_string().contains("RESOURCE_LIMIT"),
+            "{full_snapshot_error:?}"
+        );
+        assert_eq!(current_memory.facts.len(), 81);
+        assert_eq!(current_memory.rules.len(), 1);
+        let mut full_reference_goal = goal.clone();
+        full_reference_goal.budget.max_actions = 10_000;
+        verify_explain_previous_relation_objects_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &full_reference_goal,
+        )
+        .unwrap();
+        verify_explain_previous_relation_objects_memory_result(
+            &engine.store,
+            &retained,
+            None,
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
         let invalidation = engine
             .execute(
                 "alice",
