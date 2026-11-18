@@ -1051,8 +1051,40 @@ fn verify_relation_profile_memory_result(
         subject,
         goal.budget.max_actions,
         goal.budget.max_evidence_bytes,
-    )
-    .map_err(|error| {
+    );
+    verify_relation_profile_answer(answer, result, plan)
+}
+
+fn verify_relation_profile_memory_result_with_index(
+    store: &Store,
+    actor: &str,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<()>> {
+    let Intent::DraftRelationProfile { subject } = &goal.intent else {
+        return Ok(Some(()));
+    };
+    let Some((_, answer)) = crate::core::indexed_relation_profile_answer_from_store(
+        store,
+        actor,
+        subject,
+        goal.budget.max_actions,
+        goal.budget.max_evidence_bytes,
+    )?
+    else {
+        return Ok(None);
+    };
+    verify_relation_profile_answer(answer, result, plan)?;
+    Ok(Some(()))
+}
+
+fn verify_relation_profile_answer(
+    answer: Result<crate::core::RelationProfileAnswer>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    let answer = answer.map_err(|error| {
         failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             format!("the retained relation profile cannot be replayed: {error}"),
@@ -2676,10 +2708,19 @@ fn inspect(
         && result.actor_memory_revision.is_some()
     {
         // Rebuild from the current actor memory separately from the exact
-        // snapshot replay above. Changed or invalidated profile evidence must
-        // stop recovery before the original file bytes are confirmed.
-        let memory = store.load_memory(actor)?;
-        verify_relation_profile_memory_result(&memory, result, plan, &goal).map_err(|error| {
+        // snapshot replay above. Use the revision-matched subject index when
+        // available; cold/stale indexes retain the authenticated full-snapshot
+        // path. Changed or invalidated profile evidence must stop recovery.
+        let current_verification = (|| match verify_relation_profile_memory_result_with_index(
+            store, actor, result, plan, &goal,
+        )? {
+            Some(()) => Ok(()),
+            None => {
+                let memory = store.load_memory(actor)?;
+                verify_relation_profile_memory_result(&memory, result, plan, &goal)
+            }
+        })();
+        current_verification.map_err(|error| {
             failure(
                 "RECOVERY_PROOF_INVALIDATED",
                 format!("the original relation-profile proof is no longer valid: {error}"),
@@ -6213,6 +6254,7 @@ mod tests {
             "alice",
             "ココについて保存されている情報をもとに短い紹介文を書いて",
         );
+        request.budget.max_actions = 64;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -6255,6 +6297,84 @@ mod tests {
                 .unwrap(),
             Some(original_memory)
         );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "profile-recovery-off-scope-history",
+            "alice",
+            "紹介文Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let Intent::DraftRelationProfile { subject } = &goal.intent else {
+            panic!("retained profile lost its typed subject");
+        };
+        let full_answer = crate::core::relation_profile_answer(
+            &current_memory,
+            subject,
+            10_000,
+            goal.budget.max_evidence_bytes,
+        )
+        .unwrap();
+        let (indexed_revision, indexed_answer) =
+            crate::core::indexed_relation_profile_answer_from_store(
+                &engine.store,
+                "alice",
+                subject,
+                goal.budget.max_actions,
+                goal.budget.max_evidence_bytes,
+            )
+            .unwrap()
+            .expect("current profile subject index is available");
+        let indexed_answer = indexed_answer.unwrap();
+        assert_eq!(current_memory.facts.len(), 81);
+        assert_eq!(indexed_revision, current_memory.revision);
+        assert_eq!(indexed_answer, full_answer);
+        assert!(matches!(
+            crate::core::relation_profile_answer(
+                &current_memory,
+                subject,
+                goal.budget.max_actions,
+                goal.budget.max_evidence_bytes,
+            ),
+            Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+        ));
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
 
         let invalidation = engine

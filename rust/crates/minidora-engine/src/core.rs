@@ -777,6 +777,24 @@ fn relation_profile_answer_from_index(
     relation_profile_answer_from_inventory(subject, inventory, max_evidence_bytes)
 }
 
+/// Re-evaluate a relation profile from a revision-matched Store index.
+/// `None` means the index is cold or stale and the caller should use its
+/// authenticated snapshot path.
+pub(crate) fn indexed_relation_profile_answer_from_store(
+    store: &Store,
+    actor: &str,
+    subject: &str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+) -> Result<Option<(u64, Result<RelationProfileAnswer>)>> {
+    store.with_relation_index(actor, |index| {
+        let revision = index.revision();
+        let answer =
+            relation_profile_answer_from_index(index, subject, max_actions, max_evidence_bytes);
+        Ok((revision, answer))
+    })
+}
+
 fn relation_profile_answer_from_inventory(
     subject: &str,
     inventory: relations::RelationInventory,
@@ -2510,12 +2528,13 @@ impl Engine {
         max_actions: u32,
         max_evidence_bytes: usize,
     ) -> Result<Option<(u64, Result<RelationProfileAnswer>)>> {
-        self.store.with_relation_index(actor, |index| {
-            let revision = index.revision();
-            let answer =
-                relation_profile_answer_from_index(index, subject, max_actions, max_evidence_bytes);
-            Ok((revision, answer))
-        })
+        indexed_relation_profile_answer_from_store(
+            &self.store,
+            actor,
+            subject,
+            max_actions,
+            max_evidence_bytes,
+        )
     }
 
     fn active_relation_profile_answer(
