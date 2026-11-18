@@ -8696,6 +8696,129 @@ mod tests {
     }
 
     #[test]
+    fn common_relations_explanation_rejects_missing_actor_memory_snapshot_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let coco = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "coco", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let coco_id = coco.dependencies[0].clone();
+        let mike = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "mike", "alice", "ミケは鳥です"),
+            )
+            .unwrap();
+        let mike_id = mike.dependencies[0].clone();
+        let common = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "common-relations",
+                    "alice",
+                    "ココとミケの共通点は何ですか",
+                ),
+            )
+            .unwrap();
+        assert_eq!(common.lifecycle, Lifecycle::Commit, "{common:?}");
+        assert_eq!(common.guarantee, Guarantee::Derived);
+        assert!(common.dependencies.contains(&rule_id));
+        assert!(common.dependencies.contains(&coco_id));
+        assert!(common.dependencies.contains(&mike_id));
+        let pinned_revision = common
+            .actor_memory_revision
+            .expect("the common-relations result records its actor-memory revision");
+        assert!(
+            engine
+                .store
+                .load_memory_revision("alice", pinned_revision)
+                .unwrap()
+                .is_some()
+        );
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "common-explanation", "alice", "詳しく説明して");
+        explanation_request.budget.max_actions = 32;
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert!(explanation.text.contains(&common.id));
+
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let current_memory = engine.store.load_memory("alice").unwrap();
+        let missing_revision = current_memory
+            .revision
+            .checked_add(1)
+            .expect("the temporary fixture revision is in range");
+        assert!(
+            engine
+                .store
+                .load_memory_revision("alice", missing_revision)
+                .unwrap()
+                .is_none()
+        );
+
+        let mut missing_revision_pointer = retained.clone();
+        let previous = missing_revision_pointer
+            .prior_results
+            .get_mut(&common.id)
+            .expect("the retained case keeps the exact common-relations result");
+        assert_eq!(previous.id, common.id);
+        assert_eq!(previous.input_id, common.input_id);
+        assert_eq!(previous.input_version, common.input_version);
+        assert_eq!(previous.actor_memory_revision, Some(pinned_revision));
+        previous.actor_memory_revision = Some(missing_revision);
+        let (_, prior_bundle) = engine
+            .store
+            .get_input_bundle("alice", "case", &previous.input_id, previous.input_version)
+            .unwrap()
+            .expect("the exact sealed common-relations input remains available");
+        assert_eq!(identity(&prior_bundle.request).unwrap(), previous.id);
+        assert!(matches!(
+            prior_bundle.meaning.intent,
+            Intent::AskCommonRelations { .. }
+        ));
+
+        let error = inspect(
+            &engine.store,
+            "alice",
+            &missing_revision_pointer,
+            &retained_result,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_MEMORY_REVISION_MISSING"),
+            "{error:?}"
+        );
+        assert_eq!(engine.latest("alice", "case").unwrap().unwrap(), retained);
+        assert_eq!(engine.store.load_memory("alice").unwrap(), current_memory);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
     fn common_relations_explanation_pins_and_rechecks_its_memory_revision() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
