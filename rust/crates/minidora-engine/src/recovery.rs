@@ -529,10 +529,88 @@ fn verify_relation_profile_memory_result(
     Ok(())
 }
 
+fn verify_previous_relation_memory_result(
+    state: &CaseRevision,
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Intent::AskPreviousRelation {
+        proposition,
+        explain,
+        explicit_scope,
+    } = &goal.intent
+    else {
+        return Ok(());
+    };
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation result reference is missing",
+            )
+        })?;
+    let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation result is not retained",
+        )
+    })?;
+    if previous.id != previous_id || previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation result is not committed",
+        ));
+    }
+    let resolved = match crate::core::resolve_previous_relation_proposition(
+        memory,
+        previous,
+        proposition,
+        explicit_scope.as_deref(),
+    ) {
+        crate::core::PreviousRelationResolution::Resolved(proposition) => proposition,
+        crate::core::PreviousRelationResolution::Missing
+        | crate::core::PreviousRelationResolution::Ambiguous => {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the exact prior result no longer resolves to one active direct premise",
+            ));
+        }
+    };
+    let answer = crate::relations::query(memory, &resolved, goal.budget.max_actions)?;
+    let expected_units =
+        crate::core::previous_relation_success_units(memory, &resolved, &answer, *explain)
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the prior relation no longer has the adopted supported or contradicted result",
+                )
+            })?;
+    if crate::relations::answer_dependencies(&answer) != result.dependencies
+        || crate::relations::answer_guarantee(&answer) != result.guarantee
+        || expected_units != plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation answer differs from its actor-memory proof revision",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_result_memory_provenance(
     store: &Store,
     actor: &str,
     case: &str,
+    state: &CaseRevision,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
@@ -586,6 +664,9 @@ fn verify_result_memory_provenance(
         }
         Intent::DraftRelationProfile { .. } => {
             verify_relation_profile_memory_result(&memory, result, plan, goal)?;
+        }
+        Intent::AskPreviousRelation { .. } => {
+            verify_previous_relation_memory_result(state, &memory, result, plan, goal)?;
         }
         Intent::InspectPremises { subject } => {
             let (dependencies, guarantee) =
@@ -1248,7 +1329,7 @@ fn inspect(
             "adopted result differs from original input",
         ));
     }
-    verify_result_memory_provenance(store, actor, case, result, plan, &goal)?;
+    verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?;
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     let previous_result_summary =
@@ -1504,6 +1585,21 @@ fn inspect(
                 format!("the original conjunction proof is no longer valid: {error}"),
             )
         })?;
+    }
+    if matches!(goal.intent, Intent::AskPreviousRelation { .. })
+        && result.actor_memory_revision.is_some()
+    {
+        // Replay used the retained snapshot above; separately ensure the
+        // prior-result anchor still resolves to the same proof in live memory.
+        let memory = store.load_memory(actor)?;
+        verify_previous_relation_memory_result(state, &memory, result, plan, &goal).map_err(
+            |error| {
+                failure(
+                    "RECOVERY_PROOF_INVALIDATED",
+                    format!("the original prior-relation proof is no longer valid: {error}"),
+                )
+            },
+        )?;
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
@@ -3690,6 +3786,141 @@ mod tests {
             .unwrap();
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &adopted, adopted_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn previous_relation_recovery_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let premise_id = premise.dependencies[0].clone();
+        let prior = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(prior.lifecycle, Lifecycle::Commit);
+        assert!(prior.dependencies.contains(&premise_id));
+
+        let mut request =
+            RequestEnvelope::new("case", "prior-pronoun-query", "alice", "それは鳥ですか");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit, "{answer:?}");
+        assert!(answer.text.contains("ココは鳥"));
+        assert!(answer.dependencies.contains(&premise_id));
+        let memory_revision = answer
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used to resolve the prior result");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the prior-relation actor-memory snapshot is retained");
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == premise_id)
+        );
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        let snapshots: Vec<(i64, String)> = {
+            let mut statement = database
+                .prepare("SELECT revision,state_sha256 FROM case_revision ORDER BY revision")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        let mut adopted = None;
+        for (number, sha) in snapshots {
+            let revision: CaseRevision =
+                serde_json::from_slice(&fs::read(fixture.state.join("blobs").join(sha)).unwrap())
+                    .unwrap();
+            if revision.lifecycle == Lifecycle::Adopted
+                && revision
+                    .bundle
+                    .as_ref()
+                    .is_some_and(|bundle| bundle.request.input_id == "prior-pronoun-query")
+            {
+                adopted = Some((number, revision));
+            }
+        }
+        let (_, adopted) =
+            adopted.expect("Core persisted the pronoun answer before its file write");
+        let adopted_result = adopted.result.as_ref().unwrap().clone();
+        assert_eq!(adopted_result.actor_memory_revision, Some(memory_revision));
+        assert!(inspect(&engine.store, "alice", &adopted, &adopted_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(database);
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &adopted, &adopted_result).is_ok());
+
+        let mut engine = engine;
+        let explanation_prior = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "explanation-case",
+                    "explicit-explanation-query",
+                    "alice",
+                    "ココは鳥ですか",
+                ),
+            )
+            .unwrap();
+        assert_eq!(explanation_prior.lifecycle, Lifecycle::Commit);
+        let explanation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "explanation-case",
+                    "prior-pronoun-explanation",
+                    "alice",
+                    "なぜそれは鳥ですか",
+                ),
+            )
+            .unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert!(explanation.text.contains("提示された証拠が支える結論"));
+        assert!(explanation.actor_memory_revision.is_some());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-pronoun-premise",
+                    "alice",
+                    &format!("{premise_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &adopted, &adopted_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }

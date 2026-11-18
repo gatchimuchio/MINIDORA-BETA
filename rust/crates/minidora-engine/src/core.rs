@@ -5438,45 +5438,30 @@ impl Engine {
                 }
 
                 let memory = self.store.load_memory(actor)?;
-                let prior_dependencies: std::collections::BTreeSet<_> =
-                    prior.dependencies.iter().map(String::as_str).collect();
-                let candidates: Vec<_> = memory
-                    .facts
-                    .iter()
-                    .filter(|fact| {
-                        fact.valid
-                            && fact.guarantee == Guarantee::UserPremise
-                            && fact.dependencies.is_empty()
-                            && !fact.source_input.is_empty()
-                            && prior_dependencies.contains(fact.id.as_str())
-                            && explicit_scope
-                                .as_ref()
-                                .is_none_or(|scope| fact.proposition.scope == *scope)
-                    })
-                    .collect();
-                if candidates.is_empty() {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "MISSING_RELATION_CONTEXT",
-                        "直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
-                    );
-                }
-                if candidates.len() != 1 {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "AMBIGUOUS_RELATION_CONTEXT",
-                        "直前の回答は複数の直接前提を参照しています。代名詞の対象を一意に決められません。",
-                    );
-                }
-                let anchor = &candidates[0].proposition;
-                let resolved = Proposition {
-                    subject: anchor.subject.clone(),
-                    scope: explicit_scope
-                        .clone()
-                        .unwrap_or_else(|| anchor.scope.clone()),
-                    ..proposition.clone()
+                result.actor_memory_revision = Some(memory.revision);
+                let resolved = match resolve_previous_relation_proposition(
+                    &memory,
+                    prior,
+                    proposition,
+                    explicit_scope.as_deref(),
+                ) {
+                    PreviousRelationResolution::Resolved(proposition) => proposition,
+                    PreviousRelationResolution::Missing => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_RELATION_CONTEXT",
+                            "直前の回答が参照する有効な直接前提がありません。明示したscopeを含め、代名詞の対象を推測しません。",
+                        );
+                    }
+                    PreviousRelationResolution::Ambiguous => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "AMBIGUOUS_RELATION_CONTEXT",
+                            "直前の回答は複数の直接前提を参照しています。代名詞の対象を一意に決められません。",
+                        );
+                    }
                 };
                 let answer = relations::query(&memory, &resolved, request.budget.max_actions)?;
                 retain_relation_answer_dependencies(&mut result, &answer);
@@ -5486,90 +5471,39 @@ impl Engine {
                 }
                 let answer_dependencies = relations::answer_dependencies(&answer);
                 let answer_guarantee = relations::answer_guarantee(&answer);
-                if *explain {
-                    let explained = match answer.status.as_str() {
-                        "SUPPORTED" => resolved.clone(),
-                        "CONTRADICTED" => {
-                            let mut opposite = resolved.clone();
-                            opposite.negative = !opposite.negative;
-                            units.push(relation_answer_surface(&resolved, true));
-                            opposite
-                        }
-                        "CONFLICT" => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "CONFLICTING_PREMISES",
-                                &format!(
-                                    "範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
-                                    resolved.scope,
-                                    describe(&resolved)
-                                ),
-                            );
-                        }
-                        _ => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "MISSING_PREMISES",
-                                &format!(
-                                    "範囲「{}」の「{}」を説明する有効な前提または導出経路がありません。",
-                                    resolved.scope,
-                                    describe(&resolved)
-                                ),
-                            );
-                        }
-                    };
-                    units.extend(relation_explanation_lines(
-                        &memory,
-                        &explained,
-                        &answer,
-                        "提示された証拠が支える結論",
-                    ));
-                } else {
-                    match answer.status.as_str() {
-                        "SUPPORTED" => units.push(relation_answer_surface(&resolved, false)),
-                        "CONTRADICTED" => {
-                            units.push(relation_answer_surface(&resolved, true));
-                        }
-                        "CONFLICT" => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "CONFLICTING_PREMISES",
-                                &format!(
-                                    "範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
-                                    resolved.scope,
-                                    describe(&resolved)
-                                ),
-                            );
-                        }
-                        _ => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "MISSING_PREMISES",
-                                &format!(
-                                    "範囲「{}」の「{}」を判定する有効な前提または導出経路がありません。",
-                                    resolved.scope,
-                                    describe(&resolved)
-                                ),
-                            );
-                        }
-                    }
-                }
-                result.dependencies = answer_dependencies;
-                result.guarantee = answer_guarantee;
-                let Some(adopted_meaning) = relation_explanation_target(&resolved, &answer) else {
+                if let Some(answer_units) =
+                    previous_relation_success_units(&memory, &resolved, &answer, *explain)
+                {
+                    units.extend(answer_units);
+                } else if answer.status == "CONFLICT" {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
-                        "MISSING_PREMISES",
-                        "採用した関係結論を型付き命題として確定できません。",
+                        "CONFLICTING_PREMISES",
+                        &format!(
+                            "範囲「{}」の「{}」に肯定と否定の根拠があります。一方を恣意的に採用しません。",
+                            resolved.scope,
+                            describe(&resolved)
+                        ),
                     );
-                };
-                adopted_relation_meaning = Some(adopted_meaning);
-                relation_proof_dependencies = Some(result.dependencies.clone());
+                } else {
+                    let message = if *explain {
+                        format!(
+                            "範囲「{}」の「{}」を説明する有効な前提または導出経路がありません。",
+                            resolved.scope,
+                            describe(&resolved)
+                        )
+                    } else {
+                        format!(
+                            "範囲「{}」の「{}」を判定する有効な前提または導出経路がありません。",
+                            resolved.scope,
+                            describe(&resolved)
+                        )
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, "MISSING_PREMISES", &message);
+                }
+                result.dependencies = answer_dependencies;
+                result.guarantee = answer_guarantee;
             }
             Intent::Ask { proposition } => {
                 let memory = self.store.load_memory(actor)?;
@@ -7656,6 +7590,77 @@ pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposit
     match intent {
         Intent::Ask { proposition } | Intent::AskWhy { proposition } => Some(proposition),
         _ => None,
+    }
+}
+
+pub(crate) enum PreviousRelationResolution {
+    Resolved(Proposition),
+    Missing,
+    Ambiguous,
+}
+
+pub(crate) fn resolve_previous_relation_proposition(
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    proposition: &Proposition,
+    explicit_scope: Option<&str>,
+) -> PreviousRelationResolution {
+    let prior_dependencies: BTreeSet<_> =
+        previous.dependencies.iter().map(String::as_str).collect();
+    let mut candidates = memory.facts.iter().filter(|fact| {
+        fact.valid
+            && fact.guarantee == Guarantee::UserPremise
+            && fact.dependencies.is_empty()
+            && !fact.source_input.is_empty()
+            && prior_dependencies.contains(fact.id.as_str())
+            && explicit_scope.is_none_or(|scope| fact.proposition.scope == scope)
+    });
+    let Some(anchor) = candidates.next() else {
+        return PreviousRelationResolution::Missing;
+    };
+    if candidates.next().is_some() {
+        return PreviousRelationResolution::Ambiguous;
+    }
+    PreviousRelationResolution::Resolved(Proposition {
+        subject: anchor.proposition.subject.clone(),
+        scope: explicit_scope
+            .map(str::to_owned)
+            .unwrap_or_else(|| anchor.proposition.scope.clone()),
+        ..proposition.clone()
+    })
+}
+
+pub(crate) fn previous_relation_success_units(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    answer: &relations::QueryOutcome,
+    explain: bool,
+) -> Option<Vec<String>> {
+    if explain {
+        let mut units = Vec::new();
+        let explained = match answer.status.as_str() {
+            "SUPPORTED" => proposition.clone(),
+            "CONTRADICTED" => {
+                let mut opposite = proposition.clone();
+                opposite.negative = !opposite.negative;
+                units.push(relation_answer_surface(proposition, true));
+                opposite
+            }
+            _ => return None,
+        };
+        units.extend(relation_explanation_lines(
+            memory,
+            &explained,
+            answer,
+            "提示された証拠が支える結論",
+        ));
+        Some(units)
+    } else {
+        match answer.status.as_str() {
+            "SUPPORTED" => Some(vec![relation_answer_surface(proposition, false)]),
+            "CONTRADICTED" => Some(vec![relation_answer_surface(proposition, true)]),
+            _ => None,
+        }
     }
 }
 
