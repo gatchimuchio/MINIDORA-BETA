@@ -1,0 +1,110 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_COMPARISON_EXPLANATION_RECOVERY_CURRENT_RECHECK_B75_V1",
+  "work_item": "Bound saved relation-comparison ExplainPrevious Recovery current-head revalidation before confirming a pending file effect",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "8317652ab43f933522e66cd13867f9cce6c64745",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "d934439f6cfe7cdb77811885376205b931a0713d96f08cde97cfc1d8f8ad2fa3",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "local_base": "refs/heads/codex/backup-main=8317652ab43f933522e66cd13867f9cce6c64745",
+    "local_previous": "refs/heads/codex/backup-main-prev=295fec7f8b7e2e2adfad068256875e56fe502f4e",
+    "remote_tags": [
+      "refs/tags/codex/backup-main=8317652ab43f933522e66cd13867f9cce6c64745",
+      "refs/tags/codex/backup-main-prev=295fec7f8b7e2e2adfad068256875e56fe502f4e"
+    ],
+    "remote_backup_branches_unchanged": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ]
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target"
+  },
+  "implementation": {
+    "files": ["rust/crates/minidora-engine/src/recovery.rs"],
+    "route": "pending saved-comparison ExplainPrevious -> exact retained-revision replay with explicit snapshot -> revision-matched Core comparison index verifier -> artifact/proof/dependency/guarantee check -> current-head decision",
+    "current_head_index": "current-context branch passes no snapshot and uses Core index when Store revision matches actor-memory head",
+    "cold_or_stale_index": "None loads authenticated current full snapshot fallback",
+    "retained_revision_replay": "explicit immutable retained snapshot continues through the existing full-snapshot comparison verifier",
+    "preserved_contracts": [
+      "saved comparison input/result identity, artifact, ContentPlan and render integrity",
+      "current comparison proof, explanation dependencies, guarantee and required units",
+      "RECOVERY_CONTEXT_PROOF_CHANGED invalidation boundary",
+      "no schema or decision-authority change"
+    ],
+    "schema_version_changed": false
+  },
+  "fixture_observation": {
+    "intent": "ordinary Japanese relation comparison followed by ExplainPrevious",
+    "sealed_explanation_max_actions": 32,
+    "exact_retained_revision_replay_after_engine_reopen": "PASS",
+    "cold_index_fallback_on_small_snapshot": "PASS",
+    "current_memory_facts_after_off_scope_history": 82,
+    "current_memory_rules": 0,
+    "off_scope_facts_added_after_adoption": 80,
+    "full_snapshot_at_sealed_32_actions": "RELATION_BUDGET",
+    "full_snapshot_reference_at_10000_actions": "PASS",
+    "indexed_current_head_verification_at_sealed_32_actions": "PASS",
+    "premise_invalidation": "RECOVERY_CONTEXT_PROOF_CHANGED",
+    "existing_explanation_target_bytes_preserved_after_invalidation": true
+  },
+  "verification": [
+    {
+      "command": "cargo test -p minidora-engine --locked --lib recovery::tests::saved_relation_comparison_explanation_pins_and_rechecks_its_memory_revision -- --exact --nocapture",
+      "result": "PASS",
+      "cases_passed": 1,
+      "log": "b75-focused-recovery-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --lib explanation_pins_and_rechecks_its_memory_revision -- --nocapture",
+      "result": "PASS",
+      "cases_passed": 5,
+      "log": "b75-explanation-recovery-tests-final.log"
+    },
+    {
+      "command": "cargo check -p minidora-engine --all-targets --locked",
+      "result": "PASS",
+      "log": "b75-engine-check-final.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b75-engine-library-clippy-final.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b75-fmt-check-final.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b75-diff-check-final.log"
+    }
+  ],
+  "not_run": [
+    "full minidora-engine package runtime suite",
+    "workspace all-target Clippy",
+    "workspace all-features runtime suite and workspace build",
+    "large-history immutable retained-revision replay and cold/stale fallback scaling",
+    "same-subject scale, large condition closures and concurrent-writer populations",
+    "full CAP-D02 or E1 acceptance"
+  ],
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}

@@ -316,9 +316,8 @@ fn verify_previous_relation_context(
         });
     }
     if crate::core::is_saved_relation_comparison_result(previous) {
-        let memory = store.load_memory(actor)?;
         return verify_explain_previous_relation_comparison_memory_result(
-            store, state, &memory, previous, result, plan, goal,
+            store, state, None, previous, result, plan, goal,
         )
         .map_err(|error| {
             failure(
@@ -1365,7 +1364,7 @@ fn verify_previous_relation_memory_result_with_index(
 fn verify_explain_previous_relation_comparison_memory_result(
     store: &Store,
     state: &CaseRevision,
-    memory: &MemoryState,
+    current_memory: Option<&MemoryState>,
     previous: &ResultRecord,
     result: &ResultRecord,
     plan: &ContentPlan,
@@ -1493,16 +1492,37 @@ fn verify_explain_previous_relation_comparison_memory_result(
             original_replay,
         )?;
     }
-    crate::core::verify_relation_comparison_memory_result(
-        memory,
+    let current_replay = crate::core::RelationComparisonReplay {
+        max_actions: goal.budget.max_actions,
+        ..original_replay
+    };
+    if let Some(memory) = current_memory {
+        crate::core::verify_relation_comparison_memory_result(
+            memory,
+            &report_bytes,
+            previous,
+            prior_plan,
+            current_replay,
+        )?;
+    } else if crate::core::verify_relation_comparison_memory_result_with_index(
+        store,
+        &state.actor_id,
         &report_bytes,
         previous,
         prior_plan,
-        crate::core::RelationComparisonReplay {
-            max_actions: goal.budget.max_actions,
-            ..original_replay
-        },
-    )?;
+        current_replay,
+    )?
+    .is_none()
+    {
+        let memory = store.load_memory(&state.actor_id)?;
+        crate::core::verify_relation_comparison_memory_result(
+            &memory,
+            &report_bytes,
+            previous,
+            prior_plan,
+            current_replay,
+        )?;
+    }
 
     let expected_dependencies = std::iter::once(previous.id.clone())
         .chain(previous.dependencies.iter().cloned())
@@ -1582,7 +1602,13 @@ fn verify_explain_previous_relation_memory_result(
     }
     if crate::core::is_saved_relation_comparison_result(previous) {
         return verify_explain_previous_relation_comparison_memory_result(
-            store, state, memory, previous, result, plan, goal,
+            store,
+            state,
+            Some(memory),
+            previous,
+            result,
+            plan,
+            goal,
         );
     }
     if crate::core::is_common_relations_result(previous) {
@@ -6165,6 +6191,7 @@ mod tests {
 
         let mut request =
             RequestEnvelope::new("case", "comparison-explanation", "alice", "詳しく説明して");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -6208,6 +6235,99 @@ mod tests {
                 .unwrap(),
             Some(original_memory)
         );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "extended-history-case",
+            "comparison-explanation-off-scope-history",
+            "alice",
+            "関係比較説明Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        assert!(matches!(goal.intent, Intent::ExplainPrevious));
+        let previous_id = retained
+            .bundle
+            .as_ref()
+            .and_then(|bundle| bundle.meaning.context_result_ref.as_deref())
+            .expect("the sealed comparison explanation retains its prior-result reference");
+        let previous = retained
+            .prior_results
+            .get(previous_id)
+            .expect("the exact saved comparison remains retained");
+        let full_snapshot_error = verify_explain_previous_relation_comparison_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap_err();
+        assert!(
+            full_snapshot_error.to_string().contains("RELATION_BUDGET"),
+            "{full_snapshot_error:?}"
+        );
+        assert_eq!(current_memory.facts.len(), 82);
+        assert!(current_memory.rules.is_empty());
+        let mut full_reference_goal = goal.clone();
+        full_reference_goal.budget.max_actions = 10_000;
+        verify_explain_previous_relation_comparison_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &full_reference_goal,
+        )
+        .unwrap();
+        verify_explain_previous_relation_comparison_memory_result(
+            &engine.store,
+            &retained,
+            None,
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap();
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
 
         let invalidation = engine
