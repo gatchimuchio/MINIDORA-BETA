@@ -1,0 +1,134 @@
+{
+  "schema": "MINIDORA_E1_W10_REVISIONLESS_EXACT_INPUT_MISSING_MEMORY_REVISION_B91_V1",
+  "work_item": "Verify that exact sealed input identity does not bypass the missing actor-memory revision guard for a revision-less AskPreviousRelation result",
+  "observed_date": "2026-11-19",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+  "implementation_commit": "40724df99f190ab5baa65e5ae45d558aad5313cb",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "cafb643a59d0dde876a59e7a286d81a3f057c3f35ea35bb2f31f1c1cd18974d6",
+  "permission_scope": "Continuing user authorization to implement in MINIDORA-BETA and retain work in its repository; local source test, focused checks, direct main commit/fast-forward push, and existing backup-reference rotation only.",
+  "design_sources": {
+    "README.md": "4c968d391fc5c8cd05990cb80e83de8e8d6c4cd41d70e120c76c1c7482246423",
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+    "origin_main": "ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+    "local_base": "refs/heads/codex/backup-main=ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+    "local_previous": "refs/heads/codex/backup-main-prev=d7d9577449f699f9f2d9545b3f6dad82f5839755",
+    "local_tags": [
+      "refs/tags/codex/backup-main=ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+      "refs/tags/codex/backup-main-prev=d7d9577449f699f9f2d9545b3f6dad82f5839755"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+      "refs/tags/codex/backup-main-prev=d7d9577449f699f9f2d9545b3f6dad82f5839755"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 67% used",
+    "repo_size_at_start": "85M",
+    "capacity_at_batch_close": "63G total / 20G available / 67% used",
+    "repo_size_at_batch_close": "85M (observed before evidence commit)",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+    "managed_cloud_environment": "The existing /workspace checkout is ready. Pinned Rust/Cargo 1.99.1 binaries were invoked using their explicit toolchain path plus system compiler paths. Git CLI fetch and ls-remote succeeded.",
+    "remote_access": "Repository reads/writes use Git CLI; no GitHub connector API, other provider, deployment or external action was used."
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "change_type": "One Engine-library clone-only regression test; no production logic, schema, dependency, manifest or lockfile change.",
+    "producer": "A saved committed AskPreviousRelation ResultRecord with an exact sealed input bundle. In a cloned CaseRevision only, actor_memory_revision is set to None; input_id, input_version, ResultRecord.id, lifecycle and map key are retained.",
+    "consumer": "verify_previous_relation_context -> Store::get_input_bundle(actor,case,input_id,input_version) -> exact sealed request identity match -> ExplainPrevious prior-relation replay -> retained-memory-revision check.",
+    "route": "Commit premise, direct question, AskPreviousRelation and ExplainPrevious using the ordinary Japanese Engine route; reopen Engine and verify valid state before inspecting the clone.",
+    "expected_and_observed": "identity(request) equals ResultRecord.id, but replay stops with RECOVERY_CONTEXT_PROOF_CHANGED wrapping RECOVERY_MEMORY_REVISION_MISSING because the saved AskPreviousRelation has no retained actor-memory revision. Store latest revision and target bytes remain unchanged.",
+    "compatibility": "B88 revision-less missing-input fallback and B89/B90 existing misbound input_id/input_version rejection remain covered as distinct cases.",
+    "compatibility_limit": "The malformed prior result is a synthetic clone. No actual historical SQLite/schema record or migration was tested.",
+    "schema_version_changed": false,
+    "runtime_behavior_verified": true,
+    "persisted_store_modified": false,
+    "external_effects": "None; fixture uses a permissioned temporary local target and temporary database cleaned by the fixture."
+  },
+  "test_attempts": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib recovery::tests::saved_previous_relation_explanation_accepts_revisionless_result_with_exact_sealed_input --locked -- --exact --nocapture",
+      "result": "Two initial acceptance probes failed: the first showed the exact-bound revision-less result was not accepted; diagnostic rerun identified RECOVERY_CONTEXT_PROOF_CHANGED wrapping RECOVERY_MEMORY_REVISION_MISSING. The final regression asserts this refusal.",
+      "log": "b91-revisionless-exact-input-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib recovery::tests::saved_previous_relation_explanation_rejects_revisionless_exact_input_without_memory_revision --locked -- --exact --nocapture",
+      "result": "PASS: 1 passed, 0 failed, 284 filtered out.",
+      "log": "b91-revisionless-exact-input-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib saved_previous_relation_explanation_ --locked -- --nocapture",
+      "result": "PASS: 11 passed, 0 failed, 274 filtered out; completed in 5.17s.",
+      "log": "b91-explain-previous-recovery-filter.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "result": "PASS",
+      "log": "b91-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b91-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "Actual historical Rust-schema ResultRecord/SQLite reads, schema migration, persistent Store corruption/repair.",
+    "Full Engine/workspace runtime suites, workspace all-target Clippy, workspace all-features test/build.",
+    "CLI, HTTP, browser, other operating systems, large-history replay, every Recovery consumer and complete CAP-D02/E1 acceptance.",
+    "Independent QA, E2-E8, release and deployment."
+  ],
+  "asset_classification": {
+    "batch_owned_current_assets_total": 10,
+    "保持": [
+      "rust/audit/IMPLEMENTATION_STATUS.md (existing status ledger updated in place)",
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv (existing requirement trace updated in place)"
+    ],
+    "保管済み": [
+      "BUILD_BATCH_91.md report",
+      "b91-build-observation.json machine observation",
+      "b91-revisionless-exact-input-test.log",
+      "b91-explain-previous-recovery-filter.log",
+      "b91-fmt-check.log",
+      "b91-diff-check.log"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/recovery.rs (one active Engine-library regression test)",
+      "existing shared Cargo target cache updated by the tests"
+    ],
+    "ゴミ箱移動済み": 0,
+    "保留": [],
+    "temporary_fixture": "Temporary database and target are owned and cleaned by the fixture; no fixture artifact remains in the repository.",
+    "windows_storage_scope": "Not applicable to this Linux execution.",
+    "onedrive": "Not used; Git-managed records are retained in GitHub main and remote backup tags."
+  },
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}
