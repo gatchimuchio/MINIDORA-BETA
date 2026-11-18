@@ -726,6 +726,10 @@ pub struct ResultRecord {
     pub receipts: Vec<DeliveryReceipt>,
     pub evidence: Vec<EvidencePacket>,
     pub dependencies: Vec<String>,
+    /// Actor-memory snapshot used by a relation-backed Core result. Absent in
+    /// results written before memory provenance was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_memory_revision: Option<u64>,
     pub execution_graph_ref: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -755,6 +759,39 @@ mod tests {
             "{\"a\":\"1/3\",\"z\":\"雨\"}".as_bytes()
         );
         assert_ne!(identity(&"Ａ").unwrap(), identity(&"A").unwrap());
+    }
+
+    #[test]
+    fn legacy_result_records_without_memory_revision_remain_readable() {
+        let current = ResultRecord {
+            id: "result".into(),
+            input_id: "input".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Received,
+            text: String::new(),
+            reason: None,
+            guarantee: Guarantee::Unknown,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: Vec::new(),
+            actor_memory_revision: Some(3),
+            execution_graph_ref: None,
+        };
+        let mut legacy = serde_json::to_value(current).unwrap();
+        assert!(
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("actor_memory_revision")
+                .is_some()
+        );
+
+        let restored: ResultRecord = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(restored.actor_memory_revision, None);
+        assert_eq!(serde_json::to_value(restored).unwrap(), legacy);
     }
 
     #[test]

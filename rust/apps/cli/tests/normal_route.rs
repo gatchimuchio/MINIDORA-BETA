@@ -134,6 +134,7 @@ fn seed_fetched_source_case_with_sources(
         receipts: Vec::new(),
         evidence: packets,
         dependencies: packet_refs.clone(),
+        actor_memory_revision: None,
         execution_graph_ref: Some(graph_ref),
     };
     let mut state = CaseRevision {

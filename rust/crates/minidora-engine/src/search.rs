@@ -788,6 +788,7 @@ mod tests {
                 repeated_body.clone(),
             ],
             dependencies: Vec::new(),
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
 
@@ -839,6 +840,7 @@ mod tests {
             receipts: Vec::new(),
             evidence: vec![observation.listing.clone(), body],
             dependencies: Vec::new(),
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
 

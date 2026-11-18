@@ -309,6 +309,78 @@ fn verify_previous_relation_context(
     Ok(())
 }
 
+fn result_memory_snapshot(
+    store: &Store,
+    actor: &str,
+    result: &ResultRecord,
+) -> Result<Option<MemoryState>> {
+    let Some(revision) = result.actor_memory_revision else {
+        return Ok(None);
+    };
+    store
+        .load_memory_revision(actor, revision)?
+        .map(Some)
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_REVISION_MISSING",
+                "the actor-memory revision used by Core is no longer retained",
+            )
+        })
+}
+
+fn verify_result_memory_provenance(
+    store: &Store,
+    actor: &str,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Some(memory) = result_memory_snapshot(store, actor, result)? else {
+        return Ok(());
+    };
+    match &goal.intent {
+        Intent::Ask { proposition } | Intent::AskWhy { proposition } => {
+            let answer = crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+            if !matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED")
+                || crate::relations::answer_dependencies(&answer) != result.dependencies
+                || crate::relations::answer_guarantee(&answer) != result.guarantee
+            {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the retained result does not match the actor-memory revision it records",
+                ));
+            }
+        }
+        Intent::AskRelationObjects {
+            subject,
+            predicate,
+            negative,
+            scope,
+        } => {
+            let answer = crate::core::relation_objects_answer(
+                &memory,
+                subject,
+                predicate,
+                *negative,
+                scope,
+                goal.budget.max_actions,
+                goal.budget.max_evidence_bytes,
+            )?;
+            if answer.dependencies != result.dependencies
+                || answer.guarantee != result.guarantee
+                || plan.required_units != vec![answer.text]
+            {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the retained object answer does not match its actor-memory revision",
+                ));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
@@ -955,6 +1027,7 @@ fn inspect(
             "adopted result differs from original input",
         ));
     }
+    verify_result_memory_provenance(store, actor, result, plan, &goal)?;
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     let previous_result_summary =
@@ -1487,7 +1560,17 @@ fn inspect(
                     Some(language::calculation_explanation_surfaces(calculation))
                 }
                 (Intent::AskWhy { proposition }, None) => {
-                    let memory = store.load_memory(actor)?;
+                    let memory = match result.actor_memory_revision {
+                        Some(revision) => store.load_memory_revision(actor, revision)?.ok_or_else(
+                            || {
+                                failure(
+                                    "RECOVERY_MEMORY_REVISION_MISSING",
+                                    "the actor-memory revision used by Core is no longer retained",
+                                )
+                            },
+                        )?,
+                        None => store.load_memory(actor)?,
+                    };
                     let answer =
                         crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
                     let explanation_units = crate::core::relation_why_explanation_units(
@@ -2216,6 +2299,7 @@ mod tests {
             receipts: Vec::new(),
             evidence: vec![packet.clone()],
             dependencies: Vec::new(),
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
         let mut request = RequestEnvelope::new(
@@ -2266,6 +2350,7 @@ mod tests {
             receipts: Vec::new(),
             evidence: Vec::new(),
             dependencies: dependencies.clone(),
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
         let goal = GoalContract {
@@ -3107,6 +3192,20 @@ mod tests {
         let answer = engine.execute("alice", request).unwrap();
         assert_eq!(answer.lifecycle, Lifecycle::Commit);
         assert!(answer.dependencies.contains(&premise_id));
+        let memory_revision = answer
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the object answer");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the referenced actor-memory revision is retained");
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == premise_id)
+        );
         let original_bytes = fs::read(&fixture.target).unwrap();
 
         let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
@@ -3136,6 +3235,19 @@ mod tests {
         let (_, adopted) =
             retained.expect("Core persisted the object answer before its file write");
         let adopted_result = adopted.result.as_ref().unwrap();
+        assert_eq!(adopted_result.actor_memory_revision, Some(memory_revision));
+        assert!(inspect(&engine.store, "alice", &adopted, adopted_result).is_ok());
+
+        drop(database);
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
         assert!(inspect(&engine.store, "alice", &adopted, adopted_result).is_ok());
 
         let invalidation = engine

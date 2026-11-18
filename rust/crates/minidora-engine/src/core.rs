@@ -5512,6 +5512,7 @@ impl Engine {
             }
             Intent::Ask { proposition } => {
                 let memory = self.store.load_memory(actor)?;
+                result.actor_memory_revision = Some(memory.revision);
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
                 retain_relation_answer_dependencies(&mut result, &answer);
                 state.result = Some(result.clone());
@@ -5550,6 +5551,7 @@ impl Engine {
                 scope,
             } => {
                 let memory = self.store.load_memory(actor)?;
+                result.actor_memory_revision = Some(memory.revision);
                 let answer = match relation_objects_answer(
                     &memory,
                     subject,
@@ -5575,6 +5577,7 @@ impl Engine {
             Intent::AskWhy { proposition } => {
                 let direct_input = direct_atomic_meaning_input(&bundle, proposition)?;
                 let memory = self.store.load_memory(actor)?;
+                result.actor_memory_revision = Some(memory.revision);
                 let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
                 retain_relation_answer_dependencies(&mut result, &answer);
                 state.result = Some(result.clone());
@@ -7554,6 +7557,7 @@ fn base_result(request: &RequestEnvelope) -> ResultRecord {
         receipts: Vec::new(),
         evidence: Vec::new(),
         dependencies: Vec::new(),
+        actor_memory_revision: None,
         execution_graph_ref: None,
     }
 }
@@ -10422,6 +10426,7 @@ mod previous_relation_meaning_tests {
             receipts: Vec::new(),
             evidence: Vec::new(),
             dependencies: vec!["legacy-direct-premise".into()],
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
 

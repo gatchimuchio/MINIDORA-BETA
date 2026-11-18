@@ -1757,6 +1757,7 @@ mod tests {
             receipts: Vec::new(),
             evidence: Vec::new(),
             dependencies: Vec::new(),
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
         let lines = previous_math_report_explanation(&previous)
@@ -1818,6 +1819,7 @@ mod tests {
                 receipts: Vec::new(),
                 evidence: Vec::new(),
                 dependencies: Vec::new(),
+                actor_memory_revision: None,
                 execution_graph_ref: None,
             };
             assert!(
@@ -1863,6 +1865,7 @@ mod tests {
             receipts: Vec::new(),
             evidence: Vec::new(),
             dependencies: Vec::new(),
+            actor_memory_revision: None,
             execution_graph_ref: None,
         };
         let lines = previous_math_report_explanation(&previous)
@@ -1917,6 +1920,7 @@ mod tests {
                 receipts: Vec::new(),
                 evidence: Vec::new(),
                 dependencies: Vec::new(),
+                actor_memory_revision: None,
                 execution_graph_ref: None,
             };
             let lines = previous_math_report_explanation(&previous)
@@ -1960,6 +1964,7 @@ mod tests {
                 receipts: Vec::new(),
                 evidence: Vec::new(),
                 dependencies: Vec::new(),
+                actor_memory_revision: None,
                 execution_graph_ref: None,
             };
             let lines = previous_math_report_explanation(&previous)

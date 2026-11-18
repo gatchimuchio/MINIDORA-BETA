@@ -1199,6 +1199,37 @@ impl Store {
         Ok(memory)
     }
 
+    /// Loads one retained actor-memory snapshot without substituting the
+    /// current head. Result recovery uses this to reproduce the exact memory
+    /// version consumed by Core before checking that version against today's
+    /// still-valid proof.
+    pub fn load_memory_revision(&self, actor: &str, revision: u64) -> Result<Option<MemoryState>> {
+        valid_id(actor)?;
+        let revision = integer(revision)?;
+        let sha: Option<String> = sql(self
+            .connection
+            .query_row(
+                "SELECT record_sha256 FROM memory_revision WHERE actor_id=?1 AND revision=?2",
+                params![actor, revision],
+                |row| row.get(0),
+            )
+            .optional())?;
+        let Some(sha) = sha else {
+            return Ok(None);
+        };
+        let memory: MemoryState = self.read_blob(&sha)?;
+        let stored_revision = u64::try_from(revision)
+            .map_err(|_| failure("INTEGRITY_FAILURE", "actor memory revision is negative"))?;
+        if memory.revision != stored_revision {
+            return Err(failure(
+                "INTEGRITY_FAILURE",
+                "actor memory revision row differs from its immutable snapshot",
+            ));
+        }
+        self.validate_memory_scope(actor, &memory)?;
+        Ok(Some(memory))
+    }
+
     fn validate_memory_evolution(previous: &MemoryState, next: &MemoryState) -> Result<()> {
         if previous.revision.checked_add(1) != Some(next.revision) {
             return Err(failure(
@@ -2988,6 +3019,11 @@ mod tests {
         };
         let original_bytes = canonical(&original).unwrap();
         store.save_memory("alice", &original).unwrap();
+        assert_eq!(
+            store.load_memory_revision("alice", 1).unwrap(),
+            Some(original.clone())
+        );
+        assert_eq!(store.load_memory_revision("alice", 2).unwrap(), None);
         let first_sha: String = store
             .connection
             .query_row(
@@ -3010,6 +3046,14 @@ mod tests {
         drop(store);
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.load_memory("alice").unwrap(), next);
+        assert_eq!(
+            reopened.load_memory_revision("alice", 1).unwrap(),
+            Some(original.clone())
+        );
+        assert_eq!(
+            reopened.load_memory_revision("alice", 2).unwrap(),
+            Some(next.clone())
+        );
         assert_eq!(
             reopened.read_blob_bytes(&first_sha).unwrap(),
             original_bytes
