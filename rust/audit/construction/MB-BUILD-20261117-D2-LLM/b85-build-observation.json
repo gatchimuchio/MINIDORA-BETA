@@ -1,0 +1,142 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_ASK_PREVIOUS_RELATION_RECOVERY_ANCHOR_INPUT_VERSION_B85_V1",
+  "work_item": "Verify that saved AskPreviousRelation Recovery binds a committed direct-result anchor to the exact sealed input version, even when an older input version with the same actor/case/input_id exists",
+  "observed_date": "2026-11-19",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "c0194ce4c386af5744839b4795bb07db7f22077a",
+  "implementation_commit": "04f579703ba78de23873afcbe8f6a18916657c2d",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "2778207d18d007a6c5f3920eb6e879ad030be6b994f8eb0785d94dbad12a3bd9",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "c0194ce4c386af5744839b4795bb07db7f22077a",
+    "origin_main": "c0194ce4c386af5744839b4795bb07db7f22077a",
+    "local_base": "refs/heads/codex/backup-main=c0194ce4c386af5744839b4795bb07db7f22077a",
+    "local_previous": "refs/heads/codex/backup-main-prev=39b4ddcfc00557dee1edfa073f48ab284ca6644b",
+    "local_tags": [
+      "refs/tags/codex/backup-main=c0194ce4c386af5744839b4795bb07db7f22077a",
+      "refs/tags/codex/backup-main-prev=39b4ddcfc00557dee1edfa073f48ab284ca6644b"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=c0194ce4c386af5744839b4795bb07db7f22077a",
+      "refs/tags/codex/backup-main-prev=39b4ddcfc00557dee1edfa073f48ab284ca6644b"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "c0194ce4c386af5744839b4795bb07db7f22077a"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 67% used",
+    "repo_size_at_start": "83M",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+    "capacity_at_batch_start": "63G total / 20G available / 67% used",
+    "repo_size_at_batch_close": "83M (observed before documentation commit)",
+    "managed_cloud_environment": "connected; desired and observed phase running; network policy unrestricted and enforced; no configured secrets or runtime variables; no external provider used by local tests",
+    "remote_access": "GitHub origin fetched and compared with Git CLI; Git CLI is the repository method used for writes; connector APIs were not used"
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "Engine commits same-actor/case explicit-question inputs at input_id explicit-query version 1 and version 2; the following Japanese typed AskPreviousRelation anchors version 2, and ExplainPrevious writes to an authorized temporary fixture target; after Engine reopen the real Recovery inspect consumer accepts the valid state",
+    "anchor_version_test": "A cloned CaseRevision preserves direct anchor map key, ResultRecord.id, COMMIT lifecycle and input_id. Only input_version changes from 2 to 1 while the version-1 sealed input exists for the same actor/case/input_id. Recovery loads that exact older sealed request, sees identity(request) != anchor.id and rejects with RECOVERY_CONTEXT_PROOF_CHANGED.",
+    "current_head_index": "The B84 Store::get_input_bundle anchor binding check is unchanged; this test verifies the exact version argument and result identity before relation proof replay",
+    "cold_or_stale_index": "not newly exercised by B85; existing authenticated snapshot fallback remains unchanged",
+    "retained_revision_replay": "valid Engine reopen path runs Recovery inspect against the saved result; a negative CaseRevision clone leaves Store latest revision and output bytes unchanged",
+    "preserved_contracts": [
+      "same actor/case/input_id version 1 and version 2 are separately sealed and yield distinct result IDs",
+      "AskPreviousRelation directly anchors the immediately preceding version-2 committed result",
+      "a committed anchor cannot be rebound to a different existing sealed input version whose request identity differs",
+      "negative Recovery inspection returns RECOVERY_CONTEXT_PROOF_CHANGED before success and preserves persisted latest revision and output bytes",
+      "no production behavior, schema, API, manifest, dependency or lockfile change; CAP-D02 remains UNVERIFIED"
+    ],
+    "schema_version_changed": false,
+    "runtime_behavior_verified": true,
+    "change_type": "one Engine library regression test only; no production code, API/schema/dependency/lockfile change",
+    "runtime_verification_scope": "one saved AskPreviousRelation ExplainPrevious Recovery consumer; wrong version exists in sealed Store, but malformed anchor exists only in a cloned CaseRevision"
+  },
+  "test_attempts": [
+    {
+      "command": "cargo test -p minidora-engine --lib recovery::tests::saved_previous_relation_explanation_rejects_wrong_anchor_input_version --locked -- --exact --nocapture",
+      "result": "PASS: 1 passed, 0 failed, 278 filtered out; completed in 1.59s",
+      "log": "b85-wrong-anchor-input-version-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib saved_previous_relation_explanation_ --locked -- --nocapture",
+      "result": "PASS: 5 passed, 0 failed, 274 filtered out; completed in 3.31s",
+      "log": "b85-saved-prior-relation-recovery-filter.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS: compile check only; tests were not executed by this command",
+      "log": "b85-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b85-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b85-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b85-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "full minidora-engine suite and workspace/all-features runtime suite",
+    "workspace all-target Clippy",
+    "CLI/browser/HTTP normal-user entry and delivery suite",
+    "persisted Store/SQLite physical corruption, damaged blob recovery or automated repair; only a cloned CaseRevision was changed",
+    "large-history all-consumer scale, full CAP-D02/E1 acceptance, other operating systems, independent QA, E2-E8 acceptance, release or deployment"
+  ],
+  "asset_classification": {
+    "batch_owned_current_assets_total": 10,
+    "保持": [],
+    "保管済み": [
+      "B85 BUILD_BATCH_85.md report",
+      "b85-build-observation.json machine observation",
+      "b85-wrong-anchor-input-version-test.log",
+      "b85-saved-prior-relation-recovery-filter.log",
+      "b85-workspace-check.log",
+      "b85-engine-library-clippy.log",
+      "b85-fmt-check.log",
+      "b85-diff-check.log"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/recovery.rs (one regression test added)",
+      "existing shared Cargo target cache updated by test, compile check and Clippy"
+    ],
+    "ゴミ箱移動済み": 0,
+    "保留": [],
+    "temporary_fixture": "The Engine fixture owns cleanup of its temporary database and target; no residual test path or local output remained",
+    "windows_storage_scope": "not applicable to this Linux execution",
+    "onedrive": "not used; Git-managed evidence is retained in GitHub main and remote backup tags"
+  },
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}

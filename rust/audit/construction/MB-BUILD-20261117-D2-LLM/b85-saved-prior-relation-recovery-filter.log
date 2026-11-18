@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 5 tests
+test recovery::tests::saved_previous_relation_explanation_rejects_unbound_anchor_input ... ok
+test recovery::tests::saved_previous_relation_explanation_rejects_uncommitted_anchor ... ok
+test recovery::tests::saved_previous_relation_explanation_rejects_missing_or_misbound_anchor ... ok
+test recovery::tests::saved_previous_relation_explanation_rechecks_anchor_and_current_head ... ok
+test recovery::tests::saved_previous_relation_explanation_rejects_wrong_anchor_input_version ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 274 filtered out; finished in 3.31s
