@@ -811,6 +811,29 @@ fn verify_common_relations_memory_result(
     verify_common_relations_evaluation(store, actor, case, evaluation, result, plan)
 }
 
+fn verify_relation_objects_current_answer(
+    answer: Result<crate::core::RelationObjectsAnswer>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    let answer = answer.map_err(|error| {
+        failure(
+            "RECOVERY_PROOF_INVALIDATED",
+            format!("the original object-answer proof is no longer valid: {error}"),
+        )
+    })?;
+    if result.dependencies != answer.dependencies
+        || result.guarantee != answer.guarantee
+        || plan.required_units != vec![answer.text]
+    {
+        return Err(failure(
+            "RECOVERY_PROOF_INVALIDATED",
+            "the object-answer content or proof lineage differs from the original adoption",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_common_relations_memory_result_with_index(
     store: &Store,
     actor: &str,
@@ -2414,31 +2437,34 @@ fn inspect(
     {
         // Rebuild the exact supported object list from current Core memory.
         // If a premise or rule changed after the original write attempt, the
-        // old bytes cannot be confirmed as the current goal's result.
-        let memory = store.load_memory(actor)?;
-        let answer = crate::core::relation_objects_answer(
-            &memory,
+        // old bytes cannot be confirmed as the current goal's result. Use the
+        // revision-matched scoped index when available; cold/stale stores keep
+        // the authenticated full-snapshot compatibility path.
+        let replay = crate::core::RelationObjectsReplay {
             subject,
             predicate,
-            *negative,
+            negative: *negative,
             scope,
-            goal.budget.max_actions,
-            goal.budget.max_evidence_bytes,
-        )
-        .map_err(|error| {
-            failure(
-                "RECOVERY_PROOF_INVALIDATED",
-                format!("the original object-answer proof is no longer valid: {error}"),
-            )
-        })?;
-        if result.dependencies != answer.dependencies
-            || result.guarantee != answer.guarantee
-            || plan.required_units != vec![answer.text]
-        {
-            return Err(failure(
-                "RECOVERY_PROOF_INVALIDATED",
-                "the object-answer content or proof lineage differs from the original adoption",
-            ));
+            max_actions: goal.budget.max_actions,
+            max_evidence_bytes: goal.budget.max_evidence_bytes,
+        };
+        match crate::core::indexed_relation_objects_answer_from_store(store, actor, replay)? {
+            Some((_indexed_memory, answer)) => {
+                verify_relation_objects_current_answer(answer, result, plan)?;
+            }
+            None => {
+                let memory = store.load_memory(actor)?;
+                let answer = crate::core::relation_objects_answer(
+                    &memory,
+                    subject,
+                    predicate,
+                    *negative,
+                    scope,
+                    goal.budget.max_actions,
+                    goal.budget.max_evidence_bytes,
+                );
+                verify_relation_objects_current_answer(answer, result, plan)?;
+            }
         }
     }
     if matches!(goal.intent, Intent::AskCommonRelations { .. })
@@ -4620,6 +4646,7 @@ mod tests {
             .unwrap();
         let premise_id = premise.dependencies[0].clone();
         let mut request = RequestEnvelope::new("case", "object-answer", "alice", "ミナは何を飲む?");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -4683,6 +4710,71 @@ mod tests {
                 .load_memory_revision("alice", memory_revision)
                 .unwrap(),
             Some(original_memory)
+        );
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &adopted, adopted_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "relation-objects-off-scope-history",
+            "alice",
+            "関係値Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+        let goal_ref = adopted.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let Intent::AskRelationObjects {
+            subject,
+            predicate,
+            negative,
+            scope,
+        } = &goal.intent
+        else {
+            panic!("retained object answer lost its typed goal");
+        };
+        let full_snapshot_error = crate::core::relation_objects_answer(
+            &current_memory,
+            subject,
+            predicate,
+            *negative,
+            scope,
+            goal.budget.max_actions,
+            goal.budget.max_evidence_bytes,
+        )
+        .unwrap_err();
+        assert!(
+            full_snapshot_error.to_string().contains("RESOURCE_LIMIT"),
+            "{full_snapshot_error:?}"
         );
         assert!(inspect(&engine.store, "alice", &adopted, adopted_result).is_ok());
 

@@ -507,6 +507,72 @@ pub(crate) fn relation_objects_answer(
     })
 }
 
+/// Evaluate a relation-object answer from one revision-matched Store index.
+/// `None` means the index is cold or stale and lets the caller retain the
+/// authenticated full-snapshot compatibility path.
+pub(crate) fn indexed_relation_objects_answer_from_store(
+    store: &Store,
+    actor: &str,
+    replay: RelationObjectsReplay<'_>,
+) -> Result<Option<(MemoryState, Result<RelationObjectsAnswer>)>> {
+    let candidate_shape = Proposition {
+        subject: replay.subject.into(),
+        predicate: replay.predicate.into(),
+        object: "$relation_object".into(),
+        negative: replay.negative,
+        scope: replay.scope.into(),
+        condition_refs: BTreeSet::new(),
+        temporal_scope: None,
+    };
+    store.with_relation_index(actor, |index| {
+        let (memory, answer) = match relations::active_relation_projection(
+            index,
+            &candidate_shape,
+            replay.max_actions,
+        ) {
+            Ok((memory, projection_actions)) => {
+                let answer = replay
+                    .max_actions
+                    .checked_sub(projection_actions)
+                    .ok_or_else(|| {
+                        failure(
+                            "RELATION_BUDGET",
+                            "active memory projection exhausted the relation-object action budget",
+                        )
+                    })
+                    .and_then(|answer_budget| {
+                        relation_objects_answer(
+                            &memory,
+                            replay.subject,
+                            replay.predicate,
+                            replay.negative,
+                            replay.scope,
+                            answer_budget,
+                            replay.max_evidence_bytes,
+                        )
+                    });
+                (memory, answer)
+            }
+            Err(error)
+                if matches!(
+                    &error,
+                    Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                ) =>
+            {
+                (
+                    MemoryState {
+                        revision: index.revision(),
+                        ..MemoryState::default()
+                    },
+                    Err(error),
+                )
+            }
+            Err(error) => return Err(error),
+        };
+        Ok((memory, answer))
+    })
+}
+
 /// Rebuild one committed relation-object list and explain each listed value
 /// from the same actor-memory snapshot. Core and Recovery use this exact
 /// consumer for proof lineage, dependency order, and evidence limits.
@@ -2760,62 +2826,7 @@ impl Engine {
         actor: &str,
         replay: RelationObjectsReplay<'_>,
     ) -> Result<Option<(MemoryState, Result<RelationObjectsAnswer>)>> {
-        let candidate_shape = Proposition {
-            subject: replay.subject.into(),
-            predicate: replay.predicate.into(),
-            object: "$relation_object".into(),
-            negative: replay.negative,
-            scope: replay.scope.into(),
-            condition_refs: BTreeSet::new(),
-            temporal_scope: None,
-        };
-        self.store.with_relation_index(actor, |index| {
-            let (memory, answer) = match relations::active_relation_projection(
-                index,
-                &candidate_shape,
-                replay.max_actions,
-            ) {
-                    Ok((memory, projection_actions)) => {
-                        let answer = replay
-                            .max_actions
-                            .checked_sub(projection_actions)
-                            .ok_or_else(|| {
-                                failure(
-                                    "RELATION_BUDGET",
-                                    "active memory projection exhausted the relation-object action budget",
-                                )
-                            })
-                            .and_then(|answer_budget| {
-                                relation_objects_answer(
-                                    &memory,
-                                    replay.subject,
-                                    replay.predicate,
-                                    replay.negative,
-                                    replay.scope,
-                                    answer_budget,
-                                    replay.max_evidence_bytes,
-                                )
-                            });
-                        (memory, answer)
-                    }
-                    Err(error)
-                        if matches!(
-                            &error,
-                            Error::Contract { code, .. } if code == "RELATION_BUDGET"
-                        ) =>
-                    {
-                        (
-                            MemoryState {
-                                revision: index.revision(),
-                                ..MemoryState::default()
-                            },
-                            Err(error),
-                        )
-                    }
-                    Err(error) => return Err(error),
-                };
-            Ok((memory, answer))
-        })
+        indexed_relation_objects_answer_from_store(&self.store, actor, replay)
     }
 
     fn active_relation_objects_answer(

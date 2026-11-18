@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 2 tests
+test core::active_relation_projection_tests::indexed_relation_object_query_uses_only_the_goal_and_rule_closure ... ok
+test recovery::tests::relation_objects_explanation_pins_and_rechecks_its_memory_revision ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 271 filtered out; finished in 2.07s
