@@ -255,7 +255,12 @@ fn direct_core_observation_two_separates_derived_conflicting_and_unmet_relations
             .contains("CONFLICTING_PREMISES")
     );
     assert!(conflict.content_plan.is_none());
-    assert!(conflict.dependencies.is_empty());
+    for expected in [&sensor_id, &calibrated_id, &rule_id, &counterexample_id] {
+        assert!(
+            conflict.dependencies.contains(expected),
+            "conflict stop omitted evaluated proof/evidence ID {expected}: {conflict:?}"
+        );
+    }
     retain(
         &mut observations,
         "nera-reliable-conflict",

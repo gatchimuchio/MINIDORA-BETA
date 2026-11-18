@@ -1069,10 +1069,127 @@ pub struct MeaningCompositionReport {
     pub factual_status: String,
 }
 
+/// A Core-authored finite grammar. Literal fields carry typed semantic values;
+/// choices contain only local lexical or connective realizations, never full
+/// response candidates.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum MeaningGrammarFragment {
+    Literal {
+        value: String,
+    },
+    Choice {
+        slot: String,
+        alternatives: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningGrammarUnit {
+    pub id: String,
+    pub role: MeaningRole,
+    pub evidence_ids: Vec<String>,
+    pub dependencies: Vec<String>,
+    /// Digest of the Core-owned typed meaning and its proof boundary.
+    pub semantic_sha256: String,
+    pub fragments: Vec<MeaningGrammarFragment>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningGenerationRequest {
+    pub purpose: MeaningCompositionPurpose,
+    pub format: MeaningCompositionFormat,
+    pub style: MeaningCompositionStyle,
+    pub units: Vec<MeaningGrammarUnit>,
+    pub max_output_bytes: usize,
+    pub max_tokens: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningGenerationUnitTrace {
+    pub unit_id: String,
+    pub role: MeaningRole,
+    pub evidence_ids: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub semantic_sha256: String,
+    pub surface_sha256: String,
+    pub text: String,
+    pub byte_start: usize,
+    pub byte_end: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningGenerationDistributionEntry {
+    pub token: String,
+    pub probability: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningGenerationTokenStep {
+    pub unit_id: String,
+    pub fragment_index: usize,
+    pub token: String,
+    pub admissible_tokens: Vec<String>,
+    pub distribution: Vec<MeaningGenerationDistributionEntry>,
+    pub selected_probability: String,
+    pub context_state_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeaningGenerationReport {
+    pub schema: String,
+    pub text: String,
+    pub units: Vec<MeaningGenerationUnitTrace>,
+    pub required_unit_ids: Vec<String>,
+    pub evidence_ids: Vec<String>,
+    pub token_steps: Vec<MeaningGenerationTokenStep>,
+    pub context_state_sha256: String,
+    pub token_space_version: String,
+    pub conditional_distribution_version: String,
+    pub model_revision: String,
+    pub model_artifact_ref: Option<String>,
+    pub model_training_lineage: String,
+    pub training_corpus_revision: String,
+    pub transform_version: String,
+    pub transform_order: usize,
+    pub transform_smoothing: u64,
+    pub model_document_count: u64,
+    pub model_vocabulary_size: usize,
+    pub model_context_count: usize,
+    pub model_transition_count: usize,
+    pub sequence_token_count: usize,
+    pub decoder_token_count: usize,
+    pub lossless_projection: LosslessTokenProjection,
+    pub grammar_version: String,
+    pub objective: String,
+    pub decoder_version: String,
+    pub seed: Option<u64>,
+    pub tie_policy: String,
+    pub stop_reason: String,
+    pub semantic_round_trip_sha256: String,
+    pub max_output_bytes: usize,
+    pub max_tokens: usize,
+}
+
+pub struct MeaningGenerationOutput {
+    pub model: SequenceModel,
+    pub emission: ModelEmission,
+    pub report: MeaningGenerationReport,
+}
+
 const MEANING_CONTEXT_VERSION: &str = "typed-meaning-context-v1";
 const MEANING_GRAMMAR_VERSION: &str = "typed-role-single-sentence-boundary-v1";
 const MEANING_DISTRIBUTION_VERSION: &str = "exact-rational-support-backoff-char-trie-v2";
 const MEANING_DECODER_VERSION: &str = "finite-role-trie-exact-v1";
+const MEANING_GENERATION_SCHEMA: &str = "core-meaning-generation-v1";
+const MEANING_GENERATION_GRAMMAR_VERSION: &str = "core-typed-meaning-fragment-grammar-v1";
+const MEANING_GENERATION_DECODER_VERSION: &str = "grammar-state-sequence-objective-char-eos-v1";
 const MAX_MEANING_UNITS: usize = 16;
 const MAX_MEANING_UNIT_BYTES: usize = 384;
 const MAX_MEANING_INPUT_BYTES: usize = 8192;
@@ -1441,6 +1558,102 @@ fn meaning_next_token_distribution(
         );
     }
     Ok(distribution)
+}
+
+struct MeaningChoiceWalk<'a> {
+    model: &'a SequenceModel,
+    sequences: &'a [Vec<String>],
+    probabilities: &'a mut [Option<BigRational>],
+    deadline: Instant,
+}
+
+impl MeaningChoiceWalk<'_> {
+    fn visit(
+        &mut self,
+        active: &[usize],
+        position: usize,
+        history: &[String],
+        mass: BigRational,
+    ) -> Result<()> {
+        poll_model(self.deadline)?;
+        if active.len() == 1 && self.sequences[active[0]].len() == position {
+            self.probabilities[active[0]] = Some(mass);
+            return Ok(());
+        }
+        let allowed = active
+            .iter()
+            .filter_map(|index| self.sequences[*index].get(position).cloned())
+            .collect::<BTreeSet<_>>();
+        let distribution =
+            meaning_next_token_distribution(self.model, history, &allowed, self.deadline)?;
+        for token in allowed {
+            let branch_mass = probability_product(
+                mass.clone(),
+                distribution
+                    .get(&token)
+                    .cloned()
+                    .ok_or_else(|| failure("EMPTY_TOKEN_SUPPORT", "missing grammar probability"))?,
+                self.deadline,
+            )?;
+            let matching = active
+                .iter()
+                .copied()
+                .filter(|index| self.sequences[*index].get(position) == Some(&token))
+                .collect::<Vec<_>>();
+            let mut child_history = history.to_vec();
+            child_history.extend(self.model.encode(&token));
+            if child_history.len() > self.model.order.saturating_sub(1) {
+                let remove = child_history.len() - self.model.order.saturating_sub(1);
+                child_history.drain(..remove);
+            }
+            self.visit(&matching, position + 1, &child_history, branch_mass)?;
+        }
+        Ok(())
+    }
+}
+
+fn meaning_choice_probabilities(
+    model: &SequenceModel,
+    history: &[String],
+    alternatives: &[String],
+    deadline: Instant,
+) -> Result<Vec<BigRational>> {
+    if alternatives.is_empty() {
+        return Err(failure("EMPTY_TOKEN_SUPPORT", "no grammar choice remains"));
+    }
+    let sequences = alternatives
+        .iter()
+        .map(|alternative| {
+            alternative
+                .chars()
+                .map(|ch| ch.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut probabilities = vec![None; sequences.len()];
+    let mut walk = MeaningChoiceWalk {
+        model,
+        sequences: &sequences,
+        probabilities: &mut probabilities,
+        deadline,
+    };
+    walk.visit(
+        &(0..sequences.len()).collect::<Vec<_>>(),
+        0,
+        history,
+        BigRational::one(),
+    )?;
+    walk.probabilities
+        .iter_mut()
+        .map(|probability| {
+            probability.take().ok_or_else(|| {
+                failure(
+                    "MEANING_GRAMMAR_CHOICE",
+                    "a finite grammar alternative has no complete sequence probability",
+                )
+            })
+        })
+        .collect()
 }
 
 struct MeaningTrieWalk<'a> {
@@ -1839,6 +2052,723 @@ pub fn compose_typed_meaning(
         tie_policy: "highest exact probability, then lexicographically smallest emitted segment, then smallest unit ID".into(),
         guarantee: Guarantee::Unknown,
         factual_status: "TYPED_INPUT_UNVERIFIED".into(),
+    })
+}
+
+fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Result<()> {
+    if request.units.is_empty() || request.units.len() > MAX_MEANING_UNITS {
+        return Err(failure(
+            "MEANING_UNIT_LIMIT",
+            "meaning generation requires one to sixteen Core-authored grammar units",
+        ));
+    }
+    if request.max_output_bytes == 0
+        || request.max_output_bytes > MAX_MEANING_OUTPUT_BYTES
+        || request.max_tokens == 0
+        || request.max_tokens > MAX_MEANING_TOKENS
+    {
+        return Err(failure(
+            "MEANING_BUDGET",
+            "output byte and token budgets must each be in 1..=8192",
+        ));
+    }
+
+    let mut by_id = BTreeMap::new();
+    let mut role_counts = BTreeMap::<MeaningRole, usize>::new();
+    let mut grammar_bytes = 0usize;
+    let mut fragment_count = 0usize;
+    for (index, unit) in request.units.iter().enumerate() {
+        if !valid_meaning_id(&unit.id, 64) || by_id.insert(unit.id.clone(), index).is_some() {
+            return Err(failure(
+                "MEANING_UNIT_ID",
+                "grammar unit IDs must be unique bounded ASCII identifiers",
+            ));
+        }
+        let rank = role_rank(request.purpose, unit.role);
+        if rank == usize::MAX {
+            return Err(failure(
+                "MEANING_ROLE_PURPOSE_MISMATCH",
+                "a grammar unit role is not admitted for its purpose",
+            ));
+        }
+        *role_counts.entry(unit.role).or_default() += 1;
+        if unit.semantic_sha256.len() != 64
+            || !unit
+                .semantic_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(failure(
+                "MEANING_SEMANTIC_IDENTITY",
+                "every grammar unit must carry a Core semantic SHA-256",
+            ));
+        }
+        if unit.fragments.is_empty() || unit.fragments.len() > 64 {
+            return Err(failure(
+                "MEANING_GRAMMAR_LIMIT",
+                "each grammar unit requires one to sixty-four fragments",
+            ));
+        }
+        let mut possible_unit_bytes = 0usize;
+        for fragment in &unit.fragments {
+            fragment_count += 1;
+            let fragment_bytes = match fragment {
+                MeaningGrammarFragment::Literal { value } => {
+                    validate_grammar_text(value, false)?;
+                    possible_unit_bytes = possible_unit_bytes
+                        .checked_add(value.len())
+                        .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "unit size overflow"))?;
+                    value.len()
+                }
+                MeaningGrammarFragment::Choice { slot, alternatives } => {
+                    if !valid_meaning_id(slot, 64)
+                        || alternatives.is_empty()
+                        || alternatives.len() > 16
+                    {
+                        return Err(failure(
+                            "MEANING_GRAMMAR_LIMIT",
+                            "choice slots require an identifier and one to sixteen alternatives",
+                        ));
+                    }
+                    let mut unique = BTreeSet::new();
+                    let mut max_length = 0usize;
+                    for alternative in alternatives {
+                        validate_grammar_text(alternative, true)?;
+                        if !unique.insert(alternative) {
+                            return Err(failure(
+                                "MEANING_GRAMMAR_CHOICE",
+                                "choice alternatives must be unique",
+                            ));
+                        }
+                        max_length = max_length.max(alternative.len());
+                    }
+                    for left in alternatives {
+                        for right in alternatives {
+                            if left != right && left.starts_with(right) {
+                                return Err(failure(
+                                    "MEANING_GRAMMAR_CHOICE",
+                                    "choice alternatives cannot be prefixes of one another",
+                                ));
+                            }
+                        }
+                    }
+                    possible_unit_bytes = possible_unit_bytes
+                        .checked_add(max_length)
+                        .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "unit size overflow"))?;
+                    alternatives.iter().try_fold(0usize, |total, value| {
+                        total.checked_add(value.len()).ok_or_else(|| {
+                            failure("MEANING_GRAMMAR_LIMIT", "grammar byte count overflow")
+                        })
+                    })?
+                }
+            };
+            grammar_bytes = grammar_bytes
+                .checked_add(fragment_bytes)
+                .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "grammar byte count overflow"))?;
+        }
+        if possible_unit_bytes > MAX_MEANING_UNIT_BYTES {
+            return Err(failure(
+                "MEANING_UNIT_TEXT",
+                "the longest realization of a grammar unit exceeds 384 bytes",
+            ));
+        }
+        if unit.evidence_ids.len() > 16
+            || unit
+                .evidence_ids
+                .iter()
+                .any(|id| !valid_meaning_id(id, 128))
+            || unit.evidence_ids.iter().collect::<BTreeSet<_>>().len() != unit.evidence_ids.len()
+        {
+            return Err(failure(
+                "MEANING_EVIDENCE_ID",
+                "grammar evidence labels must be unique bounded ASCII identifiers",
+            ));
+        }
+        if unit.dependencies.len() > MAX_MEANING_UNITS
+            || unit
+                .dependencies
+                .iter()
+                .any(|dependency| !valid_meaning_id(dependency, 64) || dependency == &unit.id)
+            || unit.dependencies.iter().collect::<BTreeSet<_>>().len() != unit.dependencies.len()
+        {
+            return Err(failure(
+                "MEANING_DEPENDENCY",
+                "grammar dependencies must be distinct bounded unit IDs and cannot reference self",
+            ));
+        }
+    }
+    if grammar_bytes > MAX_MEANING_INPUT_BYTES || fragment_count > 512 {
+        return Err(failure(
+            "MEANING_GRAMMAR_LIMIT",
+            "semantic grammar exceeds its byte or fragment envelope",
+        ));
+    }
+    for unit in &request.units {
+        for dependency in &unit.dependencies {
+            let Some(&dependency_index) = by_id.get(dependency) else {
+                return Err(failure(
+                    "MEANING_DEPENDENCY",
+                    format!(
+                        "grammar unit {} references unknown dependency {dependency}",
+                        unit.id
+                    ),
+                ));
+            };
+            if role_rank(request.purpose, request.units[dependency_index].role)
+                > role_rank(request.purpose, unit.role)
+            {
+                return Err(failure(
+                    "MEANING_ORDER_CONFLICT",
+                    "a grammar unit cannot depend on a later semantic-role stage",
+                ));
+            }
+        }
+    }
+
+    use MeaningCompositionPurpose::{Compare, Explain, ShortComposition};
+    use MeaningRole::{Body, Claim, Commonality, Difference, Evidence, Rule, SubjectA, SubjectB};
+    let covers_purpose = match request.purpose {
+        Explain => {
+            role_counts.get(&Claim).copied().unwrap_or(0) > 0
+                && (role_counts.get(&Evidence).copied().unwrap_or(0) > 0
+                    || role_counts.get(&Rule).copied().unwrap_or(0) > 0)
+        }
+        Compare => {
+            role_counts.get(&SubjectA).copied().unwrap_or(0) > 0
+                && role_counts.get(&SubjectB).copied().unwrap_or(0) > 0
+                && (role_counts.get(&Commonality).copied().unwrap_or(0) > 0
+                    || role_counts.get(&Difference).copied().unwrap_or(0) > 0)
+        }
+        ShortComposition => role_counts.get(&Body).copied().unwrap_or(0) > 0,
+    };
+    if !covers_purpose {
+        return Err(failure(
+            "MEANING_ROLE_COVERAGE",
+            "Core grammar units do not cover their declared semantic purpose",
+        ));
+    }
+    Ok(())
+}
+
+fn meaning_generation_order(request: &MeaningGenerationRequest) -> Result<Vec<usize>> {
+    let mut emitted = BTreeSet::new();
+    let mut order = Vec::with_capacity(request.units.len());
+    while order.len() < request.units.len() {
+        let min_rank = request
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| !emitted.contains(&unit.id))
+            .map(|(_, unit)| role_rank(request.purpose, unit.role))
+            .min()
+            .ok_or_else(|| failure("MEANING_ORDER_CONFLICT", "no grammar unit remains"))?;
+        let mut eligible = request
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| {
+                !emitted.contains(&unit.id)
+                    && role_rank(request.purpose, unit.role) == min_rank
+                    && unit
+                        .dependencies
+                        .iter()
+                        .all(|dependency| emitted.contains(dependency))
+            })
+            .collect::<Vec<_>>();
+        if eligible.is_empty() {
+            return Err(failure(
+                "MEANING_ORDER_CONFLICT",
+                "role ordering and declared dependencies have no admissible next grammar unit",
+            ));
+        }
+        eligible.sort_by(|(_, left), (_, right)| left.id.cmp(&right.id));
+        let (index, unit) = eligible[0];
+        emitted.insert(unit.id.clone());
+        order.push(index);
+    }
+    Ok(order)
+}
+
+fn validate_grammar_text(value: &str, trim: bool) -> Result<()> {
+    if value.is_empty()
+        || value.len() > MAX_MEANING_UNIT_BYTES
+        || (trim && value.trim() != value)
+        || value.chars().any(char::is_control)
+    {
+        return Err(failure(
+            "MEANING_GRAMMAR_TEXT",
+            "grammar text must be non-empty, bounded, and free of control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn semantic_context_tail(model: &SequenceModel, history: &[String]) -> Result<Vec<String>> {
+    let width = model.order.saturating_sub(1);
+    let tail = &history[history.len().saturating_sub(width)..];
+    let mut padded = vec![BOS.to_owned(); width.saturating_sub(tail.len())];
+    padded.extend_from_slice(tail);
+    for length in (0..=width).rev() {
+        let context = padded[padded.len().saturating_sub(length)..].to_vec();
+        if model.counts.contains_key(&serde_json::to_string(&context)?) {
+            return Ok(context);
+        }
+    }
+    Ok(Vec::new())
+}
+
+struct MeaningGenerationDecoder<'a> {
+    model: &'a SequenceModel,
+    history: Vec<String>,
+    output: String,
+    token_steps: Vec<MeaningGenerationTokenStep>,
+    deadline: Instant,
+}
+
+impl<'a> MeaningGenerationDecoder<'a> {
+    fn new(model: &'a SequenceModel, deadline: Instant) -> Self {
+        Self {
+            model,
+            history: Vec::new(),
+            output: String::new(),
+            token_steps: Vec::new(),
+            deadline,
+        }
+    }
+
+    fn step(
+        &mut self,
+        unit_id: &str,
+        fragment_index: usize,
+        admissible: &BTreeSet<String>,
+        selected_override: Option<&str>,
+    ) -> Result<String> {
+        if admissible.is_empty()
+            || admissible
+                .iter()
+                .any(|token| token.chars().count() != 1 && token != EOS)
+        {
+            return Err(failure(
+                "EMPTY_TOKEN_SUPPORT",
+                "grammar decoder requires a nonempty set of single-character tokens",
+            ));
+        }
+        let distribution =
+            meaning_next_token_distribution(self.model, &self.history, admissible, self.deadline)?;
+        let selected = if let Some(selected) = selected_override {
+            if !distribution.contains_key(selected) {
+                return Err(failure(
+                    "MEANING_GRAMMAR_TRANSITION",
+                    "sequence-objective choice is outside the current grammar support",
+                ));
+            }
+            selected.to_owned()
+        } else {
+            distribution
+                .iter()
+                .max_by(
+                    |(left_token, left_probability), (right_token, right_probability)| {
+                        left_probability
+                            .cmp(right_probability)
+                            .then_with(|| right_token.cmp(left_token))
+                    },
+                )
+                .map(|(token, _)| token.clone())
+                .ok_or_else(|| {
+                    failure("EMPTY_TOKEN_SUPPORT", "grammar token distribution is empty")
+                })?
+        };
+        let selected_probability = distribution.get(&selected).ok_or_else(|| {
+            failure(
+                "EMPTY_TOKEN_SUPPORT",
+                "selected grammar token has no conditional probability",
+            )
+        })?;
+        let context = semantic_context_tail(self.model, &self.history)?;
+        let context_state_sha256 = identity(&(
+            MEANING_GENERATION_SCHEMA,
+            unit_id,
+            fragment_index,
+            self.output.len(),
+            &context,
+        ))?;
+        self.token_steps.push(MeaningGenerationTokenStep {
+            unit_id: unit_id.into(),
+            fragment_index,
+            token: selected.clone(),
+            admissible_tokens: admissible.iter().cloned().collect(),
+            distribution: distribution
+                .iter()
+                .map(|(token, probability)| MeaningGenerationDistributionEntry {
+                    token: token.clone(),
+                    probability: rational_text(probability),
+                })
+                .collect(),
+            selected_probability: rational_text(selected_probability),
+            context_state_sha256,
+        });
+        if selected == EOS {
+            self.history.push(EOS.into());
+        } else {
+            self.output.push_str(&selected);
+            self.history.extend(self.model.encode(&selected));
+            if self.history.len() > self.model.order.saturating_sub(1) {
+                let remove = self.history.len() - self.model.order.saturating_sub(1);
+                self.history.drain(..remove);
+            }
+        }
+        Ok(selected)
+    }
+
+    fn emit_literal(&mut self, unit_id: &str, fragment_index: usize, value: &str) -> Result<()> {
+        for token in value.chars().map(|ch| ch.to_string()) {
+            poll_model(self.deadline)?;
+            let selected = self.step(
+                unit_id,
+                fragment_index,
+                &BTreeSet::from([token.clone()]),
+                None,
+            )?;
+            if selected != token {
+                return Err(failure(
+                    "MEANING_GRAMMAR_TRANSITION",
+                    "the token decoder did not preserve a required semantic literal",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_choice(
+        &mut self,
+        unit_id: &str,
+        fragment_index: usize,
+        alternatives: &[String],
+    ) -> Result<()> {
+        let tokenized = alternatives
+            .iter()
+            .map(|alternative| {
+                alternative
+                    .chars()
+                    .map(|ch| ch.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let probabilities =
+            meaning_choice_probabilities(self.model, &self.history, alternatives, self.deadline)?;
+        let best_index = (0..alternatives.len())
+            .max_by(|left, right| {
+                probabilities[*left]
+                    .cmp(&probabilities[*right])
+                    .then_with(|| alternatives[*right].cmp(&alternatives[*left]))
+            })
+            .ok_or_else(|| failure("EMPTY_TOKEN_SUPPORT", "no complete grammar choice remains"))?;
+        let selected_tokens = &tokenized[best_index];
+        let mut active = (0..tokenized.len()).collect::<Vec<_>>();
+        let mut position = 0usize;
+        loop {
+            poll_model(self.deadline)?;
+            let admissible = active
+                .iter()
+                .filter_map(|index| tokenized[*index].get(position).cloned())
+                .collect::<BTreeSet<_>>();
+            if admissible.is_empty() {
+                return Err(failure(
+                    "MEANING_GRAMMAR_CHOICE",
+                    "finite grammar choices did not provide a next token",
+                ));
+            }
+            let selected_token = selected_tokens.get(position).ok_or_else(|| {
+                failure(
+                    "MEANING_GRAMMAR_CHOICE",
+                    "the selected grammar sequence ended before its trie path",
+                )
+            })?;
+            let selected = self.step(unit_id, fragment_index, &admissible, Some(selected_token))?;
+            active.retain(|index| tokenized[*index].get(position) == Some(&selected));
+            position += 1;
+            if active.is_empty() {
+                return Err(failure(
+                    "MEANING_GRAMMAR_CHOICE",
+                    "the decoder selected outside the finite grammar choice set",
+                ));
+            }
+            if tokenized[best_index].len() == position {
+                if active.len() != 1 || active[0] != best_index {
+                    return Err(failure(
+                        "MEANING_GRAMMAR_CHOICE",
+                        "prefix-overlapping alternatives cannot be terminated deterministically",
+                    ));
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn meaning_generation_training_documents(
+    request: &MeaningGenerationRequest,
+) -> Result<Vec<String>> {
+    let mut documents = Vec::new();
+    for unit in &request.units {
+        for fragment in &unit.fragments {
+            match fragment {
+                MeaningGrammarFragment::Literal { value } => documents.push(value.clone()),
+                MeaningGrammarFragment::Choice { alternatives, .. } => {
+                    documents.extend(alternatives.iter().cloned());
+                }
+            }
+        }
+    }
+    for role in [
+        MeaningRole::Opening,
+        MeaningRole::Claim,
+        MeaningRole::Evidence,
+        MeaningRole::Rule,
+        MeaningRole::Detail,
+        MeaningRole::Example,
+        MeaningRole::SubjectA,
+        MeaningRole::SubjectB,
+        MeaningRole::Commonality,
+        MeaningRole::Difference,
+        MeaningRole::Body,
+        MeaningRole::Conclusion,
+        MeaningRole::Limitation,
+    ] {
+        documents.extend(
+            meaning_connectors(role, request.style)
+                .iter()
+                .map(|value| (*value).to_owned()),
+        );
+    }
+    if request.format == MeaningCompositionFormat::Bullets {
+        documents.extend(["・".to_owned(), "\n".to_owned()]);
+    }
+    let total = documents.iter().try_fold(0usize, |total, document| {
+        total
+            .checked_add(document.len())
+            .ok_or_else(|| failure("MODEL_RESOURCE_LIMIT", "grammar corpus size overflow"))
+    })?;
+    model_bytes(total)?;
+    Ok(documents)
+}
+
+/// Generate a bounded sequence by walking Core's finite semantic grammar one
+/// character token at a time. The model sees grammar atoms and semantic slots,
+/// not a list of completed response surfaces.
+pub fn generate_semantic_meaning(
+    request: &MeaningGenerationRequest,
+) -> Result<MeaningGenerationOutput> {
+    generate_semantic_meaning_until(request, model_deadline())
+}
+
+pub fn generate_semantic_meaning_until(
+    request: &MeaningGenerationRequest,
+    deadline: Instant,
+) -> Result<MeaningGenerationOutput> {
+    poll_model(deadline)?;
+    validate_meaning_generation_request(request)?;
+    let training_documents = meaning_generation_training_documents(request)?;
+    let training_corpus_revision = identity(&training_documents)?;
+    let model = SequenceModel::train_until(&training_documents, 3, 1, deadline)?;
+    let context_state_sha256 = identity(&(
+        MEANING_GENERATION_SCHEMA,
+        request,
+        &training_corpus_revision,
+        model.revision()?,
+    ))?;
+
+    let mut decoder = MeaningGenerationDecoder::new(&model, deadline);
+    let mut unit_traces = Vec::with_capacity(request.units.len());
+    let mut evidence_ids = Vec::new();
+    let mut seen_evidence = BTreeSet::new();
+    let generation_order = meaning_generation_order(request)?;
+    for (unit_index, source_index) in generation_order.iter().copied().enumerate() {
+        let unit = &request.units[source_index];
+        poll_model(deadline)?;
+        let byte_start = decoder.output.len();
+        if unit_index > 0 {
+            if request.format == MeaningCompositionFormat::Paragraph {
+                decoder.emit_choice(
+                    &unit.id,
+                    usize::MAX,
+                    &meaning_connectors(unit.role, request.style)
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect::<Vec<_>>(),
+                )?;
+            } else {
+                decoder.emit_literal(&unit.id, usize::MAX, "\n・")?;
+            }
+        } else if request.format == MeaningCompositionFormat::Bullets {
+            decoder.emit_literal(&unit.id, usize::MAX, "・")?;
+        }
+        for (fragment_index, fragment) in unit.fragments.iter().enumerate() {
+            match fragment {
+                MeaningGrammarFragment::Literal { value } => {
+                    decoder.emit_literal(&unit.id, fragment_index, value)?
+                }
+                MeaningGrammarFragment::Choice { alternatives, .. } => {
+                    decoder.emit_choice(&unit.id, fragment_index, alternatives)?
+                }
+            }
+        }
+        let byte_end = decoder.output.len();
+        let text = decoder
+            .output
+            .get(byte_start..byte_end)
+            .ok_or_else(|| failure("MEANING_REVERSE_CHECK", "generated unit span is invalid"))?
+            .to_owned();
+        if text.is_empty() || text.len() > MAX_MEANING_UNIT_BYTES {
+            return Err(failure(
+                "MEANING_UNIT_TEXT",
+                "generated unit is empty or exceeds the 384-byte semantic envelope",
+            ));
+        }
+        let surface_sha256 = identity(&(
+            unit.id.as_str(),
+            unit.role,
+            &unit.evidence_ids,
+            &unit.dependencies,
+            unit.semantic_sha256.as_str(),
+            text.as_str(),
+        ))?;
+        unit_traces.push(MeaningGenerationUnitTrace {
+            unit_id: unit.id.clone(),
+            role: unit.role,
+            evidence_ids: unit.evidence_ids.clone(),
+            dependencies: unit.dependencies.clone(),
+            semantic_sha256: unit.semantic_sha256.clone(),
+            surface_sha256,
+            text,
+            byte_start,
+            byte_end,
+        });
+        for evidence_id in &unit.evidence_ids {
+            if seen_evidence.insert(evidence_id.clone()) {
+                evidence_ids.push(evidence_id.clone());
+            }
+        }
+    }
+
+    if !decoder
+        .output
+        .chars()
+        .last()
+        .is_some_and(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
+    {
+        return Err(failure(
+            "MEANING_GRAMMAR_TERMINATION",
+            "the complete generated sequence must end at a declared sentence boundary",
+        ));
+    }
+    let admissible_eos = BTreeSet::from([EOS.to_owned()]);
+    let last_unit_id = unit_traces
+        .last()
+        .map(|unit| unit.unit_id.as_str())
+        .unwrap_or_default();
+    decoder.step(last_unit_id, usize::MAX, &admissible_eos, None)?;
+    let text_length = decoder
+        .token_steps
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| failure("MEANING_DECODER_BUDGET", "EOS step is missing"))?;
+    if decoder.output.len() > request.max_output_bytes
+        || decoder.token_steps.len() > request.max_tokens
+    {
+        return Err(failure(
+            "MEANING_DECODER_BUDGET",
+            "generated sequence exceeds its explicit byte or token budget",
+        ));
+    }
+    let projection = model.project_bytes_until(decoder.output.as_bytes(), deadline)?;
+    if projection.recover_bytes()? != decoder.output.as_bytes() {
+        return Err(failure(
+            "TOKEN_PROJECTION_INTEGRITY",
+            "generated meaning did not survive its lossless token round trip",
+        ));
+    }
+    let sequence_token_count = projection.tokens.len();
+    if sequence_token_count + 1 > request.max_tokens {
+        return Err(failure(
+            "MEANING_DECODER_BUDGET",
+            "lossless output tokens plus EOS exceed the declared token budget",
+        ));
+    }
+    let required_unit_ids = unit_traces
+        .iter()
+        .map(|unit| unit.unit_id.clone())
+        .collect::<Vec<_>>();
+    let round_trip_sha256 = identity(&(
+        MEANING_GENERATION_SCHEMA,
+        &request.units,
+        &unit_traces,
+        decoder.output.as_str(),
+        &projection.raw_sha256,
+        sequence_token_count,
+        text_length,
+    ))?;
+    let mut model_transition_count = 0usize;
+    for row in model.counts.values() {
+        model_transition_count = model_transition_count
+            .checked_add(row.len())
+            .ok_or_else(|| failure("MODEL_RESOURCE_LIMIT", "transition count overflow"))?;
+    }
+    let model_revision = identity(&(model.revision()?, LOSSLESS_TOKEN_ADAPTER))?;
+    let report = MeaningGenerationReport {
+        schema: MEANING_GENERATION_SCHEMA.into(),
+        text: decoder.output.clone(),
+        units: unit_traces,
+        required_unit_ids,
+        evidence_ids,
+        token_steps: decoder.token_steps.clone(),
+        context_state_sha256,
+        token_space_version: "core-japanese-char-grammar-space-v1".into(),
+        conditional_distribution_version: MEANING_DISTRIBUTION_VERSION.into(),
+        model_revision: model_revision.clone(),
+        model_artifact_ref: None,
+        model_training_lineage: "ephemeral non-neural char n-gram fit over individual typed grammar fragments and lexical alternatives; no complete response surfaces and no cross-request learning".into(),
+        training_corpus_revision,
+        transform_version: model.version.clone(),
+        transform_order: model.order,
+        transform_smoothing: model.smoothing,
+        model_document_count: model.document_count,
+        model_vocabulary_size: model.vocabulary.len(),
+        model_context_count: model.counts.len(),
+        model_transition_count,
+        sequence_token_count,
+        decoder_token_count: decoder.token_steps.len(),
+        lossless_projection: projection.clone(),
+        grammar_version: MEANING_GENERATION_GRAMMAR_VERSION.into(),
+        objective: "for each local grammar choice select the complete alternative with maximum exact rational conditional sequence probability; score and record every token under the finite active grammar support; preserve every required semantic unit and proof reference once; terminate with explicit EOS under the byte/token budget".into(),
+        decoder_version: MEANING_GENERATION_DECODER_VERSION.into(),
+        seed: None,
+        tie_policy: "no random seed; highest exact rational conditional sequence probability per grammar choice, then lexicographically smallest alternative".into(),
+        stop_reason: "EOS".into(),
+        semantic_round_trip_sha256: round_trip_sha256,
+        max_output_bytes: request.max_output_bytes,
+        max_tokens: request.max_tokens,
+    };
+    let emission = ModelEmission {
+        text: decoder.output,
+        model_revision,
+        sequence_probability: None,
+        authorized_surfaces: None,
+        token_count: sequence_token_count,
+        objective: report.objective.clone(),
+        decoder_version: report.decoder_version.clone(),
+        context_hashes: decoder
+            .token_steps
+            .iter()
+            .take(text_length)
+            .map(|step| step.context_state_sha256.clone())
+            .collect(),
+        lossless_projection: projection,
+    };
+    Ok(MeaningGenerationOutput {
+        model,
+        emission,
+        report,
     })
 }
 

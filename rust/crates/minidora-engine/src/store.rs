@@ -2,9 +2,9 @@
 //! blobs are durably published first. Orphan blobs are harmless, while a
 //! missing or corrupt referenced blob is an integrity failure.
 use minidora_domain::{
-    ALPHA8_SCHEMA_VERSION, ActionRecord, CaseRevision, EffectPhase, InputBundle,
-    LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState, PREVIOUS_SCHEMA_VERSION, RequestEnvelope,
-    Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
+    ALPHA8_SCHEMA_VERSION, ALPHA10_SCHEMA_VERSION, ActionRecord, CaseRevision, EffectPhase,
+    InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState, PREVIOUS_SCHEMA_VERSION,
+    RequestEnvelope, Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -212,7 +212,10 @@ impl Store {
             && !(allow_legacy
                 && matches!(
                     schema.as_str(),
-                    LEGACY_SCHEMA_VERSION | ALPHA8_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
+                    LEGACY_SCHEMA_VERSION
+                        | ALPHA8_SCHEMA_VERSION
+                        | PREVIOUS_SCHEMA_VERSION
+                        | ALPHA10_SCHEMA_VERSION
                 ))
         {
             return Err(failure(
@@ -229,7 +232,7 @@ impl Store {
         Ok(store)
     }
 
-    /// Explicitly upgrades alpha 7, alpha 8 or alpha 9 store metadata after
+    /// Explicitly upgrades alpha 7, alpha 8, alpha 9 or alpha 10 store metadata after
     /// verifying every referenced blob, case journal, action journal and
     /// conflict chain.
     /// Immutable case revision blobs keep their original schema identity.
@@ -252,12 +255,15 @@ impl Store {
         }
         if !matches!(
             schema.as_str(),
-            LEGACY_SCHEMA_VERSION | ALPHA8_SCHEMA_VERSION | PREVIOUS_SCHEMA_VERSION
+            LEGACY_SCHEMA_VERSION
+                | ALPHA8_SCHEMA_VERSION
+                | PREVIOUS_SCHEMA_VERSION
+                | ALPHA10_SCHEMA_VERSION
         ) {
             return Err(failure(
                 "SCHEMA_MISMATCH",
                 format!(
-                    "explicit migration supports only {LEGACY_SCHEMA_VERSION}, {ALPHA8_SCHEMA_VERSION} or {PREVIOUS_SCHEMA_VERSION}"
+                    "explicit migration supports only {LEGACY_SCHEMA_VERSION}, {ALPHA8_SCHEMA_VERSION}, {PREVIOUS_SCHEMA_VERSION} or {ALPHA10_SCHEMA_VERSION}"
                 ),
             ));
         }
@@ -1032,11 +1038,30 @@ impl Store {
             .iter()
             .map(|f| f.id.as_str())
             .chain(memory.rules.iter().map(|r| r.id.as_str()))
+            .chain(
+                memory
+                    .conditions
+                    .iter()
+                    .map(|condition| condition.id.as_str()),
+            )
             .collect();
-        if ids.len() != memory.facts.len() + memory.rules.len() {
+        if ids.len() != memory.facts.len() + memory.rules.len() + memory.conditions.len() {
             return Err(failure(
                 "INTEGRITY_FAILURE",
                 "duplicate actor memory identity",
+            ));
+        }
+        let condition_ids = memory
+            .conditions
+            .iter()
+            .map(|condition| condition.definition.condition_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if condition_ids.len() != memory.conditions.len()
+            || condition_ids.iter().any(|id| ids.contains(id))
+        {
+            return Err(failure(
+                "INTEGRITY_FAILURE",
+                "condition IDs must be unique and distinct from memory record IDs",
             ));
         }
         for (source, dependencies) in memory
@@ -1048,6 +1073,12 @@ impl Store {
                     .rules
                     .iter()
                     .map(|r| (&r.source_input, &r.dependencies)),
+            )
+            .chain(
+                memory
+                    .conditions
+                    .iter()
+                    .map(|condition| (&condition.source_input, &condition.dependencies)),
             )
         {
             if dependencies.iter().any(|id| !ids.contains(id.as_str())) {
@@ -1067,6 +1098,54 @@ impl Store {
                 return Err(failure(
                     "ACCESS_DENIED",
                     "memory provenance is not an original input owned by this actor",
+                ));
+            }
+        }
+        for condition in &memory.conditions {
+            crate::relations::validate_condition_definition(&condition.definition)?;
+            if condition.semantics_version != minidora_domain::CONDITION_SEMANTICS_VERSION
+                || condition.source_input.is_empty()
+                || condition
+                    .dependencies
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+            {
+                return Err(failure(
+                    "INTEGRITY_FAILURE",
+                    "condition record version, provenance, or dependencies are invalid",
+                ));
+            }
+            let expected_dependencies = condition
+                .definition
+                .dependencies
+                .iter()
+                .filter_map(|condition_id| {
+                    memory
+                        .conditions
+                        .iter()
+                        .find(|candidate| {
+                            candidate.definition.condition_id == *condition_id && candidate.valid
+                        })
+                        .map(|record| record.id.as_str())
+                })
+                .collect::<BTreeSet<_>>();
+            let actual_dependencies = condition
+                .dependencies
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            if condition.valid
+                && (actual_dependencies != expected_dependencies
+                    || condition.dependencies.iter().any(|id| {
+                        !memory
+                            .conditions
+                            .iter()
+                            .any(|dependency| dependency.id == *id && dependency.valid)
+                    }))
+            {
+                return Err(failure(
+                    "INTEGRITY_FAILURE",
+                    "active condition dependency records differ from the definition",
                 ));
             }
         }
@@ -1120,28 +1199,109 @@ impl Store {
         Ok(memory)
     }
 
+    fn validate_memory_evolution(previous: &MemoryState, next: &MemoryState) -> Result<()> {
+        if previous.revision.checked_add(1) != Some(next.revision) {
+            return Err(failure(
+                "REVISION_CONFLICT",
+                "actor memory revision compare-and-swap failed",
+            ));
+        }
+
+        macro_rules! preserve_append_only_records {
+            ($field:ident, $kind:literal) => {{
+                let old_records = &previous.$field;
+                let new_records = &next.$field;
+                if new_records.len() < old_records.len() {
+                    return Err(failure(
+                        "MEMORY_HISTORY_IMMUTABLE",
+                        concat!("actor memory ", $kind, " history cannot be truncated"),
+                    ));
+                }
+                for (old, new) in old_records.iter().zip(new_records) {
+                    if old.id != new.id {
+                        return Err(failure(
+                            "MEMORY_HISTORY_IMMUTABLE",
+                            concat!(
+                                "actor memory ",
+                                $kind,
+                                " records cannot be reordered or replaced"
+                            ),
+                        ));
+                    }
+                    if !old.valid && new.valid {
+                        return Err(failure(
+                            "MEMORY_HISTORY_IMMUTABLE",
+                            concat!(
+                                "invalidated actor memory ",
+                                $kind,
+                                " records cannot be reactivated"
+                            ),
+                        ));
+                    }
+                    let mut expected = old.clone();
+                    expected.valid = new.valid;
+                    if expected != *new {
+                        return Err(failure(
+                            "MEMORY_HISTORY_IMMUTABLE",
+                            concat!("actor memory ", $kind, " record content is immutable"),
+                        ));
+                    }
+                }
+            }};
+        }
+
+        preserve_append_only_records!(facts, "Fact");
+        preserve_append_only_records!(rules, "Rule");
+        preserve_append_only_records!(conditions, "Condition");
+        Ok(())
+    }
+
     pub fn save_memory(&self, actor: &str, memory: &MemoryState) -> Result<()> {
         valid_id(actor)?;
         self.validate_memory_scope(actor, memory)?;
-        let (sha, length) = self.publish_blob(memory)?;
-        let transaction = self.transaction()?;
-        let old: Option<(i64,String)> = sql(transaction.query_row(
-            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1", [actor], |r| Ok((r.get(0)?,r.get(1)?)),
+        let bytes = canonical(memory)?;
+        let sha = digest(&bytes);
+        let old: Option<(i64, String)> = sql(self.connection.query_row(
+            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
+            [actor],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional())?;
         if let Some((revision, old_sha)) = &old {
+            let previous: MemoryState = self.read_blob(old_sha)?;
+            let stored_revision = u64::try_from(*revision)
+                .map_err(|_| failure("INTEGRITY_FAILURE", "actor memory revision is negative"))?;
+            if previous.revision != stored_revision {
+                return Err(failure(
+                    "INTEGRITY_FAILURE",
+                    "actor memory revision row differs from its immutable snapshot",
+                ));
+            }
             if *old_sha == sha {
                 return Ok(());
             }
-            if memory.revision != *revision as u64 + 1 {
-                return Err(failure(
-                    "REVISION_CONFLICT",
-                    "actor memory revision compare-and-swap failed",
-                ));
-            }
+            Self::validate_memory_evolution(&previous, memory)?;
         } else if memory.revision > 1 {
             return Err(failure(
                 "REVISION_CONFLICT",
                 "first memory revision must be zero or one",
+            ));
+        }
+
+        let (published_sha, length) = self.publish_bytes(&bytes)?;
+        if published_sha != sha {
+            return Err(failure(
+                "INTEGRITY_FAILURE",
+                "published actor memory digest differs from its canonical snapshot",
+            ));
+        }
+        let transaction = self.transaction()?;
+        let current: Option<(i64, String)> = sql(transaction.query_row(
+            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1", [actor], |r| Ok((r.get(0)?,r.get(1)?)),
+        ).optional())?;
+        if current != old {
+            return Err(failure(
+                "REVISION_CONFLICT",
+                "actor memory changed while a new immutable revision was prepared",
             ));
         }
         Self::reference(&transaction, &sha, length, "memory")?;
@@ -1319,6 +1479,7 @@ impl Store {
                     | LEGACY_SCHEMA_VERSION
                     | ALPHA8_SCHEMA_VERSION
                     | PREVIOUS_SCHEMA_VERSION
+                    | ALPHA10_SCHEMA_VERSION
             ) || revision.actor_id != owner
                 || revision.case_id != case
                 || revision.revision != number as u64
@@ -1448,7 +1609,10 @@ CREATE TRIGGER IF NOT EXISTS artifact_no_update BEFORE UPDATE ON artifact_ref BE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minidora_domain::{InputBundle, Intent, MeaningIR, Permissions};
+    use minidora_domain::{
+        ConditionDefinition, ConditionExpression, ConditionRecord, Fact, Guarantee, InputBundle,
+        Intent, MeaningIR, Permissions, Proposition, RelationRule,
+    };
     use std::collections::BTreeMap;
     use std::process::Command;
     use std::time::Instant;
@@ -2380,6 +2544,83 @@ mod tests {
     }
 
     #[test]
+    fn explicit_alpha10_migration_preserves_legacy_condition_refs_and_memory_blob() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        let fingerprint = identity(&request).unwrap();
+        assert!(
+            store
+                .register_input("alice", &request, &fingerprint)
+                .unwrap()
+        );
+        let memory = MemoryState {
+            revision: 1,
+            facts: vec![Fact {
+                id: "fact:legacy-condition-ref".into(),
+                proposition: Proposition {
+                    subject: "Nera".into(),
+                    predicate: "is".into(),
+                    object: "ore".into(),
+                    negative: false,
+                    scope: "lab".into(),
+                    temporal_scope: None,
+                    condition_refs: BTreeSet::from(["condition:legacy".into()]),
+                },
+                guarantee: Guarantee::UserPremise,
+                source_input: fingerprint,
+                source_evidence: None,
+                dependencies: Vec::new(),
+                valid: true,
+            }],
+            ..MemoryState::default()
+        };
+        store.save_memory("alice", &memory).unwrap();
+        let memory_sha: String = store
+            .connection
+            .query_row(
+                "SELECT record_sha256 FROM memory_revision WHERE actor_id='alice' AND revision=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let blob_path = directory.0.join("blobs").join(&memory_sha);
+        let original_blob = fs::read(&blob_path).unwrap();
+        drop(store);
+
+        let connection = Connection::open(directory.0.join("state.sqlite3")).unwrap();
+        connection
+            .execute(
+                "UPDATE store_metadata SET value=?1 WHERE key='schema'",
+                [ALPHA10_SCHEMA_VERSION],
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(matches!(
+            Store::open(&directory.0),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "SCHEMA_MISMATCH"
+        ));
+        assert_eq!(
+            Store::migrate_to_current(&directory.0).unwrap(),
+            (ALPHA10_SCHEMA_VERSION.into(), SCHEMA_VERSION.into())
+        );
+        let migrated = Store::open(&directory.0).unwrap();
+        let restored = migrated.load_memory("alice").unwrap();
+        assert_eq!(restored, memory);
+        assert!(restored.conditions.is_empty());
+        assert_eq!(
+            restored.facts[0].proposition.condition_refs,
+            BTreeSet::from(["condition:legacy".into()])
+        );
+        assert_eq!(fs::read(&blob_path).unwrap(), original_blob);
+        assert_eq!(
+            Store::migrate_to_current(&directory.0).unwrap(),
+            (SCHEMA_VERSION.into(), SCHEMA_VERSION.into())
+        );
+    }
+
+    #[test]
     fn corrupt_or_missing_referenced_blob_blocks_restart() {
         for missing in [false, true] {
             let directory = Directory::new();
@@ -2671,6 +2912,149 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
     }
+    #[test]
+    fn memory_revision_preserves_immutable_records_and_allows_tombstones() {
+        let directory = Directory::new();
+        let request = request();
+        let fingerprint = identity(&request).unwrap();
+        let store = Store::open(&directory.0).unwrap();
+        register(&store, &request);
+
+        let proposition = |object: &str| Proposition {
+            subject: "Nera".into(),
+            predicate: "is".into(),
+            object: object.into(),
+            negative: false,
+            scope: "lab".into(),
+            temporal_scope: None,
+            condition_refs: BTreeSet::new(),
+        };
+        let fact = |id: &str, object: &str| Fact {
+            id: id.into(),
+            proposition: proposition(object),
+            guarantee: Guarantee::UserPremise,
+            source_input: fingerprint.clone(),
+            source_evidence: None,
+            dependencies: Vec::new(),
+            valid: true,
+        };
+        let condition_definition = ConditionDefinition {
+            condition_id: "condition:lab-check".into(),
+            subject: "Nera".into(),
+            scope: "lab".into(),
+            expression: ConditionExpression::Fact {
+                predicate: "is".into(),
+                object: "ore".into(),
+            },
+            valid_from: None,
+            valid_until: None,
+            dependencies: BTreeSet::new(),
+        };
+        let condition = ConditionRecord {
+            id: format!(
+                "condition-record:{}",
+                identity(&(
+                    minidora_domain::CONDITION_SEMANTICS_VERSION,
+                    &condition_definition
+                ))
+                .unwrap()
+            ),
+            semantics_version: minidora_domain::CONDITION_SEMANTICS_VERSION.into(),
+            definition: condition_definition,
+            source_input: fingerprint.clone(),
+            dependencies: Vec::new(),
+            valid: true,
+        };
+        let rule = RelationRule {
+            id: "rule:root-one".into(),
+            premise: Proposition {
+                subject: "$subject".into(),
+                ..proposition("ore")
+            },
+            additional_premises: Vec::new(),
+            conclusion: Proposition {
+                subject: "$subject".into(),
+                ..proposition("mineral")
+            },
+            source_input: fingerprint.clone(),
+            dependencies: Vec::new(),
+            valid: true,
+        };
+        let original = MemoryState {
+            revision: 1,
+            facts: vec![fact("fact:original", "ore")],
+            rules: vec![rule],
+            conditions: vec![condition],
+        };
+        let original_bytes = canonical(&original).unwrap();
+        store.save_memory("alice", &original).unwrap();
+        let first_sha: String = store
+            .connection
+            .query_row(
+                "SELECT record_sha256 FROM memory_revision WHERE actor_id='alice' AND revision=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let mut next = original.clone();
+        next.revision = 2;
+        next.facts[0].valid = false;
+        next.rules[0].valid = false;
+        next.conditions[0].valid = false;
+        next.facts.push(fact("fact:replacement", "mineral"));
+        store.save_memory("alice", &next).unwrap();
+        assert_eq!(store.load_memory("alice").unwrap(), next);
+
+        let path = directory.0.clone();
+        drop(store);
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.load_memory("alice").unwrap(), next);
+        assert_eq!(
+            reopened.read_blob_bytes(&first_sha).unwrap(),
+            original_bytes
+        );
+
+        let mut removed = next.clone();
+        removed.revision = 3;
+        removed.facts.remove(0);
+        assert!(matches!(
+            reopened.save_memory("alice", &removed),
+            Err(minidora_domain::Error::Contract { code, .. })
+                if code == "MEMORY_HISTORY_IMMUTABLE"
+        ));
+
+        let mut rewritten = next.clone();
+        rewritten.revision = 3;
+        rewritten.rules[0].conclusion.object = "changed".into();
+        assert!(matches!(
+            reopened.save_memory("alice", &rewritten),
+            Err(minidora_domain::Error::Contract { code, .. })
+                if code == "MEMORY_HISTORY_IMMUTABLE"
+        ));
+
+        let mut reactivated = next.clone();
+        reactivated.revision = 3;
+        reactivated.conditions[0].valid = true;
+        assert!(matches!(
+            reopened.save_memory("alice", &reactivated),
+            Err(minidora_domain::Error::Contract { code, .. })
+                if code == "MEMORY_HISTORY_IMMUTABLE"
+        ));
+
+        assert_eq!(reopened.load_memory("alice").unwrap(), next);
+        assert!(reopened.orphan_blobs().unwrap().is_empty());
+        let revisions: i64 = reopened
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM memory_revision WHERE actor_id='alice'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(revisions, 2);
+    }
+
     #[test]
     fn sqlite_foreign_keys_and_immutable_revision_triggers_are_effective() {
         let directory = Directory::new();

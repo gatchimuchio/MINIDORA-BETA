@@ -11,6 +11,10 @@ pub struct QueryOutcome {
     pub facts: Vec<Fact>,
     pub used_rules: Vec<String>,
     pub steps: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub condition_evaluations: Vec<ConditionEvaluation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_status: Option<ConditionStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,6 +329,640 @@ pub(crate) fn validate(proposition: &Proposition) -> Result<()> {
     }
     Ok(())
 }
+
+#[derive(Default)]
+struct ConditionEvaluationState {
+    status: Option<ConditionStatus>,
+    definition_record_ids: BTreeSet<String>,
+    evidence_fact_ids: BTreeSet<String>,
+    dependencies: BTreeSet<String>,
+    reason: Option<String>,
+}
+
+struct ConditionEvaluationBudget<'a> {
+    max_steps: u32,
+    steps: &'a mut u32,
+}
+
+fn valid_utc_instant(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+        || [0..4, 5..7, 8..10, 11..13, 14..16, 17..19]
+            .into_iter()
+            .any(|range| !bytes[range].iter().all(u8::is_ascii_digit))
+    {
+        return false;
+    }
+    let number = |range: std::ops::Range<usize>| -> Option<u32> { value.get(range)?.parse().ok() };
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        number(0..4),
+        number(5..7),
+        number(8..10),
+        number(11..13),
+        number(14..16),
+        number(17..19),
+    ) else {
+        return false;
+    };
+    if year == 0 || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=days).contains(&day)
+}
+
+fn expression_condition_refs(
+    expression: &ConditionExpression,
+    node_count: &mut usize,
+    references: &mut BTreeSet<String>,
+) -> Result<()> {
+    *node_count = node_count.checked_add(1).ok_or_else(|| {
+        failure(
+            "CONDITION_COMPLEXITY_LIMIT",
+            "condition node count overflow",
+        )
+    })?;
+    if *node_count > 64 {
+        return Err(failure(
+            "CONDITION_COMPLEXITY_LIMIT",
+            "condition expressions are limited to 64 nodes",
+        ));
+    }
+    match expression {
+        ConditionExpression::Fact { predicate, object } => {
+            if [predicate, object].iter().any(|value| {
+                value.trim().is_empty()
+                    || value.len() > 1024
+                    || value.chars().any(char::is_control)
+                    || variable(value)
+            }) {
+                return Err(failure(
+                    "INVALID_CONDITION_PREDICATE",
+                    "condition fact predicates require bounded, non-variable predicate and object values",
+                ));
+            }
+        }
+        ConditionExpression::ConditionRef { condition_id } => {
+            validate_condition_id(condition_id)?;
+            references.insert(condition_id.clone());
+        }
+        ConditionExpression::And { operands } | ConditionExpression::Or { operands } => {
+            if !(2..=16).contains(&operands.len()) {
+                return Err(failure(
+                    "INVALID_CONDITION_ARITY",
+                    "AND and OR conditions require two to sixteen operands",
+                ));
+            }
+            for operand in operands {
+                expression_condition_refs(operand, node_count, references)?;
+            }
+        }
+        ConditionExpression::Not { operand } => {
+            expression_condition_refs(operand, node_count, references)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_condition_id(value: &str) -> Result<()> {
+    if value.trim().is_empty()
+        || value.len() > 512
+        || value.chars().any(char::is_control)
+        || variable(value)
+    {
+        return Err(failure(
+            "INVALID_CONDITION_ID",
+            "condition IDs must be nonempty, bounded, and non-variable",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_condition_definition(definition: &ConditionDefinition) -> Result<()> {
+    validate_condition_id(&definition.condition_id)?;
+    if definition.subject != "$subject"
+        && (definition.subject.trim().is_empty()
+            || definition.subject.len() > 1024
+            || definition.subject.chars().any(char::is_control)
+            || variable(&definition.subject))
+    {
+        return Err(failure(
+            "INVALID_CONDITION_SUBJECT",
+            "condition subject must be a bounded exact subject or $subject",
+        ));
+    }
+    if definition.scope.trim().is_empty()
+        || definition.scope.len() > 1024
+        || definition.scope.chars().any(char::is_control)
+        || variable(&definition.scope)
+    {
+        return Err(failure(
+            "INVALID_CONDITION_SCOPE",
+            "condition scope must be a bounded exact scope",
+        ));
+    }
+    for bound in [
+        definition.valid_from.as_deref(),
+        definition.valid_until.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !valid_utc_instant(bound) {
+            return Err(failure(
+                "INVALID_CONDITION_PERIOD",
+                "condition validity bounds require canonical YYYY-MM-DDTHH:MM:SSZ UTC instants",
+            ));
+        }
+    }
+    if definition
+        .valid_from
+        .as_ref()
+        .zip(definition.valid_until.as_ref())
+        .is_some_and(|(start, end)| start >= end)
+    {
+        return Err(failure(
+            "INVALID_CONDITION_PERIOD",
+            "condition validity is a nonempty half-open interval [valid_from, valid_until)",
+        ));
+    }
+    let mut references = BTreeSet::new();
+    expression_condition_refs(&definition.expression, &mut 0, &mut references)?;
+    if references != definition.dependencies {
+        return Err(failure(
+            "CONDITION_DEPENDENCY_MISMATCH",
+            "declared condition dependencies must equal the expression's referenced condition IDs",
+        ));
+    }
+    if definition.dependencies.len() > 32 {
+        return Err(failure(
+            "CONDITION_COMPLEXITY_LIMIT",
+            "a condition may depend on at most 32 other conditions",
+        ));
+    }
+    Ok(())
+}
+
+pub fn define_condition(
+    memory: &mut MemoryState,
+    definition: ConditionDefinition,
+    source_input: &str,
+) -> Result<ConditionRecord> {
+    validate_condition_definition(&definition)?;
+    if source_input.is_empty() {
+        return Err(failure(
+            "MISSING_PROVENANCE",
+            "a condition definition needs its original input identity",
+        ));
+    }
+    if memory
+        .facts
+        .iter()
+        .any(|fact| fact.id == definition.condition_id)
+        || memory
+            .rules
+            .iter()
+            .any(|rule| rule.id == definition.condition_id)
+        || memory
+            .conditions
+            .iter()
+            .any(|condition| condition.id == definition.condition_id)
+    {
+        return Err(failure(
+            "CONDITION_ID_COLLISION",
+            "condition IDs occupy a separate identity space from memory record IDs",
+        ));
+    }
+    if let Some(existing) = memory
+        .conditions
+        .iter()
+        .find(|record| record.definition.condition_id == definition.condition_id)
+    {
+        if existing.definition == definition && existing.valid {
+            return Ok(existing.clone());
+        }
+        return Err(failure(
+            "CONDITION_ID_COLLISION",
+            "condition IDs are immutable; define a revised condition under a new ID",
+        ));
+    }
+    let mut dependency_records = Vec::with_capacity(definition.dependencies.len());
+    for dependency in &definition.dependencies {
+        let mut matches = memory
+            .conditions
+            .iter()
+            .filter(|record| record.valid && record.definition.condition_id == *dependency);
+        let Some(record) = matches.next() else {
+            return Err(failure(
+                "UNKNOWN_CONDITION_DEPENDENCY",
+                format!("condition dependency {dependency:?} is not defined and active"),
+            ));
+        };
+        if matches.next().is_some() {
+            return Err(failure(
+                "AMBIGUOUS_CONDITION_DEPENDENCY",
+                format!("condition dependency {dependency:?} has multiple active definitions"),
+            ));
+        }
+        dependency_records.push(record.id.clone());
+    }
+    dependency_records.sort();
+    let id = format!(
+        "condition-record:{}",
+        identity(&(CONDITION_SEMANTICS_VERSION, &definition))?
+    );
+    let record = ConditionRecord {
+        id,
+        semantics_version: CONDITION_SEMANTICS_VERSION.into(),
+        definition,
+        source_input: source_input.into(),
+        dependencies: dependency_records,
+        valid: true,
+    };
+    memory.conditions.push(record.clone());
+    bump(memory)?;
+    Ok(record)
+}
+
+fn status_support(status: ConditionStatus) -> (bool, bool) {
+    match status {
+        ConditionStatus::True => (true, false),
+        ConditionStatus::False => (false, true),
+        ConditionStatus::Unknown => (false, false),
+        ConditionStatus::Conflict => (true, true),
+    }
+}
+
+fn support_status(true_support: bool, false_support: bool) -> ConditionStatus {
+    match (true_support, false_support) {
+        (true, false) => ConditionStatus::True,
+        (false, true) => ConditionStatus::False,
+        (false, false) => ConditionStatus::Unknown,
+        (true, true) => ConditionStatus::Conflict,
+    }
+}
+
+fn combine_and(left: ConditionStatus, right: ConditionStatus) -> ConditionStatus {
+    let (left_true, left_false) = status_support(left);
+    let (right_true, right_false) = status_support(right);
+    support_status(left_true && right_true, left_false || right_false)
+}
+
+fn combine_or(left: ConditionStatus, right: ConditionStatus) -> ConditionStatus {
+    let (left_true, left_false) = status_support(left);
+    let (right_true, right_false) = status_support(right);
+    support_status(left_true || right_true, left_false && right_false)
+}
+
+fn negate_status(status: ConditionStatus) -> ConditionStatus {
+    let (true_support, false_support) = status_support(status);
+    support_status(false_support, true_support)
+}
+
+fn active_memory_dependency(memory: &MemoryState, id: &str) -> bool {
+    memory.facts.iter().any(|fact| fact.id == id && fact.valid)
+        || memory.rules.iter().any(|rule| rule.id == id && rule.valid)
+        || memory
+            .conditions
+            .iter()
+            .any(|record| record.id == id && record.valid)
+}
+
+fn evaluate_condition_expression(
+    memory: &MemoryState,
+    expression: &ConditionExpression,
+    definition: &ConditionDefinition,
+    target: &Proposition,
+    allowed_hypotheses: Option<&BTreeSet<String>>,
+    budget: &mut ConditionEvaluationBudget<'_>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<ConditionEvaluationState> {
+    charge_step(budget.steps, budget.max_steps)?;
+    match expression {
+        ConditionExpression::Fact { predicate, object } => {
+            let evidence_subject = if definition.subject == "$subject" {
+                target.subject.as_str()
+            } else {
+                definition.subject.as_str()
+            };
+            let mut true_support = false;
+            let mut false_support = false;
+            let mut uncertain_evidence = false;
+            let mut result = ConditionEvaluationState::default();
+            for fact in &memory.facts {
+                charge_step(budget.steps, budget.max_steps)?;
+                if !fact.valid
+                    || matches!(fact.guarantee, Guarantee::Unknown)
+                    || (fact.guarantee == Guarantee::Hypothesis
+                        && !allowed_hypotheses.is_some_and(|ids| ids.contains(&fact.id)))
+                    || fact
+                        .dependencies
+                        .iter()
+                        .any(|id| !active_memory_dependency(memory, id))
+                    || fact.proposition.subject != evidence_subject
+                    || fact.proposition.predicate != *predicate
+                    || fact.proposition.object != *object
+                    || fact.proposition.scope != definition.scope
+                    || fact.proposition.temporal_scope != target.temporal_scope
+                {
+                    continue;
+                }
+                let mut fact_conditions = ConditionStatus::True;
+                for condition_id in &fact.proposition.condition_refs {
+                    let evaluated = evaluate_condition(
+                        memory,
+                        condition_id,
+                        target,
+                        allowed_hypotheses,
+                        budget,
+                        visiting,
+                    )?;
+                    fact_conditions = combine_and(
+                        fact_conditions,
+                        evaluated.status.unwrap_or(ConditionStatus::Unknown),
+                    );
+                    result
+                        .definition_record_ids
+                        .extend(evaluated.definition_record_ids);
+                    result.evidence_fact_ids.extend(evaluated.evidence_fact_ids);
+                    result.dependencies.extend(evaluated.dependencies);
+                    result.reason = result.reason.or(evaluated.reason);
+                }
+                if fact_conditions != ConditionStatus::True {
+                    uncertain_evidence = true;
+                    continue;
+                }
+                result.evidence_fact_ids.insert(fact.id.clone());
+                result.dependencies.insert(fact.id.clone());
+                result
+                    .dependencies
+                    .extend(fact.dependencies.iter().cloned());
+                if fact.proposition.negative {
+                    false_support = true;
+                } else {
+                    true_support = true;
+                }
+            }
+            let status = support_status(true_support, false_support);
+            Ok(ConditionEvaluationState {
+                status: Some(
+                    if status == ConditionStatus::Unknown && uncertain_evidence {
+                        ConditionStatus::Unknown
+                    } else {
+                        status
+                    },
+                ),
+                reason: if status == ConditionStatus::Unknown {
+                    Some(if uncertain_evidence {
+                        "CONDITION_EVIDENCE_CONDITION_UNRESOLVED".into()
+                    } else {
+                        "CONDITION_EVIDENCE_NOT_FOUND".into()
+                    })
+                } else {
+                    None
+                },
+                ..result
+            })
+        }
+        ConditionExpression::ConditionRef { condition_id } => evaluate_condition(
+            memory,
+            condition_id,
+            target,
+            allowed_hypotheses,
+            budget,
+            visiting,
+        ),
+        ConditionExpression::And { operands } | ConditionExpression::Or { operands } => {
+            let is_and = matches!(expression, ConditionExpression::And { .. });
+            let mut result = ConditionEvaluationState {
+                status: Some(if is_and {
+                    ConditionStatus::True
+                } else {
+                    ConditionStatus::False
+                }),
+                ..ConditionEvaluationState::default()
+            };
+            for operand in operands {
+                let evaluated = evaluate_condition_expression(
+                    memory,
+                    operand,
+                    definition,
+                    target,
+                    allowed_hypotheses,
+                    budget,
+                    visiting,
+                )?;
+                let current = result.status.unwrap_or(ConditionStatus::Unknown);
+                let next = evaluated.status.unwrap_or(ConditionStatus::Unknown);
+                result.status = Some(if is_and {
+                    combine_and(current, next)
+                } else {
+                    combine_or(current, next)
+                });
+                result
+                    .definition_record_ids
+                    .extend(evaluated.definition_record_ids);
+                result.evidence_fact_ids.extend(evaluated.evidence_fact_ids);
+                result.dependencies.extend(evaluated.dependencies);
+                result.reason = result.reason.or(evaluated.reason);
+            }
+            Ok(result)
+        }
+        ConditionExpression::Not { operand } => {
+            let mut result = evaluate_condition_expression(
+                memory,
+                operand,
+                definition,
+                target,
+                allowed_hypotheses,
+                budget,
+                visiting,
+            )?;
+            result.status = result.status.map(negate_status);
+            Ok(result)
+        }
+    }
+}
+
+fn evaluate_condition(
+    memory: &MemoryState,
+    condition_id: &str,
+    target: &Proposition,
+    allowed_hypotheses: Option<&BTreeSet<String>>,
+    budget: &mut ConditionEvaluationBudget<'_>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<ConditionEvaluationState> {
+    charge_step(budget.steps, budget.max_steps)?;
+    if !visiting.insert(condition_id.to_owned()) {
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::Unknown),
+            reason: Some("CONDITION_DEPENDENCY_CYCLE".into()),
+            ..ConditionEvaluationState::default()
+        });
+    }
+    let matches = memory
+        .conditions
+        .iter()
+        .filter(|record| {
+            record.valid
+                && record.semantics_version == CONDITION_SEMANTICS_VERSION
+                && record.definition.condition_id == condition_id
+        })
+        .collect::<Vec<_>>();
+    let Some(record) = matches.first().copied() else {
+        visiting.remove(condition_id);
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::Unknown),
+            reason: Some("CONDITION_DEFINITION_MISSING".into()),
+            ..ConditionEvaluationState::default()
+        });
+    };
+    if matches.len() != 1 {
+        visiting.remove(condition_id);
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::Conflict),
+            definition_record_ids: matches.iter().map(|record| record.id.clone()).collect(),
+            dependencies: matches.iter().map(|record| record.id.clone()).collect(),
+            reason: Some("CONDITION_DEFINITION_CONFLICT".into()),
+            ..ConditionEvaluationState::default()
+        });
+    }
+    if record
+        .dependencies
+        .iter()
+        .any(|id| !active_memory_dependency(memory, id))
+    {
+        visiting.remove(condition_id);
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::Unknown),
+            definition_record_ids: BTreeSet::from([record.id.clone()]),
+            dependencies: BTreeSet::from([record.id.clone()]),
+            reason: Some("CONDITION_DEPENDENCY_INACTIVE".into()),
+            ..ConditionEvaluationState::default()
+        });
+    }
+    if record.definition.scope != target.scope
+        || (record.definition.subject != "$subject" && record.definition.subject != target.subject)
+    {
+        visiting.remove(condition_id);
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::False),
+            definition_record_ids: BTreeSet::from([record.id.clone()]),
+            dependencies: BTreeSet::from([record.id.clone()]),
+            reason: Some("CONDITION_APPLICABILITY_MISMATCH".into()),
+            ..ConditionEvaluationState::default()
+        });
+    }
+    if (record.definition.valid_from.is_some() || record.definition.valid_until.is_some())
+        && target
+            .temporal_scope
+            .as_deref()
+            .is_none_or(|time| !valid_utc_instant(time))
+    {
+        visiting.remove(condition_id);
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::Unknown),
+            definition_record_ids: BTreeSet::from([record.id.clone()]),
+            dependencies: BTreeSet::from([record.id.clone()]),
+            reason: Some("CONDITION_EVALUATION_TIME_UNKNOWN".into()),
+            ..ConditionEvaluationState::default()
+        });
+    }
+    if target.temporal_scope.as_ref().is_some_and(|time| {
+        record
+            .definition
+            .valid_from
+            .as_ref()
+            .is_some_and(|start| time < start)
+            || record
+                .definition
+                .valid_until
+                .as_ref()
+                .is_some_and(|end| time >= end)
+    }) {
+        visiting.remove(condition_id);
+        return Ok(ConditionEvaluationState {
+            status: Some(ConditionStatus::False),
+            definition_record_ids: BTreeSet::from([record.id.clone()]),
+            dependencies: BTreeSet::from([record.id.clone()]),
+            reason: Some("CONDITION_OUTSIDE_VALID_PERIOD".into()),
+            ..ConditionEvaluationState::default()
+        });
+    }
+    let mut result = evaluate_condition_expression(
+        memory,
+        &record.definition.expression,
+        &record.definition,
+        target,
+        allowed_hypotheses,
+        budget,
+        visiting,
+    )?;
+    visiting.remove(condition_id);
+    result.definition_record_ids.insert(record.id.clone());
+    result.dependencies.insert(record.id.clone());
+    result
+        .dependencies
+        .extend(record.dependencies.iter().cloned());
+    Ok(result)
+}
+
+fn evaluate_condition_refs(
+    memory: &MemoryState,
+    target: &Proposition,
+    allowed_hypotheses: Option<&BTreeSet<String>>,
+    max_steps: u32,
+    steps: &mut u32,
+) -> Result<(
+    Option<ConditionStatus>,
+    Vec<ConditionEvaluation>,
+    BTreeSet<String>,
+)> {
+    if target.condition_refs.is_empty() {
+        return Ok((None, Vec::new(), BTreeSet::new()));
+    }
+    let mut overall = ConditionStatus::True;
+    let mut evaluations = Vec::with_capacity(target.condition_refs.len());
+    let mut dependencies = BTreeSet::new();
+    let mut budget = ConditionEvaluationBudget { max_steps, steps };
+    for condition_id in &target.condition_refs {
+        let state = evaluate_condition(
+            memory,
+            condition_id,
+            target,
+            allowed_hypotheses,
+            &mut budget,
+            &mut BTreeSet::new(),
+        )?;
+        let status = state.status.unwrap_or(ConditionStatus::Unknown);
+        overall = combine_and(overall, status);
+        let definition_record_ids = state.definition_record_ids.into_iter().collect::<Vec<_>>();
+        let evidence_fact_ids = state.evidence_fact_ids.into_iter().collect::<Vec<_>>();
+        dependencies.extend(state.dependencies.iter().cloned());
+        evaluations.push(ConditionEvaluation {
+            condition_id: condition_id.clone(),
+            status,
+            definition_record_ids,
+            evidence_fact_ids,
+            dependencies: state.dependencies.into_iter().collect(),
+            reason: state.reason,
+        });
+    }
+    Ok((Some(overall), evaluations, dependencies))
+}
+
 pub(crate) fn is_ground(proposition: &Proposition) -> bool {
     variables(proposition).is_empty()
 }
@@ -869,6 +1507,43 @@ pub(crate) fn query_hypothetical(
     query_internal(memory, proposition, max_steps, Some(allowed_hypotheses))
 }
 
+/// Return direct, active premises that match a query in every typed field
+/// except exact world scope. Core uses these only to explain an `OUT_OF_SCOPE`
+/// stop; they are never admitted to the query's proof closure.
+pub(crate) fn direct_out_of_scope_premises(
+    memory: &MemoryState,
+    proposition: &Proposition,
+    max_steps: u32,
+) -> Result<Vec<Fact>> {
+    let scanned_facts = u32::try_from(memory.facts.len()).unwrap_or(u32::MAX);
+    if max_steps == 0 || scanned_facts > max_steps {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "checking for an exact proposition in another scope exceeds the relation budget",
+        ));
+    }
+    let mut facts = memory
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.valid
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+                && !fact.source_input.is_empty()
+                && fact.proposition.scope != proposition.scope
+                && fact.proposition.subject == proposition.subject
+                && fact.proposition.predicate == proposition.predicate
+                && fact.proposition.object == proposition.object
+                && fact.proposition.negative == proposition.negative
+                && fact.proposition.temporal_scope == proposition.temporal_scope
+                && fact.proposition.condition_refs == proposition.condition_refs
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    facts.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(facts)
+}
+
 fn direct_fact_matches(
     patterns: &[Proposition],
     known: &BTreeMap<Proposition, Fact>,
@@ -1032,6 +1707,25 @@ fn query_internal(
             "relation budget must be positive",
         ));
     }
+    let mut steps = 0u32;
+    let (condition_status, condition_evaluations, condition_dependencies) =
+        evaluate_condition_refs(
+            memory,
+            proposition,
+            allowed_hypotheses,
+            max_steps,
+            &mut steps,
+        )?;
+    if condition_status.is_some_and(|status| status != ConditionStatus::True) {
+        return Ok(QueryOutcome {
+            status: "UNKNOWN".into(),
+            facts: Vec::new(),
+            used_rules: Vec::new(),
+            steps,
+            condition_evaluations,
+            condition_status,
+        });
+    }
     let rule_map: BTreeMap<_, _> = memory
         .rules
         .iter()
@@ -1041,6 +1735,11 @@ fn query_internal(
         .facts
         .iter()
         .map(|fact| (fact.id.as_str(), fact))
+        .collect();
+    let condition_map: BTreeMap<_, _> = memory
+        .conditions
+        .iter()
+        .map(|condition| (condition.id.as_str(), condition))
         .collect();
     let rules: Vec<_> = memory
         .rules
@@ -1058,6 +1757,9 @@ fn query_internal(
                     || rule_map
                         .get(id.as_str())
                         .is_some_and(|rule| permitted_rule(rule, &rule_map, &mut BTreeSet::new()))
+                    || condition_map
+                        .get(id.as_str())
+                        .is_some_and(|condition| condition.valid)
             })
             && fact.guarantee != Guarantee::Unknown
             && (fact.guarantee != Guarantee::Hypothesis
@@ -1076,7 +1778,6 @@ fn query_internal(
             !disabled_shortcuts.contains(&rule.id) && !elided_parent_rules.contains(&rule.id)
         })
         .collect();
-    let mut steps = 0u32;
     let mut applied_single = BTreeSet::new();
     let mut joined_conjunctive = BTreeSet::<(String, Vec<String>)>::new();
     loop {
@@ -1096,7 +1797,13 @@ fn query_internal(
                         continue;
                     }
                     charge_step(&mut steps, max_steps)?;
-                    derive(&mut known, rule, std::slice::from_ref(&fact), &bindings)?;
+                    derive(
+                        &mut known,
+                        rule,
+                        std::slice::from_ref(&fact),
+                        &bindings,
+                        &condition_dependencies,
+                    )?;
                     continue;
                 }
 
@@ -1140,7 +1847,13 @@ fn query_internal(
                     }
                 }
                 for (bindings, matched_facts) in partials {
-                    derive(&mut known, rule, &matched_facts, &bindings)?;
+                    derive(
+                        &mut known,
+                        rule,
+                        &matched_facts,
+                        &bindings,
+                        &condition_dependencies,
+                    )?;
                 }
             }
         }
@@ -1192,6 +1905,8 @@ fn query_internal(
         facts: positive,
         used_rules: used_rules.into_iter().collect(),
         steps,
+        condition_evaluations,
+        condition_status,
     })
 }
 
@@ -1213,6 +1928,7 @@ fn derive(
     rule: &RelationRule,
     premises: &[Fact],
     bindings: &BTreeMap<String, String>,
+    condition_dependencies: &BTreeSet<String>,
 ) -> Result<()> {
     let conclusion = substitute(&rule.conclusion, bindings);
     if !variables(&conclusion).is_empty() {
@@ -1235,6 +1951,7 @@ fn derive(
         .collect();
     dependencies.insert(rule.id.clone());
     dependencies.extend(rule.dependencies.iter().cloned());
+    dependencies.extend(condition_dependencies.iter().cloned());
     let dependencies: Vec<_> = dependencies.into_iter().collect();
     let id = format!(
         "fact:{}",
@@ -1274,6 +1991,9 @@ pub fn answer_dependencies(answer: &QueryOutcome) -> Vec<String> {
         dependencies.extend(fact.dependencies.iter().cloned());
     }
     dependencies.extend(answer.used_rules.iter().cloned());
+    for evaluation in &answer.condition_evaluations {
+        dependencies.extend(evaluation.dependencies.iter().cloned());
+    }
     dependencies.into_iter().collect()
 }
 
@@ -1298,6 +2018,7 @@ pub fn answer_guarantee(answer: &QueryOutcome) -> Guarantee {
 pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
     if !memory.facts.iter().any(|fact| fact.id == id)
         && !memory.rules.iter().any(|rule| rule.id == id)
+        && !memory.conditions.iter().any(|condition| condition.id == id)
     {
         return Err(failure(
             "UNKNOWN_MEMORY_ID",
@@ -1316,6 +2037,12 @@ pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
                     .rules
                     .iter()
                     .map(|rule| (&rule.id, &rule.dependencies)),
+            )
+            .chain(
+                memory
+                    .conditions
+                    .iter()
+                    .map(|condition| (&condition.id, &condition.dependencies)),
             )
         {
             if dependencies
@@ -1337,6 +2064,11 @@ pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
     for rule in &mut memory.rules {
         if invalid.contains(&rule.id) {
             rule.valid = false;
+        }
+    }
+    for condition in &mut memory.conditions {
+        if invalid.contains(&condition.id) {
+            condition.valid = false;
         }
     }
     bump(memory)?;

@@ -1,4 +1,7 @@
-use minidora_domain::{Guarantee, Lifecycle, Proposition, RequestEnvelope, SCHEMA_VERSION};
+use minidora_domain::{
+    ConditionDefinition, ConditionExpression, Guarantee, Lifecycle, Proposition, RequestEnvelope,
+    SCHEMA_VERSION,
+};
 use minidora_engine::{Engine, store::Store};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -48,6 +51,21 @@ fn request(case: &str, input: &str, actor: &str) -> RequestEnvelope {
     RequestEnvelope::new(case, input, actor, "")
 }
 
+fn condition(condition_id: &str, object: &str, scope: &str) -> ConditionDefinition {
+    ConditionDefinition {
+        condition_id: condition_id.into(),
+        subject: "$subject".into(),
+        scope: scope.into(),
+        expression: ConditionExpression::Fact {
+            predicate: "is".into(),
+            object: object.into(),
+        },
+        valid_from: None,
+        valid_until: None,
+        dependencies: BTreeSet::new(),
+    }
+}
+
 #[test]
 fn typed_condition_refs_bind_rules_queries_correction_and_comparison() {
     let directory = TestDirectory::new();
@@ -57,6 +75,36 @@ fn typed_condition_refs_bind_rules_queries_correction_and_comparison() {
     let dry = "condition:dry";
     let wet = "condition:wet";
     let mut engine = Engine::open(directory.path()).expect("open isolated Core state");
+
+    for (input, id, object) in [
+        ("define-dry-condition", dry, "dry"),
+        ("define-wet-condition", wet, "wet"),
+    ] {
+        let defined = engine
+            .define_condition(
+                actor,
+                request(case, input, actor),
+                condition(id, object, scope),
+            )
+            .expect("define condition through the same Core writer");
+        assert_eq!(defined.lifecycle, Lifecycle::Commit, "{defined:?}");
+    }
+
+    for (input, subject, object) in [
+        ("nera-dry-condition-evidence", "Nera", "dry"),
+        ("nera-wet-condition-evidence", "Nera", "wet"),
+        ("aster-dry-condition-evidence", "Aster", "dry"),
+        ("beryl-wet-condition-evidence", "Beryl", "wet"),
+    ] {
+        let evidence = engine
+            .assert_atomic_relation(
+                actor,
+                request(case, input, actor),
+                relation(subject, object, scope, &[]),
+            )
+            .expect("save unconditioned Fact evidence through Core");
+        assert_eq!(evidence.lifecycle, Lifecycle::Commit, "{evidence:?}");
+    }
 
     let mismatch = engine.add_atomic_relation_rule(
         actor,
@@ -200,12 +248,12 @@ fn typed_condition_refs_bind_rules_queries_correction_and_comparison() {
             && stored_rule.premise.condition_refs == BTreeSet::from([dry.to_owned()])
             && stored_rule.conclusion.condition_refs == BTreeSet::from([dry.to_owned()])
     }));
-    assert_eq!(SCHEMA_VERSION, "minidora-rust/0.7.0-alpha.10");
+    assert_eq!(SCHEMA_VERSION, "minidora-rust/0.7.0-alpha.11");
 
     println!(
-        "B53_CONDITION_SCOPE_OBSERVATION={}",
+        "W04_CONDITION_SCOPE_OBSERVATION={}",
         serde_json::to_string(&json!({
-            "work_item": "B53 exact opaque condition references in Core relation identity",
+            "work_item": "E1-W04 exact condition references with alpha11 Core evaluation",
             "actor": actor,
             "scope": scope,
             "condition_refs": [dry, wet],
@@ -231,11 +279,11 @@ fn typed_condition_refs_bind_rules_queries_correction_and_comparison() {
                 "condition_labels_present": comparison.text.contains(dry) && comparison.text.contains(wet),
             },
             "gate_assessment": {
-                "CORE-G01": "PARTIAL; opaque typed refs participate in exact matching, rules, correction, descriptions and comparison; ref truth, natural-language condition parsing, negation and broader scope conditions remain open",
+                "CORE-G01": "PARTIAL; this bounded typed condition fixture does not cover the gate's complete success predicates",
                 "CORE-G03": "PARTIAL; this typed route does not establish the general new-content acceptance path",
             },
-            "limits": ["direct typed Engine API", "opaque exact-reference equality", "no condition evaluator", "no natural-language condition parser"]
+            "limits": ["direct typed Engine API", "exact subject/scope/time matching", "four-valued condition expression subset", "no natural-language condition parser"]
         }))
-        .expect("serialize B53 runtime observation")
+        .expect("serialize W04 runtime observation")
     );
 }

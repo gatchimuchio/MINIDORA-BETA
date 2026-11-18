@@ -208,11 +208,6 @@ fn direct_core_observation_four_consumes_actual_math_and_relation_results_across
         relation_v2_bundle.meaning.context_result_ref.as_deref(),
         Some(relation_v1.id.as_str())
     );
-    let relation_v2_fact_id = relation_v2
-        .dependencies
-        .iter()
-        .find(|dependency| *dependency != &relation_v1.id)
-        .expect("new relation premise reference");
     let store = Store::open(&directory).expect("open isolated Core store for memory snapshot");
     let relation_memory = store
         .load_memory(actor)
@@ -220,8 +215,15 @@ fn direct_core_observation_four_consumes_actual_math_and_relation_results_across
     let saved_relation = relation_memory
         .facts
         .iter()
-        .find(|fact| fact.id == *relation_v2_fact_id)
+        .find(|fact| {
+            fact.valid
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.proposition.subject == "Pico"
+                && fact.proposition.object == "monitored"
+        })
         .expect("persisted version-two relation premise");
+    let relation_v2_fact_id = &saved_relation.id;
+    assert!(relation_v2.dependencies.contains(relation_v2_fact_id));
     assert_eq!(saved_relation.proposition.subject, "Pico");
     assert_eq!(saved_relation.proposition.predicate, "is");
     assert_eq!(saved_relation.proposition.object, "monitored");

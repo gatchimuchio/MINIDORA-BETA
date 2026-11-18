@@ -1,7 +1,7 @@
 use minidora_domain::{Guarantee, Intent, Lifecycle, Proposition, RequestEnvelope};
 use minidora_engine::{
     Engine,
-    language::{MeaningCompositionReport, MeaningCompositionRequest, MeaningRole},
+    language::{MeaningGenerationReport, MeaningRole},
     store::Store,
 };
 use serde_json::{Value, json};
@@ -135,13 +135,14 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
             "plan lost proof ID {proof_id}"
         );
     }
-    assert!(plan.text.contains("Neraはreadyである"));
+    assert!(plan.text.contains("Nera"));
+    assert!(plan.text.contains("ready"));
     assert!(plan.text.contains("ore"));
     assert!(plan.text.contains("refined"));
     assert!(plan.text.contains("inspected"));
     assert!(plan.text.contains(&first_rule_id));
     assert!(plan.text.contains(&second_rule_id));
-    assert!(plan.text.contains("Coreが親規則から合成した短縮規則"));
+    assert!(plan.text.contains("合成規則") || plan.text.contains("短縮規則"));
     assert!(plan.text.contains("現実世界の真偽"));
 
     let render = result.render.as_ref().expect("K7 render observation");
@@ -176,18 +177,16 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
         serde_json::from_slice(&compute_bytes).expect("decode computation artifact");
     assert_eq!(
         compute["kind"],
-        "minidora.core-computation.relation-meaning.v3"
+        "minidora.core-computation.relation-meaning.v5"
     );
-    let request: MeaningCompositionRequest =
-        serde_json::from_value(compute["content_request"].clone())
-            .expect("Core-authored content request");
-    let composition: MeaningCompositionReport =
-        serde_json::from_value(compute["content_composition"].clone())
-            .expect("retained composition result");
-    assert_eq!(engine.compose_typed_meaning(&request).unwrap(), composition);
-    assert_eq!(composition.text, plan.text);
+    assert!(compute.get("content_request").is_none());
+    let generation: MeaningGenerationReport =
+        serde_json::from_value(compute["content_generation"].clone())
+            .expect("retained Core grammar-generation report");
+    assert_eq!(generation.text, plan.text);
+    assert_eq!(generation.stop_reason, "EOS");
     assert_eq!(
-        composition
+        generation
             .evidence_ids
             .iter()
             .cloned()
@@ -199,22 +198,22 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
             .collect::<std::collections::BTreeSet<_>>()
     );
     assert!(
-        composition
-            .steps
+        generation
+            .units
             .iter()
-            .any(|step| step.role == MeaningRole::Rule)
+            .any(|unit| unit.role == MeaningRole::Rule)
     );
     assert!(
-        composition
-            .steps
+        generation
+            .units
             .iter()
-            .any(|step| step.role == MeaningRole::Evidence)
+            .any(|unit| unit.role == MeaningRole::Evidence)
     );
     assert!(
-        composition
-            .steps
+        generation
+            .units
             .iter()
-            .filter(|step| step.role == MeaningRole::Rule)
+            .filter(|unit| unit.role == MeaningRole::Rule)
             .count()
             == 2,
         "the two declared parent rules must be shown as rules"
@@ -227,22 +226,18 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
         .expect("Core proof-composition rule is retained in memory");
     assert!(composed_rule.dependencies.contains(&first_rule_id));
     assert!(composed_rule.dependencies.contains(&second_rule_id));
-    let composed_detail = request
+    let composed_detail = generation
         .units
         .iter()
         .find(|unit| {
             unit.role == MeaningRole::Detail && unit.evidence_ids.contains(&composed_rule.id)
         })
         .expect("composed rule is labeled separately as Core-derived detail");
-    assert!(
-        composed_detail
-            .text
-            .contains("Coreが親規則から合成した短縮規則")
-    );
+    assert!(composed_detail.text.contains("合成規則") || composed_detail.text.contains("短縮規則"));
     assert!(composed_detail.text.contains(&composed_rule.id));
     assert!(composed_detail.text.contains(&first_rule_id));
     assert!(composed_detail.text.contains(&second_rule_id));
-    let parent_rule_units = request
+    let parent_rule_units = generation
         .units
         .iter()
         .filter(|unit| {
@@ -250,7 +245,7 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
                 && (unit.evidence_ids.contains(&first_rule_id)
                     || unit.evidence_ids.contains(&second_rule_id))
         })
-        .map(|unit| unit.id.clone())
+        .map(|unit| unit.unit_id.clone())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(parent_rule_units.len(), 2);
     assert_eq!(
@@ -272,7 +267,7 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
                 "Why?",
             ),
         )
-        .expect("consume the retained V3 typed explanation through Core");
+        .expect("consume the retained V5 typed semantic-generation explanation through Core");
     assert_eq!(follow_up.lifecycle, Lifecycle::Commit, "{follow_up:?}");
     assert_eq!(follow_up.guarantee, Guarantee::Derived);
     assert!(follow_up.dependencies.contains(&result.id));
@@ -284,17 +279,17 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
         Some("RENDERED")
     );
     assert_eq!(
-        composition.steps.first().map(|step| step.role),
+        generation.units.first().map(|unit| unit.role),
         Some(MeaningRole::Claim)
     );
     assert_eq!(
-        composition.steps.last().map(|step| step.role),
+        generation.units.last().map(|unit| unit.role),
         Some(MeaningRole::Limitation)
     );
 
     let observation = json!({
         "work_item": "B50 Core multi-hop atomic explanation",
-        "base_route": "typed Proposition + Explain purpose -> relation proof -> Core-authored typed units -> K4 composition -> ContentPlan -> K7 render",
+        "base_route": "typed Proposition + Explain purpose -> relation proof -> Core-authored semantic grammar -> conditional token generation + EOS -> Core reverse check -> ContentPlan -> K7 render",
         "actor": actor,
         "seed_case": seed_case,
         "result_case": "multi-hop-explanation-result",
@@ -311,18 +306,21 @@ fn core_builds_and_renders_a_new_explanation_from_a_two_rule_proof() {
             "content_plan": {"id": plan.id, "dependencies": plan.dependencies, "required_units": plan.required_units},
             "render": {"status": render.status, "actual_sha256": render.actual_sha256, "byte_length": render.bytes.len()}
         },
-        "content_request": {"purpose": request.purpose, "units": request.units},
-        "composition": {
-            "text": composition.text,
-            "evidence_ids": composition.evidence_ids,
-            "steps": composition.steps,
-            "model_revision": composition.model_revision,
-            "context_state_sha256": composition.context_state_sha256,
-            "decoder_version": composition.decoder_version,
-            "objective": composition.objective
+        "content_generation": {
+            "text": generation.text,
+            "evidence_ids": generation.evidence_ids,
+            "units": generation.units,
+            "token_steps": generation.token_steps,
+            "model_revision": generation.model_revision,
+            "model_artifact_ref": generation.model_artifact_ref,
+            "context_state_sha256": generation.context_state_sha256,
+            "decoder_version": generation.decoder_version,
+            "objective": generation.objective,
+            "stop_reason": generation.stop_reason,
+            "semantic_round_trip_sha256": generation.semantic_round_trip_sha256
         },
         "computation_artifact_sha256": compute_ref,
-        "v3_artifact_follow_up": {
+        "v5_artifact_follow_up": {
             "id": follow_up.id,
             "lifecycle": follow_up.lifecycle,
             "guarantee": follow_up.guarantee,

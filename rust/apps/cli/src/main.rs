@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.10 — local execution frontend
+const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.11 — local execution frontend
 
 Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...
@@ -48,7 +48,7 @@ These are trusted local configuration, not remote authentication. State director
 access must be protected by the host. Development budgets are finite admission
 defaults, not measured performance or Windows/8GB guarantees.
 
-Migrate explicitly accepts an existing alpha 7, alpha 8 or alpha 9 state directory,
+Migrate explicitly accepts an existing alpha 7, alpha 8, alpha 9 or alpha 10 state directory,
 verifies it, then updates only its schema metadata to the current schema. It
 requires --db and also accepts an already-migrated current directory as a
 verified no-op.

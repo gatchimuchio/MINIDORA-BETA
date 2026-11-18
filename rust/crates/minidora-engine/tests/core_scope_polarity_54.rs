@@ -180,13 +180,18 @@ fn world_scope_and_negation_remain_separate_through_proof_and_correction() {
         "{positive_question:?}"
     );
     assert!(positive_question.dependencies.contains(&negative_fact_id));
-    assert!(positive_question.text.contains("ではない"));
+    assert!(
+        positive_question.text.contains("ではない")
+            || positive_question.text.contains("ではありません")
+    );
     let negative_plan = positive_question
         .content_plan
         .as_ref()
         .expect("Core adopted the contradiction explanation");
     assert!(negative_plan.dependencies.contains(&negative_fact_id));
-    assert!(negative_plan.text.contains("ではない"));
+    assert!(
+        negative_plan.text.contains("ではない") || negative_plan.text.contains("ではありません")
+    );
     let negative_render = positive_question
         .render
         .as_ref()
@@ -287,7 +292,7 @@ fn world_scope_and_negation_remain_separate_through_proof_and_correction() {
                 "no_render": negative_does_not_fire_positive_rule.render.is_none(),
                 "positive_question_against_negative_fact": positive_question.lifecycle,
                 "negative_fact_dependency_retained": positive_question.dependencies.contains(&negative_fact_id),
-                "contrary_wording_present": positive_question.text.contains("ではない"),
+                "contrary_wording_present": positive_question.text.contains("ではない") || positive_question.text.contains("ではありません"),
                 "contrary_render_status": negative_render.status,
                 "contrary_rendered_bytes_match_plan": negative_render.bytes == negative_plan.text.as_bytes(),
             },

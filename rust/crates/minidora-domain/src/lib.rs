@@ -7,7 +7,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.10";
+pub const SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.11";
+pub const ALPHA10_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.10";
+pub const CONDITION_SEMANTICS_VERSION: &str = "minidora-condition-evaluation/v1";
 pub const PREVIOUS_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.9";
 pub const ALPHA8_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.8";
 pub const LEGACY_SCHEMA_VERSION: &str = "minidora-rust/0.7.0-alpha.7";
@@ -133,9 +135,10 @@ pub struct Proposition {
     pub object: String,
     pub negative: bool,
     pub scope: String,
-    /// Canonical set of opaque applicability-condition references. It
-    /// participates in exact relation identity; the Core does not evaluate
-    /// the referenced conditions as facts.
+    /// Canonical set of applicability-condition IDs. The K1 evaluator resolves
+    /// each ID against Core-owned condition definitions before K2 may use the
+    /// relation. Older records retain their IDs and evaluate UNKNOWN when the
+    /// referenced definition is absent.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub condition_refs: BTreeSet<String>,
     /// Exact source-provided temporal partition. It participates in relation
@@ -170,11 +173,77 @@ pub struct Fact {
     pub dependencies: Vec<String>,
     pub valid: bool,
 }
+/// Meaning expression for one Core-owned applicability condition.
+/// Atomic predicates inspect exact subject/scope/time-matched Facts;
+/// condition references form the dependency graph used by the same evaluator.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum ConditionExpression {
+    Fact { predicate: String, object: String },
+    ConditionRef { condition_id: String },
+    And { operands: Vec<ConditionExpression> },
+    Or { operands: Vec<ConditionExpression> },
+    Not { operand: Box<ConditionExpression> },
+}
+/// UTC validity bounds are canonical `YYYY-MM-DDTHH:MM:SSZ` instants.
+/// A relation's `temporal_scope` supplies the evaluation instant when a bound
+/// is present; no wall-clock time is inferred for replayable Core decisions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionDefinition {
+    pub condition_id: String,
+    /// Exact subject, or `$subject` to bind to the target relation subject.
+    pub subject: String,
+    /// Exact scope required both by the target relation and evidence Facts.
+    pub scope: String,
+    pub expression: ConditionExpression,
+    /// Inclusive lower bound and exclusive upper bound.
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
+    /// Sorted condition IDs referenced by the expression. Validation requires
+    /// equality with the expression's actual references.
+    pub dependencies: BTreeSet<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionRecord {
+    /// Immutable revision identity; Fact IDs and condition IDs remain distinct.
+    pub id: String,
+    pub semantics_version: String,
+    pub definition: ConditionDefinition,
+    pub source_input: String,
+    /// Immutable condition-record IDs consumed by this definition.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    pub valid: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ConditionStatus {
+    True,
+    False,
+    Unknown,
+    Conflict,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConditionEvaluation {
+    pub condition_id: String,
+    pub status: ConditionStatus,
+    pub definition_record_ids: Vec<String>,
+    pub evidence_fact_ids: Vec<String>,
+    pub dependencies: Vec<String>,
+    pub reason: Option<String>,
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryState {
     pub revision: u64,
     pub facts: Vec<Fact>,
     pub rules: Vec<RelationRule>,
+    /// Missing in alpha 7–10 memory snapshots; those bytes are preserved and
+    /// condition references without definitions now remain UNKNOWN.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<ConditionRecord>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
@@ -374,6 +443,9 @@ pub enum Intent {
     },
     Assert {
         proposition: Proposition,
+    },
+    DefineCondition {
+        definition: ConditionDefinition,
     },
     AssertPreviousRelation {
         proposition: Proposition,
@@ -710,6 +782,17 @@ mod tests {
             serde_json::from_slice::<Proposition>(&canonical(&timed).unwrap()).unwrap(),
             timed
         );
+    }
+    #[test]
+    fn alpha10_memory_without_condition_records_keeps_legacy_condition_refs() {
+        let legacy = br#"{"facts":[{"dependencies":[],"guarantee":"USER_PREMISE","id":"fact:legacy","proposition":{"condition_refs":["condition:dry"],"negative":false,"object":"ore","predicate":"is","scope":"lab","subject":"Nera"},"source_input":"legacy-input","valid":true}],"revision":1,"rules":[]}"#;
+        let memory: MemoryState = serde_json::from_slice(legacy).unwrap();
+        assert!(memory.conditions.is_empty());
+        assert_eq!(
+            memory.facts[0].proposition.condition_refs,
+            BTreeSet::from(["condition:dry".to_owned()])
+        );
+        assert_eq!(canonical(&memory).unwrap(), legacy);
     }
     #[test]
     fn nonexact_numbers_cannot_silently_become_null_or_facts() {

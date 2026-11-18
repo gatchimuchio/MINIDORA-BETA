@@ -1,10 +1,7 @@
 use minidora_domain::{Guarantee, Intent, Lifecycle, Proposition, RequestEnvelope};
 use minidora_engine::{
     Engine,
-    language::{
-        MeaningCompositionReport, MeaningCompositionRequest, MeaningRole, ModelEmission,
-        SequenceModel,
-    },
+    language::{MeaningGenerationReport, MeaningRole, ModelEmission, SequenceModel},
     store::Store,
 };
 use serde_json::Value;
@@ -117,7 +114,8 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
             "missing proof ID {expected}"
         );
     }
-    assert!(supported.text.contains("Velaはreliableである"));
+    assert!(supported.text.contains("Vela"));
+    assert!(supported.text.contains("reliable"));
     assert!(supported.text.contains("sensor"));
     assert!(supported.text.contains("calibrated"));
     assert!(supported.text.contains(&rule_id));
@@ -214,10 +212,11 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
         .realize_supported(std::slice::from_ref(&plan.text), 2_000_000)
         .expect("replay the Core-composed surface through the stored K4 model");
     assert_eq!(
-        serde_json::to_value(replay).expect("serialize deterministic model replay"),
-        serde_json::to_value(&emission).expect("serialize retained model emission"),
-        "the stored K4 projection must reproduce the retained emission"
+        replay.text, emission.text,
+        "the stored model projection must preserve the generated emission"
     );
+    assert_eq!(replay.model_revision, emission.model_revision);
+    assert_eq!(replay.lossless_projection, emission.lossless_projection);
     let compute_ref = plan
         .dependencies
         .last()
@@ -231,44 +230,50 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
         serde_json::from_slice(&compute_bytes).expect("stored content computation JSON");
     assert_eq!(
         compute_value["kind"],
-        "minidora.core-computation.relation-meaning.v3"
+        "minidora.core-computation.relation-meaning.v5"
     );
-    let composition_request: MeaningCompositionRequest =
-        serde_json::from_value(compute_value["content_request"].clone())
-            .expect("stored Core-authored typed content plan");
-    let composition: MeaningCompositionReport =
-        serde_json::from_value(compute_value["content_composition"].clone())
-            .expect("stored native composition report");
+    assert!(compute_value.get("content_request").is_none());
+    let generation: MeaningGenerationReport =
+        serde_json::from_value(compute_value["content_generation"].clone())
+            .expect("stored finite-grammar generation report");
+    assert_eq!(generation.text, plan.text);
     assert_eq!(
-        engine
-            .compose_typed_meaning(&composition_request)
-            .expect("replay the stored Core semantic plan"),
-        composition
+        generation.model_artifact_ref.as_deref(),
+        Some(plan.model_artifact_ref.as_str())
     );
-    assert_eq!(composition.text, plan.text);
-    assert_eq!(composition.guarantee, Guarantee::Unknown);
-    assert_eq!(composition.factual_status, "TYPED_INPUT_UNVERIFIED");
+    assert_eq!(generation.stop_reason, "EOS");
     assert_eq!(
-        composition.steps.first().map(|step| step.role),
+        generation
+            .token_steps
+            .last()
+            .map(|step| step.token.as_str()),
+        Some("<EOS>")
+    );
+    assert_eq!(
+        generation.lossless_projection.recover_bytes().unwrap(),
+        plan.text.as_bytes()
+    );
+    assert_eq!(
+        generation.units.first().map(|unit| unit.role),
         Some(MeaningRole::Claim)
     );
     assert_eq!(
-        composition.steps.last().map(|step| step.role),
+        generation.units.last().map(|unit| unit.role),
         Some(MeaningRole::Limitation)
     );
-    let evidence_step = composition
-        .steps
+    let evidence_step = generation
+        .units
         .iter()
-        .position(|step| step.role == MeaningRole::Evidence)
+        .position(|unit| unit.role == MeaningRole::Evidence)
         .expect("new plan includes source evidence content");
-    let rule_step = composition
-        .steps
+    let rule_step = generation
+        .units
         .iter()
-        .position(|step| step.role == MeaningRole::Rule)
+        .position(|unit| unit.role == MeaningRole::Rule)
         .expect("new plan includes the applied rule content");
     assert!(evidence_step < rule_step);
     assert_eq!(
-        composition
+        generation
             .evidence_ids
             .iter()
             .cloned()
@@ -279,24 +284,22 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
             .cloned()
             .collect::<std::collections::BTreeSet<_>>()
     );
-    let units_by_id = composition_request
+    let planned_units = generation
         .units
         .iter()
-        .map(|unit| (unit.id.as_str(), unit.text.as_str()))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let planned_units = composition
-        .required_unit_ids
-        .iter()
-        .map(|id| {
-            units_by_id
-                .get(id.as_str())
-                .expect("plan unit exists")
-                .to_string()
-        })
+        .map(|unit| unit.text.clone())
         .collect::<Vec<_>>();
     assert_eq!(planned_units, plan.required_units);
-    assert!(plan.text.contains("保存された前提と規則から"));
-    assert!(plan.text.contains("保存規則"));
+    for unit in &generation.units {
+        assert_eq!(
+            &plan.text[unit.byte_start..unit.byte_end],
+            unit.text.as_str()
+        );
+    }
+    assert!(
+        plan.text.contains("保存前提と規則から") || plan.text.contains("適用した保存規則により")
+    );
+    assert!(plan.text.contains("保存規則") || plan.text.contains("記録された規則"));
     assert!(plan.text.contains("現実世界の真偽"));
     assert!(!plan.text.contains("提示された証拠が支える結論"));
 
@@ -430,8 +433,7 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
                     "artifact_sha256": minidora_domain::digest(&compute_bytes),
                     "artifact_bytes": compute_bytes.len(),
                     "serialized_artifact": compute_value,
-                    "typed_request": composition_request,
-                    "composition_report": composition,
+                    "generation_report": generation,
                 },
                 "render": {
                     "plan_id": &render.plan_id,
