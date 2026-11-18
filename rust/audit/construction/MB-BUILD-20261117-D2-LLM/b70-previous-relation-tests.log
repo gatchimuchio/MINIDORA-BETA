@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 3 tests
+test core::previous_relation_meaning_tests::previous_relation_meaning_reads_legacy_computation_artifact ... ok
+test core::active_relation_projection_tests::indexed_previous_relation_resolves_only_prior_dependencies_before_projection ... ok
+test recovery::tests::previous_relation_recovery_pins_and_rechecks_its_memory_revision ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 1.45s

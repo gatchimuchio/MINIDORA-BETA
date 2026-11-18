@@ -1147,6 +1147,98 @@ fn verify_previous_relation_memory_result(
     Ok(())
 }
 
+fn verify_previous_relation_memory_result_with_index(
+    store: &Store,
+    actor: &str,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<()>> {
+    let Intent::AskPreviousRelation {
+        proposition,
+        explain,
+        explicit_scope,
+    } = &goal.intent
+    else {
+        return Ok(Some(()));
+    };
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation result reference is missing",
+            )
+        })?;
+    let previous = state.prior_results.get(previous_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation result is not retained",
+        )
+    })?;
+    if previous.id != previous_id || previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior relation result is not committed",
+        ));
+    }
+    let Some(query) = crate::core::indexed_previous_relation_query_from_store(
+        store,
+        actor,
+        previous,
+        proposition,
+        explicit_scope.as_deref(),
+        goal.budget.max_actions,
+    )?
+    else {
+        return Ok(None);
+    };
+    let answer = query.answer?.ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation no longer has the adopted supported or contradicted result",
+        )
+    })?;
+    let resolved = match query.resolution {
+        Some(crate::core::PreviousRelationResolution::Resolved(resolved)) => resolved,
+        Some(
+            crate::core::PreviousRelationResolution::Missing
+            | crate::core::PreviousRelationResolution::Ambiguous,
+        )
+        | None => {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the exact prior result no longer resolves to one active direct premise",
+            ));
+        }
+    };
+    let expected_units =
+        crate::core::previous_relation_success_units(&query.memory, &resolved, &answer, *explain)
+            .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior relation no longer has the adopted supported or contradicted result",
+            )
+        })?;
+    if crate::relations::answer_dependencies(&answer) != result.dependencies
+        || crate::relations::answer_guarantee(&answer) != result.guarantee
+        || expected_units != plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior relation answer differs from its actor-memory proof revision",
+        ));
+    }
+    Ok(Some(()))
+}
+
 fn verify_explain_previous_relation_comparison_memory_result(
     store: &Store,
     state: &CaseRevision,
@@ -2620,15 +2712,23 @@ fn inspect(
     {
         // Replay used the retained snapshot above; separately ensure the
         // prior-result anchor still resolves to the same proof in live memory.
-        let memory = store.load_memory(actor)?;
-        verify_previous_relation_memory_result(state, &memory, result, plan, &goal).map_err(
-            |error| {
-                failure(
-                    "RECOVERY_PROOF_INVALIDATED",
-                    format!("the original prior-relation proof is no longer valid: {error}"),
-                )
-            },
-        )?;
+        // Use the shared revision-matched prior-dependency index when present;
+        // cold/stale indexes retain the authenticated full-snapshot path.
+        let current_verification = (|| match verify_previous_relation_memory_result_with_index(
+            store, actor, state, result, plan, &goal,
+        )? {
+            Some(()) => Ok(()),
+            None => {
+                let memory = store.load_memory(actor)?;
+                verify_previous_relation_memory_result(state, &memory, result, plan, &goal)
+            }
+        })();
+        current_verification.map_err(|error| {
+            failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                format!("the original prior-relation proof is no longer valid: {error}"),
+            )
+        })?;
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
@@ -5244,6 +5344,129 @@ mod tests {
                 .unwrap(),
             Some(original_memory)
         );
+        assert!(inspect(&engine.store, "alice", &adopted, &adopted_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &adopted, &adopted_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "extended-history-case",
+            "previous-relation-recovery-off-scope-history",
+            "alice",
+            "直前関係Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = adopted.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let Intent::AskPreviousRelation {
+            proposition,
+            explain,
+            explicit_scope,
+        } = &goal.intent
+        else {
+            panic!("retained prior-relation answer lost its typed query");
+        };
+        let previous_id = adopted
+            .bundle
+            .as_ref()
+            .and_then(|bundle| bundle.meaning.context_result_ref.as_deref())
+            .expect("the sealed query retains its prior-result reference");
+        let previous = adopted
+            .prior_results
+            .get(previous_id)
+            .expect("the exact prior result remains retained");
+        let resolved = match crate::core::resolve_previous_relation_proposition(
+            &current_memory,
+            previous,
+            proposition,
+            explicit_scope.as_deref(),
+        ) {
+            crate::core::PreviousRelationResolution::Resolved(proposition) => proposition,
+            crate::core::PreviousRelationResolution::Missing
+            | crate::core::PreviousRelationResolution::Ambiguous => {
+                panic!("full current memory no longer resolves the prior relation")
+            }
+        };
+        let full_answer =
+            crate::relations::query(&current_memory, &resolved, goal.budget.max_actions).unwrap();
+        let full_units = crate::core::previous_relation_success_units(
+            &current_memory,
+            &resolved,
+            &full_answer,
+            *explain,
+        )
+        .expect("full current memory reproduces the adopted clause");
+        let indexed = crate::core::indexed_previous_relation_query_from_store(
+            &engine.store,
+            "alice",
+            previous,
+            proposition,
+            explicit_scope.as_deref(),
+            goal.budget.max_actions,
+        )
+        .unwrap()
+        .expect("current prior-relation index is available");
+        assert_eq!(indexed.memory.revision, current_memory.revision);
+        let indexed_resolved = match indexed.resolution.as_ref() {
+            Some(crate::core::PreviousRelationResolution::Resolved(proposition)) => {
+                proposition.clone()
+            }
+            _ => panic!("indexed prior dependencies no longer resolve uniquely"),
+        };
+        assert_eq!(indexed_resolved, resolved);
+        let indexed_answer = indexed.answer.unwrap().unwrap();
+        assert_eq!(indexed_answer.status, full_answer.status);
+        assert_eq!(indexed_answer.facts, full_answer.facts);
+        assert_eq!(indexed_answer.used_rules, full_answer.used_rules);
+        assert_eq!(
+            crate::relations::answer_dependencies(&indexed_answer),
+            crate::relations::answer_dependencies(&full_answer)
+        );
+        assert_eq!(
+            crate::relations::answer_guarantee(&indexed_answer),
+            crate::relations::answer_guarantee(&full_answer)
+        );
+        let indexed_units = crate::core::previous_relation_success_units(
+            &indexed.memory,
+            &indexed_resolved,
+            &indexed_answer,
+            *explain,
+        )
+        .expect("indexed current memory reproduces the adopted clause");
+        assert_eq!(indexed_units, full_units);
+        assert_eq!(current_memory.facts.len(), 153);
+        assert!(indexed.memory.facts.len() < current_memory.facts.len());
         assert!(inspect(&engine.store, "alice", &adopted, &adopted_result).is_ok());
 
         let mut engine = engine;

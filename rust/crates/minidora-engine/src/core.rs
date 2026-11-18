@@ -2748,101 +2748,14 @@ impl Engine {
         explicit_scope: Option<&str>,
         max_actions: u32,
     ) -> Result<Option<PreviousRelationQuery>> {
-        self.store.with_relation_index(actor, |index| {
-            let attempt = (|| -> Result<PreviousRelationQuery> {
-                let mut actions = 0_u32;
-                let mut anchor_facts = Vec::new();
-                let mut seen_dependencies = BTreeSet::new();
-                for dependency in &previous.dependencies {
-                    if !seen_dependencies.insert(dependency.as_str()) {
-                        continue;
-                    }
-                    actions = actions.checked_add(1).ok_or_else(|| {
-                        failure(
-                            "RELATION_BUDGET",
-                            "prior relation lookup action count overflowed",
-                        )
-                    })?;
-                    if actions > max_actions {
-                        return Err(failure(
-                            "RELATION_BUDGET",
-                            "prior relation lookup exceeds the sealed action budget",
-                        ));
-                    }
-                    if let Some(record) = index.record_by_id(dependency)?
-                        && let crate::store::IndexedMemoryValue::Fact(fact) = record.value
-                    {
-                        anchor_facts.push((record.ordinal, fact));
-                    }
-                }
-                anchor_facts.sort_by_key(|(ordinal, _)| *ordinal);
-                let resolution_memory = MemoryState {
-                    revision: index.revision(),
-                    facts: anchor_facts.into_iter().map(|(_, fact)| fact).collect(),
-                    ..MemoryState::default()
-                };
-                let resolution = resolve_previous_relation_proposition(
-                    &resolution_memory,
-                    previous,
-                    proposition,
-                    explicit_scope,
-                );
-                let PreviousRelationResolution::Resolved(resolved) = &resolution else {
-                    return Ok(PreviousRelationQuery {
-                        resolution: Some(resolution),
-                        memory: resolution_memory,
-                        answer: Ok(None),
-                    });
-                };
-
-                let projection_budget = max_actions.checked_sub(actions).ok_or_else(|| {
-                    failure(
-                        "RELATION_BUDGET",
-                        "prior relation lookup exhausted the sealed action budget",
-                    )
-                })?;
-                let (memory, projection_actions) =
-                    relations::active_relation_projection(index, resolved, projection_budget)?;
-                actions = actions.checked_add(projection_actions).ok_or_else(|| {
-                    failure("RELATION_BUDGET", "relation action count overflowed")
-                })?;
-                let query_budget = max_actions.checked_sub(actions).ok_or_else(|| {
-                    failure(
-                        "RELATION_BUDGET",
-                        "active memory projection exhausted the relation action budget",
-                    )
-                })?;
-                let mut answer = relations::query(&memory, resolved, query_budget)?;
-                actions = actions.checked_add(answer.steps).ok_or_else(|| {
-                    failure("RELATION_BUDGET", "relation action count overflowed")
-                })?;
-                answer.steps = actions;
-                Ok(PreviousRelationQuery {
-                    resolution: Some(resolution),
-                    memory,
-                    answer: Ok(Some(answer)),
-                })
-            })();
-            match attempt {
-                Ok(result) => Ok(result),
-                Err(error)
-                    if matches!(
-                        &error,
-                        Error::Contract { code, .. } if code == "RELATION_BUDGET"
-                    ) =>
-                {
-                    Ok(PreviousRelationQuery {
-                        resolution: None,
-                        memory: MemoryState {
-                            revision: index.revision(),
-                            ..MemoryState::default()
-                        },
-                        answer: Err(error),
-                    })
-                }
-                Err(error) => Err(error),
-            }
-        })
+        indexed_previous_relation_query_from_store(
+            &self.store,
+            actor,
+            previous,
+            proposition,
+            explicit_scope,
+            max_actions,
+        )
     }
 
     fn active_previous_relation_query(
@@ -9148,16 +9061,124 @@ pub(crate) fn relation_question_proposition(intent: &Intent) -> Option<&Proposit
     }
 }
 
-struct PreviousRelationQuery {
-    resolution: Option<PreviousRelationResolution>,
-    memory: MemoryState,
-    answer: Result<Option<relations::QueryOutcome>>,
+pub(crate) struct PreviousRelationQuery {
+    pub(crate) resolution: Option<PreviousRelationResolution>,
+    pub(crate) memory: MemoryState,
+    pub(crate) answer: Result<Option<relations::QueryOutcome>>,
 }
 
 pub(crate) enum PreviousRelationResolution {
     Resolved(Proposition),
     Missing,
     Ambiguous,
+}
+
+/// Re-evaluate a prior-result relation query from the same revision-matched
+/// index transaction used by ordinary Core. `None` means the index is cold or
+/// stale and the caller should use its authenticated snapshot path.
+pub(crate) fn indexed_previous_relation_query_from_store(
+    store: &Store,
+    actor: &str,
+    previous: &ResultRecord,
+    proposition: &Proposition,
+    explicit_scope: Option<&str>,
+    max_actions: u32,
+) -> Result<Option<PreviousRelationQuery>> {
+    store.with_relation_index(actor, |index| {
+        let attempt = (|| -> Result<PreviousRelationQuery> {
+            let mut actions = 0_u32;
+            let mut anchor_facts = Vec::new();
+            let mut seen_dependencies = BTreeSet::new();
+            for dependency in &previous.dependencies {
+                if !seen_dependencies.insert(dependency.as_str()) {
+                    continue;
+                }
+                actions = actions.checked_add(1).ok_or_else(|| {
+                    failure(
+                        "RELATION_BUDGET",
+                        "prior relation lookup action count overflowed",
+                    )
+                })?;
+                if actions > max_actions {
+                    return Err(failure(
+                        "RELATION_BUDGET",
+                        "prior relation lookup exceeds the sealed action budget",
+                    ));
+                }
+                if let Some(record) = index.record_by_id(dependency)?
+                    && let crate::store::IndexedMemoryValue::Fact(fact) = record.value
+                {
+                    anchor_facts.push((record.ordinal, fact));
+                }
+            }
+            anchor_facts.sort_by_key(|(ordinal, _)| *ordinal);
+            let resolution_memory = MemoryState {
+                revision: index.revision(),
+                facts: anchor_facts.into_iter().map(|(_, fact)| fact).collect(),
+                ..MemoryState::default()
+            };
+            let resolution = resolve_previous_relation_proposition(
+                &resolution_memory,
+                previous,
+                proposition,
+                explicit_scope,
+            );
+            let PreviousRelationResolution::Resolved(resolved) = &resolution else {
+                return Ok(PreviousRelationQuery {
+                    resolution: Some(resolution),
+                    memory: resolution_memory,
+                    answer: Ok(None),
+                });
+            };
+
+            let projection_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+                failure(
+                    "RELATION_BUDGET",
+                    "prior relation lookup exhausted the sealed action budget",
+                )
+            })?;
+            let (memory, projection_actions) =
+                relations::active_relation_projection(index, resolved, projection_budget)?;
+            actions = actions
+                .checked_add(projection_actions)
+                .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+            let query_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+                failure(
+                    "RELATION_BUDGET",
+                    "active memory projection exhausted the relation action budget",
+                )
+            })?;
+            let mut answer = relations::query(&memory, resolved, query_budget)?;
+            actions = actions
+                .checked_add(answer.steps)
+                .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+            answer.steps = actions;
+            Ok(PreviousRelationQuery {
+                resolution: Some(resolution),
+                memory,
+                answer: Ok(Some(answer)),
+            })
+        })();
+        match attempt {
+            Ok(result) => Ok(result),
+            Err(error)
+                if matches!(
+                    &error,
+                    Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                ) =>
+            {
+                Ok(PreviousRelationQuery {
+                    resolution: None,
+                    memory: MemoryState {
+                        revision: index.revision(),
+                        ..MemoryState::default()
+                    },
+                    answer: Err(error),
+                })
+            }
+            Err(error) => Err(error),
+        }
+    })
 }
 
 pub(crate) fn resolve_previous_relation_proposition(
