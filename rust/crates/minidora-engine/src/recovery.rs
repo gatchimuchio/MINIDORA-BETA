@@ -496,6 +496,28 @@ fn verify_common_relations_memory_result(
     Ok(())
 }
 
+fn verify_relation_comparison_memory_result(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    if !matches!(goal.intent, Intent::CompareRelationInventories { .. }) {
+        return Ok(());
+    }
+    let report_ref = result.dependencies.first().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison has no report artifact reference",
+        )
+    })?;
+    let artifact = store.get_bytes(actor, case, report_ref)?;
+    crate::core::verify_relation_comparison_memory_result(memory, &artifact, result, plan, goal)
+}
+
 fn verify_relation_profile_memory_result(
     memory: &MemoryState,
     result: &ResultRecord,
@@ -661,6 +683,11 @@ fn verify_result_memory_provenance(
         }
         Intent::AskCommonRelations { .. } => {
             verify_common_relations_memory_result(store, actor, case, &memory, result, plan, goal)?;
+        }
+        Intent::CompareRelationInventories { .. } => {
+            verify_relation_comparison_memory_result(
+                store, actor, case, &memory, result, plan, goal,
+            )?;
         }
         Intent::DraftRelationProfile { .. } => {
             verify_relation_profile_memory_result(&memory, result, plan, goal)?;
@@ -1311,6 +1338,7 @@ fn inspect(
                     | Intent::SummarizePreviousSourceConstrained { .. }
                     | Intent::SummarizePreviousResult { .. }
                     | Intent::AskPreviousSourceQuestion { .. }
+                    | Intent::CompareRelationInventories { .. }
                     | Intent::DraftRelationProfile { .. }
             ))
         || !validate_render(plan, render)
@@ -1557,6 +1585,19 @@ fn inspect(
                 failure(
                     "RECOVERY_PROOF_INVALIDATED",
                     format!("the original common-relation proof is no longer valid: {error}"),
+                )
+            })?;
+    }
+    if matches!(goal.intent, Intent::CompareRelationInventories { .. }) {
+        // The exact immutable snapshot was replayed above when this result has
+        // a revision. Older results without one must still match current
+        // memory before their retained report can be confirmed.
+        let memory = store.load_memory(actor)?;
+        verify_relation_comparison_memory_result(store, actor, case, &memory, result, plan, &goal)
+            .map_err(|error| {
+                failure(
+                    "RECOVERY_PROOF_INVALIDATED",
+                    format!("the original relation-comparison proof is no longer valid: {error}"),
                 )
             })?;
     }
@@ -3921,6 +3962,87 @@ mod tests {
             .unwrap();
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &adopted, &adopted_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn relation_comparison_recovery_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let coco = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "coco", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let coco_id = coco.dependencies[0].clone();
+        let mike = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "mike", "alice", "ミケは鳥です"),
+            )
+            .unwrap();
+        let mike_id = mike.dependencies[0].clone();
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "relation-comparison",
+            "alice",
+            "ココとミケの保存済みの関係を比較して",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let comparison = engine.execute("alice", request).unwrap();
+        assert_eq!(comparison.lifecycle, Lifecycle::Commit, "{comparison:?}");
+        assert_eq!(comparison.guarantee, Guarantee::Hypothesis);
+        assert!(comparison.dependencies.contains(&coco_id));
+        assert!(comparison.dependencies.contains(&mike_id));
+        let memory_revision = comparison
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the comparison");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the comparison's actor-memory revision is retained");
+        assert!(original_memory.facts.iter().any(|fact| fact.id == coco_id));
+        assert!(original_memory.facts.iter().any(|fact| fact.id == mike_id));
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
+        inspect(&engine.store, "alice", &retained, &retained_result)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-comparison-premise",
+                    "alice",
+                    &format!("{mike_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }

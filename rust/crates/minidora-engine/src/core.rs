@@ -5173,6 +5173,7 @@ impl Engine {
                 let direct_input =
                     direct_relation_comparison_input(&bundle, subject_a, subject_b, scope)?;
                 let memory = self.store.load_memory(actor)?;
+                result.actor_memory_revision = Some(memory.revision);
                 let inventory_a = match relation_comparison_inventory(
                     &memory,
                     subject_a,
@@ -5241,58 +5242,15 @@ impl Engine {
                 );
                 let mut comparison_units = vec![report.clone()];
                 let artifact_bytes;
-                let comparison_proofs = relation_comparison_proof_ids(&inventory_a, &inventory_b);
-                let comparison_rules = memory
-                    .rules
-                    .iter()
-                    .filter(|rule| comparison_proofs.contains(&rule.id))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let (content_request, content_kind) = if comparison_rules.is_empty() {
-                    (
-                        relation_comparison_content_request_v2(
-                            subject_a,
-                            subject_b,
-                            scope,
-                            &inventory_a,
-                            &inventory_b,
-                            request.budget.max_evidence_bytes,
-                        )?,
-                        RELATION_COMPARISON_CONTENT_KIND,
-                    )
-                } else if let Some(request) = relation_comparison_content_request_v3(
+                let (content_request, content_kind) = relation_comparison_content_request(
+                    &memory,
                     subject_a,
                     subject_b,
                     scope,
                     &inventory_a,
                     &inventory_b,
-                    &comparison_rules,
                     request.budget.max_evidence_bytes,
-                )? {
-                    (Some(request), RELATION_COMPARISON_CONTENT_KIND_V3)
-                } else if let Some(request) = relation_comparison_content_request_v4(
-                    subject_a,
-                    subject_b,
-                    scope,
-                    &inventory_a,
-                    &inventory_b,
-                    &comparison_rules,
-                    request.budget.max_evidence_bytes,
-                )? {
-                    (Some(request), RELATION_COMPARISON_CONTENT_KIND_V4)
-                } else {
-                    (
-                        relation_comparison_content_request_v2(
-                            subject_a,
-                            subject_b,
-                            scope,
-                            &inventory_a,
-                            &inventory_b,
-                            request.budget.max_evidence_bytes,
-                        )?,
-                        RELATION_COMPARISON_CONTENT_KIND,
-                    )
-                };
+                )?;
                 if let Some(content_request) = content_request {
                     let composition = match language::compose_typed_meaning(&content_request) {
                         Ok(value) => value,
@@ -9466,6 +9424,70 @@ fn relation_comparison_proof_ids(
         .collect()
 }
 
+fn relation_comparison_content_request(
+    memory: &MemoryState,
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    max_output_bytes: usize,
+) -> Result<(Option<language::MeaningCompositionRequest>, &'static str)> {
+    let proof_ids = relation_comparison_proof_ids(inventory_a, inventory_b);
+    let comparison_rules = memory
+        .rules
+        .iter()
+        .filter(|rule| proof_ids.contains(&rule.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if comparison_rules.is_empty() {
+        return Ok((
+            relation_comparison_content_request_v2(
+                subject_a,
+                subject_b,
+                scope,
+                inventory_a,
+                inventory_b,
+                max_output_bytes,
+            )?,
+            RELATION_COMPARISON_CONTENT_KIND,
+        ));
+    }
+    if let Some(request) = relation_comparison_content_request_v3(
+        subject_a,
+        subject_b,
+        scope,
+        inventory_a,
+        inventory_b,
+        &comparison_rules,
+        max_output_bytes,
+    )? {
+        return Ok((Some(request), RELATION_COMPARISON_CONTENT_KIND_V3));
+    }
+    if let Some(request) = relation_comparison_content_request_v4(
+        subject_a,
+        subject_b,
+        scope,
+        inventory_a,
+        inventory_b,
+        &comparison_rules,
+        max_output_bytes,
+    )? {
+        return Ok((Some(request), RELATION_COMPARISON_CONTENT_KIND_V4));
+    }
+    Ok((
+        relation_comparison_content_request_v2(
+            subject_a,
+            subject_b,
+            scope,
+            inventory_a,
+            inventory_b,
+            max_output_bytes,
+        )?,
+        RELATION_COMPARISON_CONTENT_KIND,
+    ))
+}
+
 fn relation_comparison_map(
     inventory: &relations::RelationInventory,
 ) -> BTreeMap<RelationComparisonKey, Vec<&Fact>> {
@@ -9993,6 +10015,138 @@ fn decode_relation_comparison_artifact(bytes: &[u8]) -> Result<RelationCompariso
         "RELATION_COMPARISON_ARTIFACT_INVALID",
         "unsupported comparison artifact kind",
     ))
+}
+
+pub(crate) fn verify_relation_comparison_memory_result(
+    memory: &MemoryState,
+    artifact_bytes: &[u8],
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Intent::CompareRelationInventories {
+        subject_a,
+        subject_b,
+        scope,
+    } = &goal.intent
+    else {
+        return Ok(());
+    };
+    let report_ref = result.dependencies.first().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison has no report artifact reference",
+        )
+    })?;
+    let artifact = decode_relation_comparison_artifact(artifact_bytes).map_err(|error| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            format!("the retained comparison artifact cannot be decoded: {error}"),
+        )
+    })?;
+    if artifact.canonical_bytes != artifact_bytes
+        || digest(artifact_bytes) != *report_ref
+        || artifact.result_id != result.id
+        || artifact.subject_a != *subject_a
+        || artifact.subject_b != *subject_b
+        || artifact.scope != *scope
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison artifact identity differs from the adopted request",
+        ));
+    }
+    let per_subject_actions = goal.budget.max_actions / 2;
+    if per_subject_actions == 0 {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison has no bounded replay budget",
+        ));
+    }
+    let inventory_a = relation_comparison_inventory(memory, subject_a, scope, per_subject_actions)?;
+    let inventory_b = relation_comparison_inventory(memory, subject_b, scope, per_subject_actions)?;
+    if inventory_a.facts.is_empty() && inventory_b.facts.is_empty() {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison no longer has a supporting saved relation",
+        ));
+    }
+    if artifact.inventory_a != inventory_a || artifact.inventory_b != inventory_b {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison inventories differ from the actor-memory revision",
+        ));
+    }
+    let (content_request, content_kind) = relation_comparison_content_request(
+        memory,
+        subject_a,
+        subject_b,
+        scope,
+        &inventory_a,
+        &inventory_b,
+        goal.budget.max_evidence_bytes,
+    )?;
+    let (report, expected_units) = if let Some(content_request) = content_request {
+        if artifact.kind != content_kind {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained comparison content version differs from Core's selected version",
+            ));
+        }
+        let composition = language::compose_typed_meaning(&content_request)?;
+        let expected_proofs = relation_comparison_proof_ids(&inventory_a, &inventory_b);
+        let composed_proofs = composition
+            .evidence_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if composed_proofs != expected_proofs
+            || artifact.content.as_ref() != Some(&(content_request.clone(), composition.clone()))
+        {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained comparison composition differs from its exact Core proof request",
+            ));
+        }
+        let units = composed_content_units(&content_request, &composition)?;
+        (composition.text, units)
+    } else {
+        if artifact.kind != RELATION_COMPARISON_REPORT_KIND || artifact.content.is_some() {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained comparison report artifact has an unexpected content variant",
+            ));
+        }
+        let report =
+            relation_comparison_report(subject_a, subject_b, scope, &inventory_a, &inventory_b);
+        (report.clone(), vec![report])
+    };
+    let mut expected_dependencies = vec![report_ref.clone()];
+    expected_dependencies.extend(
+        inventory_a
+            .dependencies
+            .iter()
+            .chain(&inventory_b.dependencies)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+    );
+    if artifact.report_sha256 != digest(report.as_bytes())
+        || report.len().saturating_add(artifact_bytes.len()) > goal.budget.max_evidence_bytes
+        || result.text != report
+        || plan.text != report
+        || result.dependencies != expected_dependencies
+        || result.guarantee != Guarantee::Hypothesis
+        || plan.guarantee != Guarantee::Hypothesis
+        || plan.required_units != expected_units
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison output, plan or proof lineage differs from its actor-memory revision",
+        ));
+    }
+    Ok(())
 }
 
 fn relation_comparison_report(
