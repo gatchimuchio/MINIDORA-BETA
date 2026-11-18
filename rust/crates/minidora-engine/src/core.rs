@@ -3546,6 +3546,7 @@ impl Engine {
                         );
                     }
                     let memory = self.store.load_memory(actor)?;
+                    result.actor_memory_revision = Some(memory.revision);
                     let inventory_a = match relation_comparison_inventory(
                         &memory,
                         &artifact.subject_a,
@@ -3699,14 +3700,7 @@ impl Engine {
                             "前回比較の依存記録が左右の再検証済みinventoryと一致しません。",
                         );
                     }
-                    let mut explanation = vec![format!(
-                        "前回の保存関係比較を詳しく説明します（比較結果ID: {}）。同じactorの現在有効な記憶から左右のscope別inventoryを再計算し、前回と一致することを確認しました。",
-                        prior.id
-                    )];
-                    explanation.extend(report.lines().skip(1).map(str::to_string));
-                    explanation.push(
-                        "比較分類は保存済みの前提・規則の範囲に限られます。片側で支持を確認できないことは、関係が偽または存在しない証明ではありません。記録の網羅性と現実世界の真偽は確認していません。".into(),
-                    );
+                    let explanation = relation_comparison_explanation_units(&prior.id, &report);
                     if explanation.join("\n").len() > request.budget.max_evidence_bytes {
                         return self.stop(
                             &mut state,
@@ -10019,21 +10013,22 @@ fn decode_relation_comparison_artifact(bytes: &[u8]) -> Result<RelationCompariso
     ))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RelationComparisonReplay<'a> {
+    pub subject_a: &'a str,
+    pub subject_b: &'a str,
+    pub scope: &'a str,
+    pub max_actions: u32,
+    pub max_evidence_bytes: usize,
+}
+
 pub(crate) fn verify_relation_comparison_memory_result(
     memory: &MemoryState,
     artifact_bytes: &[u8],
     result: &ResultRecord,
     plan: &ContentPlan,
-    goal: &GoalContract,
+    replay: RelationComparisonReplay<'_>,
 ) -> Result<()> {
-    let Intent::CompareRelationInventories {
-        subject_a,
-        subject_b,
-        scope,
-    } = &goal.intent
-    else {
-        return Ok(());
-    };
     let report_ref = result.dependencies.first().ok_or_else(|| {
         failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -10049,24 +10044,26 @@ pub(crate) fn verify_relation_comparison_memory_result(
     if artifact.canonical_bytes != artifact_bytes
         || digest(artifact_bytes) != *report_ref
         || artifact.result_id != result.id
-        || artifact.subject_a != *subject_a
-        || artifact.subject_b != *subject_b
-        || artifact.scope != *scope
+        || artifact.subject_a != replay.subject_a
+        || artifact.subject_b != replay.subject_b
+        || artifact.scope != replay.scope
     {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the retained comparison artifact identity differs from the adopted request",
         ));
     }
-    let per_subject_actions = goal.budget.max_actions / 2;
+    let per_subject_actions = replay.max_actions / 2;
     if per_subject_actions == 0 {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the retained comparison has no bounded replay budget",
         ));
     }
-    let inventory_a = relation_comparison_inventory(memory, subject_a, scope, per_subject_actions)?;
-    let inventory_b = relation_comparison_inventory(memory, subject_b, scope, per_subject_actions)?;
+    let inventory_a =
+        relation_comparison_inventory(memory, replay.subject_a, replay.scope, per_subject_actions)?;
+    let inventory_b =
+        relation_comparison_inventory(memory, replay.subject_b, replay.scope, per_subject_actions)?;
     if inventory_a.facts.is_empty() && inventory_b.facts.is_empty() {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -10081,12 +10078,12 @@ pub(crate) fn verify_relation_comparison_memory_result(
     }
     let (content_request, content_kind) = relation_comparison_content_request(
         memory,
-        subject_a,
-        subject_b,
-        scope,
+        replay.subject_a,
+        replay.subject_b,
+        replay.scope,
         &inventory_a,
         &inventory_b,
-        goal.budget.max_evidence_bytes,
+        replay.max_evidence_bytes,
     )?;
     let (report, expected_units) = if let Some(content_request) = content_request {
         if artifact.kind != content_kind {
@@ -10119,8 +10116,13 @@ pub(crate) fn verify_relation_comparison_memory_result(
                 "the retained comparison report artifact has an unexpected content variant",
             ));
         }
-        let report =
-            relation_comparison_report(subject_a, subject_b, scope, &inventory_a, &inventory_b);
+        let report = relation_comparison_report(
+            replay.subject_a,
+            replay.subject_b,
+            replay.scope,
+            &inventory_a,
+            &inventory_b,
+        );
         (report.clone(), vec![report])
     };
     let mut expected_dependencies = vec![report_ref.clone()];
@@ -10133,7 +10135,7 @@ pub(crate) fn verify_relation_comparison_memory_result(
             .collect::<BTreeSet<_>>(),
     );
     if artifact.report_sha256 != digest(report.as_bytes())
-        || report.len().saturating_add(artifact_bytes.len()) > goal.budget.max_evidence_bytes
+        || report.len().saturating_add(artifact_bytes.len()) > replay.max_evidence_bytes
         || result.text != report
         || plan.text != report
         || result.dependencies != expected_dependencies
@@ -10149,6 +10151,25 @@ pub(crate) fn verify_relation_comparison_memory_result(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn relation_comparison_explanation_units(
+    prior_result_id: &str,
+    report: &str,
+) -> Vec<String> {
+    let mut explanation = vec![format!(
+        "前回の保存関係比較を詳しく説明します（比較結果ID: {prior_result_id}）。同じactorの現在有効な記憶から左右のscope別inventoryを再計算し、前回と一致することを確認しました。"
+    )];
+    explanation.extend(report.lines().skip(1).map(str::to_string));
+    explanation.push(
+        "比較分類は保存済みの前提・規則の範囲に限られます。片側で支持を確認できないことは、関係が偽または存在しない証明ではありません。記録の網羅性と現実世界の真偽は確認していません。".into(),
+    );
+    explanation
+}
+
+pub(crate) fn is_saved_relation_comparison_result(result: &ResultRecord) -> bool {
+    result.text.starts_with(RELATION_COMPARISON_REPORT_HEADER)
+        || result.text.starts_with(RELATION_COMPARISON_CONTENT_HEADER)
 }
 
 fn relation_comparison_report(

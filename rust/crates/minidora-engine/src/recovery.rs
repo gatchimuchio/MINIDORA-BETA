@@ -266,6 +266,18 @@ fn verify_previous_relation_context(
     if previous.calculation.is_some() {
         return Ok(());
     }
+    if crate::core::is_saved_relation_comparison_result(previous) {
+        let memory = store.load_memory(actor)?;
+        return verify_explain_previous_relation_comparison_memory_result(
+            store, state, &memory, previous, result, plan, goal,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!("the saved comparison behind the explanation changed: {error}"),
+            )
+        });
+    }
     if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none() {
         return Ok(());
     }
@@ -477,9 +489,14 @@ fn verify_relation_comparison_memory_result(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<()> {
-    if !matches!(goal.intent, Intent::CompareRelationInventories { .. }) {
+    let Intent::CompareRelationInventories {
+        subject_a,
+        subject_b,
+        scope,
+    } = &goal.intent
+    else {
         return Ok(());
-    }
+    };
     let report_ref = result.dependencies.first().ok_or_else(|| {
         failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -487,7 +504,19 @@ fn verify_relation_comparison_memory_result(
         )
     })?;
     let artifact = store.get_bytes(actor, case, report_ref)?;
-    crate::core::verify_relation_comparison_memory_result(memory, &artifact, result, plan, goal)
+    crate::core::verify_relation_comparison_memory_result(
+        memory,
+        &artifact,
+        result,
+        plan,
+        crate::core::RelationComparisonReplay {
+            subject_a,
+            subject_b,
+            scope,
+            max_actions: goal.budget.max_actions,
+            max_evidence_bytes: goal.budget.max_evidence_bytes,
+        },
+    )
 }
 
 fn verify_relation_profile_memory_result(
@@ -600,6 +629,172 @@ fn verify_previous_relation_memory_result(
     Ok(())
 }
 
+fn verify_explain_previous_relation_comparison_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    if !matches!(goal.intent, Intent::ExplainPrevious) {
+        return Ok(());
+    }
+    let Some(bundle) = state.bundle.as_ref() else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "sealed explanation input is missing",
+        ));
+    };
+    if bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str()) {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact saved comparison is not the sealed explanation target",
+        ));
+    }
+    let (Some(prior_plan), Some(prior_render)) = (&previous.content_plan, &previous.render) else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved comparison has no retained ContentPlan or render record",
+        ));
+    };
+    let Some((_, prior_bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )?
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact saved comparison input bundle is not retained",
+        ));
+    };
+    if prior_bundle.request.actor_id != state.actor_id
+        || prior_bundle.request.case_id != state.case_id
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved comparison input and committed result identities differ",
+        ));
+    }
+    let Intent::CompareRelationInventories {
+        subject_a,
+        subject_b,
+        scope,
+    } = &prior_bundle.meaning.intent
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved comparison input does not retain a typed comparison request",
+        ));
+    };
+    let report_ref = previous.dependencies.first().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved comparison has no report artifact reference",
+        )
+    })?;
+    let report_bytes = store.get_bytes(&state.actor_id, &state.case_id, report_ref)?;
+    let mut unsigned_plan = prior_plan.clone();
+    unsigned_plan.id.clear();
+    if previous.id.is_empty()
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+        || previous.guarantee != Guarantee::Hypothesis
+        || prior_plan.guarantee != Guarantee::Hypothesis
+        || prior_plan.id != identity(&unsigned_plan)?
+        || prior_plan.text != previous.text
+        || !validate_render(prior_plan, prior_render)
+        || previous.dependencies.first() != Some(report_ref)
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved comparison result, plan or render identity is invalid",
+        ));
+    }
+    let prior_content_bytes = canonical(prior_plan)?;
+    let prior_render_bytes = canonical(prior_render)?;
+    for (reference, expected) in [
+        (digest(&prior_content_bytes), prior_content_bytes),
+        (digest(&prior_render_bytes), prior_render_bytes),
+    ] {
+        match store.get_bytes_if_present(&state.actor_id, &state.case_id, &reference)? {
+            Some(stored) if stored == expected => {}
+            Some(_) => {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the saved comparison plan or render differs from its stored artifact",
+                ));
+            }
+            None => {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the saved comparison plan or render artifact is missing",
+                ));
+            }
+        }
+    }
+    let original_replay = crate::core::RelationComparisonReplay {
+        subject_a,
+        subject_b,
+        scope,
+        max_actions: prior_bundle.request.budget.max_actions,
+        max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
+    };
+    if previous.actor_memory_revision.is_some() {
+        let original_memory = result_memory_snapshot(store, &state.actor_id, previous)?
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_MEMORY_REVISION_MISSING",
+                    "the saved comparison's actor-memory revision is not retained",
+                )
+            })?;
+        crate::core::verify_relation_comparison_memory_result(
+            &original_memory,
+            &report_bytes,
+            previous,
+            prior_plan,
+            original_replay,
+        )?;
+    }
+    crate::core::verify_relation_comparison_memory_result(
+        memory,
+        &report_bytes,
+        previous,
+        prior_plan,
+        crate::core::RelationComparisonReplay {
+            max_actions: goal.budget.max_actions,
+            ..original_replay
+        },
+    )?;
+
+    let expected_dependencies = std::iter::once(previous.id.clone())
+        .chain(previous.dependencies.iter().cloned())
+        .collect::<Vec<_>>();
+    let expected_units =
+        crate::core::relation_comparison_explanation_units(&previous.id, &previous.text);
+    if expected_dependencies != result.dependencies
+        || expected_units != plan.required_units
+        || report_bytes.len() > goal.budget.max_evidence_bytes
+        || expected_units.join("\n").len() > goal.budget.max_evidence_bytes
+        || result.guarantee != Guarantee::Hypothesis
+        || plan.guarantee != Guarantee::Hypothesis
+        || result.calculation.is_some()
+        || plan.text != result.text
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the saved comparison explanation differs from its exact proof, dependencies or units",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_explain_previous_relation_memory_result(
     store: &Store,
     state: &CaseRevision,
@@ -639,6 +834,11 @@ fn verify_explain_previous_relation_memory_result(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the exact prior relation result is not a committed relation answer",
         ));
+    }
+    if crate::core::is_saved_relation_comparison_result(previous) {
+        return verify_explain_previous_relation_comparison_memory_result(
+            store, state, memory, previous, result, plan, goal,
+        );
     }
     let prior_meaning =
         crate::core::previous_relation_meaning(store, &state.actor_id, &state.case_id, previous)?
@@ -1396,6 +1596,13 @@ fn inspect(
             "actual retained rendering unavailable",
         )
     })?;
+    let saved_comparison_explanation = matches!(&goal.intent, Intent::ExplainPrevious)
+        && bundle
+            .meaning
+            .context_result_ref
+            .as_deref()
+            .and_then(|id| state.prior_results.get(id))
+            .is_some_and(crate::core::is_saved_relation_comparison_result);
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
     if plan.id != identity(&unsigned_plan)?
@@ -1414,7 +1621,8 @@ fn inspect(
                     | Intent::AskPreviousSourceQuestion { .. }
                     | Intent::CompareRelationInventories { .. }
                     | Intent::DraftRelationProfile { .. }
-            ))
+            )
+            && !saved_comparison_explanation)
         || !validate_render(plan, render)
     {
         return Err(failure(
@@ -4182,6 +4390,104 @@ mod tests {
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn saved_relation_comparison_explanation_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let coco = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "coco", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let coco_id = coco.dependencies[0].clone();
+        let mike = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "mike", "alice", "ミケは鳥です"),
+            )
+            .unwrap();
+        let mike_id = mike.dependencies[0].clone();
+        let comparison = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "relation-comparison",
+                    "alice",
+                    "ココとミケの保存済みの関係を比較して",
+                ),
+            )
+            .unwrap();
+        assert_eq!(comparison.lifecycle, Lifecycle::Commit, "{comparison:?}");
+        let comparison_revision = comparison
+            .actor_memory_revision
+            .expect("Core records the saved comparison's actor-memory revision");
+
+        let mut request =
+            RequestEnvelope::new("case", "comparison-explanation", "alice", "詳しく説明して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert!(explanation.text.contains(&comparison.id));
+        assert_eq!(
+            explanation.actor_memory_revision,
+            Some(comparison_revision),
+            "the explanation records the exact memory used to revalidate the saved comparison"
+        );
+        let mut expected_dependencies = vec![comparison.id.clone()];
+        expected_dependencies.extend(comparison.dependencies.iter().cloned());
+        assert_eq!(explanation.dependencies, expected_dependencies);
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", comparison_revision)
+            .unwrap()
+            .expect("the comparison explanation's actor-memory revision is retained");
+        assert!(original_memory.facts.iter().any(|fact| fact.id == coco_id));
+        assert!(original_memory.facts.iter().any(|fact| fact.id == mike_id));
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert!(matches!(
+            retained.bundle.as_ref().unwrap().meaning.intent,
+            Intent::ExplainPrevious
+        ));
+        inspect(&engine.store, "alice", &retained, &retained_result)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", comparison_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-comparison-explanation-premise",
+                    "alice",
+                    &format!("{mike_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
