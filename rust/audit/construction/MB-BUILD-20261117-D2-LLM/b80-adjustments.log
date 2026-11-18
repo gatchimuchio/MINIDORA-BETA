@@ -1,0 +1,6 @@
+B80 verification adjustments (2026-11-18 Asia/Tokyo)
+
+1. The first cargo check invocation through the rustup shim failed while rustup tried to transfer rust-src; no code diagnostic was emitted. Re-running with the pinned Rust 1.99.1 rustc/rustdoc selected explicitly completed workspace all-target compilation successfully.
+2. The first warnings-denied Clippy run found too_many_arguments on the new Recovery helper (8 arguments). The helper now groups the explanation ResultRecord and ContentPlan tuple; no lint suppression was added. The final library Clippy run passes.
+3. The first attempt to tee the workspace check log used a path relative to the wrong directory. Cargo check itself completed successfully, but tee could not create that log. The command was rerun with the correct rust/audit path; b80-workspace-check.log contains the successful run.
+4. Functional tests were neither added nor executed in this batch. The compile check only type-checks all targets; it does not establish runtime behavior.
