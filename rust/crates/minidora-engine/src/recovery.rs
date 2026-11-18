@@ -327,9 +327,8 @@ fn verify_previous_relation_context(
         });
     }
     if crate::core::is_common_relations_result(previous) {
-        let memory = store.load_memory(actor)?;
         return verify_explain_previous_common_relations_memory_result(
-            store, state, &memory, previous, result, plan, goal,
+            store, state, None, previous, result, plan, goal,
         )
         .map_err(|error| {
             failure(
@@ -569,7 +568,7 @@ fn verify_explain_previous_relation_objects_memory_result(
 fn verify_explain_previous_common_relations_memory_result(
     store: &Store,
     state: &CaseRevision,
-    memory: &MemoryState,
+    current_memory: Option<&MemoryState>,
     previous: &ResultRecord,
     result: &ResultRecord,
     plan: &ContentPlan,
@@ -697,19 +696,43 @@ fn verify_explain_previous_common_relations_memory_result(
         }
     }
 
-    let explanation = match crate::core::common_relations_explanation(
-        memory,
-        &report_bytes,
-        report_ref,
-        previous,
-        crate::core::CommonRelationsExplanationReplay {
-            subject_a,
-            subject_b,
-            scope,
-            max_actions: goal.budget.max_actions,
-            max_evidence_bytes: goal.budget.max_evidence_bytes,
-        },
-    )? {
+    let replay = crate::core::CommonRelationsExplanationReplay {
+        subject_a,
+        subject_b,
+        scope,
+        max_actions: goal.budget.max_actions,
+        max_evidence_bytes: goal.budget.max_evidence_bytes,
+    };
+    let evaluation = if let Some(memory) = current_memory {
+        crate::core::common_relations_explanation(
+            memory,
+            &report_bytes,
+            report_ref,
+            previous,
+            replay,
+        )?
+    } else if let Some((_, evaluation)) =
+        crate::core::indexed_common_relations_explanation_from_store(
+            store,
+            &state.actor_id,
+            &report_bytes,
+            report_ref,
+            previous,
+            replay,
+        )?
+    {
+        evaluation?
+    } else {
+        let memory = store.load_memory(&state.actor_id)?;
+        crate::core::common_relations_explanation(
+            &memory,
+            &report_bytes,
+            report_ref,
+            previous,
+            replay,
+        )?
+    };
+    let explanation = match evaluation {
         crate::core::CommonRelationsExplanationEvaluation::Complete(answer) => answer,
         crate::core::CommonRelationsExplanationEvaluation::Blocked { code, message } => {
             return Err(failure(
@@ -1613,7 +1636,13 @@ fn verify_explain_previous_relation_memory_result(
     }
     if crate::core::is_common_relations_result(previous) {
         return verify_explain_previous_common_relations_memory_result(
-            store, state, memory, previous, result, plan, goal,
+            store,
+            state,
+            Some(memory),
+            previous,
+            result,
+            plan,
+            goal,
         );
     }
     if let Some((_, prior_bundle)) = store.get_input_bundle(
@@ -6394,6 +6423,7 @@ mod tests {
 
         let mut request =
             RequestEnvelope::new("case", "common-explanation", "alice", "詳しく説明して");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -6418,6 +6448,16 @@ mod tests {
         assert!(original_memory.rules.iter().any(|rule| rule.id == rule_id));
         assert!(original_memory.facts.iter().any(|fact| fact.id == coco_id));
         assert!(original_memory.facts.iter().any(|fact| fact.id == mike_id));
+        assert_eq!(original_memory.facts.len(), 2);
+        assert_eq!(original_memory.rules.len(), 1);
+        let common_scope = original_memory
+            .facts
+            .iter()
+            .find(|fact| fact.id == coco_id)
+            .unwrap()
+            .proposition
+            .scope
+            .clone();
 
         let retained = engine.latest("alice", "case").unwrap().unwrap();
         let retained_result = retained.result.as_ref().unwrap().clone();
@@ -6431,9 +6471,114 @@ mod tests {
                 .store
                 .load_memory_revision("alice", memory_revision)
                 .unwrap(),
-            Some(original_memory)
+            Some(original_memory.clone())
         );
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "independent-proof-history-case",
+            "common-explanation-independent-proof-history",
+            "alice",
+            "共通関係説明Recoveryの無関係な規則履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            let subject = format!("archive-subject-{ordinal}");
+            let premise = Proposition {
+                subject: subject.clone(),
+                predicate: format!("archive-input-{ordinal}"),
+                object: "present".into(),
+                negative: false,
+                scope: common_scope.clone(),
+                condition_refs: BTreeSet::new(),
+                temporal_scope: None,
+            };
+            crate::relations::add_rule(
+                &mut current_memory,
+                premise.clone(),
+                Proposition {
+                    subject,
+                    predicate: format!("archive-output-{ordinal}"),
+                    object: "derived".into(),
+                    negative: false,
+                    scope: common_scope.clone(),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+            crate::relations::assert_fact(&mut current_memory, premise, &history_source).unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let previous_id = retained
+            .bundle
+            .as_ref()
+            .and_then(|bundle| bundle.meaning.context_result_ref.as_deref())
+            .expect("the sealed explanation retains its prior-result reference");
+        let previous = retained
+            .prior_results
+            .get(previous_id)
+            .expect("the exact common-relations result remains retained");
+        let full_snapshot_error = verify_explain_previous_common_relations_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap_err();
+        assert!(
+            full_snapshot_error.to_string().contains("RELATION_BUDGET"),
+            "{full_snapshot_error:?}"
+        );
+        assert_eq!(current_memory.facts.len(), 82);
+        assert_eq!(current_memory.rules.len(), 81);
+        assert!(current_memory.rules.iter().any(|rule| rule.id == rule_id));
+        let mut full_reference_goal = goal.clone();
+        full_reference_goal.budget.max_actions = 10_000;
+        verify_explain_previous_common_relations_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &full_reference_goal,
+        )
+        .unwrap();
+        verify_explain_previous_common_relations_memory_result(
+            &engine.store,
+            &retained,
+            None,
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
         let invalidation = engine
             .execute(
                 "alice",

@@ -1560,6 +1560,69 @@ pub(crate) fn common_relations_explanation(
     prior: &ResultRecord,
     replay: CommonRelationsExplanationReplay<'_>,
 ) -> Result<CommonRelationsExplanationEvaluation> {
+    common_relations_explanation_with_query(
+        report_bytes,
+        report_ref,
+        prior,
+        replay,
+        |proposition, max_actions, heading| {
+            let answer = relations::query(memory, proposition, max_actions)?;
+            let lines = relation_explanation_lines(memory, proposition, &answer, heading);
+            Ok((answer, lines))
+        },
+    )
+}
+
+/// Re-evaluate a saved common-relations explanation from the revision-matched
+/// derived index. `None` means the index is cold or stale and the caller must
+/// use its authenticated snapshot path.
+pub(crate) fn indexed_common_relations_explanation_from_store(
+    store: &Store,
+    actor: &str,
+    report_bytes: &[u8],
+    report_ref: &str,
+    prior: &ResultRecord,
+    replay: CommonRelationsExplanationReplay<'_>,
+) -> Result<Option<(u64, Result<CommonRelationsExplanationEvaluation>)>> {
+    store.with_relation_index(actor, |index| {
+        let revision = index.revision();
+        let evaluation = common_relations_explanation_with_query(
+            report_bytes,
+            report_ref,
+            prior,
+            replay,
+            |proposition, max_actions, heading| {
+                let (memory, answer) =
+                    indexed_common_relation_query(index, proposition, max_actions)?;
+                let lines = relation_explanation_lines(&memory, proposition, &answer, heading);
+                Ok((answer, lines))
+            },
+        );
+        let evaluation = match evaluation {
+            Err(error)
+                if matches!(
+                    &error,
+                    Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                ) =>
+            {
+                Ok(CommonRelationsExplanationEvaluation::Blocked {
+                    code: "RESOURCE_LIMIT",
+                    message: error.to_string(),
+                })
+            }
+            other => other,
+        };
+        Ok((revision, evaluation))
+    })
+}
+
+fn common_relations_explanation_with_query(
+    report_bytes: &[u8],
+    report_ref: &str,
+    prior: &ResultRecord,
+    replay: CommonRelationsExplanationReplay<'_>,
+    mut query: impl FnMut(&Proposition, u32, &str) -> Result<(relations::QueryOutcome, Vec<String>)>,
+) -> Result<CommonRelationsExplanationEvaluation> {
     if report_bytes.len() > replay.max_evidence_bytes {
         return Ok(CommonRelationsExplanationEvaluation::Blocked {
             code: "RESOURCE_LIMIT",
@@ -1666,8 +1729,16 @@ pub(crate) fn common_relations_explanation(
                 message: "前回の比較条件または左右の証拠一覧に不整合があります。".into(),
             });
         }
-        let answer_a = relations::query(memory, &proof.proposition_a, per_query_budget)?;
-        let answer_b = relations::query(memory, &proof.proposition_b, per_query_budget)?;
+        let (answer_a, explanation_lines_a) = query(
+            &proof.proposition_a,
+            per_query_budget,
+            &format!("{}側の証明", artifact.subject_a),
+        )?;
+        let (answer_b, explanation_lines_b) = query(
+            &proof.proposition_b,
+            per_query_budget,
+            &format!("{}側の証明", artifact.subject_b),
+        )?;
         if let Some((_, code, message)) = condition_block(&answer_a) {
             return Ok(CommonRelationsExplanationEvaluation::Blocked { code, message });
         }
@@ -1712,18 +1783,8 @@ pub(crate) fn common_relations_explanation(
             artifact.subject_b,
             guarantee_label(&guarantee_b)
         ));
-        units.extend(relation_explanation_lines(
-            memory,
-            &proof.proposition_a,
-            &answer_a,
-            &format!("{}側の証明", artifact.subject_a),
-        ));
-        units.extend(relation_explanation_lines(
-            memory,
-            &proof.proposition_b,
-            &answer_b,
-            &format!("{}側の証明", artifact.subject_b),
-        ));
+        units.extend(explanation_lines_a);
+        units.extend(explanation_lines_b);
     }
     let mut expected_prior_dependencies = vec![report_ref.to_string()];
     expected_prior_dependencies.extend(expected_proof_dependencies);
