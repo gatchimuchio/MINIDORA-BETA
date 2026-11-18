@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 5 tests
+test core::relation_comparison_temporal_identity_tests::untimed_comparison_key_identity_matches_the_legacy_shape ... ok
+test input::tests::saved_relation_comparisons_preserve_two_subjects_and_scope ... ok
+test core::active_relation_projection_tests::indexed_relation_comparison_selects_only_the_requested_scope_on_the_normal_route ... ok
+test recovery::tests::relation_comparison_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::saved_relation_comparison_explanation_pins_and_rechecks_its_memory_revision ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 268 filtered out; finished in 3.06s

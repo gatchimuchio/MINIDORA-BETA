@@ -1,0 +1,124 @@
+{
+  "schema": "MINIDORA_E1_W10_RELATION_COMPARISON_RECOVERY_PROJECTION_B65_V1",
+  "work_item": "Bound the current-head relation-comparison revalidation before confirming a pending file effect",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "266d0575b0e9c04ab9768ce2bf31b656ebaa62eb",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "677fcde46eb0a998ef15f93682cfd836b964c20fb60c0888d6e7f5706e5cefc6",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs": {
+    "local_base": "refs/heads/codex/backup-main=266d0575b0e9c04ab9768ce2bf31b656ebaa62eb",
+    "local_previous": "refs/heads/codex/backup-main-prev=d8d86e1601fd6e2f3b943931ce93119e7e2c47c5",
+    "remote_tags": [
+      "refs/tags/codex/backup-main=266d0575b0e9c04ab9768ce2bf31b656ebaa62eb",
+      "refs/tags/codex/backup-main-prev=d8d86e1601fd6e2f3b943931ce93119e7e2c47c5"
+    ],
+    "remote_backup_branches_unchanged": [
+      "refs/remotes/origin/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/remotes/origin/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ]
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target"
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "pending comparison file effect -> Core Recovery inspect -> revision-matched Store::with_relation_index -> exact-scope left/right inventory and supporting Rule projection -> shared comparison artifact/content/proof verifier",
+    "current_head_index": "used only when the derived index revision matches the actor-memory head",
+    "cold_or_stale_index": "returns None and retains the existing full-current-snapshot verifier as compatibility fallback",
+    "retained_revision_replay": "unchanged full-snapshot replay of the immutable actor-memory revision used at adoption",
+    "preserved_responsibilities": [
+      "Core remains responsible for relation inventory, comparison content, proof dependencies and guarantee verification",
+      "both current inventories and supporting Rules are read in one revision-matched index transaction",
+      "Recovery still stops before file confirmation when comparison support is invalidated"
+    ],
+    "schema_version_changed": false
+  },
+  "fixture_observation": {
+    "intent": "Japanese saved relation comparison",
+    "requested_scope": "default",
+    "comparison_facts": 2,
+    "off_scope_facts_added_after_adoption": 80,
+    "off_scope_distribution": "one Fact in each of 80 distinct scopes",
+    "max_actions": 32,
+    "per_subject_action_budget": 16,
+    "full_snapshot_current_recheck": "RELATION_BUDGET",
+    "revision_matched_scope_index_current_recheck": "PASS",
+    "cold_index_fallback_on_small_snapshot": "PASS",
+    "exact_retained_revision_replay": "PASS",
+    "premise_invalidation": "RECOVERY_PROOF_INVALIDATED",
+    "existing_target_bytes_preserved_after_invalidation": true
+  },
+  "verification": [
+    {
+      "command": "cargo test -p minidora-engine --locked --lib recovery::tests::relation_comparison_recovery_pins_and_rechecks_its_memory_revision -- --exact --nocapture",
+      "result": "PASS",
+      "cases_passed": 1,
+      "log": "b65-focused-recovery-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --lib relation_comparison -- --nocapture",
+      "result": "PASS",
+      "cases_passed": 5,
+      "log": "b65-relation-comparison-library-tests.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --test core_atomic_relation_comparison_42 --test core_atomic_relation_comparison_46 --test core_atomic_relation_comparison_47",
+      "result": "PASS",
+      "cases_passed": 3,
+      "harnesses_passed": 3,
+      "log": "b65-comparison-regressions.log"
+    },
+    {
+      "command": "cargo check -p minidora-engine --all-targets --locked",
+      "result": "PASS",
+      "log": "b65-engine-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b65-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b65-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b65-diff-check.log"
+    }
+  ],
+  "resolved_attempts": [
+    "initial shell omitted cargo from PATH; final commands used the installed 1.99.1 toolchain explicitly",
+    "initial verifier refactor had two E0308 borrowed-inventory comparisons; corrected before final test runs"
+  ],
+  "not_run": [
+    "full minidora-engine package tests",
+    "workspace all-target Clippy",
+    "large-history immutable retained-revision replay projection",
+    "cold/stale full-snapshot fallback cost with large history",
+    "large same-scope history and concurrent-writer populations",
+    "full CAP-D02 or E1 acceptance"
+  ],
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}

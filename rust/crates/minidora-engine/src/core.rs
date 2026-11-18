@@ -11575,6 +11575,90 @@ pub(crate) fn verify_relation_comparison_memory_result(
     plan: &ContentPlan,
     replay: RelationComparisonReplay<'_>,
 ) -> Result<()> {
+    let per_subject_actions = replay.max_actions / 2;
+    if per_subject_actions == 0 {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison has no bounded replay budget",
+        ));
+    }
+    let inventory_a =
+        relation_comparison_inventory(memory, replay.subject_a, replay.scope, per_subject_actions)?;
+    let inventory_b =
+        relation_comparison_inventory(memory, replay.subject_b, replay.scope, per_subject_actions)?;
+    verify_relation_comparison_inventories(
+        &inventory_a,
+        &inventory_b,
+        &memory.rules,
+        artifact_bytes,
+        result,
+        plan,
+        replay,
+    )
+}
+
+/// Revalidates pending comparison bytes against the current, revision-matched
+/// scope index without materializing the actor's complete retained history.
+/// `None` means the derived index is cold or stale and the caller must use the
+/// authenticated snapshot fallback.
+pub(crate) fn verify_relation_comparison_memory_result_with_index(
+    store: &Store,
+    actor: &str,
+    artifact_bytes: &[u8],
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    replay: RelationComparisonReplay<'_>,
+) -> Result<Option<()>> {
+    let Some(verified) = store.with_relation_index(actor, |index| {
+        let per_subject_actions = replay.max_actions / 2;
+        if per_subject_actions == 0 {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained comparison has no bounded replay budget",
+            ));
+        }
+        let (inventory_a, rules_a) = relation_comparison_inventory_from_index(
+            index,
+            replay.subject_a,
+            replay.scope,
+            per_subject_actions,
+        )?;
+        let (inventory_b, rules_b) = relation_comparison_inventory_from_index(
+            index,
+            replay.subject_b,
+            replay.scope,
+            per_subject_actions,
+        )?;
+        let mut rules = BTreeMap::new();
+        for rule in rules_a.into_iter().chain(rules_b) {
+            rules.insert(rule.id.clone(), rule);
+        }
+        verify_relation_comparison_inventories(
+            &inventory_a,
+            &inventory_b,
+            &rules.into_values().collect::<Vec<_>>(),
+            artifact_bytes,
+            result,
+            plan,
+            replay,
+        )?;
+        Ok(())
+    })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(verified))
+}
+
+fn verify_relation_comparison_inventories(
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    rules: &[RelationRule],
+    artifact_bytes: &[u8],
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    replay: RelationComparisonReplay<'_>,
+) -> Result<()> {
     let report_ref = result.dependencies.first().ok_or_else(|| {
         failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -11599,36 +11683,25 @@ pub(crate) fn verify_relation_comparison_memory_result(
             "the retained comparison artifact identity differs from the adopted request",
         ));
     }
-    let per_subject_actions = replay.max_actions / 2;
-    if per_subject_actions == 0 {
-        return Err(failure(
-            "RECOVERY_MEMORY_PROOF_MISMATCH",
-            "the retained comparison has no bounded replay budget",
-        ));
-    }
-    let inventory_a =
-        relation_comparison_inventory(memory, replay.subject_a, replay.scope, per_subject_actions)?;
-    let inventory_b =
-        relation_comparison_inventory(memory, replay.subject_b, replay.scope, per_subject_actions)?;
     if inventory_a.facts.is_empty() && inventory_b.facts.is_empty() {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the retained comparison no longer has a supporting saved relation",
         ));
     }
-    if artifact.inventory_a != inventory_a || artifact.inventory_b != inventory_b {
+    if &artifact.inventory_a != inventory_a || &artifact.inventory_b != inventory_b {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the retained comparison inventories differ from the actor-memory revision",
         ));
     }
     let (content_request, content_kind) = relation_comparison_content_request(
-        &memory.rules,
+        rules,
         replay.subject_a,
         replay.subject_b,
         replay.scope,
-        &inventory_a,
-        &inventory_b,
+        inventory_a,
+        inventory_b,
         replay.max_evidence_bytes,
     )?;
     let (report, expected_units) = if let Some(content_request) = content_request {
@@ -11639,7 +11712,7 @@ pub(crate) fn verify_relation_comparison_memory_result(
             ));
         }
         let composition = language::compose_typed_meaning(&content_request)?;
-        let expected_proofs = relation_comparison_proof_ids(&inventory_a, &inventory_b);
+        let expected_proofs = relation_comparison_proof_ids(inventory_a, inventory_b);
         let composed_proofs = composition
             .evidence_ids
             .iter()
@@ -11666,8 +11739,8 @@ pub(crate) fn verify_relation_comparison_memory_result(
             replay.subject_a,
             replay.subject_b,
             replay.scope,
-            &inventory_a,
-            &inventory_b,
+            inventory_a,
+            inventory_b,
         );
         (report.clone(), vec![report])
     };

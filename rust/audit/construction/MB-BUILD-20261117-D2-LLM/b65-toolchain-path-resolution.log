@@ -1,0 +1,5 @@
+Initial attempt: `cargo fmt --all` from the Rust workspace.
+
+Observed result: `/bin/bash: cargo: command not found` because this shell did not include `/home/agent/.cargo/bin` on `PATH`.
+
+Resolution: used the installed Rust 1.99.1 toolchain with `PATH=/home/agent/.cargo/bin:$PATH` and retained the shared target cache at `/workspace/.minidora-cloud/rust-target`. Subsequent formatting, tests, check and Clippy commands completed with exit status 0.

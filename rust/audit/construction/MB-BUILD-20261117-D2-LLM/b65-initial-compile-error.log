@@ -1,0 +1,5 @@
+Initial targeted compile attempt: `cargo test -p minidora-engine --locked --lib recovery::tests::relation_comparison_recovery_pins_and_rechecks_its_memory_revision -- --exact --nocapture`.
+
+Observed result: failed with two Rust `E0308` diagnostics in the extracted comparison verifier. The artifact inventories are owned `RelationInventory` values while the shared verifier receives `&RelationInventory`; the compiler identified those comparisons as mismatched types and suggested dereferencing.
+
+Resolution: compare references to the artifact inventories with the shared verifier's borrowed inventories. The focused Recovery test, filtered comparison library tests, comparison integration regressions, all-target engine check and warnings-denied engine-library Clippy then passed.

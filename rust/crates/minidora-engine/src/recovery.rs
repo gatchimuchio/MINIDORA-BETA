@@ -879,6 +879,45 @@ fn verify_relation_comparison_memory_result(
     )
 }
 
+fn verify_relation_comparison_memory_result_with_index(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<()>> {
+    let Intent::CompareRelationInventories {
+        subject_a,
+        subject_b,
+        scope,
+    } = &goal.intent
+    else {
+        return Ok(Some(()));
+    };
+    let report_ref = result.dependencies.first().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained comparison has no report artifact reference",
+        )
+    })?;
+    let artifact = store.get_bytes(actor, case, report_ref)?;
+    crate::core::verify_relation_comparison_memory_result_with_index(
+        store,
+        actor,
+        &artifact,
+        result,
+        plan,
+        crate::core::RelationComparisonReplay {
+            subject_a,
+            subject_b,
+            scope,
+            max_actions: goal.budget.max_actions,
+            max_evidence_bytes: goal.budget.max_evidence_bytes,
+        },
+    )
+}
+
 fn verify_relation_profile_memory_result(
     memory: &MemoryState,
     result: &ResultRecord,
@@ -2374,14 +2413,27 @@ fn inspect(
         // The exact immutable snapshot was replayed above when this result has
         // a revision. Older results without one must still match current
         // memory before their retained report can be confirmed.
-        let memory = store.load_memory(actor)?;
-        verify_relation_comparison_memory_result(store, actor, case, &memory, result, plan, &goal)
-            .map_err(|error| {
-                failure(
-                    "RECOVERY_PROOF_INVALIDATED",
-                    format!("the original relation-comparison proof is no longer valid: {error}"),
-                )
-            })?;
+        let current_verification = (|| {
+            match verify_relation_comparison_memory_result_with_index(
+                store, actor, case, result, plan, &goal,
+            )? {
+                Some(()) => Ok(()),
+                None => {
+                    // Preserve old-store compatibility when the derived index
+                    // has not yet been built for the current memory head.
+                    let memory = store.load_memory(actor)?;
+                    verify_relation_comparison_memory_result(
+                        store, actor, case, &memory, result, plan, &goal,
+                    )
+                }
+            }
+        })();
+        current_verification.map_err(|error| {
+            failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                format!("the original relation-comparison proof is no longer valid: {error}"),
+            )
+        })?;
     }
     if matches!(goal.intent, Intent::DraftRelationProfile { .. })
         && result.actor_memory_revision.is_some()
@@ -4918,6 +4970,7 @@ mod tests {
             "alice",
             "ココとミケの保存済みの関係を比較して",
         );
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -4954,6 +5007,62 @@ mod tests {
                 .load_memory_revision("alice", memory_revision)
                 .unwrap(),
             Some(original_memory)
+        );
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "comparison-off-scope-history",
+            "alice",
+            "比較Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let full_snapshot_error = verify_relation_comparison_memory_result(
+            &engine.store,
+            "alice",
+            "case",
+            &current_memory,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap_err();
+        assert!(
+            full_snapshot_error.to_string().contains("RELATION_BUDGET"),
+            "{full_snapshot_error:?}"
         );
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
 
