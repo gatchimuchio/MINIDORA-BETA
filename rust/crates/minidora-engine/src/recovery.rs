@@ -328,6 +328,94 @@ fn result_memory_snapshot(
         })
 }
 
+fn verify_conjunction_memory_result(
+    memory: &MemoryState,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let Intent::AskConjunction { propositions } = &goal.intent else {
+        return Ok(());
+    };
+    if !(2..=3).contains(&propositions.len()) {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained conjunction does not contain two or three propositions",
+        ));
+    }
+    let clause_count = u32::try_from(propositions.len()).map_err(|_| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained conjunction clause count is out of range",
+        )
+    })?;
+    let per_relation_budget = goal.budget.max_actions / clause_count;
+    if per_relation_budget == 0 {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained conjunction has no per-relation proof budget",
+        ));
+    }
+
+    let mut dependencies = std::collections::BTreeSet::new();
+    let mut all_supported = true;
+    let mut any_derived = false;
+    let mut conclusions = Vec::with_capacity(propositions.len());
+    for proposition in propositions {
+        let answer = crate::relations::query(memory, proposition, per_relation_budget)?;
+        match answer.status.as_str() {
+            "SUPPORTED" => conclusions.push(format!(
+                "- {}",
+                crate::core::relation_answer_surface(proposition, false)
+            )),
+            "CONTRADICTED" => {
+                all_supported = false;
+                conclusions.push(format!(
+                    "- {}",
+                    crate::core::relation_answer_surface(proposition, true)
+                ));
+            }
+            _ => {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "a retained conjunction clause is no longer supported or contradicted",
+                ));
+            }
+        }
+        dependencies.extend(crate::relations::answer_dependencies(&answer));
+        any_derived |= crate::relations::answer_guarantee(&answer) == Guarantee::Derived;
+    }
+
+    let relation_count = if propositions.len() == 2 {
+        "二つ"
+    } else {
+        "三つ"
+    };
+    let mut required_units = vec![if all_supported {
+        format!("提示された前提の範囲では、尋ねた{relation_count}の関係がともに支持されます。")
+    } else {
+        format!(
+            "提示された根拠は、尋ねた{relation_count}の関係がともに成立するという組み合わせを支持しません。"
+        )
+    }];
+    required_units.extend(conclusions);
+    let guarantee = if any_derived {
+        Guarantee::Derived
+    } else {
+        Guarantee::UserPremise
+    };
+    if dependencies.into_iter().collect::<Vec<_>>() != result.dependencies
+        || guarantee != result.guarantee
+        || required_units != plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained conjunction does not match its actor-memory proof revision",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_result_memory_provenance(
     store: &Store,
     actor: &str,
@@ -375,6 +463,9 @@ fn verify_result_memory_provenance(
                     "the retained object answer does not match its actor-memory revision",
                 ));
             }
+        }
+        Intent::AskConjunction { .. } => {
+            verify_conjunction_memory_result(&memory, result, plan, goal)?;
         }
         _ => {}
     }
@@ -1242,6 +1333,18 @@ fn inspect(
                 "the object-answer content or proof lineage differs from the original adoption",
             ));
         }
+    }
+    if matches!(goal.intent, Intent::AskConjunction { .. }) {
+        // The original immutable snapshot was checked above. Before confirming
+        // pending bytes, ensure the conjunction is still true of the current
+        // actor memory and cannot be adopted after premise invalidation.
+        let memory = store.load_memory(actor)?;
+        verify_conjunction_memory_result(&memory, result, plan, &goal).map_err(|error| {
+            failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                format!("the original conjunction proof is no longer valid: {error}"),
+            )
+        })?;
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
@@ -3170,6 +3273,84 @@ mod tests {
         assert!(result.text.contains("ココは動物ではない"));
         let revision = engine.latest("alice", "case").unwrap().unwrap();
         assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
+    }
+
+    #[test]
+    fn conjunction_answer_recovery_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let bird = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "bird", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let bird_id = bird.dependencies[0].clone();
+        let animal = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "animal", "alice", "ココは動物です"),
+            )
+            .unwrap();
+        let animal_id = animal.dependencies[0].clone();
+
+        let mut request =
+            RequestEnvelope::new("case", "conjunction", "alice", "ココは鳥かつ動物ですか");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert!(answer.dependencies.contains(&bird_id));
+        assert!(answer.dependencies.contains(&animal_id));
+        let memory_revision = answer
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the conjunction");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the conjunction's actor-memory snapshot is retained");
+        assert!(original_memory.facts.iter().any(|fact| fact.id == bird_id));
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == animal_id)
+        );
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap();
+        assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate-bird-premise",
+                    "alice",
+                    &format!("{bird_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
     }
 
     #[test]

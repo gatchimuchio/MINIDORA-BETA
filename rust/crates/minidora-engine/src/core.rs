@@ -4798,6 +4798,7 @@ impl Engine {
                     );
                 }
                 let memory = self.store.load_memory(actor)?;
+                result.actor_memory_revision = Some(memory.revision);
                 let mut dependencies = BTreeSet::new();
                 let mut all_supported = true;
                 let mut any_derived = false;
@@ -7981,7 +7982,7 @@ fn relation_meaning_status_matches(
     }
 }
 
-fn relation_answer_surface(proposition: &Proposition, contradicted: bool) -> String {
+pub(crate) fn relation_answer_surface(proposition: &Proposition, contradicted: bool) -> String {
     if contradicted {
         let mut opposite = proposition.clone();
         opposite.negative = !opposite.negative;
