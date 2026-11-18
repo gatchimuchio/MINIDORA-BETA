@@ -2,9 +2,10 @@
 //! blobs are durably published first. Orphan blobs are harmless, while a
 //! missing or corrupt referenced blob is an integrity failure.
 use minidora_domain::{
-    ALPHA8_SCHEMA_VERSION, ALPHA10_SCHEMA_VERSION, ActionRecord, CaseRevision, EffectPhase,
-    InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState, PREVIOUS_SCHEMA_VERSION,
-    RequestEnvelope, Result, ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
+    ALPHA8_SCHEMA_VERSION, ALPHA10_SCHEMA_VERSION, ActionRecord, CaseRevision, ConditionRecord,
+    EffectPhase, Fact, InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
+    PREVIOUS_SCHEMA_VERSION, Proposition, RelationRule, RequestEnvelope, Result, ResultRecord,
+    SCHEMA_VERSION, canonical, digest, failure, identity,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -28,6 +29,10 @@ fn sql<T>(result: SqlResult<T>) -> Result<T> {
 fn integer(value: u64) -> Result<i64> {
     i64::try_from(value)
         .map_err(|_| failure("INVALID_REVISION", "revision exceeds SQLite integer range"))
+}
+fn canonical_string<T: Serialize>(value: &T) -> Result<String> {
+    String::from_utf8(canonical(value)?)
+        .map_err(|error| failure("INTEGRITY_FAILURE", error.to_string()))
 }
 fn valid_id(value: &str) -> Result<()> {
     if value.trim().is_empty() || value.len() > 4096 {
@@ -102,6 +107,453 @@ fn create_stage_file_with(
 pub struct Store {
     connection: Connection,
     blobs: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum IndexedMemoryValue {
+    Fact(Fact),
+    Rule(RelationRule),
+    Condition(ConditionRecord),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct IndexedMemoryRecord {
+    pub(crate) ordinal: usize,
+    pub(crate) value: IndexedMemoryValue,
+}
+
+impl IndexedMemoryValue {
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Fact(record) => &record.id,
+            Self::Rule(record) => &record.id,
+            Self::Condition(record) => &record.id,
+        }
+    }
+}
+
+pub(crate) struct MemoryIndexSnapshot<'tx, 'conn> {
+    transaction: &'tx Transaction<'conn>,
+    actor: String,
+    revision: u64,
+}
+
+fn memory_index_limit(max_records: usize) -> Result<i64> {
+    let limit = max_records
+        .checked_add(1)
+        .ok_or_else(|| failure("RELATION_BUDGET", "active memory record limit overflowed"))?;
+    i64::try_from(limit).map_err(|_| {
+        failure(
+            "RELATION_BUDGET",
+            "active memory record limit exceeds storage range",
+        )
+    })
+}
+
+impl MemoryIndexSnapshot<'_, '_> {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn select_records<P: rusqlite::Params>(
+        &self,
+        statement: &str,
+        params: P,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        let mut statement = sql(self.transaction.prepare(statement))?;
+        let rows = sql(statement.query_map(params, StoredMemoryIndexRow::read))?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(sql(row)?.decode()?);
+            if records.len() > max_records {
+                return Err(failure(
+                    "RELATION_BUDGET",
+                    "goal-relevant memory projection exceeds the sealed action budget",
+                ));
+            }
+        }
+        Ok(records)
+    }
+
+    pub(crate) fn relation_candidates(
+        &self,
+        proposition: &Proposition,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        let condition_refs = canonical_string(&proposition.condition_refs)?;
+        let subject_is_variable =
+            proposition.subject.starts_with('$') || proposition.subject.starts_with('?');
+        let object_is_variable =
+            proposition.object.starts_with('$') || proposition.object.starts_with('?');
+        self.select_records(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record WHERE actor_id=?1 AND valid=1 AND record_kind IN ('FACT','RULE') AND predicate=?2 AND scope=?3 AND temporal_scope IS ?4 AND condition_refs=?5 AND (?6=1 OR subject=?7 OR (record_kind='RULE' AND (substr(subject,1,1)='$' OR substr(subject,1,1)='?'))) AND (?8=1 OR object=?9 OR (record_kind='RULE' AND (substr(object,1,1)='$' OR substr(object,1,1)='?'))) ORDER BY record_kind,ordinal LIMIT ?10",
+            params![
+                self.actor,
+                proposition.predicate,
+                proposition.scope,
+                proposition.temporal_scope,
+                condition_refs,
+                if subject_is_variable { 1_i64 } else { 0_i64 },
+                proposition.subject,
+                if object_is_variable { 1_i64 } else { 0_i64 },
+                proposition.object,
+                memory_index_limit(max_records)?,
+            ],
+            max_records,
+        )
+    }
+
+    pub(crate) fn out_of_scope_direct_facts(
+        &self,
+        proposition: &Proposition,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        let condition_refs = canonical_string(&proposition.condition_refs)?;
+        self.select_records(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record WHERE actor_id=?1 AND valid=1 AND record_kind='FACT' AND subject=?2 AND predicate=?3 AND object=?4 AND negative=?5 AND scope<>?6 AND temporal_scope IS ?7 AND condition_refs=?8 ORDER BY ordinal LIMIT ?9",
+            params![
+                self.actor,
+                proposition.subject,
+                proposition.predicate,
+                proposition.object,
+                if proposition.negative { 1_i64 } else { 0_i64 },
+                proposition.scope,
+                proposition.temporal_scope,
+                condition_refs,
+                memory_index_limit(max_records)?,
+            ],
+            max_records,
+        )
+    }
+
+    pub(crate) fn condition_evidence_facts(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        scope: &str,
+        temporal_scope: Option<&str>,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        self.select_records(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record WHERE actor_id=?1 AND valid=1 AND record_kind='FACT' AND subject=?2 AND predicate=?3 AND object=?4 AND scope=?5 AND temporal_scope IS ?6 ORDER BY ordinal LIMIT ?7",
+            params![
+                self.actor,
+                subject,
+                predicate,
+                object,
+                scope,
+                temporal_scope,
+                memory_index_limit(max_records)?,
+            ],
+            max_records,
+        )
+    }
+
+    pub(crate) fn condition_definitions(
+        &self,
+        condition_id: &str,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        self.select_records(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record WHERE actor_id=?1 AND valid=1 AND record_kind='CONDITION' AND condition_id=?2 ORDER BY ordinal LIMIT ?3",
+            params![
+                self.actor,
+                condition_id,
+                memory_index_limit(max_records)?,
+            ],
+            max_records,
+        )
+    }
+
+    pub(crate) fn record_by_id(&self, id: &str) -> Result<Option<IndexedMemoryRecord>> {
+        let mut statement = sql(self.transaction.prepare(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record WHERE actor_id=?1 AND record_id=?2",
+        ))?;
+        let record = sql(statement
+            .query_row(params![self.actor, id], StoredMemoryIndexRow::read)
+            .optional())?
+        .map(StoredMemoryIndexRow::decode)
+        .transpose()?;
+        Ok(record)
+    }
+}
+
+struct MemoryIndexFields {
+    kind: &'static str,
+    valid: bool,
+    subject: Option<String>,
+    predicate: Option<String>,
+    object: Option<String>,
+    negative: Option<i64>,
+    scope: Option<String>,
+    temporal_scope: Option<String>,
+    condition_refs: Option<String>,
+    condition_id: Option<String>,
+}
+
+struct StoredMemoryIndexRow {
+    kind: String,
+    record_id: String,
+    ordinal: i64,
+    payload_json: String,
+    payload_sha256: String,
+    valid: i64,
+    subject: Option<String>,
+    predicate: Option<String>,
+    object: Option<String>,
+    negative: Option<i64>,
+    scope: Option<String>,
+    temporal_scope: Option<String>,
+    condition_refs: Option<String>,
+    condition_id: Option<String>,
+}
+
+impl StoredMemoryIndexRow {
+    fn read(row: &rusqlite::Row<'_>) -> SqlResult<Self> {
+        Ok(Self {
+            kind: row.get(0)?,
+            record_id: row.get(1)?,
+            ordinal: row.get(2)?,
+            payload_json: row.get(3)?,
+            payload_sha256: row.get(4)?,
+            valid: row.get(5)?,
+            subject: row.get(6)?,
+            predicate: row.get(7)?,
+            object: row.get(8)?,
+            negative: row.get(9)?,
+            scope: row.get(10)?,
+            temporal_scope: row.get(11)?,
+            condition_refs: row.get(12)?,
+            condition_id: row.get(13)?,
+        })
+    }
+
+    fn decode(self) -> Result<IndexedMemoryRecord> {
+        let payload = self.payload_json.as_bytes();
+        if digest(payload) != self.payload_sha256 {
+            return Err(failure(
+                "MEMORY_INDEX_CORRUPT",
+                "indexed memory record checksum differs",
+            ));
+        }
+        let value = match self.kind.as_str() {
+            "FACT" => IndexedMemoryValue::Fact(serde_json::from_str(&self.payload_json)?),
+            "RULE" => IndexedMemoryValue::Rule(serde_json::from_str(&self.payload_json)?),
+            "CONDITION" => IndexedMemoryValue::Condition(serde_json::from_str(&self.payload_json)?),
+            _ => {
+                return Err(failure(
+                    "MEMORY_INDEX_CORRUPT",
+                    "indexed memory record kind is unknown",
+                ));
+            }
+        };
+        let valid = match self.valid {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(failure(
+                    "MEMORY_INDEX_CORRUPT",
+                    "indexed memory validity flag is invalid",
+                ));
+            }
+        };
+        let ordinal = usize::try_from(self.ordinal)
+            .map_err(|_| failure("MEMORY_INDEX_CORRUPT", "indexed memory ordinal is negative"))?;
+        if value.id() != self.record_id || memory_value_valid(&value) != valid {
+            return Err(failure(
+                "MEMORY_INDEX_CORRUPT",
+                "indexed memory identity or validity differs from its payload",
+            ));
+        }
+        let fields = memory_index_fields(&value)?;
+        if fields.kind != self.kind
+            || fields.valid != valid
+            || fields.subject != self.subject
+            || fields.predicate != self.predicate
+            || fields.object != self.object
+            || fields.negative != self.negative
+            || fields.scope != self.scope
+            || fields.temporal_scope != self.temporal_scope
+            || fields.condition_refs != self.condition_refs
+            || fields.condition_id != self.condition_id
+        {
+            return Err(failure(
+                "MEMORY_INDEX_CORRUPT",
+                "indexed relation keys differ from their typed memory payload",
+            ));
+        }
+        Ok(IndexedMemoryRecord { ordinal, value })
+    }
+}
+
+fn memory_value_valid(value: &IndexedMemoryValue) -> bool {
+    match value {
+        IndexedMemoryValue::Fact(record) => record.valid,
+        IndexedMemoryValue::Rule(record) => record.valid,
+        IndexedMemoryValue::Condition(record) => record.valid,
+    }
+}
+
+fn memory_index_fields(value: &IndexedMemoryValue) -> Result<MemoryIndexFields> {
+    let relation_fields = |proposition: &Proposition| -> Result<MemoryIndexFields> {
+        Ok(MemoryIndexFields {
+            kind: match value {
+                IndexedMemoryValue::Fact(_) => "FACT",
+                IndexedMemoryValue::Rule(_) => "RULE",
+                IndexedMemoryValue::Condition(_) => unreachable!(),
+            },
+            valid: memory_value_valid(value),
+            subject: Some(proposition.subject.clone()),
+            predicate: Some(proposition.predicate.clone()),
+            object: Some(proposition.object.clone()),
+            negative: Some(i64::from(proposition.negative)),
+            scope: Some(proposition.scope.clone()),
+            temporal_scope: proposition.temporal_scope.clone(),
+            condition_refs: Some(canonical_string(&proposition.condition_refs)?),
+            condition_id: None,
+        })
+    };
+    match value {
+        IndexedMemoryValue::Fact(record) => relation_fields(&record.proposition),
+        IndexedMemoryValue::Rule(record) => relation_fields(&record.conclusion),
+        IndexedMemoryValue::Condition(record) => Ok(MemoryIndexFields {
+            kind: "CONDITION",
+            valid: record.valid,
+            subject: None,
+            predicate: None,
+            object: None,
+            negative: None,
+            scope: None,
+            temporal_scope: None,
+            condition_refs: None,
+            condition_id: Some(record.definition.condition_id.clone()),
+        }),
+    }
+}
+
+fn memory_index_record(
+    transaction: &Transaction<'_>,
+    actor: &str,
+    ordinal: usize,
+    value: &IndexedMemoryValue,
+) -> Result<()> {
+    let bytes = match value {
+        IndexedMemoryValue::Fact(record) => canonical(record)?,
+        IndexedMemoryValue::Rule(record) => canonical(record)?,
+        IndexedMemoryValue::Condition(record) => canonical(record)?,
+    };
+    let payload_json = String::from_utf8(bytes.clone())
+        .map_err(|error| failure("INTEGRITY_FAILURE", error.to_string()))?;
+    let fields = memory_index_fields(value)?;
+    sql(transaction.execute(
+        "INSERT INTO memory_index_record(actor_id,record_id,record_kind,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(actor_id,record_id) DO UPDATE SET record_kind=excluded.record_kind,ordinal=excluded.ordinal,payload_json=excluded.payload_json,payload_sha256=excluded.payload_sha256,valid=excluded.valid,subject=excluded.subject,predicate=excluded.predicate,object=excluded.object,negative=excluded.negative,scope=excluded.scope,temporal_scope=excluded.temporal_scope,condition_refs=excluded.condition_refs,condition_id=excluded.condition_id",
+        params![
+            actor,
+            value.id(),
+            fields.kind,
+            integer(u64::try_from(ordinal).map_err(|_| failure("MEMORY_INDEX_CORRUPT", "memory index ordinal exceeds its representation"))?)?,
+            payload_json,
+            digest(&bytes),
+            fields.valid,
+            fields.subject,
+            fields.predicate,
+            fields.object,
+            fields.negative,
+            fields.scope,
+            fields.temporal_scope,
+            fields.condition_refs,
+            fields.condition_id,
+        ],
+    ))?;
+    Ok(())
+}
+
+fn index_memory_state_records(
+    transaction: &Transaction<'_>,
+    actor: &str,
+    memory: &MemoryState,
+) -> Result<()> {
+    for (ordinal, record) in memory.facts.iter().enumerate() {
+        memory_index_record(
+            transaction,
+            actor,
+            ordinal,
+            &IndexedMemoryValue::Fact(record.clone()),
+        )?;
+    }
+    for (ordinal, record) in memory.rules.iter().enumerate() {
+        memory_index_record(
+            transaction,
+            actor,
+            ordinal,
+            &IndexedMemoryValue::Rule(record.clone()),
+        )?;
+    }
+    for (ordinal, record) in memory.conditions.iter().enumerate() {
+        memory_index_record(
+            transaction,
+            actor,
+            ordinal,
+            &IndexedMemoryValue::Condition(record.clone()),
+        )?;
+    }
+    Ok(())
+}
+
+fn sync_memory_index(
+    transaction: &Transaction<'_>,
+    actor: &str,
+    previous: Option<&MemoryState>,
+    memory: &MemoryState,
+) -> Result<()> {
+    let indexed_revision: Option<i64> = sql(transaction
+        .query_row(
+            "SELECT revision FROM memory_index_state WHERE actor_id=?1",
+            [actor],
+            |row| row.get(0),
+        )
+        .optional())?;
+    let can_update_incrementally =
+        previous.is_some_and(|previous| indexed_revision == integer(previous.revision).ok());
+    if can_update_incrementally {
+        let previous = previous.expect("incremental index update requires a previous snapshot");
+        macro_rules! update_records {
+            ($field:ident, $variant:ident) => {{
+                for (ordinal, (old, new)) in previous.$field.iter().zip(&memory.$field).enumerate()
+                {
+                    if old.valid != new.valid {
+                        memory_index_record(
+                            transaction,
+                            actor,
+                            ordinal,
+                            &IndexedMemoryValue::$variant(new.clone()),
+                        )?;
+                    }
+                }
+                for (ordinal, new) in memory.$field.iter().enumerate().skip(previous.$field.len()) {
+                    memory_index_record(
+                        transaction,
+                        actor,
+                        ordinal,
+                        &IndexedMemoryValue::$variant(new.clone()),
+                    )?;
+                }
+            }};
+        }
+        update_records!(facts, Fact);
+        update_records!(rules, Rule);
+        update_records!(conditions, Condition);
+    } else {
+        sql(transaction.execute("DELETE FROM memory_index_record WHERE actor_id=?1", [actor]))?;
+        index_memory_state_records(transaction, actor, memory)?;
+    }
+    sql(transaction.execute(
+        "INSERT INTO memory_index_state(actor_id,revision) VALUES(?1,?2) ON CONFLICT(actor_id) DO UPDATE SET revision=excluded.revision",
+        params![actor, integer(memory.revision)?],
+    ))?;
+    Ok(())
 }
 
 impl Store {
@@ -230,6 +682,93 @@ impl Store {
         let store = Self { connection, blobs };
         store.verify_integrity()?;
         Ok(store)
+    }
+
+    pub(crate) fn with_relation_index<T>(
+        &self,
+        actor: &str,
+        read: impl FnOnce(&MemoryIndexSnapshot<'_, '_>) -> Result<T>,
+    ) -> Result<Option<T>> {
+        valid_id(actor)?;
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Deferred)
+                .map_err(|error| failure("STORE_SQLITE", error.to_string()))?;
+        let head: Option<i64> = sql(transaction.query_row(
+            "SELECT revision FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
+            [actor],
+            |row| row.get(0),
+        ).optional())?;
+        let head = head.unwrap_or(0);
+        let indexed: Option<i64> = sql(transaction
+            .query_row(
+                "SELECT revision FROM memory_index_state WHERE actor_id=?1",
+                [actor],
+                |row| row.get(0),
+            )
+            .optional())?;
+        if indexed != Some(head) {
+            sql(transaction.commit())?;
+            return Ok(None);
+        }
+        let revision = u64::try_from(head)
+            .map_err(|_| failure("INTEGRITY_FAILURE", "memory index revision is negative"))?;
+        let snapshot = MemoryIndexSnapshot {
+            transaction: &transaction,
+            actor: actor.into(),
+            revision,
+        };
+        let value = read(&snapshot)?;
+        sql(transaction.commit())?;
+        Ok(Some(value))
+    }
+
+    /// Rebuilds a cold or stale derived index from one already loaded snapshot.
+    /// The source revision and digest are rechecked under the write lock so a
+    /// concurrent memory update cannot publish an index for the wrong head.
+    pub(crate) fn rebuild_relation_index_if_current(
+        &self,
+        actor: &str,
+        memory: &MemoryState,
+    ) -> Result<bool> {
+        valid_id(actor)?;
+        let bytes = canonical(memory)?;
+        let sha = digest(&bytes);
+        let transaction = self.transaction()?;
+        let head: Option<(i64, String)> = sql(transaction.query_row(
+            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
+            [actor],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional())?;
+        let is_current = match head {
+            Some((revision, stored_sha)) => {
+                u64::try_from(revision).ok() == Some(memory.revision) && stored_sha == sha
+            }
+            None => memory == &MemoryState::default(),
+        };
+        if !is_current {
+            sql(transaction.commit())?;
+            return Ok(false);
+        }
+        let revision = integer(memory.revision)?;
+        let indexed: Option<i64> = sql(transaction
+            .query_row(
+                "SELECT revision FROM memory_index_state WHERE actor_id=?1",
+                [actor],
+                |row| row.get(0),
+            )
+            .optional())?;
+        if indexed == Some(revision) {
+            sql(transaction.commit())?;
+            return Ok(false);
+        }
+        sql(transaction.execute("DELETE FROM memory_index_record WHERE actor_id=?1", [actor]))?;
+        index_memory_state_records(&transaction, actor, memory)?;
+        sql(transaction.execute(
+            "INSERT INTO memory_index_state(actor_id,revision) VALUES(?1,?2) ON CONFLICT(actor_id) DO UPDATE SET revision=excluded.revision",
+            params![actor, revision],
+        ))?;
+        sql(transaction.commit())?;
+        Ok(true)
     }
 
     /// Explicitly upgrades alpha 7, alpha 8, alpha 9 or alpha 10 store metadata after
@@ -1297,7 +1836,7 @@ impl Store {
             [actor],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional())?;
-        if let Some((revision, old_sha)) = &old {
+        let previous_memory = if let Some((revision, old_sha)) = &old {
             let previous: MemoryState = self.read_blob(old_sha)?;
             let stored_revision = u64::try_from(*revision)
                 .map_err(|_| failure("INTEGRITY_FAILURE", "actor memory revision is negative"))?;
@@ -1311,12 +1850,15 @@ impl Store {
                 return Ok(());
             }
             Self::validate_memory_evolution(&previous, memory)?;
+            Some(previous)
         } else if memory.revision > 1 {
             return Err(failure(
                 "REVISION_CONFLICT",
                 "first memory revision must be zero or one",
             ));
-        }
+        } else {
+            None
+        };
 
         let (published_sha, length) = self.publish_bytes(&bytes)?;
         if published_sha != sha {
@@ -1340,6 +1882,7 @@ impl Store {
             "INSERT INTO memory_revision(actor_id,revision,record_sha256) VALUES(?1,?2,?3)",
             params![actor, integer(memory.revision)?, sha],
         ))?;
+        sync_memory_index(&transaction, actor, previous_memory.as_ref(), memory)?;
         sql(transaction.commit())?;
         Ok(())
     }
@@ -1623,6 +2166,19 @@ CREATE TABLE IF NOT EXISTS action_history(
  PRIMARY KEY(case_id,action_id,sequence),FOREIGN KEY(case_id,action_id) REFERENCES action_identity(case_id,action_id));
 CREATE TABLE IF NOT EXISTS memory_revision(
  actor_id TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0),record_sha256 TEXT NOT NULL REFERENCES artifact_ref(sha256),PRIMARY KEY(actor_id,revision));
+CREATE TABLE IF NOT EXISTS memory_index_state(actor_id TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0));
+CREATE TABLE IF NOT EXISTS memory_index_record(
+ actor_id TEXT NOT NULL,record_id TEXT NOT NULL,record_kind TEXT NOT NULL CHECK(record_kind IN ('FACT','RULE','CONDITION')),
+ ordinal INTEGER NOT NULL CHECK(ordinal>=0),payload_json TEXT NOT NULL,payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256)=64),
+ valid INTEGER NOT NULL CHECK(valid IN (0,1)),subject TEXT,predicate TEXT,object TEXT,negative INTEGER,scope TEXT,
+ temporal_scope TEXT,condition_refs TEXT,condition_id TEXT,
+ PRIMARY KEY(actor_id,record_id));
+CREATE INDEX IF NOT EXISTS memory_index_relation_lookup
+ ON memory_index_record(actor_id,valid,record_kind,predicate,scope,temporal_scope,condition_refs,subject,object);
+CREATE INDEX IF NOT EXISTS memory_index_condition_evidence
+ ON memory_index_record(actor_id,valid,record_kind,subject,predicate,object,scope,temporal_scope);
+CREATE INDEX IF NOT EXISTS memory_index_condition_id
+ ON memory_index_record(actor_id,valid,record_kind,condition_id);
 CREATE TRIGGER IF NOT EXISTS input_conflict_no_update BEFORE UPDATE ON input_conflict BEGIN SELECT RAISE(ABORT,'immutable conflict observation'); END;
 CREATE TRIGGER IF NOT EXISTS input_conflict_no_delete BEFORE DELETE ON input_conflict BEGIN SELECT RAISE(ABORT,'immutable conflict observation'); END;
 CREATE TRIGGER IF NOT EXISTS case_revision_no_update BEFORE UPDATE ON case_revision BEGIN SELECT RAISE(ABORT,'immutable case revision'); END;

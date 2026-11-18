@@ -1,9 +1,10 @@
 //! Scoped proof-preserving relations. Source premises are never world facts.
 //! Declared rules support one or two premises; internal shortcuts are bounded
 //! to three antecedents and retain their parent proof DAG.
+use crate::store::{IndexedMemoryRecord, IndexedMemoryValue, MemoryIndexSnapshot};
 use minidora_domain::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryOutcome {
@@ -1494,6 +1495,250 @@ pub fn query(
     max_steps: u32,
 ) -> Result<QueryOutcome> {
     query_internal(memory, proposition, max_steps, None)
+}
+
+/// Build a bounded, rebuildable current-memory projection for a typed Ask.
+/// The index only supplies stored records; Core remains the sole caller that
+/// evaluates conditions and adopts the resulting proof.
+pub(crate) fn active_relation_projection(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<(MemoryState, u32)> {
+    validate(proposition)?;
+    if max_actions == 0 {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "active relation projection budget must be positive",
+        ));
+    }
+
+    fn charge(actions: &mut u32, max_actions: u32) -> Result<()> {
+        *actions = actions.checked_add(1).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "active memory projection action overflow",
+            )
+        })?;
+        if *actions > max_actions {
+            return Err(failure(
+                "RELATION_BUDGET",
+                "goal-relevant memory projection exceeds the sealed action budget",
+            ));
+        }
+        Ok(())
+    }
+
+    fn expression_parts(
+        expression: &ConditionExpression,
+        references: &mut BTreeSet<String>,
+        fact_atoms: &mut BTreeSet<(String, String)>,
+    ) {
+        match expression {
+            ConditionExpression::Fact { predicate, object } => {
+                fact_atoms.insert((predicate.clone(), object.clone()));
+            }
+            ConditionExpression::ConditionRef { condition_id } => {
+                references.insert(condition_id.clone());
+            }
+            ConditionExpression::And { operands } | ConditionExpression::Or { operands } => {
+                for operand in operands {
+                    expression_parts(operand, references, fact_atoms);
+                }
+            }
+            ConditionExpression::Not { operand } => {
+                expression_parts(operand, references, fact_atoms);
+            }
+        }
+    }
+
+    let mut actions = 0;
+    let mut records = BTreeMap::<String, IndexedMemoryRecord>::new();
+    let mut relation_shapes = VecDeque::from([proposition.clone()]);
+    let mut seen_relation_shapes = BTreeSet::new();
+    let mut condition_ids = VecDeque::from_iter(proposition.condition_refs.iter().cloned());
+    let mut seen_condition_ids = BTreeSet::new();
+    let mut record_ids = VecDeque::new();
+    let mut requested_record_ids = BTreeSet::new();
+    let mut evidence_queries = BTreeSet::new();
+
+    macro_rules! include_record {
+        ($record:expr) => {{
+            let record = $record;
+            let id = record.value.id().to_owned();
+            if !records.contains_key(&id) {
+                charge(&mut actions, max_actions)?;
+                match &record.value {
+                    IndexedMemoryValue::Fact(fact) => {
+                        condition_ids.extend(fact.proposition.condition_refs.iter().cloned());
+                        record_ids.extend(fact.dependencies.iter().cloned());
+                    }
+                    IndexedMemoryValue::Rule(rule) => {
+                        condition_ids.extend(rule.conclusion.condition_refs.iter().cloned());
+                        for premise in
+                            std::iter::once(&rule.premise).chain(rule.additional_premises.iter())
+                        {
+                            relation_shapes.push_back(premise.clone());
+                            condition_ids.extend(premise.condition_refs.iter().cloned());
+                        }
+                        record_ids.extend(rule.dependencies.iter().cloned());
+                    }
+                    IndexedMemoryValue::Condition(condition) => {
+                        record_ids.extend(condition.dependencies.iter().cloned());
+                        condition_ids.extend(condition.definition.dependencies.iter().cloned());
+                    }
+                }
+                records.insert(id, record);
+            }
+        }};
+    }
+
+    while !relation_shapes.is_empty() || !condition_ids.is_empty() || !record_ids.is_empty() {
+        while let Some(shape) = relation_shapes.pop_front() {
+            if !seen_relation_shapes.insert(shape.clone()) {
+                continue;
+            }
+            charge(&mut actions, max_actions)?;
+            let remaining = usize::try_from(max_actions - actions).unwrap_or(usize::MAX);
+            for record in index.relation_candidates(&shape, remaining)? {
+                include_record!(record);
+            }
+        }
+
+        while let Some(condition_id) = condition_ids.pop_front() {
+            if !seen_condition_ids.insert(condition_id.clone()) {
+                continue;
+            }
+            charge(&mut actions, max_actions)?;
+            let remaining = usize::try_from(max_actions - actions).unwrap_or(usize::MAX);
+            let definitions = index.condition_definitions(&condition_id, remaining)?;
+            for record in definitions {
+                let definition = match &record.value {
+                    IndexedMemoryValue::Condition(condition) => condition.definition.clone(),
+                    _ => {
+                        return Err(failure(
+                            "MEMORY_INDEX_CORRUPT",
+                            "condition lookup returned a non-condition record",
+                        ));
+                    }
+                };
+                let mut referenced_conditions = BTreeSet::new();
+                let mut fact_atoms = BTreeSet::new();
+                expression_parts(
+                    &definition.expression,
+                    &mut referenced_conditions,
+                    &mut fact_atoms,
+                );
+                condition_ids.extend(referenced_conditions);
+                include_record!(record);
+
+                let subject = if definition.subject == "$subject" {
+                    proposition.subject.as_str()
+                } else {
+                    definition.subject.as_str()
+                };
+                for (predicate, object) in fact_atoms {
+                    let evidence_key = (
+                        subject.to_owned(),
+                        predicate.clone(),
+                        object.clone(),
+                        definition.scope.clone(),
+                        proposition.temporal_scope.clone(),
+                    );
+                    if !evidence_queries.insert(evidence_key) {
+                        continue;
+                    }
+                    charge(&mut actions, max_actions)?;
+                    let remaining = usize::try_from(max_actions - actions).unwrap_or(usize::MAX);
+                    let evidence = index.condition_evidence_facts(
+                        subject,
+                        &predicate,
+                        &object,
+                        &definition.scope,
+                        proposition.temporal_scope.as_deref(),
+                        remaining,
+                    )?;
+                    for fact in evidence {
+                        include_record!(fact);
+                    }
+                }
+            }
+        }
+
+        while let Some(record_id) = record_ids.pop_front() {
+            if records.contains_key(&record_id) || !requested_record_ids.insert(record_id.clone()) {
+                continue;
+            }
+            charge(&mut actions, max_actions)?;
+            if let Some(record) = index.record_by_id(&record_id)? {
+                include_record!(record);
+            }
+        }
+    }
+
+    let mut memory = MemoryState {
+        revision: index.revision(),
+        ..MemoryState::default()
+    };
+    let mut facts = Vec::new();
+    let mut rules = Vec::new();
+    let mut conditions = Vec::new();
+    for record in records.into_values() {
+        match record.value {
+            IndexedMemoryValue::Fact(fact) => facts.push((record.ordinal, fact)),
+            IndexedMemoryValue::Rule(rule) => rules.push((record.ordinal, rule)),
+            IndexedMemoryValue::Condition(condition) => {
+                conditions.push((record.ordinal, condition));
+            }
+        }
+    }
+    facts.sort_by_key(|(ordinal, _)| *ordinal);
+    rules.sort_by_key(|(ordinal, _)| *ordinal);
+    conditions.sort_by_key(|(ordinal, _)| *ordinal);
+    memory.facts = facts.into_iter().map(|(_, record)| record).collect();
+    memory.rules = rules.into_iter().map(|(_, record)| record).collect();
+    memory.conditions = conditions.into_iter().map(|(_, record)| record).collect();
+    Ok((memory, actions))
+}
+
+/// Preserve OUT_OF_SCOPE classification only after the proof query is
+/// unresolved. Supported queries therefore do not spend budget on diagnostic
+/// facts from other scopes.
+pub(crate) fn active_out_of_scope_facts(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<(Vec<Fact>, u32)> {
+    if max_actions == 0 {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "out-of-scope classification budget must be positive",
+        ));
+    }
+    let max_records = usize::try_from(max_actions - 1).unwrap_or(usize::MAX);
+    let records = index.out_of_scope_direct_facts(proposition, max_records)?;
+    let actions = 1_u32
+        .checked_add(
+            u32::try_from(records.len())
+                .map_err(|_| failure("RELATION_BUDGET", "out-of-scope record count overflowed"))?,
+        )
+        .ok_or_else(|| failure("RELATION_BUDGET", "out-of-scope action count overflowed"))?;
+    let mut facts = records
+        .into_iter()
+        .filter_map(|record| match record.value {
+            IndexedMemoryValue::Fact(fact)
+                if fact.valid
+                    && fact.guarantee == Guarantee::UserPremise
+                    && fact.dependencies.is_empty()
+                    && !fact.source_input.is_empty() =>
+            {
+                Some(fact)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    facts.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok((facts, actions))
 }
 
 /// Evaluate only the explicitly supplied scenario assumptions as hypotheses.

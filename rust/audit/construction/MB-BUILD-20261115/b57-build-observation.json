@@ -1,0 +1,94 @@
+{
+  "schema": "MINIDORA_E1_W10_RELATION_PROJECTION_B57_V1",
+  "work_item": "Goal-related relation subgraph selection for ordinary typed Ask and AskWhy",
+  "observed_date": "2026-11-18",
+  "base_head": "62f411fe99be4f993e385ac37c6030a69dbc1653",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "tested_source_diff_sha256": "343b78f3e4fac98ae671e79c9d961055b46fb0c23524d2ce438e7629c9858d39",
+  "scope": {
+    "routes": [
+      "Engine::execute Intent::Ask",
+      "Engine::execute Intent::AskWhy"
+    ],
+    "ownership": "Store provides a revision-checked derived read model; existing Core K1 evaluates conditions, K2 infers, and K3 adopts.",
+    "index_consistency": "Index revision must equal the actor memory head; memory revision and incremental index updates publish in one SQLite transaction.",
+    "cold_index": "A missing legacy index is rebuilt once from the authenticated loaded current snapshot; that initial full-snapshot read remains unbounded by this slice.",
+    "budget": "Projection, proof expansion and UNKNOWN-only scope diagnostics share the request action budget."
+  },
+  "fixture": {
+    "stored_records": {
+      "facts": 68,
+      "rules": 2,
+      "conditions": 1
+    },
+    "goal_projection": {
+      "facts": 2,
+      "rules": 1,
+      "conditions": 1,
+      "matches_full_snapshot_reference_dependencies": true
+    },
+    "normal_japanese_engine_ask": "PASS",
+    "supported_query_with_24_out_of_scope_facts_action_budget_4": "PASS",
+    "cold_index_rebuild": "PASS",
+    "incremental_premise_tombstone_next_query_unknown": "PASS"
+  },
+  "checks": [
+    {
+      "command": "cargo test -p minidora-engine --locked --quiet",
+      "exit_code": 0,
+      "result": "PASS: 266 unit tests, 37 integration tests across 33 harnesses, 0 doc tests",
+      "log": "b57-engine-test.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b57-format-check.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b57-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b57-engine-lib-clippy.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "result": "BLOCKED by existing clippy::too_many_arguments warnings in tests/core_atomic_relation_comparison_45.rs:150 and tests/core_atomic_relation_comparison_46.rs:147",
+      "log": "b57-engine-all-target-clippy.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b57-diff-check.log"
+    }
+  ],
+  "gate_assessment": {
+    "E1-W10": "PARTIAL: ordinary typed Ask/AskWhy goal projection slice only",
+    "CAP-D02": "UNVERIFIED: full acceptance predicate not established",
+    "E1_exit": "NOT_CLAIMED"
+  },
+  "limitations": [
+    "Cold-index rebuild reads the full loaded current snapshot once.",
+    "Other Core consumers, Recovery, relation-profile/list inventory and cache/summary/model-adaptation versioning are not verified by this batch.",
+    "Fresh-process, session, model-version and large-history populations are not verified.",
+    "All-target Clippy is blocked by existing argument-count lints in comparison integration helpers 45 and 46.",
+    "Full CAP-D02 acceptance, release and deployment are not established."
+  ],
+  "release": "NOT_RELEASED"
+}

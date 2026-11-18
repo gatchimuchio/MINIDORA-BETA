@@ -1882,6 +1882,76 @@ impl Engine {
         self.execute_with_bundle(actor, request, Some(bundle))
     }
 
+    fn indexed_relation_query(
+        &self,
+        actor: &str,
+        proposition: &Proposition,
+        max_actions: u32,
+    ) -> Result<Option<(MemoryState, relations::QueryOutcome)>> {
+        self.store.with_relation_index(actor, |index| {
+            let (mut memory, projection_actions) =
+                relations::active_relation_projection(index, proposition, max_actions)?;
+            let query_budget = max_actions.checked_sub(projection_actions).ok_or_else(|| {
+                failure(
+                    "RELATION_BUDGET",
+                    "active memory projection exhausted the relation action budget",
+                )
+            })?;
+            let mut answer = relations::query(&memory, proposition, query_budget)?;
+            let mut actions = projection_actions
+                .checked_add(answer.steps)
+                .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+            if answer.status == "UNKNOWN"
+                && answer
+                    .condition_status
+                    .is_none_or(|status| status == ConditionStatus::True)
+            {
+                let classification_budget = max_actions.checked_sub(actions).ok_or_else(|| {
+                    failure(
+                        "RELATION_BUDGET",
+                        "proof query exhausted the out-of-scope classification budget",
+                    )
+                })?;
+                let (facts, classification_actions) = relations::active_out_of_scope_facts(
+                    index,
+                    proposition,
+                    classification_budget,
+                )?;
+                memory.facts.extend(facts);
+                actions = actions.checked_add(classification_actions).ok_or_else(|| {
+                    failure("RELATION_BUDGET", "relation action count overflowed")
+                })?;
+            }
+            answer.steps = actions;
+            Ok((memory, answer))
+        })
+    }
+
+    fn active_relation_query(
+        &self,
+        actor: &str,
+        proposition: &Proposition,
+        max_actions: u32,
+    ) -> Result<(MemoryState, relations::QueryOutcome)> {
+        if let Some(result) = self.indexed_relation_query(actor, proposition, max_actions)? {
+            return Ok(result);
+        }
+
+        // Older stores may predate the derived index. Rebuild it from the
+        // authenticated current snapshot once, then use the bounded query.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(result) = self.indexed_relation_query(actor, proposition, max_actions)? {
+            return Ok(result);
+        }
+
+        // A concurrent writer may have advanced the source while rebuilding;
+        // the immutable snapshot loaded above remains a safe fallback.
+        let answer = relations::query(&memory, proposition, max_actions)?;
+        Ok((memory, answer))
+    }
+
     pub fn execute(&mut self, actor: &str, request: RequestEnvelope) -> Result<ResultRecord> {
         self.execute_with_bundle(actor, request, None)
     }
@@ -5995,9 +6065,23 @@ impl Engine {
                 result.guarantee = answer_guarantee;
             }
             Intent::Ask { proposition } => {
-                let memory = self.store.load_memory(actor)?;
+                let (memory, answer) = match self.active_relation_query(
+                    actor,
+                    proposition,
+                    request.budget.max_actions,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
                 result.actor_memory_revision = Some(memory.revision);
-                let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
                 retain_relation_answer_dependencies(&mut result, &answer);
                 state.result = Some(result.clone());
                 if let Some((lifecycle, code, message)) = condition_block(&answer) {
@@ -6060,9 +6144,23 @@ impl Engine {
             }
             Intent::AskWhy { proposition } => {
                 let direct_input = direct_atomic_meaning_input(&bundle, proposition)?;
-                let memory = self.store.load_memory(actor)?;
+                let (memory, answer) = match self.active_relation_query(
+                    actor,
+                    proposition,
+                    request.budget.max_actions,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
                 result.actor_memory_revision = Some(memory.revision);
-                let answer = relations::query(&memory, proposition, request.budget.max_actions)?;
                 retain_relation_answer_dependencies(&mut result, &answer);
                 state.result = Some(result.clone());
                 if let Some((lifecycle, code, message)) = condition_block(&answer) {
@@ -11117,6 +11215,213 @@ pub fn validate_render(plan: &ContentPlan, render: &RenderObservation) -> bool {
         && render.plan_id == plan.id
         && render.bytes == plan.text.as_bytes()
         && render.actual_sha256 == digest(&render.bytes)
+}
+
+#[cfg(test)]
+mod active_relation_projection_tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    fn proposition(subject: &str, predicate: &str, object: &str) -> Proposition {
+        Proposition {
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            negative: false,
+            scope: "lab".into(),
+            condition_refs: BTreeSet::new(),
+            temporal_scope: None,
+        }
+    }
+
+    #[test]
+    fn indexed_ask_projection_keeps_only_the_goal_and_condition_closure() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-relation-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let request = RequestEnvelope::new("active-relation-case", "input", "alice", "保存前提");
+        let source_input = identity(&request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &request, &source_input)
+            .expect("register source input");
+
+        let mut full_memory = MemoryState::default();
+        let evidence = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "ready"),
+            &source_input,
+        )
+        .expect("condition evidence fact");
+        let condition_id = "condition:ready".to_owned();
+        relations::define_condition(
+            &mut full_memory,
+            ConditionDefinition {
+                condition_id: condition_id.clone(),
+                subject: "$subject".into(),
+                scope: "lab".into(),
+                expression: ConditionExpression::Fact {
+                    predicate: "is".into(),
+                    object: "ready".into(),
+                },
+                valid_from: None,
+                valid_until: None,
+                dependencies: BTreeSet::new(),
+            },
+            &source_input,
+        )
+        .expect("condition definition");
+
+        let target = Proposition {
+            condition_refs: BTreeSet::from([condition_id]),
+            ..proposition("Nera", "is", "mineral")
+        };
+        let premise = Proposition {
+            condition_refs: target.condition_refs.clone(),
+            ..proposition("Nera", "is", "ore")
+        };
+        let premise_fact = relations::assert_fact(&mut full_memory, premise.clone(), &source_input)
+            .expect("relation premise");
+        relations::add_rule(
+            &mut full_memory,
+            Proposition {
+                subject: "$subject".into(),
+                ..premise
+            },
+            Proposition {
+                subject: "$subject".into(),
+                ..target.clone()
+            },
+            &source_input,
+        )
+        .expect("relation rule");
+
+        let ask_fact = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "鉱石"),
+            &source_input,
+        )
+        .expect("ordinary Ask premise");
+        let ask_rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "is", "鉱石"),
+            proposition("$subject", "is", "鉱物"),
+            &source_input,
+        )
+        .expect("ordinary Ask rule");
+        relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "copper"),
+            &source_input,
+        )
+        .expect("same-scope direct control");
+        for ordinal in 0..24 {
+            let mut out_of_scope = proposition("Nera", "is", "copper");
+            out_of_scope.scope = format!("archive-{ordinal}");
+            relations::assert_fact(&mut full_memory, out_of_scope, &source_input)
+                .expect("out-of-scope direct control");
+        }
+
+        for ordinal in 0..40 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(&format!("unrelated-{ordinal}"), "is", "unrelated"),
+                &source_input,
+            )
+            .expect("unrelated fact");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+        let connection = rusqlite::Connection::open(directory.join("state.sqlite3"))
+            .expect("open derived index for cold-start setup");
+        connection
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .expect("mark actor index cold");
+        drop(connection);
+
+        let (active, answer) = engine
+            .active_relation_query("alice", &target, 128)
+            .expect("run indexed typed relation query");
+        assert_eq!(active.revision, full_memory.revision);
+        assert_eq!(
+            active.facts.len(),
+            2,
+            "only premise and condition evidence remain active"
+        );
+        assert_eq!(active.rules.len(), 1);
+        assert_eq!(active.conditions.len(), 1);
+        assert_eq!(answer.status, "SUPPORTED");
+        assert_eq!(answer.condition_status, Some(ConditionStatus::True));
+        assert_eq!(
+            answer.condition_evaluations[0].evidence_fact_ids,
+            vec![evidence.id.clone()]
+        );
+        assert!(answer.steps <= 128);
+        assert!(relations::answer_dependencies(&answer).contains(&premise_fact.id));
+
+        let full_answer = relations::query(&full_memory, &target, 128)
+            .expect("run full-snapshot reference query");
+        assert_eq!(answer.status, full_answer.status);
+        assert_eq!(
+            relations::answer_dependencies(&answer),
+            relations::answer_dependencies(&full_answer)
+        );
+
+        let ordinary_ask = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "active-relation-ask-case",
+                    "active-relation-ask-input",
+                    "alice",
+                    "[scope=lab]Neraは鉱物ですか",
+                ),
+            )
+            .expect("run the ordinary Ask intent through Core");
+        assert_eq!(
+            ordinary_ask.lifecycle,
+            Lifecycle::Commit,
+            "{ordinary_ask:?}"
+        );
+        assert!(ordinary_ask.dependencies.contains(&ask_fact.id));
+        assert!(ordinary_ask.dependencies.contains(&ask_rule.id));
+
+        let (scoped_memory, scoped_answer) = engine
+            .active_relation_query("alice", &proposition("Nera", "is", "copper"), 4)
+            .expect("supported queries do not spend budget on scope diagnostics");
+        assert_eq!(scoped_memory.facts.len(), 1);
+        assert_eq!(scoped_answer.status, "SUPPORTED");
+        assert!(scoped_answer.steps <= 4);
+
+        let mut next = full_memory.clone();
+        next.revision = 2;
+        next.facts
+            .iter_mut()
+            .find(|fact| fact.id == premise_fact.id)
+            .expect("premise remains in immutable history")
+            .valid = false;
+        engine
+            .store
+            .save_memory("alice", &next)
+            .expect("incrementally apply premise tombstone");
+        let (_, after_tombstone) = engine
+            .active_relation_query("alice", &target, 128)
+            .expect("query updated index revision");
+        assert_eq!(after_tombstone.status, "UNKNOWN");
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated test store");
+    }
 }
 
 fn matches_artifact(path: &Path, expected: &[u8]) -> bool {
