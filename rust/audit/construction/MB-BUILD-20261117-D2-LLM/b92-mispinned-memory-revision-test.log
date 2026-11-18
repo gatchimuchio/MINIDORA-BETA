@@ -1,0 +1,42 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+error[E0596]: cannot borrow `engine` as mutable, as it is not declared as mutable
+    --> crates/minidora-engine/src/recovery.rs:7882:28
+     |
+7882 |         let invalidation = engine
+     |                            ^^^^^^ cannot borrow as mutable
+     |
+help: consider changing this to be mutable
+     |
+7876 |         let mut engine = Engine::open(&fixture.state).unwrap();
+     |             +++
+
+For more information about this error, try `rustc --explain E0596`.
+error: could not compile `minidora-engine` (lib test) due to 1 previous error
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+warning: variable does not need to be mutable
+    --> crates/minidora-engine/src/recovery.rs:6928:13
+     |
+6928 |         let mut engine = Engine::open(&fixture.state).unwrap();
+     |             ----^^^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `minidora-engine` (lib test) generated 1 warning (run `cargo fix --lib -p minidora-engine --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.08s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+test recovery::tests::saved_previous_relation_explanation_rejects_revision_pointer_to_invalidated_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 285 filtered out; finished in 1.74s
+
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.57s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+test recovery::tests::saved_previous_relation_explanation_rejects_revision_pointer_to_invalidated_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 285 filtered out; finished in 1.44s

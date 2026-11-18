@@ -1,0 +1,122 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_PREVIOUS_RELATION_MISPINNED_INVALIDATED_MEMORY_REVISION_B92_V1",
+  "work_item": "Verify that ExplainPrevious Recovery refuses a saved AskPreviousRelation result when its actor_memory_revision points at another retained snapshot where the premise has been invalidated",
+  "observed_date": "2026-11-19",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17",
+  "implementation_commit": "223461af478ab9def5a30e1824b8c491ecc5918c",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "b0085514dd68e1cf41f625a8075952fcea5a0322c7222cd38a066442405ba898",
+  "permission_scope": "Continuing user authorization to implement in MINIDORA-BETA and retain work in its repository; local source test and focused checks, direct main commit/fast-forward push, and existing backup-reference rotation only.",
+  "design_sources": {
+    "README.md": "4c968d391fc5c8cd05990cb80e83de8e8d6c4cd41d70e120c76c1c7482246423",
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17",
+    "origin_main": "0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17",
+    "local_base": "refs/heads/codex/backup-main=0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17",
+    "local_previous": "refs/heads/codex/backup-main-prev=ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f",
+    "local_tags": [
+      "refs/tags/codex/backup-main=0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17",
+      "refs/tags/codex/backup-main-prev=ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17",
+      "refs/tags/codex/backup-main-prev=ad0e7b8d531f88b4a1140e53de57a77ecc1ed36f"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "0ec4b66b9e304d2c4edbeb3d0a5e772a3d6aab17"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 68% used",
+    "repo_size_at_start": "85M",
+    "capacity_at_batch_close": "63G total / 20G available / 67% used",
+    "repo_size_at_batch_close": "85M (observed before evidence commit)",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+    "managed_cloud_environment": "The existing /workspace/MINIDORA-BETA checkout was ready and clean at batch start. Pinned Rust/Cargo 1.99.1 were invoked via their explicit toolchain path with system compiler paths. Git CLI remote reads and ls-remote succeeded.",
+    "remote_access": "Repository reads/writes use Git CLI; no GitHub connector API, deployment or external action was used."
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "change_type": "One Engine-library clone-only regression test; no production logic, schema, dependency, manifest or lockfile change.",
+    "producer": "A normal Japanese AskPreviousRelation ResultRecord records its retained actor-memory revision and exact sealed input identity after committing a premise and direct question.",
+    "consumer": "ExplainPrevious Recovery -> verify_previous_relation_context -> exact actor-memory snapshot lookup -> direct-premise replay.",
+    "route": "Commit premise, direct question, AskPreviousRelation and ExplainPrevious through Engine; reopen Engine and confirm valid Recovery inspect; create a separate invalidation-case that invalidates the premise and retains a distinct snapshot; in a cloned CaseRevision only, repoint the prior result actor_memory_revision to that snapshot.",
+    "expected_and_observed": "The clone preserves the prior result ID, input ID/version and sealed request identity. The invalidated snapshot contains the same Fact with valid=false. Recovery stops with RECOVERY_CONTEXT_PROOF_CHANGED because the prior relation no longer resolves to one direct premise in that snapshot. The original case latest revision and output bytes remain unchanged.",
+    "compatibility": "B88-B91 revision-less and misbound-input boundaries remain separate cases; B92 tests a revision-bearing result whose revision pointer is rebound in a synthetic clone.",
+    "compatibility_limit": "The malformed CaseRevision is synthetic and never persisted. No actual historical SQLite/schema record or migration was tested.",
+    "schema_version_changed": false,
+    "runtime_behavior_verified": true,
+    "production_store_modified": false,
+    "temporary_fixture_store_modified": "The fixture records the premise invalidation in a separate case to create the later retained snapshot; fixture-owned state is cleaned after the test.",
+    "external_effects": "None; fixture uses temporary local state and output, cleaned by the test fixture."
+  },
+  "test_attempts": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib recovery::tests::saved_previous_relation_explanation_rejects_revision_pointer_to_invalidated_snapshot --locked -- --exact --nocapture",
+      "result": "Initial attempt failed to compile because the reopened Engine binding was not mutable. After correcting the intended B92 binding, a run passed with an unnecessary-mut warning from an unrelated existing test; that unrelated change was reverted. The final clean retry passed: 1 passed, 0 failed, 285 filtered out.",
+      "log": "b92-mispinned-memory-revision-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib saved_previous_relation_explanation_ --locked -- --nocapture",
+      "result": "PASS: 12 passed, 0 failed, 274 filtered out; 5.57s.",
+      "log": "b92-saved-previous-relation-recovery-filter.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "result": "PASS",
+      "log": "b92-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b92-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "Actual historical Rust-schema ResultRecord/SQLite reads, schema migration, persistent Store corruption/repair.",
+    "Full Engine/workspace runtime suites, workspace all-target Clippy, workspace all-features test/build.",
+    "CLI, HTTP, browser, other operating systems, large-history replay, every Recovery consumer and complete CAP-D02/E1 acceptance.",
+    "Independent QA, E2-E8, release and deployment."
+  ],
+  "asset_classification": {
+    "batch_owned_current_assets_total": 10,
+    "保持": [
+      "rust/audit/IMPLEMENTATION_STATUS.md (existing status ledger updated in place)",
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv (existing trace row updated in place; CAP-D02 remains UNVERIFIED)"
+    ],
+    "保管済み": [
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/BUILD_BATCH_92.md",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b92-build-observation.json",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b92-mispinned-memory-revision-test.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b92-saved-previous-relation-recovery-filter.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b92-fmt-check.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b92-diff-check.log"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/recovery.rs (B92 regression test)",
+      "/workspace/.minidora-cloud/rust-target (shared Cargo target cache)"
+    ],
+    "ゴミ箱移動済み": [],
+    "保留": []
+  }
+}
