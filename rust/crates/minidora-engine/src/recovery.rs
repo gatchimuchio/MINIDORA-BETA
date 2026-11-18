@@ -7527,6 +7527,99 @@ mod tests {
     }
 
     #[test]
+    fn saved_previous_relation_explanation_rejects_revisionless_result_bound_to_other_input() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        assert_eq!(premise.lifecycle, Lifecycle::Commit, "{premise:?}");
+
+        let explicit_answer = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            explicit_answer.lifecycle,
+            Lifecycle::Commit,
+            "{explicit_answer:?}"
+        );
+
+        let prior_relation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "prior-relation-why", "alice", "なぜそれは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            prior_relation.lifecycle,
+            Lifecycle::Commit,
+            "{prior_relation:?}"
+        );
+        assert!(prior_relation.actor_memory_revision.is_some());
+        assert_eq!(explicit_answer.input_version, prior_relation.input_version);
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior_relation.text);
+
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let mut misbound_revisionless_result = retained.clone();
+        let previous = misbound_revisionless_result
+            .prior_results
+            .get_mut(&prior_relation.id)
+            .expect("the persisted case retains the AskPreviousRelation result");
+        assert_eq!(previous.id, prior_relation.id);
+        assert_eq!(previous.lifecycle, Lifecycle::Commit);
+        assert_eq!(previous.input_version, prior_relation.input_version);
+        assert_eq!(previous.input_id, prior_relation.input_id);
+        assert!(previous.actor_memory_revision.is_some());
+        previous.actor_memory_revision = None;
+        previous.input_id = explicit_answer.input_id.clone();
+
+        let (_, misbound_bundle) = engine
+            .store
+            .get_input_bundle("alice", "case", &previous.input_id, previous.input_version)
+            .unwrap()
+            .expect("the other sealed input exists at the same version");
+        assert_ne!(identity(&misbound_bundle.request).unwrap(), previous.id);
+
+        let error = inspect(
+            &engine.store,
+            "alice",
+            &misbound_revisionless_result,
+            &retained_result,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert!(
+            error
+                .to_string()
+                .contains("not bound to its sealed input identity")
+        );
+        assert_eq!(engine.latest("alice", "case").unwrap().unwrap(), retained);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
     fn conjunction_explanation_rechecks_the_current_memory_revision() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
