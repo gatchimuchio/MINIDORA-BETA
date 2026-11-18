@@ -1,5 +1,8 @@
 use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
-use crate::{input, language, output, ports, relations, store::Store};
+use crate::{
+    input, language, output, ports, relations,
+    store::{MemoryIndexSnapshot, Store},
+};
 use minidora_domain::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -607,6 +610,25 @@ pub(crate) fn relation_profile_answer(
     max_evidence_bytes: usize,
 ) -> Result<RelationProfileAnswer> {
     let inventory = relations::inventory_about(memory, subject, max_actions)?;
+    relation_profile_answer_from_inventory(subject, inventory, max_evidence_bytes)
+}
+
+fn relation_profile_answer_from_index(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+) -> Result<RelationProfileAnswer> {
+    let (inventory, _) =
+        relations::active_relation_inventory_projection(index, subject, max_actions)?;
+    relation_profile_answer_from_inventory(subject, inventory, max_evidence_bytes)
+}
+
+fn relation_profile_answer_from_inventory(
+    subject: &str,
+    inventory: relations::RelationInventory,
+    max_evidence_bytes: usize,
+) -> Result<RelationProfileAnswer> {
     let units = relation_profile_units(subject, &inventory);
     let profile_bytes = units.iter().try_fold(0usize, |total, unit| {
         total
@@ -2319,6 +2341,51 @@ impl Engine {
             replay.max_evidence_bytes,
             replay.result_id,
         );
+        Ok((memory.revision, answer))
+    }
+
+    fn indexed_relation_profile_answer(
+        &self,
+        actor: &str,
+        subject: &str,
+        max_actions: u32,
+        max_evidence_bytes: usize,
+    ) -> Result<Option<(u64, Result<RelationProfileAnswer>)>> {
+        self.store.with_relation_index(actor, |index| {
+            let revision = index.revision();
+            let answer =
+                relation_profile_answer_from_index(index, subject, max_actions, max_evidence_bytes);
+            Ok((revision, answer))
+        })
+    }
+
+    fn active_relation_profile_answer(
+        &self,
+        actor: &str,
+        subject: &str,
+        max_actions: u32,
+        max_evidence_bytes: usize,
+    ) -> Result<(u64, Result<RelationProfileAnswer>)> {
+        if let Some(answer) =
+            self.indexed_relation_profile_answer(actor, subject, max_actions, max_evidence_bytes)?
+        {
+            return Ok(answer);
+        }
+
+        // A cold or stale derived index is rebuilt from the authenticated
+        // snapshot once, then the profile is retried against one matched revision.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(answer) =
+            self.indexed_relation_profile_answer(actor, subject, max_actions, max_evidence_bytes)?
+        {
+            return Ok(answer);
+        }
+
+        // If a concurrent writer moves the head during rebuild, the loaded
+        // immutable snapshot remains the safe fallback for this request.
+        let answer = relation_profile_answer(&memory, subject, max_actions, max_evidence_bytes);
         Ok((memory.revision, answer))
     }
 
@@ -7329,14 +7396,15 @@ impl Engine {
                 };
             }
             Intent::DraftRelationProfile { subject } => {
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
-                let answer = match relation_profile_answer(
-                    &memory,
+                let (memory_revision, answer) = self.active_relation_profile_answer(
+                    actor,
                     subject,
                     request.budget.max_actions,
                     request.budget.max_evidence_bytes,
-                ) {
+                )?;
+                result.actor_memory_revision = Some(memory_revision);
+                state.result = Some(result.clone());
+                let answer = match answer {
                     Ok(answer) => answer,
                     Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
                         return self.stop(
@@ -12386,8 +12454,7 @@ mod active_relation_projection_tests {
         assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
         assert_eq!(
             budget_stop.actor_memory_revision,
-            Some(full_memory.revision),
-            "{budget_stop:?}"
+            Some(full_memory.revision)
         );
         assert!(
             budget_stop
@@ -12639,7 +12706,8 @@ mod active_relation_projection_tests {
         assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
         assert_eq!(
             budget_stop.actor_memory_revision,
-            Some(full_memory.revision)
+            Some(full_memory.revision),
+            "{budget_stop:?}"
         );
         assert!(
             budget_stop
@@ -12650,6 +12718,188 @@ mod active_relation_projection_tests {
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated conjunction store");
+    }
+
+    #[test]
+    fn indexed_relation_profile_uses_bounded_subject_candidates_and_preserves_inventory() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-relation-profile-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request = RequestEnvelope::new(
+            "active-profile-seed-case",
+            "active-profile-seed-input",
+            "alice",
+            "保存関係",
+        );
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register relation source");
+
+        let mut full_memory = MemoryState::default();
+        let rock = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "has", "rock"),
+            &source_input,
+        )
+        .expect("Nera premise");
+        let mineral_rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "has", "rock"),
+            proposition("$subject", "is", "mineral"),
+            &source_input,
+        )
+        .expect("variable-subject profile rule");
+        let positive = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "tall"),
+            &source_input,
+        )
+        .expect("positive conflicting premise");
+        let negative = relations::assert_fact(
+            &mut full_memory,
+            Proposition {
+                negative: true,
+                ..proposition("Nera", "is", "tall")
+            },
+            &source_input,
+        )
+        .expect("negative conflicting premise");
+        let archived = relations::assert_fact(
+            &mut full_memory,
+            Proposition {
+                scope: "archive".into(),
+                ..proposition("Nera", "likes", "blue")
+            },
+            &source_input,
+        )
+        .expect("relation in a second scope");
+        for ordinal in 0..80 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(
+                    &format!("unrelated-{ordinal}"),
+                    "is",
+                    &format!("unrelated-{ordinal}"),
+                ),
+                &source_input,
+            )
+            .expect("unrelated retained history");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let indexed = engine
+            .store
+            .with_relation_index("alice", |index| {
+                let candidates = index.relation_profile_candidates("Nera", 8)?;
+                let candidate_ids = candidates
+                    .into_iter()
+                    .map(|record| record.value.id().to_owned())
+                    .collect::<BTreeSet<_>>();
+                Ok((
+                    index.revision(),
+                    candidate_ids,
+                    relation_profile_answer_from_index(index, "Nera", 64, 16_384),
+                ))
+            })
+            .expect("read relation-profile index")
+            .expect("save_memory creates the current relation index");
+        assert_eq!(indexed.0, full_memory.revision);
+        assert_eq!(
+            indexed.1,
+            BTreeSet::from([
+                rock.id.clone(),
+                mineral_rule.id.clone(),
+                positive.id.clone(),
+                negative.id.clone(),
+                archived.id.clone(),
+            ])
+        );
+        let full_answer = relation_profile_answer(&full_memory, "Nera", 10_000, 16_384)
+            .expect("full-snapshot profile reference");
+        assert_eq!(indexed.2.expect("bounded indexed profile"), full_answer);
+        assert!(
+            matches!(
+                relation_profile_answer(&full_memory, "Nera", 64, 16_384),
+                Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+            ),
+            "the full-snapshot baseline must exceed the same action budget"
+        );
+
+        // Force the normal Core route through cold-index reconstruction.
+        let connection = rusqlite::Connection::open(directory.join("state.sqlite3"))
+            .expect("open derived index for cold-start setup");
+        connection
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .expect("mark actor index cold");
+        drop(connection);
+
+        let mut request = RequestEnvelope::new(
+            "active-profile-query-case",
+            "active-profile-query-input",
+            "alice",
+            "Neraについて保存されている情報をもとに短い紹介文を書いて",
+        );
+        request.budget.max_actions = 64;
+        let result = engine
+            .execute("alice", request)
+            .expect("run the ordinary Japanese DraftRelationProfile route");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.actor_memory_revision, Some(full_memory.revision));
+        assert_eq!(result.guarantee, Guarantee::Hypothesis);
+        assert_eq!(result.dependencies, full_answer.dependencies);
+        assert_eq!(
+            result
+                .content_plan
+                .as_ref()
+                .expect("profile content plan")
+                .required_units,
+            full_answer.units
+        );
+        assert!(result.text.contains("紹介文案"));
+        assert!(result.text.contains("archive"));
+        assert!(result.text.contains("対立"));
+        assert!(
+            !result
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.contains("unrelated"))
+        );
+
+        let mut budget_request = RequestEnvelope::new(
+            "active-profile-budget-case",
+            "active-profile-budget-input",
+            "alice",
+            "Neraについて保存されている情報をもとに短い紹介文を書いて",
+        );
+        budget_request.budget.max_actions = 8;
+        let budget_stop = engine
+            .execute("alice", budget_request)
+            .expect("suspend when subject candidates exceed the sealed budget");
+        assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
+        assert_eq!(
+            budget_stop.actor_memory_revision,
+            Some(full_memory.revision),
+            "{budget_stop:?}"
+        );
+        assert!(
+            budget_stop
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("RESOURCE_LIMIT:"))
+        );
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated relation-profile store");
     }
 
     #[test]

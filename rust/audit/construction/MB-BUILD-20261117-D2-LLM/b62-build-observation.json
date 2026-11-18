@@ -1,0 +1,218 @@
+{
+  "schema": "MINIDORA_E1_W10_RELATION_PROFILE_PROJECTION_B62_V1",
+  "work_item": "Goal-related bounded candidate selection for ordinary Japanese DraftRelationProfile Core route",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "6809f31fad1eeacee85e619d220e6757e032da96",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs": {
+    "local_base": "refs/heads/codex/backup-main=6809f31fad1eeacee85e619d220e6757e032da96",
+    "local_previous": "refs/heads/codex/backup-main-prev=b8429c4a75a57f256256145a2f231293999fe6bf",
+    "local_tags_preserved": [
+      "refs/tags/codex/backup-main=63873b0061857ba3e76690dfba22497cf4632c82",
+      "refs/tags/codex/backup-main-prev=3513de1c2a34c4a95c42319f96952504d9d41e5e"
+    ],
+    "remote_backup_refs_preserved": [
+      "refs/remotes/origin/codex/backup-main=c820916a78f3564f2fec518cb2b2f68787426204",
+      "refs/remotes/origin/codex/backup-main-prev=1e84a3e83a2d9a76f30e067ca433b203d35570d5"
+    ],
+    "backup_refs_or_tags_rewritten": false
+  },
+  "environment": {
+    "platform": "Linux x86_64",
+    "kernel": "Linux 6.18.57",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "tested_source_diff_sha256": "cb74c456634bd56acab170e9512ce6edc98e0e637be3df00e0322bc8ec1a6acf",
+  "scope": {
+    "route": "Engine::execute Intent::DraftRelationProfile for ordinary Japanese saved-relation profile request",
+    "selection": "One revision-matched Store relation-index transaction selects active Facts for the exact subject across scopes, exact-subject Rules, and variable-subject Rules. The candidates seed the existing finite relation-shape builder; each shape uses active_relation_projection and the existing Core relation proof evaluator.",
+    "ownership": "Store supplies revision-checked derived candidates. Core retains shape interpretation, conditions, proof status, conflict/budget stops, profile units, model-approved surfaces, HYPOTHESIS guarantee and adoption. No parser grammar, separate decision authority, or external API was added.",
+    "budget": "Candidate selection, shape planning, projection and proof evaluation consume the sealed max_actions. Evidence output remains bounded by max_evidence_bytes.",
+    "memory_revision": "The revision observed by the index transaction is retained on successful ResultRecord and on an indexed budget stop.",
+    "index_fallback": "A missing/stale index is rebuilt once from the authenticated loaded current snapshot and retried. If a concurrent head advance prevents an indexed retry, the request uses its already-loaded immutable snapshot and the full-snapshot reference implementation.",
+    "recovery": "Profile Recovery continues exact retained-snapshot replay and current-memory recheck; this batch does not bound Recovery selection.",
+    "schema": "The new subject index is derived and rebuildable; persisted memory records and store schema identity are unchanged."
+  },
+  "fixtures": {
+    "indexed_relation_profile": {
+      "stored_records": {
+        "facts": 84,
+        "rules": 1,
+        "conditions": 0,
+        "unrelated_facts": 80
+      },
+      "selected_records": {
+        "requested_subject_facts": 4,
+        "exact_subject_rules": 0,
+        "variable_subject_rules": 1,
+        "unrelated_records": 0
+      },
+      "relation_shapes": 5,
+      "scopes": ["lab", "archive"],
+      "conflicting_supports_retained": true,
+      "normal_japanese_request": "Neraについて保存されている情報をもとに短い紹介文を書いて",
+      "normal_route_action_budget": 64,
+      "normal_route_lifecycle": "COMMIT",
+      "actor_memory_revision": 1,
+      "guarantee": "HYPOTHESIS",
+      "unrelated_facts_in_dependencies": false,
+      "required_units_match_10000_action_full_snapshot": true,
+      "dependency_ids_match_full_snapshot": true,
+      "conflict_treatment_matches_full_snapshot": true,
+      "guarantee_matches_full_snapshot": true,
+      "former_full_snapshot_route_at_same_budget": "RESOURCE_LIMIT",
+      "cold_index_deleted_rebuilt_and_retried": true
+    },
+    "budget_stop": {
+      "action_budget": 8,
+      "lifecycle": "SUSPEND",
+      "reason_code": "RESOURCE_LIMIT",
+      "result_actor_memory_revision": 1
+    },
+    "recovery": {
+      "exact_memory_revision_replay_pass": true,
+      "invalidated_supporting_fact_or_rule_prevents_old_answer_confirmation": true,
+      "recovery_projection_bounded_in_b62": false
+    },
+    "normal_cli": {
+      "ordinary_japanese_profile_route_pass": true,
+      "previous_result_consumer_pass": true
+    }
+  },
+  "checks": [
+    {
+      "command": "cargo test -p minidora-engine --lib indexed_relation_profile_uses_bounded_subject_candidates_and_preserves_inventory --locked -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: indexed candidates, ordinary Japanese Core profile, full-snapshot unit/dependency/conflict/guarantee parity, cold-index rebuild and revision-bearing budget stop",
+      "log": "b62-focused-core-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine relation_profile --locked",
+      "exit_code": 0,
+      "result": "PASS: 5 filtered tests covering indexed profile, exact-revision Recovery, explanation Recovery, input and model surfaces",
+      "log": "b62-profile-recovery-tests.log"
+    },
+    {
+      "command": "cargo test -p minidora-cli --test normal_route natural_relation_profile_uses_current_proofs_and_feeds_a_follow_up_consumer --locked -- --exact",
+      "exit_code": 0,
+      "result": "PASS: ordinary Japanese CLI profile and downstream previous-result consumer",
+      "log": "b62-normal-cli-profile-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked",
+      "exit_code": 0,
+      "result": "PASS: 271 unit tests, 37 integration cases across 33 harnesses, 0 doc tests",
+      "log": "b62-engine-tests.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b62-format-check.log"
+    },
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b62-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b62-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo build --workspace --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b62-workspace-build.log"
+    },
+    {
+      "command": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "result": "BLOCKED by unchanged clippy::too_many_arguments in comparison test helper core_atomic_relation_comparison_46.rs:147",
+      "log": "b62-all-target-clippy.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b62-diff-check.log"
+    }
+  ],
+  "gate_assessment": {
+    "E1-W10": "PARTIAL: ordinary Japanese DraftRelationProfile bounded subject candidate/proof projection slice",
+    "CAP-D02": "UNVERIFIED: complete long-history acceptance predicate not established",
+    "E1_exit": "NOT_CLAIMED"
+  },
+  "asset_closure": {
+    "retained": [
+      "1,134 unchanged base tracked paths",
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/relations.rs",
+      "rust/crates/minidora-engine/src/store.rs"
+    ],
+    "stored": [
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv",
+      "rust/audit/IMPLEMENTATION_STATUS.md",
+      "rust/audit/requirements.tsv",
+      "rust/audit/rust-requirement-observations.json",
+      "rust/docs/IMPLEMENTATION_CHOICES.md",
+      "BUILD_BATCH_62.md",
+      "b62-build-observation.json",
+      "b62-focused-core-test.log",
+      "b62-profile-recovery-tests.log",
+      "b62-normal-cli-profile-test.log",
+      "b62-engine-tests.log",
+      "b62-format-check.log",
+      "b62-workspace-check.log",
+      "b62-engine-library-clippy.log",
+      "b62-workspace-build.log",
+      "b62-all-target-clippy.log",
+      "b62-diff-check.log"
+    ],
+    "active": [
+      "revision-matched indexed candidate selection and proof projection in ordinary Core DraftRelationProfile",
+      "/workspace/.minidora-cloud/rust-target retained Rust build cache"
+    ],
+    "moved_to_trash": [],
+    "pending": [
+      "remaining E1-W10 consumers and broad CAP-D02 acceptance",
+      "cold-index rebuild full-snapshot read and concurrent-head fallback costs",
+      "exact-snapshot Recovery selection and replay remain full-snapshot",
+      "large-history resource population and derived index/cache/summary/model versioning",
+      "unchanged all-target Clippy argument-count lint in core_atomic_relation_comparison_46.rs"
+    ],
+    "tracked_path_inventory": {
+      "base_tracked_paths": 1142,
+      "base_paths_unchanged": 1134,
+      "retained_paths_including_updated_source": 1137,
+      "modified_audit_paths_stored": 5,
+      "new_batch_paths_stored": 12,
+      "stored_paths_total": 17,
+      "final_tracked_paths": 1154
+    }
+  },
+  "limitations": [
+    "Cold-index rebuild still reads the full authenticated current snapshot once.",
+    "A concurrent head advance during rebuild uses the immutable loaded full-snapshot fallback; B62 does not exercise that race.",
+    "Recovery continues exact retained-snapshot replay and is not bounded by this candidate selector.",
+    "All variable-subject Rules across scopes remain candidates and their count is limited by the request action budget.",
+    "B62 does not establish bounded selection for other relation, explanation, learning, cache, summary or model-adaptation consumers.",
+    "Broad fresh-process/session/model-revision reuse and large-history resource populations remain unverified.",
+    "Workspace all-target Clippy remains blocked by an unchanged too_many_arguments finding in core_atomic_relation_comparison_46.rs:147.",
+    "Full CAP-D02 acceptance, E1 exit, release and deployment are not established."
+  ],
+  "release": "NOT_RELEASED"
+}

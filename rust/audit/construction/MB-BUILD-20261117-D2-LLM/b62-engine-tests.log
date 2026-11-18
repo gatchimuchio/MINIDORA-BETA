@@ -1,0 +1,607 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 271 tests
+test code_capability::tests::parenthesized_operands_remain_inside_parent_source_segments ... ok
+test code_capability::tests::bounded_reader_retains_utf8_source_segments_and_ast_bounds ... ok
+test code_capability::tests::evaluator_preserves_python_floor_mod_bool_and_dictionary_order ... ok
+test code_capability::tests::previous_generated_source_is_consumed_by_native_finite_verification ... ok
+test code_capability::tests::verifier_distinguishes_bool_from_integer_and_enforces_step_budget ... ok
+test code_capability::tests::sequence_index_reports_type_and_out_of_range_errors_separately ... ok
+test code_capability::tests::whole_source_rejects_import_attributes_and_break_in_for_else ... ok
+test code_generation::tests::structured_code_generation_identifier_contract ... ok
+test code_generation::tests::code_explanation_uses_the_saved_algorithm_ir_and_keeps_execution_unverified ... ok
+test code_generation::tests::code_explanation_preserves_loop_and_branch_structure ... ok
+test code_generation::tests::structured_code_generation_preserves_exact_constant_lexemes ... ok
+test core::active_relation_projection_tests::indexed_previous_relation_resolves_only_prior_dependencies_before_projection ... ok
+test core::active_relation_projection_tests::indexed_ask_projection_keeps_only_the_goal_and_condition_closure ... ok
+test core::active_relation_projection_tests::indexed_common_relations_use_bounded_subject_candidates_and_preserve_artifacts ... ok
+test core::active_relation_projection_tests::indexed_conjunction_projects_each_clause_within_the_shared_budget ... ok
+test core::active_relation_projection_tests::indexed_relation_object_query_uses_only_the_goal_and_rule_closure ... ok
+test core::core_construction_observation_tests::contextual_negative_japanese_transitive_assertion_preserves_halfwidth_surface_roles_after_reopen ... ok
+test core::core_construction_observation_tests::direct_assertion_source_roles_follow_the_fact_into_reopened_proofs ... ok
+test core::core_construction_observation_tests::contextual_japanese_assertion_source_roles_follow_the_fact_into_reopened_proofs ... ok
+test core::core_construction_observation_tests::contextual_premise_correction_source_roles_follow_both_facts_into_reopened_proofs ... ok
+test core::core_construction_observation_tests::direct_english_assertion_source_roles_follow_the_fact_into_reopened_proofs ... ok
+test core::core_construction_observation_tests::direct_transitive_assertion_source_roles_follow_the_fact_into_reopened_proofs ... ok
+test core::active_relation_projection_tests::indexed_relation_profile_uses_bounded_subject_candidates_and_preserves_inventory ... ok
+test core::previous_relation_meaning_tests::previous_relation_meaning_reads_legacy_computation_artifact ... ok
+test core::relation_comparison_temporal_identity_tests::untimed_comparison_key_identity_matches_the_legacy_shape ... ok
+test document::tests::absent_noop_empty_or_expanding_edits_stop ... ok
+test document::tests::csv_json_roundtrip_preserves_string_types_and_source ... ok
+test document::tests::exact_edit_count_and_unicode_unchanged_regions ... ok
+test document::tests::explicit_headerless_index_and_final_empty_cell ... ok
+test document::tests::explicit_text_composition_maps_material_and_layout_bytes ... ok
+test document::tests::explicit_text_composition_rejects_ambiguous_or_over_budget_input ... ok
+test document::tests::formula_export_is_withheld_without_changing_original ... ok
+test document::tests::json_cells_are_strict_strings_with_exact_token_spans ... ok
+test document::tests::malformed_csv_never_uses_a_valid_prefix ... ok
+test document::tests::rfc_quote_and_source_byte_spans ... ok
+test document::tests::unique_exact_edit_rejects_missing_duplicate_and_overlapping_literals ... ok
+test input::mathematics_and_source_tests::compound_research_request_cannot_commit_as_a_body_quote ... ok
+test input::mathematics_and_source_tests::linear_equation_directives_preserve_exact_equality_sides ... ok
+test core::core_construction_observation_tests::english_premise_correction_source_roles_follow_both_facts_into_reopened_proofs ... ok
+test input::mathematics_and_source_tests::matrix_and_statistics_use_input_values_and_preserve_decimal_lexemes ... ok
+test core::core_construction_observation_tests::japanese_premise_correction_source_roles_follow_both_facts_into_reopened_proofs ... ok
+test input::structured_document_tests::document_headers_never_discard_extra_effects ... ok
+test input::structured_document_tests::explicit_text_composition_headers_retain_complete_json_body ... ok
+test input::structured_document_tests::document_body_retains_crlf_trailing_newline_and_instruction_like_text ... ok
+test input::mathematics_and_source_tests::matrix_parser_does_not_discard_residuals_or_malformed_arrays ... ok
+test input::structured_document_tests::metadata_query_has_explicit_provider_and_data_boundary ... ok
+test input::structured_document_tests::extractive_summary_headers_retain_complete_json_body ... ok
+test input::structured_document_tests::text_import_edit_headers_preserve_original_body_and_reject_extra_instructions ... ok
+test input::structured_document_tests::unique_text_location_headers_preserve_original_body_and_reject_added_instructions ... ok
+test input::symbolic_and_clause_tests::english_copula_capture_groups_preserve_subject_object_and_polarity ... ok
+test input::tests::arithmetic_and_one_time_source_capture ... ok
+test input::symbolic_and_clause_tests::symbolic_grammar_has_explicit_operation_and_variable ... ok
+test input::tests::basic_document_pointer_body_and_scientific_statistics_identity_are_preserved ... ok
+test input::tests::bounded_code_capability_headers_preserve_original_body ... ok
+test input::tests::common_relation_questions_preserve_two_subjects_and_scope ... ok
+test input::symbolic_and_clause_tests::unsupported_clause_qualifiers_remain_unresolved ... ok
+test input::tests::concise_japanese_arithmetic_topic_question_uses_the_core_calculator ... ok
+test input::tests::constrained_previous_source_summary_retains_only_supported_limits ... ok
+test input::tests::context_reference_requires_real_result ... ok
+test input::tests::conjunctive_relation_rules_keep_explicit_and_shorthand_premises ... ok
+test input::tests::direct_transitive_assertion_roles_capture_original_fields_and_inflection ... ok
+test input::tests::elliptical_why_questions_consume_the_actual_previous_result ... ok
+test input::tests::english_premise_correction_roles_keep_articles_and_nouns_separate ... ok
+test input::tests::generated_code_verification_headers_preserve_finite_case_document ... ok
+test input::tests::evidence_ledger_headers_preserve_the_complete_body_and_constraints ... ok
+test input::tests::japanese_premise_correction_roles_keep_old_new_values_at_distinct_source_ranges ... ok
+test input::tests::conjunctive_relation_questions_keep_both_same_subject_clauses ... ok
+test input::tests::highest_group_mean_questions_have_explicit_japanese_and_english_shapes ... ok
+test input::tests::labelled_meaning_comparison_accepts_bounded_japanese_and_english_directives ... ok
+test input::tests::natural_premise_corrections_keep_both_relations_and_exact_scope ... ok
+test input::tests::japanese_yes_no_transitive_questions_preserve_relation_scope_and_polarity ... ok
+test input::tests::nfkc_source_mapping_keeps_cross_character_normalization_and_original_ranges ... ok
+test input::tests::old_meaning_ir_without_optional_source_roles_keeps_its_canonical_bytes ... ok
+test input::tests::operand_correction_input_is_explicit_and_keeps_the_replacement_complete ... ok
+test input::tests::natural_relation_profile_requests_keep_one_explicit_subject ... ok
+test input::tests::previous_result_summary_keeps_its_result_context_and_explicit_limits ... ok
+test core::core_construction_observation_tests::direct_core_observation_preserves_relation_conditions_subject_scope_and_negation ... ok
+test input::tests::previous_source_questions_retain_the_requested_topic ... ok
+test input::tests::previous_source_summary_requires_an_explicit_source_context_phrase ... ok
+test input::tests::premise_inspection_questions_keep_the_named_subject ... ok
+test input::tests::relation_roles_map_to_exact_utf8_source_and_preserve_negation_and_scope ... ok
+test input::tests::previous_text_replacement_preserves_both_exact_literals ... ok
+test input::tests::japanese_transitive_relations_preserve_object_verb_and_question_polarity ... ok
+test input::tests::relations_preserve_negation_scope_and_variables ... ok
+test input::tests::saved_relation_comparisons_preserve_two_subjects_and_scope ... ok
+test input::tests::search_candidate_body_request_names_one_prior_list_rank ... ok
+test input::tests::singular_pronoun_relation_questions_retain_context_and_scope_requirements ... ok
+test input::tests::structured_code_generation_headers_preserve_original_body ... ok
+test input::tests::singular_pronoun_relation_assertions_keep_subject_unresolved_until_core ... ok
+test language::lossless_tests::successor_distribution_is_exact_and_comparison_boundary_is_explicit ... ok
+test language::lossless_tests::successor_projection_preserves_unknown_unicode_and_invalid_utf8 ... ok
+test language::model_resource_tests::deadline_is_checked_inside_training_and_scoring ... ok
+test input::tests::unknown_or_quoted_material_never_acquires_implicit_authority ... ok
+test language::model_resource_tests::shared_byte_admission_and_failed_learning_preserve_model_state ... ok
+test language::tests::basic_document_numeric_tokens_cannot_be_reclassified_as_unit_suffixes ... ok
+test language::tests::calculation_explanation_surfaces_retain_expression_steps_and_exact_value ... ok
+test language::tests::calculation_sequence_quantity_references_are_complete_operands ... ok
+test language::tests::exact_addition_and_subtraction_preserve_or_convert_units ... ok
+test language::tests::exact_arithmetic_and_precedence ... ok
+test language::tests::finite_supported_decoding_preserves_admitted_content ... ok
+test language::tests::incompatible_mixed_units_are_a_typed_stop ... ok
+test language::tests::inherited_ngram_exact_vector ... ok
+test language::tests::meaning_distribution_backs_off_to_observed_admissible_support_and_normalizes ... ok
+test language::tests::operand_correction_builds_a_new_exact_binary_calculation ... ok
+test language::tests::parser_rejects_partial_or_unbounded_execution ... ok
+test language::tests::relation_explanation_surfaces_preserve_core_units_and_vary_only_transition ... ok
+test language::tests::relation_profile_surfaces_preserve_all_claim_and_provenance_units ... ok
+test math::polynomial_tests::domain_guards_do_not_cancel_away_variable_denominators ... ok
+test math::polynomial_tests::exact_derivative_and_antiderivative ... ok
+test math::polynomial_tests::exact_linear_equations_classify_unique_identity_and_contradiction ... ok
+test math::polynomial_tests::exact_linear_equations_reject_unsupported_variables_and_degree ... ok
+test math::polynomial_tests::exact_quadratic_equations_cover_rational_repeated_radical_and_complex_roots ... ok
+test math::polynomial_tests::exact_quadratic_equations_reject_unsupported_variables_and_degrees ... ok
+test input::tests::why_questions_parse_only_one_supported_relation ... ok
+test math::polynomial_tests::normalization_and_full_roundtrip ... ok
+test math::polynomial_tests::unicode_names_rational_coefficients_and_limits ... ok
+test math::tests::certificate_tampering_and_missing_rows_fail ... ok
+test math::tests::dimensions_zero_equations_and_numeric_limits ... ok
+test math::tests::exact_linear_unique_and_fractional_substitution ... ok
+test math::tests::exact_maximum_comparison_preserves_all_rational_ties ... ok
+test math::tests::exact_statistics_even_median_and_variances ... ok
+test math::tests::free_parameters_and_inconsistent_certificates_are_distinct ... ok
+test language::model_resource_tests::long_exact_products_stop_before_unbounded_big_integer_growth ... ok
+test math::tests::independent_known_solutions_and_row_order_perturbation ... ok
+test math::tests::mixed_si_length_units_are_converted_exactly_before_statistics ... ok
+test math::tests::previous_linear_and_quadratic_reports_are_recomputed ... ok
+test math::tests::previous_math_report_explanation_recomputes_the_saved_report ... ok
+test math::tests::previous_probability_and_polynomial_reports_are_recomputed_and_bounded ... ok
+test math::tests::previous_symbolic_reports_recompute_simplify_derivative_and_integral ... ok
+test math::tests::units_empty_population_and_single_observation ... ok
+test meaning_compare::tests::compares_ascii_fullwidth_and_kanji_counts_as_the_same_numeric_scale ... ok
+test meaning_compare::tests::compares_participant_roles_and_active_passive_wording ... ok
+test meaning_compare::tests::converts_decimal_coefficients_before_japanese_scale_units_exactly ... ok
+test meaning_compare::tests::distinguishes_condition_direction_attribution_cause_and_units ... ok
+test meaning_compare::tests::distinguishes_partial_negation_from_none_and_preserves_ambiguity ... ok
+test meaning_compare::tests::keeps_modality_negation_separate_from_clause_polarity_and_conditions ... ok
+test meaning_compare::tests::refuses_unrecognized_semantic_differences_and_oversized_inputs ... ok
+test meaning_compare::tests::reports_absent_markers_and_avoids_duplicate_annual_frequency ... ok
+test meaning_compare::tests::reports_common_topics_and_objects_without_duplicating_subject_differences ... ok
+test output::tests::actual_bytes_are_exclusive_and_idempotent ... ok
+test output::tests::authority_and_traversal_are_checked_before_creation ... ok
+test output::tests::multi_process_write_worker ... ok
+
+running 1 test
+
+running 1 test
+test math::polynomial_tests::independent_quadratic_difference_identity ... ok
+test output::tests::symlink_ancestors_and_leaf_are_rejected ... ok
+test ports::tests::direct_private_and_transition_addresses_are_rejected ... ok
+test ports::tests::duplicates_nonfinite_and_malformed_documents_fail ... ok
+test ports::tests::exact_json_numbers_and_spans_are_preserved ... ok
+test ports::tests::inherited_proxy_bypass_patterns_are_conservatively_recognized ... ok
+test ports::tests::unsupported_interpretations_are_not_body_success ... ok
+test ports::tests::url_authority_and_exact_host_scope_precede_network ... ok
+test output::tests::multi_process_write_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.01s
+
+test output::tests::multi_process_write_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.01s
+
+test output::tests::separate_processes_cannot_overwrite_a_shared_target_with_different_bytes ... ok
+test input::tests::unit_arithmetic_input_requires_a_complete_two_quantity_expression ... ok
+test recovery::tests::a_replaced_symlink_is_not_an_actual_original_file_receipt ... ok
+test recovery::tests::authorized_cancel_stops_pending_goal_and_retains_unknown_effect_identity ... ok
+test math::tests::large_valid_certificates_do_not_reuse_the_smaller_input_text_limit ... ok
+test recovery::tests::calculation_explanation_candidates_replay_for_recovery ... ok
+test recovery::tests::cancellation_from_suspended_unknown_case_preserves_observed_effects ... ok
+test recovery::tests::cancelled_missing_effect_stays_unknown_and_new_cancel_permissions_do_not_apply ... ok
+test recovery::tests::cancelled_goal_stays_cancelled_when_original_file_effect_is_observed ... ok
+test recovery::tests::conjunction_answer_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::interrupted_actual_write_reconciles_same_identity_without_resending ... ok
+test recovery::tests::missing_and_different_files_stay_unknown_and_are_never_rewritten ... ok
+test recovery::tests::common_relations_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::originally_unauthorized_file_cannot_be_confirmed_by_recovery ... ok
+test recovery::tests::current_relation_answer_lineage_and_guarantee_replay_for_recovery ... ok
+test recovery::tests::object_answer_recovery_rechecks_proof_before_confirming_saved_bytes ... ok
+test recovery::tests::premise_inventory_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::previous_answer_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::probability_explanation_reconciles_the_original_file_without_resending ... ok
+test recovery::tests::previous_relation_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::common_relations_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::previous_result_summary_recovery_revalidates_source_and_candidate_artifact ... ok
+test recovery::tests::quadratic_explanation_reconciles_the_original_file_without_resending ... ok
+test recovery::tests::relation_comparison_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::relation_objects_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::source_question_recovery_dispatches_versioned_and_legacy_artifacts ... ok
+test recovery::tests::source_question_recovery_keeps_the_legacy_v1_derivation_readable ... ok
+test recovery::tests::source_question_recovery_revalidates_the_exact_source_answer_artifact ... ok
+test recovery::tests::statistics_explanation_reconciles_the_original_file_without_resending ... ok
+test recovery::tests::relation_profile_explanation_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::relation_profile_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::symbolic_explanation_reconciles_the_original_file_without_resending ... ok
+test relations::conjunctive_rule_tests::a_composed_shortcut_does_not_bypass_a_contradicted_intermediate ... ok
+test relations::conjunctive_rule_tests::a_single_rule_before_a_two_premise_rule_keeps_the_other_antecedent ... ok
+test relations::conjunctive_rule_tests::declared_relation_rules_remain_limited_to_two_explicit_premises ... ok
+test relations::conjunctive_rule_tests::older_serialized_relation_rules_default_to_single_premise ... ok
+test relations::conjunctive_rule_tests::shared_variable_join_binds_a_new_conclusion_subject ... ok
+test relations::conjunctive_rule_tests::single_premise_composition_identity_stays_compatible ... ok
+test relations::conjunctive_rule_tests::single_premise_rule_identity_stays_compatible ... ok
+test relations::conjunctive_rule_tests::two_premise_join_transfers_to_a_new_subject_and_keeps_every_dependency ... ok
+test relations::conjunctive_rule_tests::two_two_premise_rules_compose_to_a_bounded_three_antecedent_shortcut ... ok
+test relations::contrary_evidence_tests::contradicted_answer_retains_actual_negative_fact_and_proof ... ok
+test relations::tests::contradicted_direct_premise_keeps_user_premise_guarantee ... ok
+test relations::tests::contradictory_premises_cannot_drive_descendants ... ok
+test relations::tests::explicit_premise_listing_excludes_invalid_derived_and_other_subject_facts ... ok
+test relations::tests::older_direct_fact_without_optional_source_evidence_remains_wire_compatible ... ok
+test relations::tests::query_answer_dependencies_retain_root_premise_and_rule ... ok
+test relations::tests::unseen_entity_uses_proof_composition_and_retains_dependency ... ok
+test relations::tests::wrong_scope_and_unbound_conclusions_are_rejected ... ok
+test scheduler::tests::cycles_missing_nodes_and_duplicate_contracts_are_rejected ... ok
+test scheduler::tests::downstream_nodes_consume_actual_predecessor_artifacts ... ok
+test scheduler::tests::exact_prerequisites_and_canonical_references_are_required ... ok
+test scheduler::tests::no_progress_and_exhaustion_do_not_manufacture_completion ... ok
+test scheduler::tests::ready_list_retains_explicit_goal_order_not_lexical_identity ... ok
+test scheduler::tests::stale_and_unobserved_dependencies_never_advance_the_graph ... ok
+test search::tests::candidate_body_lineage_rejects_changed_packet_or_unlisted_source ... ok
+test search::tests::candidate_body_lineage_retains_the_listing_and_all_verified_prior_bodies ... ok
+test search::tests::candidate_body_lineage_stops_before_the_seventeenth_packet ... ok
+test search::tests::changed_candidate_and_unapproved_provider_require_no_network ... ok
+test search::tests::crossref_uses_returned_title_doi_and_uri_not_abstract_text ... ok
+test search::tests::europe_pmc_distinguishes_source_id_and_actual_fulltext_uri ... ok
+test search::tests::malformed_duplicate_and_failed_lists_retain_original_packet ... ok
+test search::tests::query_encoding_cannot_inject_provider_parameters ... ok
+test search::tests::source_hash_and_query_identity_cannot_be_substituted ... ok
+test search::tests::stored_live_listing_revalidates_candidates_and_selects_raw_wikitext_route ... ok
+test search::tests::wikipedia_listing_preserves_rank_raw_source_and_separates_snippets ... ok
+test store::tests::abrupt_attempt_worker ... ok
+test store::tests::abrupt_blob_publisher_worker ... ok
+
+running 1 test
+test store::tests::abrupt_process_exit_after_attempted_action_recovers_unknown ... ok
+
+running 1 test
+test store::tests::abrupt_process_exit_after_blob_publication_leaves_only_an_orphan ... ok
+test store::tests::action_idempotency_mapping_is_immutable_and_verified_on_open ... ok
+test store::tests::blob_staging_skips_a_stale_name_after_process_id_reuse ... ok
+test store::tests::bound_goal_is_immutable_but_pre_goal_received_is_restorable ... ok
+test store::tests::case_and_action_access_are_scoped_to_persisted_actor ... ok
+test store::tests::compare_and_swap_prevents_stale_writer ... ok
+test store::tests::confirmation_requires_matching_receipt ... ok
+test store::tests::corrupt_or_missing_referenced_blob_blocks_restart ... ok
+test store::tests::crash_before_database_commit_leaves_orphan_and_no_case ... ok
+test store::tests::exact_input_tombstone_survives_restart_and_rejects_collision ... ok
+test store::tests::explicit_alpha10_migration_preserves_legacy_condition_refs_and_memory_blob ... ok
+test recovery::tests::unknown_original_blocks_new_effect_until_same_identity_reconciliation ... ok
+test store::tests::explicit_alpha7_migration_preserves_legacy_case_blobs_and_is_idempotent ... ok
+test store::tests::explicit_alpha8_migration_preserves_legacy_case_blob_and_is_idempotent ... ok
+test store::tests::explicit_alpha9_migration_preserves_legacy_case_blob_and_is_idempotent ... ok
+test store::tests::idempotency_key_cannot_be_reassigned_to_a_different_action ... ok
+test store::tests::memory_is_actor_scoped_and_retains_revision_history ... ok
+test store::tests::interrupted_attempt_is_unknown_and_cannot_be_reissued ... ok
+test store::tests::multi_process_writer_worker ... ok
+test store::tests::memory_revision_preserves_immutable_records_and_allows_tombstones ... ok
+test store::tests::new_input_version_must_reenter_received_before_new_seal ... ok
+
+running 1 test
+
+running 1 test
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test store::tests::separate_processes_cannot_claim_one_case_for_different_actors ... ok
+test store::tests::retained_input_bundle_is_loaded_by_exact_actor_case_input_and_version ... ok
+
+running 1 test
+
+running 1 test
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+
+running 1 test
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+
+running 1 test
+test store::tests::separate_processes_register_exact_input_once ... ok
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test store::tests::separate_processes_reject_action_idempotency_collision ... ok
+
+running 1 test
+
+running 1 test
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+
+running 1 test
+
+running 1 test
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.03s
+
+test store::tests::separate_processes_retain_conflicting_input_attempt ... ok
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test store::tests::separate_processes_save_identical_action_once ... ok
+
+running 1 test
+
+running 1 test
+test store::tests::sqlite_foreign_keys_and_immutable_revision_triggers_are_effective ... ok
+test text_editing::tests::atomic_edits_use_original_coordinates_and_shift_protected_text ... ok
+test text_editing::tests::composition_artifacts_are_replayed_and_keep_condition_protection ... ok
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test text_editing::tests::edits_reject_stale_overlapping_protected_and_invalid_unicode_requests ... ok
+test text_editing::tests::imported_text_checks_exact_unicode_source_and_protected_ranges ... ok
+test store::tests::multi_process_writer_worker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 0.02s
+
+test text_editing::tests::literal_location_rejects_missing_ambiguous_and_protected_ranges ... ok
+test text_editing::tests::literal_location_rejects_stale_hashes_and_invalid_schemas ... ok
+test store::tests::separate_processes_serialize_case_revision_compare_and_swap ... ok
+test text_editing::tests::unique_literal_location_returns_a_source_linked_proposal_without_applying_it ... ok
+test text_summary::tests::enforces_character_budget_without_truncating_or_discarding_later_fitting_sentences ... ok
+test text_summary::tests::fetched_source_followup_retains_packet_identity_and_unobserved_license ... ok
+test text_summary::tests::preserves_repeated_punctuation_and_line_boundaries_without_normalizing_text ... ok
+test text_summary::tests::ranks_and_retains_exact_japanese_source_ranges ... ok
+test text_summary::tests::rejects_ambiguous_schema_empty_text_and_invalid_limits ... ok
+test text_summary::tests::rejects_required_source_indices_that_are_unavailable_or_exceed_budgets ... ok
+test text_summary::tests::renders_paragraph_layout_with_exact_unicode_source_and_output_spans ... ok
+test text_summary::tests::retains_required_source_sentences_before_ranked_fill_and_maps_them_exactly ... ok
+test text_summary::tests::source_question_returns_exact_lexical_matches_with_source_spans ... ok
+test text_summary::tests::source_question_supports_japanese_substrings_and_refuses_no_match ... ok
+test text_summary::tests::source_question_v2_deduplicates_same_body_observations_without_claiming_independence ... ok
+test text_summary::tests::source_question_v2_suspends_on_same_time_conflicts_and_mixed_modes ... ok
+test text_summary::tests::source_question_v2_uses_the_latest_exact_uri_version_and_retains_old_identity ... ok
+test recovery::tests::saved_relation_comparison_explanation_pins_and_rechecks_its_memory_revision ... ok
+test text_editing::tests::replay_rejects_forged_artifacts_and_enforces_history_and_deadline ... ok
+test recovery::tests::structured_table_operation_explanation_reconciles_without_resending ... ok
+
+test result: ok. 271 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.22s
+
+     Running tests/core_actor_context_boundary_48.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_actor_context_boundary_48-c18d1856fee1bedb)
+
+running 1 test
+test actor_cannot_use_another_actors_result_as_explicit_context ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+     Running tests/core_atomic_explanation_31.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_explanation_31-5be3032bc289dafb)
+
+running 1 test
+test typed_atomic_explanation_reaches_k7_and_stops_without_evidence_or_write_authority ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/core_atomic_explanation_34.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_explanation_34-ff678d23dd93a7c0)
+
+running 1 test
+test typed_derived_explanation_carries_premise_and_rule_lineage_through_k7 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s
+
+     Running tests/core_atomic_explanation_50.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_explanation_50-f462c34f59cde71b)
+
+running 1 test
+test core_builds_and_renders_a_new_explanation_from_a_two_rule_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s
+
+     Running tests/core_atomic_relation_comparison_36.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_36-faf4379e00260844)
+
+running 1 test
+test typed_atomic_relation_comparison_reaches_k7_and_preserves_stops ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.60s
+
+     Running tests/core_atomic_relation_comparison_38.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_38-2920f084d9ac90d6)
+
+running 1 test
+test proof_derived_comparison_content_is_adopted_replayed_and_recovered ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.35s
+
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-d1113a7aedd96859)
+
+running 1 test
+test derived_comparison_v3_replays_rules_renders_and_survives_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s
+
+     Running tests/core_atomic_relation_comparison_41.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_41-9c99d99b5a1d458b)
+
+running 1 test
+test derived_comparison_v4_replays_rules_renders_and_survives_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s
+
+     Running tests/core_atomic_relation_comparison_42.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_42-dc93a92e90ba2cde)
+
+running 1 test
+test overfull_rule_comparison_uses_legacy_report_and_replays_all_proofs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.34s
+
+     Running tests/core_atomic_relation_comparison_43.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_43-e30f75fbebdd55af)
+
+running 1 test
+test all_comparison_artifact_versions_coexist_and_replay_after_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.57s
+
+     Running tests/core_atomic_relation_comparison_44.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_44-5a29fa73d340e9a7)
+
+running 1 test
+test changed_scope_stops_selected_comparison_without_affecting_other_version ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s
+
+     Running tests/core_atomic_relation_comparison_45.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_45-ca7073c1b8745ae5)
+
+running 1 test
+test v1_and_v4_comparisons_invalidate_only_their_selected_scope ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.38s
+
+     Running tests/core_atomic_relation_comparison_46.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_46-dfcd3800ee255f04)
+
+running 1 test
+test v4_saved_comparison_stops_after_rule_invalidation_while_v1_control_replays ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.64s
+
+     Running tests/core_atomic_relation_comparison_47.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_47-df5b29918f590b05)
+
+running 1 test
+test invalidating_one_actor_rule_does_not_change_another_actors_saved_v4_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.11s
+
+     Running tests/core_condition_evaluation_57.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_condition_evaluation_57-d50947bf83b502d6)
+
+running 4 tests
+test counterfactual_rejects_an_assumption_outside_the_target_scope_without_mutation ... ok
+test core_adoption_stops_preserve_condition_status_evidence_and_missing_reason ... ok
+test conditioned_conjunctive_proofs_intersect_scope_and_keep_condition_dependencies ... ok
+test core_evaluates_condition_truth_composition_time_and_dependency_invalidation has been running for over 60 seconds
+test core_evaluates_condition_truth_composition_time_and_dependency_invalidation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 126.49s
+
+     Running tests/core_condition_scope_53.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_condition_scope_53-74c0f0d27bae9639)
+
+running 1 test
+test typed_condition_refs_bind_rules_queries_correction_and_comparison ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.03s
+
+     Running tests/core_conjunctive_proof_55.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_conjunctive_proof_55-c04a691c13fe422e)
+
+running 1 test
+test two_premises_derive_only_while_both_are_supported_and_uncontested ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.77s
+
+     Running tests/core_construction_observation_02.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_02-7d4ebcc30b61d430)
+
+running 1 test
+test direct_core_observation_two_separates_derived_conflicting_and_unmet_relations ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.90s
+
+     Running tests/core_construction_observation_04.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_04-3e99139bdaa5fffb)
+
+running 1 test
+test direct_core_observation_four_consumes_actual_math_and_relation_results_across_versions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.54s
+
+     Running tests/core_construction_observation_05.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_05-0514b0b71a1a3ec2)
+
+running 1 test
+test direct_core_observation_five_composes_observed_rules_adapts_and_invalidates_counterexample_lineage ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.14s
+
+     Running tests/core_construction_observation_06.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_06-eb7613ed7e53a544)
+
+running 1 test
+test direct_core_observation_six_never_completes_permission_budget_cancel_or_unknown_effect_stops ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/core_construction_observation_07.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_07-7a5ddd43e980bdb1)
+
+running 1 test
+test direct_core_observation_seven_reproduces_identical_state_and_versions_a_caused_change ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.89s
+
+     Running tests/core_meaning_composition_03.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_meaning_composition_03-3242e8efe6a64ba2)
+
+running 2 tests
+test typed_core_meaning_composer_rejects_missing_semantic_roles ... ok
+test typed_core_meaning_composer_builds_explanation_comparison_and_short_composition ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/core_proof_composition_learning_49.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_proof_composition_learning_49-eacf656b86397441)
+
+running 1 test
+test proof_composition_changes_a_direct_core_result_and_uses_the_shorter_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.10s
+
+     Running tests/core_scope_classification_58.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_scope_classification_58-672808ad9af852aa)
+
+running 1 test
+test exact_scope_miss_distinguishes_out_of_scope_from_missing_premises ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/core_scope_polarity_54.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_scope_polarity_54-ad09081fa9bc2b8e)
+
+running 1 test
+test world_scope_and_negation_remain_separate_through_proof_and_correction ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.14s
+
+     Running tests/core_temporal_correction_52.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_temporal_correction_52-28755a1ccb52014d)
+
+running 1 test
+test typed_temporal_correction_invalidates_only_the_exact_dependent_proof ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.75s
+
+     Running tests/core_temporal_scope_51.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_temporal_scope_51-bb9efd06e5ed7e3b)
+
+running 1 test
+test core_temporal_identity_requires_exact_time_and_keeps_comparison_sides_distinct ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+     Running tests/input_machine_observation_01.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_01-3a0757cdc8ee2e8c)
+
+running 1 test
+test concise_arithmetic_question_reaches_core_once_and_replays_its_versioned_result ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/input_machine_observation_02.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_02-76750ed711909c59)
+
+running 1 test
+test parsed_relation_roles_keep_exact_source_ranges_across_persisted_input_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/input_machine_observation_03.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_03-083830c33cc51b46)
+
+running 1 test
+test all_intent_string_leaves_keep_exact_source_ranges_and_replay ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+
+     Running tests/input_machine_observation_04.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_04-34478f48411c1278)
+
+running 1 test
+test nfkc_composes_japanese_marks_but_maps_the_original_source_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/input_machine_observation_05.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_05-866a4dacac3d88e5)
+
+running 1 test
+test repeated_nfkc_equivalent_assertion_values_keep_their_structural_source_roles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+   Doc-tests minidora_engine
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

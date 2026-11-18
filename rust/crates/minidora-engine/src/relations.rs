@@ -1701,6 +1701,196 @@ pub(crate) fn active_relation_projection(
     Ok((memory, actions))
 }
 
+/// Build a bounded relation inventory for one subject from the revision-matched
+/// Store index. Candidate discovery starts with that subject's active Facts and
+/// applicable Rules, then reuses the ordinary proof projection and evaluator
+/// for each supported relation shape.
+pub(crate) fn active_relation_inventory_projection(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    max_actions: u32,
+) -> Result<(RelationInventory, u32)> {
+    if max_actions == 0 {
+        return Err(failure(
+            "RELATION_BUDGET",
+            "relation-profile projection budget must be positive",
+        ));
+    }
+
+    let mut actions = 1_u32;
+    let remaining = max_actions - actions;
+    let candidates = index
+        .relation_profile_candidates(subject, usize::try_from(remaining).unwrap_or(usize::MAX))?;
+    actions = actions
+        .checked_add(u32::try_from(candidates.len()).map_err(|_| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-profile candidate count overflowed",
+            )
+        })?)
+        .ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-profile candidate action count overflowed",
+            )
+        })?;
+
+    let mut seeds = MemoryState {
+        revision: index.revision(),
+        ..MemoryState::default()
+    };
+    for candidate in candidates {
+        match candidate.value {
+            IndexedMemoryValue::Fact(fact) => seeds.facts.push(fact),
+            IndexedMemoryValue::Rule(rule) => seeds.rules.push(rule),
+            IndexedMemoryValue::Condition(_) => {
+                return Err(failure(
+                    "MEMORY_INDEX_CORRUPT",
+                    "relation-profile candidate lookup returned a condition record",
+                ));
+            }
+        }
+    }
+
+    let remaining = max_actions.checked_sub(actions).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "relation-profile candidate scan exceeds the sealed action budget",
+        )
+    })?;
+    let query_shapes = query_shapes_about(
+        &seeds,
+        subject,
+        usize::try_from(remaining).unwrap_or(usize::MAX),
+    )?;
+    if query_shapes.is_empty() {
+        return Err(failure(
+            "MISSING_PREMISES",
+            "no active supported relation query applies to this subject",
+        ));
+    }
+    let query_count = u32::try_from(query_shapes.len())
+        .map_err(|_| failure("RELATION_BUDGET", "relation query count overflowed"))?;
+    actions = actions.checked_add(query_count).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "relation-profile query planning action count overflowed",
+        )
+    })?;
+
+    let mut dependencies = BTreeSet::new();
+    let mut reported_facts = BTreeMap::new();
+    let mut contested_fact_ids = BTreeSet::new();
+    let mut has_conflict = false;
+    let query_count = usize::try_from(query_count).unwrap_or(usize::MAX);
+    for (position, shape) in query_shapes.into_iter().enumerate() {
+        let remaining_actions = max_actions.checked_sub(actions).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-profile query planning exceeds the sealed action budget",
+            )
+        })?;
+        let remaining_queries = u32::try_from(query_count.saturating_sub(position))
+            .map_err(|_| failure("RELATION_BUDGET", "relation query count overflowed"))?;
+        let per_query_budget = remaining_actions / remaining_queries;
+        if per_query_budget < 2 {
+            return Err(failure(
+                "RELATION_BUDGET",
+                "no proof budget remains for every relation query",
+            ));
+        }
+
+        let (projected, projection_actions) =
+            active_relation_projection(index, &shape, per_query_budget - 1)?;
+        actions = actions.checked_add(projection_actions).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-profile proof projection action count overflowed",
+            )
+        })?;
+        let proof_budget = per_query_budget
+            .checked_sub(projection_actions)
+            .ok_or_else(|| {
+                failure(
+                    "RELATION_BUDGET",
+                    "relation-profile proof projection exhausted the query allowance",
+                )
+            })?;
+        let answer = query(&projected, &shape, proof_budget)?;
+        actions = actions.checked_add(answer.steps).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "relation-profile proof action count overflowed",
+            )
+        })?;
+
+        match answer.status.as_str() {
+            "SUPPORTED" | "CONTRADICTED" => {}
+            "CONFLICT" => {
+                has_conflict = true;
+                contested_fact_ids.extend(answer.facts.iter().map(|fact| fact.id.clone()));
+            }
+            "UNKNOWN" | "MISSING_PREMISES" => continue,
+            _ => {
+                return Err(failure(
+                    "UNSUPPORTED_RELATION_RESULT",
+                    "relation inventory proof returned an unknown terminal status",
+                ));
+            }
+        }
+        dependencies.extend(answer_dependencies(&answer));
+        for fact in answer.facts {
+            reported_facts.insert(fact.id.clone(), fact);
+        }
+    }
+
+    if reported_facts.is_empty() {
+        return Err(failure(
+            "MISSING_PREMISES",
+            "no supported relation result remains for this subject",
+        ));
+    }
+    let guarantee = if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::Derived))
+    {
+        Guarantee::Derived
+    } else if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::UserPremise))
+    {
+        Guarantee::UserPremise
+    } else if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::Computed))
+    {
+        Guarantee::Computed
+    } else if reported_facts
+        .values()
+        .any(|fact| matches!(fact.guarantee, Guarantee::SourceReport))
+    {
+        Guarantee::SourceReport
+    } else {
+        Guarantee::Unknown
+    };
+    let mut facts: Vec<_> = reported_facts.into_values().collect();
+    facts.sort_by(|left, right| {
+        left.proposition
+            .cmp(&right.proposition)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok((
+        RelationInventory {
+            facts,
+            contested_fact_ids,
+            has_conflict,
+            dependencies: dependencies.into_iter().collect(),
+            guarantee,
+        },
+        actions,
+    ))
+}
+
 /// Preserve OUT_OF_SCOPE classification only after the proof query is
 /// unresolved. Supported queries therefore do not spend budget on diagnostic
 /// facts from other scopes.

@@ -12,7 +12,7 @@ use rusqlite::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -230,6 +230,37 @@ impl MemoryIndexSnapshot<'_, '_> {
                 return Err(failure(
                     "RELATION_BUDGET",
                     "common-relation candidate projection exceeds the sealed action budget",
+                ));
+            }
+        }
+        Ok(records.into_values().collect())
+    }
+
+    /// Select the subject-local records that can seed a saved relation profile.
+    /// Variable-subject Rules remain eligible because Core binds them to the
+    /// requested subject before evaluating their proof closure.
+    pub(crate) fn relation_profile_candidates(
+        &self,
+        subject: &str,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        let mut statement = sql(self.transaction.prepare(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_profile_subject WHERE actor_id=?1 AND valid=1 AND record_kind='FACT' AND subject=?2 UNION ALL SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_profile_subject WHERE actor_id=?1 AND valid=1 AND record_kind='RULE' AND subject=?2 UNION ALL SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_profile_subject WHERE actor_id=?1 AND valid=1 AND record_kind='RULE' AND subject >= '$' AND subject < '%' UNION ALL SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_profile_subject WHERE actor_id=?1 AND valid=1 AND record_kind='RULE' AND subject >= '?' AND subject < '@' LIMIT ?3",
+        ))?;
+        let rows = sql(statement.query_map(
+            params![self.actor, subject, memory_index_limit(max_records)?],
+            StoredMemoryIndexRow::read,
+        ))?;
+        let mut records = BTreeMap::new();
+        for row in rows {
+            let record = sql(row)?.decode()?;
+            records
+                .entry(record.value.id().to_owned())
+                .or_insert(record);
+            if records.len() > max_records {
+                return Err(failure(
+                    "RELATION_BUDGET",
+                    "relation-profile candidate projection exceeds the sealed action budget",
                 ));
             }
         }
@@ -2209,6 +2240,8 @@ CREATE INDEX IF NOT EXISTS memory_index_relation_lookup
  ON memory_index_record(actor_id,valid,record_kind,predicate,scope,temporal_scope,condition_refs,subject,object);
 CREATE INDEX IF NOT EXISTS memory_index_common_subject_scope
  ON memory_index_record(actor_id,valid,scope,subject,record_kind);
+CREATE INDEX IF NOT EXISTS memory_index_profile_subject
+ ON memory_index_record(actor_id,valid,subject,record_kind);
 CREATE INDEX IF NOT EXISTS memory_index_condition_evidence
  ON memory_index_record(actor_id,valid,record_kind,subject,predicate,object,scope,temporal_scope);
 CREATE INDEX IF NOT EXISTS memory_index_condition_id
