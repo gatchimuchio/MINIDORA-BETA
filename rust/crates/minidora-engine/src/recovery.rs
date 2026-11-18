@@ -6611,6 +6611,224 @@ mod tests {
     }
 
     #[test]
+    fn saved_previous_relation_explanation_rechecks_anchor_and_current_head() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        assert_eq!(premise.lifecycle, Lifecycle::Commit, "{premise:?}");
+        let premise_id = premise.dependencies[0].clone();
+
+        let explicit_answer = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            explicit_answer.lifecycle,
+            Lifecycle::Commit,
+            "{explicit_answer:?}"
+        );
+        assert!(explicit_answer.dependencies.contains(&premise_id));
+
+        let mut prior_relation_request =
+            RequestEnvelope::new("case", "prior-relation-why", "alice", "なぜそれは鳥ですか");
+        prior_relation_request.budget.max_actions = 64;
+        let prior_relation = engine.execute("alice", prior_relation_request).unwrap();
+        assert_eq!(
+            prior_relation.lifecycle,
+            Lifecycle::Commit,
+            "{prior_relation:?}"
+        );
+        assert!(prior_relation.dependencies.contains(&premise_id));
+        assert!(prior_relation.actor_memory_revision.is_some());
+        let (_, prior_relation_bundle) = engine
+            .store
+            .get_input_bundle(
+                "alice",
+                "case",
+                &prior_relation.input_id,
+                prior_relation.input_version,
+            )
+            .unwrap()
+            .expect("the typed AskPreviousRelation input is retained");
+        assert!(matches!(
+            &prior_relation_bundle.meaning.intent,
+            Intent::AskPreviousRelation { explain: true, .. }
+        ));
+        let Intent::AskPreviousRelation {
+            proposition,
+            explain,
+            explicit_scope,
+        } = &prior_relation_bundle.meaning.intent
+        else {
+            unreachable!("the prior request was checked as AskPreviousRelation");
+        };
+        assert!(crate::core::previous_relation_meaning(
+            &engine.store,
+            "alice",
+            "case",
+            &prior_relation,
+        )
+        .unwrap()
+        .is_none());
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation_request.budget.max_actions = 64;
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior_relation.text);
+        assert_eq!(explanation.dependencies, [prior_relation.id.clone()]);
+        assert_eq!(explanation.guarantee, prior_relation.guarantee);
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        inspect(&engine.store, "alice", &retained, &retained_result)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "previous-relation-explanation-off-scope-history",
+            "alice",
+            "前回関係回答説明Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let anchor_id = prior_relation_bundle
+            .meaning
+            .context_result_ref
+            .as_deref()
+            .expect("the saved AskPreviousRelation retains its direct result anchor");
+        let anchor = retained
+            .prior_results
+            .get(anchor_id)
+            .expect("the exact direct result anchor remains retained");
+        let indexed_query = crate::core::indexed_previous_relation_query_from_store(
+            &engine.store,
+            "alice",
+            anchor,
+            proposition,
+            explicit_scope.as_deref(),
+            64,
+        )
+        .unwrap()
+        .expect("the current-head relation index is available");
+        let indexed_resolution = match indexed_query.resolution {
+            Some(crate::core::PreviousRelationResolution::Resolved(resolved)) => resolved,
+            _ => panic!("the indexed query must retain its direct-prior resolution"),
+        };
+        let full_resolution = match crate::core::resolve_previous_relation_proposition(
+            &current_memory,
+            anchor,
+            proposition,
+            explicit_scope.as_deref(),
+        ) {
+            crate::core::PreviousRelationResolution::Resolved(resolved) => resolved,
+            _ => panic!("the full-snapshot query must retain its direct-prior resolution"),
+        };
+        assert_eq!(indexed_resolution, full_resolution);
+        let indexed_memory = indexed_query.memory;
+        assert_eq!(indexed_memory.revision, current_memory.revision);
+        assert!(indexed_memory.facts.len() < current_memory.facts.len());
+        let indexed_answer = indexed_query
+            .answer
+            .unwrap()
+            .expect("the indexed prior relation remains supported or contradicted");
+        let full_answer =
+            crate::relations::query(&current_memory, &full_resolution, 10_000).unwrap();
+        assert_eq!(indexed_answer.status, full_answer.status);
+        assert_eq!(
+            crate::relations::answer_dependencies(&indexed_answer),
+            crate::relations::answer_dependencies(&full_answer)
+        );
+        assert_eq!(
+            crate::relations::answer_guarantee(&indexed_answer),
+            crate::relations::answer_guarantee(&full_answer)
+        );
+        assert_eq!(
+            crate::core::previous_relation_success_units(
+                &indexed_memory,
+                &indexed_resolution,
+                &indexed_answer,
+                *explain,
+            ),
+            crate::core::previous_relation_success_units(
+                &current_memory,
+                &full_resolution,
+                &full_answer,
+                *explain,
+            )
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-prior-relation-premise",
+                    "alice",
+                    &format!("{premise_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            invalidation.lifecycle,
+            Lifecycle::Commit,
+            "{invalidation:?}"
+        );
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
     fn conjunction_explanation_rechecks_the_current_memory_revision() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
