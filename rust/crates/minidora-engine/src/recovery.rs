@@ -278,6 +278,18 @@ fn verify_previous_relation_context(
             )
         });
     }
+    if crate::core::is_common_relations_result(previous) {
+        let memory = store.load_memory(actor)?;
+        return verify_explain_previous_common_relations_memory_result(
+            store, state, &memory, previous, result, plan, goal,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!("the common-relations report behind the explanation changed: {error}"),
+            )
+        });
+    }
     if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none() {
         return Ok(());
     }
@@ -291,6 +303,175 @@ fn verify_previous_relation_context(
                 ),
             )
         })
+}
+
+fn verify_explain_previous_common_relations_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    memory: &MemoryState,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior common-relations result reference is missing",
+            )
+        })?;
+    if previous.id != previous_id || previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior common-relations result is not committed",
+        ));
+    }
+    let Some((_, prior_bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )?
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact common-relations input bundle is not retained",
+        ));
+    };
+    if prior_bundle.request.actor_id != state.actor_id
+        || prior_bundle.request.case_id != state.case_id
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the common-relations input and committed result identities differ",
+        ));
+    }
+    let Intent::AskCommonRelations {
+        subject_a,
+        subject_b,
+        scope,
+    } = &prior_bundle.meaning.intent
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior input does not retain a typed common-relations request",
+        ));
+    };
+    let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the common-relations result has no retained content plan",
+        )
+    })?;
+    let prior_render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the common-relations result has no retained render record",
+        )
+    })?;
+    let mut unsigned_prior_plan = prior_plan.clone();
+    unsigned_prior_plan.id.clear();
+    if prior_plan.id != identity(&unsigned_prior_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || prior_plan.required_units != vec![previous.text.clone()]
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained common-relations result, content plan or render is invalid",
+        ));
+    }
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_plan)?;
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_render)?;
+    let report_ref = previous.dependencies.first().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the common-relations result has no report artifact reference",
+        )
+    })?;
+    let report_bytes = store.get_bytes(&state.actor_id, &state.case_id, report_ref)?;
+
+    if let Some(original_memory) = result_memory_snapshot(store, &state.actor_id, previous)? {
+        let original_answer = match crate::core::common_relations_answer(
+            &original_memory,
+            subject_a,
+            subject_b,
+            scope,
+            prior_bundle.request.budget.max_actions,
+            prior_bundle.request.budget.max_evidence_bytes,
+            &previous.id,
+        )? {
+            crate::core::CommonRelationsEvaluation::Complete(answer) => answer,
+            crate::core::CommonRelationsEvaluation::Blocked { code, message } => {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    format!(
+                        "the original common-relations report cannot be replayed ({code}: {message})"
+                    ),
+                ));
+            }
+        };
+        let mut expected_previous_dependencies = vec![report_ref.clone()];
+        expected_previous_dependencies.extend(original_answer.proof_dependencies.iter().cloned());
+        if report_bytes != original_answer.artifact_bytes
+            || previous.dependencies != expected_previous_dependencies
+            || previous.guarantee != original_answer.guarantee
+            || previous.text != original_answer.report
+            || prior_plan.required_units != vec![original_answer.report]
+        {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained common-relations report differs from its actor-memory revision",
+            ));
+        }
+    }
+
+    let explanation = match crate::core::common_relations_explanation(
+        memory,
+        &report_bytes,
+        report_ref,
+        previous,
+        crate::core::CommonRelationsExplanationReplay {
+            subject_a,
+            subject_b,
+            scope,
+            max_actions: goal.budget.max_actions,
+            max_evidence_bytes: goal.budget.max_evidence_bytes,
+        },
+    )? {
+        crate::core::CommonRelationsExplanationEvaluation::Complete(answer) => answer,
+        crate::core::CommonRelationsExplanationEvaluation::Blocked { code, message } => {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                format!("the common-relations explanation cannot be replayed ({code}: {message})"),
+            ));
+        }
+    };
+    if explanation.dependencies != result.dependencies
+        || explanation.guarantee != result.guarantee
+        || explanation.guarantee != plan.guarantee
+        || explanation.units != plan.required_units
+        || plan.text != result.text
+        || result.calculation.is_some()
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the common-relations explanation differs from its exact proof, dependencies or units",
+        ));
+    }
+    Ok(())
 }
 
 fn result_memory_snapshot(
@@ -837,6 +1018,11 @@ fn verify_explain_previous_relation_memory_result(
     }
     if crate::core::is_saved_relation_comparison_result(previous) {
         return verify_explain_previous_relation_comparison_memory_result(
+            store, state, memory, previous, result, plan, goal,
+        );
+    }
+    if crate::core::is_common_relations_result(previous) {
+        return verify_explain_previous_common_relations_memory_result(
             store, state, memory, previous, result, plan, goal,
         );
     }
@@ -4480,6 +4666,110 @@ mod tests {
                 RequestEnvelope::new(
                     "invalidation-case",
                     "invalidate-comparison-explanation-premise",
+                    "alice",
+                    &format!("{mike_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn common_relations_explanation_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let coco = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "coco", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let coco_id = coco.dependencies[0].clone();
+        let mike = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "mike", "alice", "ミケは鳥です"),
+            )
+            .unwrap();
+        let mike_id = mike.dependencies[0].clone();
+        let common = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "common-relations",
+                    "alice",
+                    "ココとミケの共通点は何ですか",
+                ),
+            )
+            .unwrap();
+        assert_eq!(common.lifecycle, Lifecycle::Commit, "{common:?}");
+        assert_eq!(common.guarantee, Guarantee::Derived);
+        assert!(common.dependencies.contains(&rule_id));
+        assert!(common.dependencies.contains(&coco_id));
+        assert!(common.dependencies.contains(&mike_id));
+        let memory_revision = common
+            .actor_memory_revision
+            .expect("the common-relations result records its actor-memory revision");
+
+        let mut request =
+            RequestEnvelope::new("case", "common-explanation", "alice", "詳しく説明して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert!(explanation.text.contains(&common.id));
+        assert_eq!(
+            explanation.actor_memory_revision,
+            Some(memory_revision),
+            "the explanation records the exact memory used to recheck the common report"
+        );
+        let mut expected_dependencies = vec![common.id.clone()];
+        expected_dependencies.extend(common.dependencies.iter().cloned());
+        assert_eq!(explanation.dependencies, expected_dependencies);
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the explanation's actor-memory revision is retained");
+        assert!(original_memory.rules.iter().any(|rule| rule.id == rule_id));
+        assert!(original_memory.facts.iter().any(|fact| fact.id == coco_id));
+        assert!(original_memory.facts.iter().any(|fact| fact.id == mike_id));
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        drop(engine);
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-common-explanation-premise",
                     "alice",
                     &format!("{mike_id}を無効化して"),
                 ),
