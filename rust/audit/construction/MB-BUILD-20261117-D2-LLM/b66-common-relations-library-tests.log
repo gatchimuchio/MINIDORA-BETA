@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 3 tests
+test core::active_relation_projection_tests::indexed_common_relations_use_bounded_subject_candidates_and_preserve_artifacts ... ok
+test recovery::tests::common_relations_recovery_pins_and_rechecks_its_memory_revision ... ok
+test recovery::tests::common_relations_explanation_pins_and_rechecks_its_memory_revision ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 270 filtered out; finished in 4.78s

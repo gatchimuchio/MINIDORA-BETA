@@ -799,7 +799,7 @@ fn verify_common_relations_memory_result(
     else {
         return Ok(());
     };
-    let answer = match crate::core::common_relations_answer(
+    let evaluation = crate::core::common_relations_answer(
         memory,
         subject_a,
         subject_b,
@@ -807,7 +807,54 @@ fn verify_common_relations_memory_result(
         goal.budget.max_actions,
         goal.budget.max_evidence_bytes,
         &result.id,
-    )? {
+    )?;
+    verify_common_relations_evaluation(store, actor, case, evaluation, result, plan)
+}
+
+fn verify_common_relations_memory_result_with_index(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<()>> {
+    let Intent::AskCommonRelations {
+        subject_a,
+        subject_b,
+        scope,
+    } = &goal.intent
+    else {
+        return Ok(Some(()));
+    };
+    let Some((_, evaluation)) = crate::core::indexed_common_relations_answer_from_store(
+        store,
+        actor,
+        crate::core::CommonRelationsReplay {
+            subject_a,
+            subject_b,
+            scope,
+            max_actions: goal.budget.max_actions,
+            max_evidence_bytes: goal.budget.max_evidence_bytes,
+            result_id: &result.id,
+        },
+    )?
+    else {
+        return Ok(None);
+    };
+    verify_common_relations_evaluation(store, actor, case, evaluation?, result, plan)?;
+    Ok(Some(()))
+}
+
+fn verify_common_relations_evaluation(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    evaluation: crate::core::CommonRelationsEvaluation,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    let answer = match evaluation {
         crate::core::CommonRelationsEvaluation::Complete(answer) => answer,
         crate::core::CommonRelationsEvaluation::Blocked { code, message } => {
             return Err(failure(
@@ -2399,15 +2446,26 @@ fn inspect(
     {
         // The exact immutable snapshot was replayed above. Before confirming
         // pending bytes, ensure the common relations still have identical
-        // current support and artifact contents.
-        let memory = store.load_memory(actor)?;
-        verify_common_relations_memory_result(store, actor, case, &memory, result, plan, &goal)
-            .map_err(|error| {
-                failure(
-                    "RECOVERY_PROOF_INVALIDATED",
-                    format!("the original common-relation proof is no longer valid: {error}"),
+        // current support and artifact contents. Use the current revision's
+        // bounded index when available; a cold or stale index keeps the
+        // authenticated full-snapshot compatibility path.
+        let current_verification = (|| match verify_common_relations_memory_result_with_index(
+            store, actor, case, result, plan, &goal,
+        )? {
+            Some(()) => Ok(()),
+            None => {
+                let memory = store.load_memory(actor)?;
+                verify_common_relations_memory_result(
+                    store, actor, case, &memory, result, plan, &goal,
                 )
-            })?;
+            }
+        })();
+        current_verification.map_err(|error| {
+            failure(
+                "RECOVERY_PROOF_INVALIDATED",
+                format!("the original common-relation proof is no longer valid: {error}"),
+            )
+        })?;
     }
     if matches!(goal.intent, Intent::CompareRelationInventories { .. }) {
         // The exact immutable snapshot was replayed above when this result has
@@ -5419,6 +5477,7 @@ mod tests {
             "alice",
             "ココとミケの共通点は何ですか",
         );
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -5433,7 +5492,7 @@ mod tests {
         assert!(answer.dependencies.contains(&mike_id));
         let memory_revision = answer
             .actor_memory_revision
-            .expect("Core records the actor-memory snapshot used by the comparison");
+            .expect("Core records the actor-memory snapshot used by the common-relations result");
         let original_memory = engine
             .store
             .load_memory_revision("alice", memory_revision)
@@ -5457,6 +5516,62 @@ mod tests {
                 .load_memory_revision("alice", memory_revision)
                 .unwrap(),
             Some(original_memory)
+        );
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "common-relation-off-scope-history",
+            "alice",
+            "共通関係Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let full_snapshot_error = verify_common_relations_memory_result(
+            &engine.store,
+            "alice",
+            "case",
+            &current_memory,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap_err();
+        assert!(
+            full_snapshot_error.to_string().contains("RESOURCE_LIMIT"),
+            "{full_snapshot_error:?}"
         );
         assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
 

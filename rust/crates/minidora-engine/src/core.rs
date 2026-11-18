@@ -851,13 +851,13 @@ pub(crate) struct CommonRelationsExplanationReplay<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct CommonRelationsReplay<'a> {
-    subject_a: &'a str,
-    subject_b: &'a str,
-    scope: &'a str,
-    max_actions: u32,
-    max_evidence_bytes: usize,
-    result_id: &'a str,
+pub(crate) struct CommonRelationsReplay<'a> {
+    pub(crate) subject_a: &'a str,
+    pub(crate) subject_b: &'a str,
+    pub(crate) scope: &'a str,
+    pub(crate) max_actions: u32,
+    pub(crate) max_evidence_bytes: usize,
+    pub(crate) result_id: &'a str,
 }
 
 struct SupportedCommonRelation {
@@ -1309,6 +1309,43 @@ fn indexed_common_relations_answer(
         max_evidence_bytes,
         supported,
     )
+}
+
+/// Evaluate common relations only from a revision-matched derived index.
+/// `None` means the index is cold or stale; callers retain their authenticated
+/// full-snapshot compatibility path in that case.
+pub(crate) fn indexed_common_relations_answer_from_store(
+    store: &Store,
+    actor: &str,
+    replay: CommonRelationsReplay<'_>,
+) -> Result<Option<(u64, Result<CommonRelationsEvaluation>)>> {
+    store.with_relation_index(actor, |index| {
+        let revision = index.revision();
+        let answer = match indexed_common_relations_answer(
+            index,
+            replay.subject_a,
+            replay.subject_b,
+            replay.scope,
+            replay.max_actions,
+            replay.max_evidence_bytes,
+            replay.result_id,
+        ) {
+            Ok(answer) => Ok(answer),
+            Err(error)
+                if matches!(
+                    &error,
+                    Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                ) =>
+            {
+                Ok(CommonRelationsEvaluation::Blocked {
+                    code: "RESOURCE_LIMIT",
+                    message: error.to_string(),
+                })
+            }
+            Err(error) => Err(error),
+        };
+        Ok((revision, answer))
+    })
 }
 
 fn indexed_common_relation_query(
@@ -2292,33 +2329,7 @@ impl Engine {
         actor: &str,
         replay: CommonRelationsReplay<'_>,
     ) -> Result<Option<(u64, Result<CommonRelationsEvaluation>)>> {
-        self.store.with_relation_index(actor, |index| {
-            let revision = index.revision();
-            let answer = match indexed_common_relations_answer(
-                index,
-                replay.subject_a,
-                replay.subject_b,
-                replay.scope,
-                replay.max_actions,
-                replay.max_evidence_bytes,
-                replay.result_id,
-            ) {
-                Ok(answer) => Ok(answer),
-                Err(error)
-                    if matches!(
-                        &error,
-                        Error::Contract { code, .. } if code == "RELATION_BUDGET"
-                    ) =>
-                {
-                    Ok(CommonRelationsEvaluation::Blocked {
-                        code: "RESOURCE_LIMIT",
-                        message: error.to_string(),
-                    })
-                }
-                Err(error) => Err(error),
-            };
-            Ok((revision, answer))
-        })
+        indexed_common_relations_answer_from_store(&self.store, actor, replay)
     }
 
     fn active_common_relations_answer(

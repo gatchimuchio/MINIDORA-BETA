@@ -1,0 +1,114 @@
+{
+  "schema": "MINIDORA_E1_W10_COMMON_RELATIONS_RECOVERY_CURRENT_RECHECK_B66_V1",
+  "work_item": "Bound current-head common-relations revalidation before confirming a pending file effect",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "e481718da8a14fe2b5688086dfd754cabce119be",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "a9d0497409a980410c28cad0b32caab3666a4f1c895d8a16fe5a85da923f4d70",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_before_batch": {
+    "local_base": "refs/heads/codex/backup-main=e481718da8a14fe2b5688086dfd754cabce119be",
+    "local_previous": "refs/heads/codex/backup-main-prev=266d0575b0e9c04ab9768ce2bf31b656ebaa62eb",
+    "remote_tags": [
+      "refs/tags/codex/backup-main=e481718da8a14fe2b5688086dfd754cabce119be",
+      "refs/tags/codex/backup-main-prev=266d0575b0e9c04ab9768ce2bf31b656ebaa62eb"
+    ],
+    "remote_backup_branches_unchanged": [
+      "refs/remotes/origin/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/remotes/origin/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ]
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target"
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "pending AskCommonRelations file effect -> exact retained-revision replay -> revision-matched Store common-relation index -> existing report/artifact/content/proof verifier",
+    "current_head_index": "used only when the derived index revision matches the actor-memory head",
+    "cold_or_stale_index": "returns None and retains the existing authenticated full-current-snapshot verifier as compatibility fallback",
+    "retained_revision_replay": "unchanged full-snapshot replay of the immutable actor-memory revision used at adoption",
+    "legacy_result_without_revision": "existing behavior preserved",
+    "preserved_responsibilities": [
+      "Core remains responsible for common-relation evaluation and artifact/content/proof semantics",
+      "candidate selection and left/right proof queries share the sealed max_actions budget",
+      "Recovery still stops before file confirmation when common-relation support is invalidated"
+    ],
+    "schema_version_changed": false
+  },
+  "fixture_observation": {
+    "intent": "Japanese saved common-relations report",
+    "named_subject_facts": 2,
+    "supporting_rules": 1,
+    "off_scope_facts_added_after_adoption": 80,
+    "off_scope_distribution": "one Fact in each of 80 distinct scopes",
+    "max_actions": 32,
+    "full_snapshot_current_recheck": "RESOURCE_LIMIT",
+    "revision_matched_index_current_recheck": "PASS",
+    "cold_index_fallback_on_small_snapshot": "PASS",
+    "exact_retained_revision_replay": "PASS",
+    "premise_invalidation": "RECOVERY_PROOF_INVALIDATED",
+    "existing_target_bytes_preserved_after_invalidation": true
+  },
+  "verification": [
+    {
+      "command": "cargo test -p minidora-engine --locked --lib recovery::tests::common_relations_recovery_pins_and_rechecks_its_memory_revision -- --exact --nocapture",
+      "result": "PASS",
+      "cases_passed": 1,
+      "log": "b66-focused-recovery-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked --lib common_relations -- --nocapture",
+      "result": "PASS",
+      "cases_passed": 3,
+      "log": "b66-common-relations-library-tests.log"
+    },
+    {
+      "command": "cargo check -p minidora-engine --all-targets --locked",
+      "result": "PASS",
+      "log": "b66-engine-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b66-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b66-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b66-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "full minidora-engine package runtime suite",
+    "workspace all-target Clippy",
+    "workspace all-features runtime suite and workspace build",
+    "large-history immutable retained-revision replay projection",
+    "large-history cold/stale full-snapshot fallback cost",
+    "large same-scope history and concurrent-writer populations",
+    "full CAP-D02 or E1 acceptance"
+  ],
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}
