@@ -328,6 +328,28 @@ fn result_memory_snapshot(
         })
 }
 
+fn premise_memory_inventory(
+    memory: &MemoryState,
+    subject: &str,
+    max_actions: u32,
+) -> Result<(Vec<String>, Guarantee)> {
+    let (dependencies, guarantee) =
+        crate::relations::inventory_dependencies_and_guarantee(memory, subject, max_actions)
+            .map_err(|error| {
+                failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    format!("the retained premise inventory cannot be replayed: {error}"),
+                )
+            })?;
+    if dependencies.is_empty() {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained premise inventory has no proof dependencies",
+        ));
+    }
+    Ok((dependencies, guarantee))
+}
+
 fn verify_conjunction_memory_result(
     memory: &MemoryState,
     result: &ResultRecord,
@@ -466,6 +488,16 @@ fn verify_result_memory_provenance(
         }
         Intent::AskConjunction { .. } => {
             verify_conjunction_memory_result(&memory, result, plan, goal)?;
+        }
+        Intent::InspectPremises { subject } => {
+            let (dependencies, guarantee) =
+                premise_memory_inventory(&memory, subject, goal.budget.max_actions)?;
+            if dependencies != result.dependencies || guarantee != result.guarantee {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the retained premise inventory does not match its actor-memory revision",
+                ));
+            }
         }
         _ => {}
     }
@@ -1348,18 +1380,14 @@ fn inspect(
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
         let memory = store.load_memory(actor)?;
-        let current_inventory = if matches!(
-            bundle.meaning.parser_version.as_str(),
-            "declarative-ja-en-v68-previous-result-summary"
-                | "declarative-ja-en-v69-relation-profile-draft"
-                | "declarative-ja-en-v70-generic-transitive-verbs"
-        ) {
-            crate::relations::inventory_dependencies_and_guarantee(
-                &memory,
-                subject,
-                goal.budget.max_actions,
-            )
-            .ok()
+        let current_inventory = if result.actor_memory_revision.is_some()
+            || matches!(
+                bundle.meaning.parser_version.as_str(),
+                "declarative-ja-en-v68-previous-result-summary"
+                    | "declarative-ja-en-v69-relation-profile-draft"
+                    | "declarative-ja-en-v70-generic-transitive-verbs"
+            ) {
+            premise_memory_inventory(&memory, subject, goal.budget.max_actions).ok()
         } else {
             let dependencies = crate::relations::explicit_premises_about(&memory, subject)
                 .into_iter()
@@ -3273,6 +3301,94 @@ mod tests {
         assert!(result.text.contains("ココは動物ではない"));
         let revision = engine.latest("alice", "case").unwrap().unwrap();
         assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
+    }
+
+    #[test]
+    fn premise_inventory_recovery_pins_and_rechecks_its_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let rule = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "rule", "alice", "もしXは鳥ならXは動物"),
+            )
+            .unwrap();
+        let rule_id = rule.dependencies[0].clone();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let premise_id = premise.dependencies[0].clone();
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "premise-inventory",
+            "alice",
+            "ココについて、何が分かっていますか",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit);
+        assert_eq!(answer.guarantee, Guarantee::Derived);
+        assert!(answer.dependencies.contains(&rule_id));
+        assert!(answer.dependencies.contains(&premise_id));
+        let memory_revision = answer
+            .actor_memory_revision
+            .expect("Core records the actor-memory snapshot used by the inventory");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the inventory's actor-memory snapshot is retained");
+        assert!(
+            original_memory
+                .rules
+                .iter()
+                .any(|stored| stored.id == rule_id)
+        );
+        assert!(
+            original_memory
+                .facts
+                .iter()
+                .any(|stored| stored.id == premise_id)
+        );
+
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap();
+        assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate-inventory-rule",
+                    "alice",
+                    &format!("{rule_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PREMISES_CHANGED"));
     }
 
     #[test]

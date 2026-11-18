@@ -5779,6 +5779,7 @@ impl Engine {
             }
             Intent::InspectPremises { subject } => {
                 let memory = self.store.load_memory(actor)?;
+                result.actor_memory_revision = Some(memory.revision);
                 let scanned_records = memory
                     .facts
                     .len()
