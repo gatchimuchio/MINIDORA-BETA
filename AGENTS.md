@@ -6,9 +6,9 @@
 
 `操作語=観測{現物読取,状態非変更};照合{観測値⇔適用正本};判定{対象・版・証拠付き成立状態決定};施工{許可された対象への差分作成};検査{実行・負例・exit/成果観測};記録{原本/差分/根拠/時点保全};停止{未成立境界に関わる作用のみ凍結};帰還{不成立生成原因の上流へ戻す};更新{旧根拠保全＋新版判断の再設定}`。同一行為の指示に「実装/開発/コーディング/施行」等の別語を並列定義しない。`PASS`は根拠付き判定、`DONE`は指定出口条件の成立、`NOT_RUN`は未実行、`UNKNOWN`は未観測・未確定。これらを相互置換禁止。
 
-`P0=上位の安全・環境・権限制約;P1=今回のユーザー原文指示と明示許可;P2=本AGENTSの持続作業要領;P3=docs/redesign/01_SYSTEM_SPECIFICATION.mdのR2先行論理契約と採用済み施工順改訂;P4=R2の要求/試験/出典/履歴台帳;P5=rust/audit/construction/MB-BUILD-20261117-D2-LLM/01_施工仕様書.md+02_施工工程表.md+03_Codex施工指示書.md;P6=現物コード/実行結果/Git履歴;P7=他repo/一般論`。`管轄=P1{今回の許可と目的};P2{施工方法};P3/P4{論理同一性と要求母集団};P5{現行仕様・工程・具体施工};P6{観測実態};P7{比較資料}`。単純な数値順位で別管轄を上書き禁止。矛盾は`対象/主語/版/管轄/根拠/影響`を照合→未認可変更を停止→設計者/オーナーへ帰還。
+`P0=上位の安全・環境・権限制約;P1=今回のユーザー原文指示と明示許可;P2=本AGENTSの持続作業要領;P3=docs/redesign/01_SYSTEM_SPECIFICATION.mdのR2先行論理契約と採用済み施工順改訂;P4=R2の要求/試験/出典/履歴台帳;P5={仕様:rust/audit/construction/MB-BUILD-20261117-D2-LLM/01_施工仕様書.md,工程:rust/audit/construction/MB-BUILD-20261117-D2-LLM/02_施工工程表.md,指示:rust/audit/construction/MB-BUILD-20261119-D3-C/03_Codex施工指示書.md};P6=現物コード/実行結果/Git履歴;P7=他repo/一般論`。`管轄=P1{今回の許可と目的};P2{施工方法};P3/P4{論理同一性と要求母集団};P5{現行仕様・工程・具体施工};P6{観測実態};P7{比較資料}`。単純な数値順位で別管轄を上書き禁止。矛盾は`対象/主語/版/管轄/根拠/影響`を照合→未認可変更を停止→設計者/オーナーへ帰還。
 
-`現行=D2-LLM唯一のRust施工3点セット`。版採用＝[`D2採用記録`](rust/audit/construction/MB-BUILD-20261117-D2-LLM/README.md)、索引＝[`施工版索引`](rust/audit/construction/README.md)。旧R2/R4/D1・11-13/14版・B01..B56は成立範囲付き履歴/証拠。`D1全数source意味照合のE6末尾への変更はD2で継承`；E0/E1前に元414 source全読解を先行必須化せず、E6末尾の全意味/実consumer照合義務は削除しない。旧版原文/評価/不成立を現在の文言で遡及改変禁止。
+`現行={D2仕様,D2工程,D3-C指示}唯一のRust施工3点セット`。版採用＝[`D3-C採用記録`](rust/audit/construction/MB-BUILD-20261119-D3-C/README.md)、索引＝[`施工版索引`](rust/audit/construction/README.md)。旧R2/R4/D1・11-13/14版・B01..B56は成立範囲付き履歴/証拠。`D1全数source意味照合のE6末尾への変更はD2で継承`；E0/E1前に元414 source全読解を先行必須化せず、E6末尾の全意味/実consumer照合義務は削除しない。旧版原文/評価/不成立を現在の文言で遡及改変禁止。
 
 `役割=指示者・採否者・公開決定者{オーナー};設計者・仕様整合者{チャッピー};施工者{Codex};利用者{製品ユーザー};履歴保持{Git}`。Codexの裁量＝認可済み施工順内の局所手段・根因修正。Codexの非裁量＝原理、主語、目的、責任境界、要求削除、工程再設計、設計採否、保証、公開、別権限。仕様書＝成立条件／工程表＝依存順・工程出口／指示書＝対象・施工・検査／本書＝共通作業方法。**本書を第四の独立施工指示書にしない**。
 
@@ -26,7 +26,7 @@
 
 ## 2｜着工・施工束・再同期
 
-`START[独立作業/復帰/作業者交代]: (1)P0と今回P1原文・許可/非許可;(2)作業path上の全適用AGENTSと本書;(3)Git本repo/main実HEAD/remote-main差/dirty/staged/未push/別writer/未確定作用/保全対象;(4)現行D2採用記録+3点セット(施工者は03と本書を直接使用、上位判断では01/02);(5)必要なR2原典/要件/履歴/現物コード/試験;(6)`{主語,目的,手段,対象,工程,許可,保持条件,実producer→consumer,実出口,停止条件}`を固定→着工`。要約/会話の「完了」/前回のSHA/過去PASSのみで現物を置換禁止。GitHub同期が不能なら現HEADとremote未観測を区別し、無断の迂回接続をしない。
+`START[独立作業/復帰/作業者交代]: (1)P0と今回P1原文・許可/非許可;(2)作業path上の全適用AGENTSと本書;(3)Git本repo/main実HEAD/remote-main差/dirty/staged/未push/別writer/未確定作用/保全対象;(4)現行D3-C採用記録+3点セット(施工者はD3-C/03と本書を直接使用、上位判断ではD2/01/02);(5)必要なR2原典/要件/履歴/現物コード/試験;(6)`{主語,目的,手段,対象,工程,許可,保持条件,実producer→consumer,実出口,停止条件}`を固定→着工`。要約/会話の「完了」/前回のSHA/過去PASSのみで現物を置換禁止。GitHub同期が不能なら現HEADとremote未観測を区別し、無断の迂回接続をしない。
 
 `READ_MIN=工程E0/E1では一台Coreに必要な既存Rust/元コード/根拠だけ観測;E6で全93+追加/元source全意味・試験全母集団を完成照合;独立設計変更では関連するR2/台帳/監査原典を再照合`。必要台帳＝`docs/redesign/{02_CAPABILITY_REGISTER.md,03_REQUIREMENT_TRACE.tsv,04_SOURCE_CENSUS.tsv,05_VERIFICATION_AND_EVIDENCE.md,06_LINEAGE_AND_DECISIONS.md,07_R1_AUDIT_CLOSURE.md,08_WIRE_SCHEMA.json,09_TEST_CENSUS.tsv}`、`rust/audit/{implementation-obligations.md,requirements.tsv,source_contract_reviews.tsv,IMPLEMENTATION_STATUS.md}`。Rust現物＝`rust/{Cargo.toml,Cargo.lock,rust-toolchain.toml,README.md}`、`rust/docs/{IMPLEMENTATION_CHOICES.md,DEPENDENCIES.md}`、影響するcrate/app/試験/port。元ソース母集団と要求を先行完了と混同禁止。
 
@@ -46,9 +46,9 @@
 
 ## 4｜工程参照・検査・状態
 
-`工程・W命令・G/T成功述語・93要件の唯一の施工正本=D2 01/02/03`。`順序=E0→E1{唯一Core K1..K7一体躯体}→E2{CORE-G01..07同一版7/7}→E3/E4{最小入出力}→E5{通常入口T01..03}→E6{残る93+新発見+全source意味/実consumer}→E7{体系QC}→E8{独立QA}→オーナー別GO`。これは施工依存であり現在の達成状態ではない。作業者は工程を自動省略・再設計・逆順施工しない。`CORE-Gxx≠R2のCxx`、`CAP-Dxx≠ARCH-Dxx`、`要求Fxx≠R1監査Fxx`。
+`工程・W命令・G/T成功述語・93要件の唯一の施工正本={D2/01仕様,D2/02工程,D3-C/03指示}`。`順序=E0→E1{唯一Core K1..K7一体躯体}→E2{CORE-G01..07同一版7/7}→E3/E4{最小入出力}→E5{通常入口T01..03}→E6{残る93+新発見+全source意味/実consumer}→E7{体系QC}→E8{独立QA}→オーナー別GO`。これは施工依存であり現在の達成状態ではない。作業者は工程を自動省略・再設計・逆順施工しない。`CORE-Gxx≠R2のCxx`、`CAP-Dxx≠ARCH-Dxx`、`要求Fxx≠R1監査Fxx`。
 
-`主語不変=入力→唯一Core→出力→実観測→同Core元Goal判定`。Inputは封印だけ、Outputは採用内容描画とreceiptだけ、Store/port/CLI/HTTP/外部LLMは従属。判断/学習/Goal/権限の別writer化・完成済み文章の選択だけを新内容生成と呼ぶこと・元Goalの暗黙変更・未確認receiptのCOMMIT・独立Learnerによる成功代行を禁止。D2/R2に定義された意味/状態/六要素/証明保存型・仮説型学習/有限停止の施工詳細は03指示書の所定Wで施工し、本書へ重複転載しない。
+`主語不変=入力→唯一Core→出力→実観測→同Core元Goal判定`。Inputは封印だけ、Outputは採用内容描画とreceiptだけ、Store/port/CLI/HTTP/外部LLMは従属。判断/学習/Goal/権限の別writer化・完成済み文章の選択だけを新内容生成と呼ぶこと・元Goalの暗黙変更・未確認receiptのCOMMIT・独立Learnerによる成功代行を禁止。D2/R2に定義された意味/状態/六要素/証明保存型・仮説型学習/有限停止の施工詳細は現行D3-C/03指示書の所定Wで施工し、本書へ重複転載しない。
 
 `BUILD検査=変更箇所の構文/型/実結線smoke+影響する安全/権限/秘密/重複作用/復旧負例`。高危険の中間状態は隔離・無効化。全workspace suite/長時間LIVE/全要件表は小束ごとの必須でない。`E7 QC=体系形状の成立後に通常/異常/相互作用/資源/持続化/回復/OS・ABI/性能を同一版で検査`；`E8 QA=固定した母集団/環境/用途・配布形態ごとの独立保証判定`。E6出口までの未実装/未接続をQC/QAの「欠陥処理」に移して隠さない。契約上必須の安全試験とゲートは削除・恒久skip禁止。
 

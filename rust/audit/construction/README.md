@@ -4,13 +4,14 @@
 
 | 版 | 現在の用途 | 参照先 |
 |---|---|---|
-| **2026-11-17／D2-LLM** | **唯一の現行Rust後継施工3点セット／日本語基底LLM高密度** | [`MB-BUILD-20261117-D2-LLM`](MB-BUILD-20261117-D2-LLM/README.md) |
+| **2026-11-19／D3-C** | **現行三点セット＝D2仕様＋D2工程＋D3-C指示。全体躯体先行の施工命令改訂** | [`MB-BUILD-20261119-D3-C`](MB-BUILD-20261119-D3-C/README.md) |
+| 2026-11-17／D2-LLM | 現行仕様・工程の原文および歴史的D2施工指示・採用記録 | [`MB-BUILD-20261117-D2-LLM`](MB-BUILD-20261117-D2-LLM/README.md) |
 | 2026-11-17／D1 | 旧採用施工3点セットの原本・採用記録。D2に改訂済み、現行指示にはしない | [`MB-BUILD-20261117`](MB-BUILD-20261117/README.md) |
 | 2026-11-15／R4 | 過去の施工契約・B31〜B56の施工・試験履歴。現行指示にしない | [`MB-BUILD-20261115`](MB-BUILD-20261115/README.md) |
 | 2026-11-14 | 過去の施工契約・B01〜B30の施工・試験履歴。現行指示にしない | [`MB-BUILD-20261114`](MB-BUILD-20261114/README.md) |
 | 2026-11-13 | 過去の施工契約と原文証拠。現行指示にしない | [`MB-BUILD-20261113`](MB-BUILD-20261113/README.md) |
 
-現行D2-LLMの3文書：[`01_施工仕様書.md`](MB-BUILD-20261117-D2-LLM/01_施工仕様書.md)／[`02_施工工程表.md`](MB-BUILD-20261117-D2-LLM/02_施工工程表.md)／[`03_Codex施工指示書.md`](MB-BUILD-20261117-D2-LLM/03_Codex施工指示書.md)。**三文書を一組**で適用。先行論理仕様＝[`R2`](../../../docs/redesign/01_SYSTEM_SPECIFICATION.md)。施工順の明示的改訂＝歴史的[`D1採用記録`](MB-BUILD-20261117/README.md)、その意味と全要求を保持した高密度版＝[`D2採用記録`](MB-BUILD-20261117-D2-LLM/README.md)。作業要領＝ルート[`AGENTS.md`](../../../AGENTS.md)。歴史的R2/R4/D1を改竄せず、Codexの直接施工は**D2指示書＋AGENTS**に従う。
+現行3文書：[D2仕様書](MB-BUILD-20261117-D2-LLM/01_施工仕様書.md)／[D2工程表](MB-BUILD-20261117-D2-LLM/02_施工工程表.md)／**[D3-C施工指示書](MB-BUILD-20261119-D3-C/03_Codex施工指示書.md)**。**三文書を一組**で適用。採用差分・SHA＝[D3-C採用記録](MB-BUILD-20261119-D3-C/README.md)。先行論理仕様＝[`R2`](../../../docs/redesign/01_SYSTEM_SPECIFICATION.md)。工程改訂履歴＝[D1](MB-BUILD-20261117/README.md)、D2仕様・工程＝[D2採用記録](MB-BUILD-20261117-D2-LLM/README.md)。作業要領＝ルート[`AGENTS.md`](../../../AGENTS.md)。歴史版の当時の「現行」表記を遡及変更せず、今後のCodex直接施工は**D3-C指示書＋AGENTS**に従う。
 
 E1で**一台のCore K1〜K7の全体躯体**を実producer→consumerで通し、E2で同一版の施工専用`CORE-G01`〜`CORE-G07`全PASSを確認する。その後E3/E4最小入出力、E5通常入口T01〜T03全PASS、E6全93要件・元ソース全数の意味と実経路、E7全体系QC、E8独立QAの順。初期基線のB12/B14/B16やB49/B56の限定成立を新HEADの全ゲートPASSと混同しない。`CORE-Gxx`とR2の外部根拠要求`C01`〜`C13`は別ID。現状の評価と不足は[`IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md)を参照し、毎施工開始時にHEAD・現物・実証拠を再観測する。
 
