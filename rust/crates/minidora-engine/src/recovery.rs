@@ -504,6 +504,22 @@ fn verify_previous_relation_context(
             "the prior result is not committed",
         ));
     }
+    match store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)? {
+        Some((_, prior_bundle)) if identity(&prior_bundle.request)? != previous.id => {
+            return Err(failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the saved prior result is not bound to its sealed input identity",
+            ));
+        }
+        Some(_) => {}
+        None if previous.actor_memory_revision.is_some() => {
+            return Err(failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the saved prior result is not bound to its sealed input identity",
+            ));
+        }
+        None => {}
+    }
     if previous.calculation.is_some() {
         return Ok(());
     }
@@ -7333,6 +7349,90 @@ mod tests {
             &engine.store,
             "alice",
             &wrong_input_id_anchor,
+            &retained_result,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert!(
+            error
+                .to_string()
+                .contains("not bound to its sealed input identity")
+        );
+        assert_eq!(engine.latest("alice", "case").unwrap().unwrap(), retained);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn saved_previous_relation_explanation_rejects_missing_previous_result_input() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        assert_eq!(premise.lifecycle, Lifecycle::Commit, "{premise:?}");
+
+        let explicit_answer = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            explicit_answer.lifecycle,
+            Lifecycle::Commit,
+            "{explicit_answer:?}"
+        );
+
+        let prior_relation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "prior-relation-why", "alice", "なぜそれは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            prior_relation.lifecycle,
+            Lifecycle::Commit,
+            "{prior_relation:?}"
+        );
+        assert!(prior_relation.actor_memory_revision.is_some());
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior_relation.text);
+
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let mut unbound_previous_result = retained.clone();
+        let previous = unbound_previous_result
+            .prior_results
+            .get_mut(&prior_relation.id)
+            .expect("the persisted case retains the AskPreviousRelation result");
+        assert_eq!(previous.id, prior_relation.id);
+        assert_eq!(previous.lifecycle, Lifecycle::Commit);
+        assert_eq!(previous.input_id, prior_relation.input_id);
+        assert_eq!(previous.input_version, prior_relation.input_version);
+        assert!(previous.actor_memory_revision.is_some());
+        previous.input_id = "missing-ask-previous-relation-input".into();
+
+        let error = inspect(
+            &engine.store,
+            "alice",
+            &unbound_previous_result,
             &retained_result,
         )
         .unwrap_err();
