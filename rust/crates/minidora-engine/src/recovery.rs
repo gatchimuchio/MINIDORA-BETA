@@ -2381,9 +2381,21 @@ fn inspect(
     if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
-        // newly different answer during mere effect reconciliation.
-        let memory = store.load_memory(actor)?;
-        let answer = crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+        // newly different answer during mere effect reconciliation. Use a
+        // current revision-matched Goal projection when available; cold/stale
+        // indexes retain the authenticated full-snapshot path.
+        let answer = match crate::core::indexed_relation_query_from_store(
+            store,
+            actor,
+            proposition,
+            goal.budget.max_actions,
+        )? {
+            Some((_projected_memory, answer)) => answer?,
+            None => {
+                let memory = store.load_memory(actor)?;
+                crate::relations::query(&memory, proposition, goal.budget.max_actions)?
+            }
+        };
         let current_proof_contract = matches!(
             bundle.meaning.parser_version.as_str(),
             "declarative-ja-en-v46-proof-lineage-guarantee"
@@ -4454,6 +4466,7 @@ mod tests {
 
         let mut request =
             RequestEnvelope::new("case", "after-invalidation", "alice", "ココは動物ですか");
+        request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -4462,10 +4475,117 @@ mod tests {
         let result = engine.execute("alice", request).unwrap();
         assert_eq!(result.lifecycle, Lifecycle::Commit);
         assert_eq!(result.guarantee, Guarantee::UserPremise);
-        assert_eq!(result.dependencies, vec![counterexample_id]);
+        assert_eq!(result.dependencies, vec![counterexample_id.clone()]);
         assert!(result.text.contains("ココは動物ではない"));
         let revision = engine.latest("alice", "case").unwrap().unwrap();
+        let memory_revision = result
+            .actor_memory_revision
+            .expect("Core records the actor-memory revision for the relation answer");
+        let original_memory = engine
+            .store
+            .load_memory_revision("alice", memory_revision)
+            .unwrap()
+            .expect("the relation answer's immutable actor-memory revision is retained");
         assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap(),
+            Some(original_memory)
+        );
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "relation-query-off-scope-history",
+            "alice",
+            "関係照会Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+        let goal_ref = revision.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let (Intent::Ask { proposition } | Intent::AskWhy { proposition }) = &goal.intent else {
+            panic!("retained relation answer lost its typed query");
+        };
+        let full_answer =
+            crate::relations::query(&current_memory, proposition, goal.budget.max_actions).unwrap();
+        let (projected_memory, indexed_answer) = crate::core::indexed_relation_query_from_store(
+            &engine.store,
+            "alice",
+            proposition,
+            goal.budget.max_actions,
+        )
+        .unwrap()
+        .expect("current relation index is available");
+        let indexed_answer = indexed_answer.unwrap();
+        assert_eq!(current_memory.facts.len(), 82);
+        assert_eq!(indexed_answer.status, full_answer.status);
+        assert_eq!(indexed_answer.facts, full_answer.facts);
+        assert_eq!(indexed_answer.used_rules, full_answer.used_rules);
+        assert_eq!(
+            crate::relations::answer_dependencies(&indexed_answer),
+            crate::relations::answer_dependencies(&full_answer)
+        );
+        assert_eq!(
+            crate::relations::answer_guarantee(&indexed_answer),
+            crate::relations::answer_guarantee(&full_answer)
+        );
+        assert_eq!(projected_memory.revision, current_memory.revision);
+        assert_eq!(projected_memory.facts.len(), 1);
+        assert_eq!(projected_memory.rules.len(), 0);
+        assert!(inspect(&engine.store, "alice", &revision, &result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "invalidate-current-counterexample",
+                    "alice",
+                    &format!("{counterexample_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &revision, &result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_PROOF_INVALIDATED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
     #[test]

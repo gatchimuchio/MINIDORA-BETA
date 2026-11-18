@@ -302,6 +302,38 @@ fn indexed_relation_evaluation(
     ))
 }
 
+/// Re-evaluate one relation query from a revision-matched Store projection.
+/// `None` means the index is cold or stale and the caller should use its
+/// authenticated snapshot path.
+pub(crate) fn indexed_relation_query_from_store(
+    store: &Store,
+    actor: &str,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<Option<(MemoryState, Result<relations::QueryOutcome>)>> {
+    store.with_relation_index(actor, |index| {
+        let (memory, answer) = match indexed_relation_evaluation(index, proposition, max_actions) {
+            Ok((memory, evaluation)) => (memory, Ok(evaluation.answer)),
+            Err(error)
+                if matches!(
+                    &error,
+                    Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                ) =>
+            {
+                (
+                    MemoryState {
+                        revision: index.revision(),
+                        ..MemoryState::default()
+                    },
+                    Err(error),
+                )
+            }
+            Err(error) => return Err(error),
+        };
+        Ok((memory, answer))
+    })
+}
+
 fn full_snapshot_relation_evaluation(
     memory: &MemoryState,
     proposition: &Proposition,
