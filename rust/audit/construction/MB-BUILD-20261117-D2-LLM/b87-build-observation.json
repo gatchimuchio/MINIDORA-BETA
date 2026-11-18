@@ -1,0 +1,151 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_PREVIOUS_RELATION_RESULT_INPUT_BINDING_B87_V1",
+  "work_item": "Ensure current-format saved AskPreviousRelation results cannot bypass ExplainPrevious Recovery validation when their sealed input lookup is missing or misbound",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Etc/UTC",
+  "base_head": "04bc2473b6821fa90954b39d0f8b33598863c73d",
+  "implementation_commit": "e9a7a7cd12853cb7aacc3acf485ef73dd3a22e76",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "f20717069b0951d11d8492ff93a106e8ff2a7760d0d4fa5f7f89bd44617e702c",
+  "permission_scope": "Continuing user authorization to implement in MINIDORA-BETA and retain work in its repository; local source change, focused checks, direct main commit/fast-forward push, and existing backup-reference rotation only.",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "04bc2473b6821fa90954b39d0f8b33598863c73d",
+    "origin_main": "04bc2473b6821fa90954b39d0f8b33598863c73d",
+    "local_base": "refs/heads/codex/backup-main=04bc2473b6821fa90954b39d0f8b33598863c73d",
+    "local_previous": "refs/heads/codex/backup-main-prev=5c826754a16a4d4713634c80b1865bf214da80e2",
+    "local_tags": [
+      "refs/tags/codex/backup-main=04bc2473b6821fa90954b39d0f8b33598863c73d",
+      "refs/tags/codex/backup-main-prev=5c826754a16a4d4713634c80b1865bf214da80e2"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=04bc2473b6821fa90954b39d0f8b33598863c73d",
+      "refs/tags/codex/backup-main-prev=5c826754a16a4d4713634c80b1865bf214da80e2"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "04bc2473b6821fa90954b39d0f8b33598863c73d"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 67% used",
+    "repo_size_at_start": "84M",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+    "capacity_at_batch_close": "63G total / 20G available / 67% used",
+    "repo_size_at_batch_close": "84M (observed before evidence commit)",
+    "managed_cloud_environment": "Platform reported the existing /workspace checkout ready; pinned Rust/Cargo 1.99.1 binaries were invoked via their explicit toolchain path; Git CLI fetch/ls-remote succeeded; no external provider was used.",
+    "remote_access": "Repository reads and writes use Git CLI; no GitHub connector API, other provider, deployment or external action was used."
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "The normal Japanese Engine path commits a premise, a direct explicit Ask, a typed AskPreviousRelation result and ExplainPrevious to a permissioned fixture target. After Engine reopen, the valid saved result passes Recovery inspect.",
+    "root_cause": "verify_previous_relation_context allowed missing prior input bundles to fall through to the revision-less legacy fallback. A current saved AskPreviousRelation ResultRecord with actor_memory_revision present could therefore lose its input_id in a cloned CaseRevision and Recovery would still return Ok.",
+    "guard": "Before typed-result dispatch, a loaded prior input must have identity(request)==previous.id. If lookup is absent and the saved ResultRecord has actor_memory_revision, Recovery returns RECOVERY_CONTEXT_PROOF_CHANGED. Results without actor_memory_revision retain the pre-existing missing-input fallback; this legacy branch was not independently exercised by B87.",
+    "negative_case": "Only the prior AskPreviousRelation ResultRecord input_id changes to an unbound ID in a cloned CaseRevision. The result id, map key, COMMIT lifecycle and input_version stay unchanged. Recovery stops with RECOVERY_CONTEXT_PROOF_CHANGED; persisted latest revision and output bytes remain unchanged.",
+    "current_head_index": "The prior-result input binding check runs before the existing saved prior-relation proof/current-head validation; no index or proof algorithm changed.",
+    "retained_revision_replay": "Valid Engine reopen inspect passes before the clone-only mutation; no persistent Store record is edited.",
+    "preserved_contracts": [
+      "Current-format prior results with an actor-memory revision require their sealed input identity for Recovery.",
+      "When a prior input bundle exists, its request identity must equal the ResultRecord.id.",
+      "Revision-less legacy records keep the previous optional-input path.",
+      "No schema/API/dependency/manifest/lockfile change; production change is confined to the existing Recovery consumer."
+    ],
+    "schema_version_changed": false,
+    "runtime_behavior_verified": true,
+    "change_type": "One existing Recovery identity guard plus one Engine-library regression test.",
+    "runtime_verification_scope": "One saved AskPreviousRelation -> ExplainPrevious Recovery route; malformed prior result exists only in a cloned CaseRevision, not in persistent Store."
+  },
+  "test_attempts": [
+    {
+      "command": "cargo test -p minidora-engine --lib recovery::tests::saved_previous_relation_explanation_rejects_missing_previous_result_input --locked -- --exact --nocapture",
+      "result": "Initial FAIL: inspect returned Ok for the unbound current-format prior result; 0 passed, 1 failed, 280 filtered out; exit 101. After the guard: 1 passed, 0 failed, 280 filtered out; test completed in 1.06s.",
+      "logs": [
+        "b87-initial-missing-prior-input-gap.log",
+        "b87-missing-prior-result-input-test.log"
+      ]
+    },
+    {
+      "command": "cargo test -p minidora-engine --lib saved_previous_relation_explanation_ --locked -- --nocapture",
+      "result": "PASS: 7 passed, 0 failed, 274 filtered out; completed in 3.79s.",
+      "log": "b87-anchor-recovery-filter.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS: compile check only; no tests were executed by this command.",
+      "log": "b87-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b87-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b87-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b87-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "Full Engine/workspace runtime suites, workspace all-target Clippy, workspace all-features tests and build.",
+    "Revision-less legacy missing-input recovery route; compatibility fallback is preserved by code but was not separately exercised.",
+    "CLI, HTTP and browser entry paths; B87 used the Engine library Recovery consumer.",
+    "Persistent SQLite/Store corruption, repair and malformed stored CaseRevision injection.",
+    "Long-history replay, every Recovery consumer and complete CAP-D02/E1 acceptance.",
+    "Other operating systems, independent QA, E2-E8, release and deployment."
+  ],
+  "asset_classification": {
+    "batch_owned_current_assets_total": 13,
+    "保持": [
+      "rust/audit/IMPLEMENTATION_STATUS.md (existing status ledger updated in place)",
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv (existing requirement trace updated in place)"
+    ],
+    "保管済み": [
+      "BUILD_BATCH_87.md report",
+      "b87-build-observation.json machine observation",
+      "b87-initial-missing-prior-input-gap.log (initial failing evidence preserved)",
+      "b87-missing-prior-result-input-test.log",
+      "b87-anchor-recovery-filter.log",
+      "b87-workspace-check.log",
+      "b87-engine-library-clippy.log",
+      "b87-fmt-check.log",
+      "b87-diff-check.log"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/recovery.rs (existing Recovery guard and one regression test updated)",
+      "existing shared Cargo target cache updated by test, compile check and Clippy"
+    ],
+    "ゴミ箱移動済み": 0,
+    "保留": [],
+    "temporary_fixture": "The fixture owns cleanup of its temporary database and target; no fixture file remains in the repository.",
+    "windows_storage_scope": "Not applicable to this Linux execution.",
+    "onedrive": "Not used; Git-managed records will be stored in GitHub main and remote backup tags."
+  },
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}

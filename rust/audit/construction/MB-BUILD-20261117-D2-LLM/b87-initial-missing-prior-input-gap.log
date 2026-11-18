@@ -1,0 +1,19 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.29s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+
+thread 'recovery::tests::saved_previous_relation_explanation_rejects_missing_previous_result_input' (283586) panicked at crates/minidora-engine/src/recovery.rs:7422:10:
+called `Result::unwrap_err()` on an `Ok` value: (ActionRecord { case_id: "case", actor_id: "alice", action_id: "6e08869949061089134d78375be344a29891c385ac34997a9f516bb414069a3c", input_fingerprint: "2118beec9da78130151e2d8ee3933fcbf5bdc7ca6711d209d6c2c42b8a586583", idempotency_key: "6e08869949061089134d78375be344a29891c385ac34997a9f516bb414069a3c", effect_class: "LOCAL_WRITE", target: "/tmp/minidora-recovery-283585-1795016903364586671/actual-report.txt", authorization_sha256: "8b8fd4a57176ddc9a95cf0d9cdfcd0732d53cd765ee56d780a7d7fc9ab779efd", exact_request_sha256: "1bb2722f578df236892c2228053cfce268b5aa48d262f475b6aebc0019e0de51", phase: Confirmed, receipt: Some(DeliveryReceipt { action_id: "6e08869949061089134d78375be344a29891c385ac34997a9f516bb414069a3c", target: "/tmp/minidora-recovery-283585-1795016903364586671/actual-report.txt", content_sha256: "1bb2722f578df236892c2228053cfce268b5aa48d262f475b6aebc0019e0de51", phase: Confirmed, observed_bytes: Some(382), reason: None }) }, DeliveryReceipt { action_id: "6e08869949061089134d78375be344a29891c385ac34997a9f516bb414069a3c", target: "/tmp/minidora-recovery-283585-1795016903364586671/actual-report.txt", content_sha256: "1bb2722f578df236892c2228053cfce268b5aa48d262f475b6aebc0019e0de51", phase: Confirmed, observed_bytes: Some(382), reason: None }, Scheduler { nodes: [GoalNode { id: "compute", kind: CoreResult, requires: [] }, GoalNode { id: "content", kind: ContentPlan, requires: ["compute"] }, GoalNode { id: "render", kind: RenderedArtifact, requires: ["content"] }, GoalNode { id: "file", kind: RequiredFile, requires: ["render"] }], index: {"compute": 0, "content": 1, "file": 3, "render": 2}, observed: {"compute": "bae0e8618ced78b316facd050c0a74a6acd5c6f6405007f9ae6c36a4771e23db", "content": "ee316aa44e7ba40355c78bac82fef2556dfef3d65f18273fcd663ccc16b9ecc4", "render": "7b8f872124c6a42e7a506e6d8093bfb49ad4074a4ecae24fef987411e01c2137"}, consumption: {"compute": {}, "content": {"compute": "bae0e8618ced78b316facd050c0a74a6acd5c6f6405007f9ae6c36a4771e23db"}, "render": {"content": "ee316aa44e7ba40355c78bac82fef2556dfef3d65f18273fcd663ccc16b9ecc4"}}, remaining_actions: 29 }, "7b8f872124c6a42e7a506e6d8093bfb49ad4074a4ecae24fef987411e01c2137")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test recovery::tests::saved_previous_relation_explanation_rejects_missing_previous_result_input ... FAILED
+
+failures:
+
+failures:
+    recovery::tests::saved_previous_relation_explanation_rejects_missing_previous_result_input
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 280 filtered out; finished in 1.42s
+
+error: test failed, to rerun pass `-p minidora-engine --lib`
