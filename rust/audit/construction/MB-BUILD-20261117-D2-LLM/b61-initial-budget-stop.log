@@ -1,0 +1,6 @@
+Iteration evidence for the initial low-budget probe.
+
+Command: cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib indexed_common_relations_use_bounded_subject_candidates_and_preserve_artifacts --locked -- --nocapture
+Initial fixture setting: budget_request.budget.max_actions = 2
+Observed: the query suspended before reaching Intent::AskCommonRelations with reason ACTION_BUDGET_EXHAUSTED: required graph products ["compute", "content", "render"]. actor_memory_revision was None because no memory query had run.
+Correction: use max_actions = 3, the scheduler minimum for this query. The request then reaches indexed candidate selection, suspends as RESOURCE_LIMIT, and retains actor-memory revision 1. The final regression verifies that behavior.

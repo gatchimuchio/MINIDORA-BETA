@@ -1,0 +1,202 @@
+{
+  "schema": "MINIDORA_E1_W10_COMMON_RELATION_PROJECTION_B61_V1",
+  "work_item": "Goal-related bounded candidate selection for ordinary Japanese AskCommonRelations Core route",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "62f39338517d74152e787615a5fd0f0243d39735",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "environment": {
+    "platform": "Linux x86_64",
+    "kernel": "Linux 6.18.57",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "target_dir": "/workspace/.minidora-cloud/rust-target"
+  },
+  "tested_source_diff_sha256": "3b8575e05f3892299fa87768eb5120eeec105607b73bb08f0a5e624d95297c4d",
+  "scope": {
+    "route": "Engine::execute Intent::AskCommonRelations for the ordinary Japanese common-point question",
+    "selection": "One revision-matched Store relation-index transaction selects exact-scope Fact/Rule records for either named subject and variable-subject Rules through memory_index_common_subject_scope. Selected Facts and Rule premise/additional-premise/conclusion shapes seed the existing per-subject relation proof projection.",
+    "ownership": "Store supplies revision-checked derived candidates. Existing Core owns candidate interpretation, condition evaluation, proof status, conflict/budget stops, report construction and adoption. No parser grammar, separate decision authority, or external API was added.",
+    "budget": "Indexed candidate-record selection consumes a bounded portion of request max_actions. The remaining allowance is divided over each candidate shape for both subjects; each existing active_relation_projection and proof query must fit its per-side allowance.",
+    "memory_revision": "Committed answers and indexed candidate/proof budget stops retain the revision read in the same index transaction on ResultRecord.actor_memory_revision.",
+    "index_fallback": "A missing/stale index is rebuilt once from the authenticated loaded current snapshot and retried. If a concurrent writer advances the head during rebuild, the immutable loaded snapshot is the bounded request fallback.",
+    "recovery": "Recovery continues to replay the exact retained CommonRelations memory snapshot and recheck current memory before confirming pending output; this batch does not bound that replay selection."
+  },
+  "fixtures": {
+    "indexed_common_relations": {
+      "stored_records": {
+        "facts": 82,
+        "rules": 1,
+        "conditions": 0,
+        "unrelated_facts": 80
+      },
+      "selected_records": {
+        "named_subject_facts": 2,
+        "variable_subject_rules": 1,
+        "unrelated_records": 0
+      },
+      "candidate_shapes": 2,
+      "normal_japanese_request": "[scope=lab]NeraとMikoの共通点は何ですか",
+      "normal_route_action_budget": 64,
+      "normal_route_lifecycle": "COMMIT",
+      "actor_memory_revision": 1,
+      "guarantee": "DERIVED",
+      "unrelated_facts_in_dependencies": false,
+      "report_matches_full_snapshot": true,
+      "canonical_artifact_bytes_match_full_snapshot": true,
+      "proof_dependency_ids_match_full_snapshot": true,
+      "guarantee_matches_full_snapshot": true,
+      "former_full_table_route_at_same_budget": "RESOURCE_LIMIT",
+      "cold_index_deleted_rebuilt_and_retried": true
+    },
+    "budget_stop": {
+      "action_budget": 3,
+      "lifecycle": "SUSPEND",
+      "reason_code": "RESOURCE_LIMIT",
+      "result_actor_memory_revision": 1
+    },
+    "recovery": {
+      "exact_memory_revision_replay_pass": true,
+      "invalidated_supporting_fact_prevents_old_answer_confirmation": true
+    },
+    "normal_cli": {
+      "ordinary_japanese_common_relations_route_pass": true
+    }
+  },
+  "checks": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib indexed_common_relations_use_bounded_subject_candidates_and_preserve_artifacts --locked -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: indexed candidate selection, normal Japanese Core route, full-snapshot artifact/proof parity, cold-index rebuild and revision-bearing budget stop",
+      "log": "b61-focused-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib common_relations_recovery_pins_and_rechecks_its_memory_revision --locked -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: exact revision replay after Engine reopen and invalidation recheck",
+      "log": "b61-common-relations-recovery-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-cli --test normal_route natural_common_relation_questions_compare_two_subjects_using_shared_proofs --locked -- --exact",
+      "exit_code": 0,
+      "result": "PASS: ordinary Japanese CLI common-relations consumer",
+      "log": "b61-normal-cli-common-relations-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --locked",
+      "exit_code": 0,
+      "result": "PASS: 270 unit tests, 37 integration cases across 33 harnesses, 0 doc tests",
+      "log": "b61-engine-tests.log"
+    },
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b61-format-check.log"
+    },
+    {
+      "command": "cargo check --manifest-path rust/Cargo.toml --workspace --all-targets --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b61-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml -p minidora-engine --lib --locked -- -D warnings",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b61-engine-library-clippy-pass.log"
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml -p minidora-engine --all-targets --locked -- -D warnings",
+      "exit_code": 101,
+      "result": "BLOCKED by unchanged clippy::too_many_arguments in comparison test helpers _45 and _46",
+      "log": "b61-all-target-clippy.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b61-diff-check.log"
+    }
+  ],
+  "iteration_notes": [
+    {
+      "initial_attempt": "A 2-action normal request stopped at the scheduler's required-product minimum before Core relation candidate selection and had no actor-memory revision.",
+      "correction": "The final budget-stop regression uses 3 actions, reaches indexed selection and verifies RESOURCE_LIMIT with revision 1.",
+      "log": "b61-initial-budget-stop.log"
+    },
+    {
+      "initial_attempt": "Warnings-denied engine-library Clippy reported too_many_arguments on two new Core wrappers.",
+      "correction": "Consolidated the wrapper input into a typed CommonRelationsReplay value; focused Core/Recovery tests, workspace check and library Clippy pass on final code.",
+      "log": "b61-initial-engine-library-clippy.log"
+    }
+  ],
+  "gate_assessment": {
+    "E1-W10": "PARTIAL: ordinary Japanese AskCommonRelations bounded candidate-selection slice",
+    "CAP-D02": "UNVERIFIED: full long-history acceptance predicate not established",
+    "E1_exit": "NOT_CLAIMED"
+  },
+  "asset_closure": {
+    "retained": [
+      "rust/crates/minidora-engine/src/core.rs",
+      "rust/crates/minidora-engine/src/store.rs"
+    ],
+    "stored": [
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv",
+      "rust/audit/IMPLEMENTATION_STATUS.md",
+      "rust/audit/requirements.tsv",
+      "rust/audit/rust-requirement-observations.json",
+      "rust/docs/IMPLEMENTATION_CHOICES.md",
+      "BUILD_BATCH_61.md",
+      "b61-build-observation.json",
+      "b61-focused-test.log",
+      "b61-common-relations-recovery-test.log",
+      "b61-normal-cli-common-relations-test.log",
+      "b61-engine-tests.log",
+      "b61-format-check.log",
+      "b61-workspace-check.log",
+      "b61-engine-library-clippy-pass.log",
+      "b61-initial-engine-library-clippy.log",
+      "b61-all-target-clippy.log",
+      "b61-diff-check.log",
+      "b61-initial-budget-stop.log"
+    ],
+    "active": [
+      "revision-matched indexed candidate selection and proof projection in ordinary Core AskCommonRelations",
+      "/workspace/.minidora-cloud/rust-target retained Rust build cache"
+    ],
+    "moved_to_trash": [],
+    "pending": [
+      "remaining E1-W10 consumers and broad CAP-D02 acceptance",
+      "cold-index rebuild full-snapshot read and concurrent-head fallback costs",
+      "large-history resource population and derived index/cache/summary/model versioning",
+      "unchanged all-target Clippy argument-count findings in comparison test helpers _45 and _46"
+    ],
+    "tracked_path_inventory": {
+      "base_tracked_paths": 1129,
+      "base_paths_unchanged": 1127,
+      "retained_paths_including_updated_source": 1129,
+      "modified_audit_paths_stored": 5,
+      "new_batch_paths_stored": 13,
+      "stored_paths_total": 18,
+      "final_tracked_paths": 1142
+    }
+  },
+  "limitations": [
+    "Cold-index rebuild still reads the full authenticated current snapshot once.",
+    "A concurrent writer that advances the head during rebuild uses the immutable loaded full-snapshot fallback; B61 does not exercise that race.",
+    "Recovery continues exact retained-snapshot replay and is not bounded by this candidate selector.",
+    "B61 does not establish bounded selection for other relation, explanation, learning, cache, summary or model-adaptation consumers.",
+    "Broad fresh-process/session/model-revision reuse and large-history resource populations remain unverified.",
+    "All-target Clippy remains blocked by unchanged too_many_arguments findings in comparison test helpers _45 and _46.",
+    "Full CAP-D02 acceptance, E1 exit, release and deployment are not established."
+  ],
+  "release": "NOT_RELEASED"
+}

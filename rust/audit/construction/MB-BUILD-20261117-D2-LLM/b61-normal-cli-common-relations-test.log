@@ -1,0 +1,9 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+   Compiling minidora-cli v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/apps/cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.45s
+     Running tests/normal_route.rs (/workspace/.minidora-cloud/rust-target/debug/deps/normal_route-3c4f2ab9f7514cbd)
+
+running 1 test
+test natural_common_relation_questions_compare_two_subjects_using_shared_proofs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 141 filtered out; finished in 13.81s

@@ -821,6 +821,104 @@ pub(crate) struct CommonRelationsExplanationReplay<'a> {
     pub(crate) max_evidence_bytes: usize,
 }
 
+#[derive(Clone, Copy)]
+struct CommonRelationsReplay<'a> {
+    subject_a: &'a str,
+    subject_b: &'a str,
+    scope: &'a str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+    result_id: &'a str,
+}
+
+struct SupportedCommonRelation {
+    proposition_a: Proposition,
+    proposition_b: Proposition,
+    guarantee_a: Guarantee,
+    guarantee_b: Guarantee,
+    dependencies_a: Vec<String>,
+    dependencies_b: Vec<String>,
+    explanation_lines_a: Vec<String>,
+    explanation_lines_b: Vec<String>,
+}
+
+fn common_relations_answer_from_supported(
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    result_id: &str,
+    max_evidence_bytes: usize,
+    supported: Vec<SupportedCommonRelation>,
+) -> Result<CommonRelationsEvaluation> {
+    if supported.is_empty() {
+        return Ok(CommonRelationsEvaluation::Blocked {
+            code: "MISSING_PREMISES",
+            message: "保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。".into(),
+        });
+    }
+
+    let origin = |guarantee: &Guarantee| match guarantee {
+        Guarantee::UserPremise => "直接提示",
+        Guarantee::Derived => "規則導出",
+        _ => "根拠付き",
+    };
+    let mut report = vec![COMMON_RELATIONS_REPORT_HEADER.to_string()];
+    let mut shared_proofs = Vec::with_capacity(supported.len());
+    let mut dependencies = BTreeSet::new();
+    let mut any_derived = false;
+    for relation in supported {
+        report.push(format!(
+            "共通関係: {}（{}）／{}（{}）",
+            describe(&relation.proposition_a),
+            origin(&relation.guarantee_a),
+            describe(&relation.proposition_b),
+            origin(&relation.guarantee_b)
+        ));
+        report.extend(relation.explanation_lines_a);
+        report.extend(relation.explanation_lines_b);
+        dependencies.extend(relation.dependencies_a.iter().cloned());
+        dependencies.extend(relation.dependencies_b.iter().cloned());
+        any_derived |= relation.guarantee_a == Guarantee::Derived
+            || relation.guarantee_b == Guarantee::Derived;
+        shared_proofs.push(CommonRelationProofArtifact {
+            proposition_a: relation.proposition_a,
+            proposition_b: relation.proposition_b,
+            guarantee_a: relation.guarantee_a,
+            guarantee_b: relation.guarantee_b,
+            dependencies_a: relation.dependencies_a,
+            dependencies_b: relation.dependencies_b,
+        });
+    }
+    let report = report.join("\n");
+    let guarantee = if any_derived {
+        Guarantee::Derived
+    } else {
+        Guarantee::UserPremise
+    };
+    let artifact = CommonRelationsReportArtifact {
+        kind: COMMON_RELATIONS_REPORT_KIND.into(),
+        result_id: result_id.into(),
+        report_sha256: digest(report.as_bytes()),
+        subject_a: subject_a.into(),
+        subject_b: subject_b.into(),
+        scope: scope.into(),
+        shared_proofs,
+    };
+    let artifact_bytes = canonical(&artifact)?;
+    if report.len().saturating_add(artifact_bytes.len()) > max_evidence_bytes {
+        return Ok(CommonRelationsEvaluation::Blocked {
+            code: "RESOURCE_LIMIT",
+            message: "共通関係の出力と再検証artifactが要求の証拠予算を超えました。".into(),
+        });
+    }
+    Ok(CommonRelationsEvaluation::Complete(CommonRelationsAnswer {
+        report,
+        artifact_bytes,
+        proof_dependencies: dependencies.into_iter().collect(),
+        guarantee,
+    }))
+}
+
 /// Rebuild the bounded common-relation report and its proof artifact from one
 /// actor-memory snapshot. Core uses this when adopting the result; Recovery
 /// uses the same computation to replay the retained revision and recheck the
@@ -924,10 +1022,7 @@ pub(crate) fn common_relations_answer(
         });
     }
 
-    let mut common = Vec::new();
-    let mut shared_proofs = Vec::new();
-    let mut dependencies = BTreeSet::new();
-    let mut any_derived = false;
+    let mut supported = Vec::new();
     for (predicate, object, negative) in candidates {
         let proposition_a = Proposition {
             subject: subject_a.into(),
@@ -971,87 +1066,240 @@ pub(crate) fn common_relations_answer(
         let guarantee_b = relations::answer_guarantee(&answer_b);
         let dependencies_a = relations::answer_dependencies(&answer_a);
         let dependencies_b = relations::answer_dependencies(&answer_b);
-        dependencies.extend(dependencies_a.iter().cloned());
-        dependencies.extend(dependencies_b.iter().cloned());
-        any_derived |= guarantee_a == Guarantee::Derived || guarantee_b == Guarantee::Derived;
-        shared_proofs.push(CommonRelationProofArtifact {
-            proposition_a: proposition_a.clone(),
-            proposition_b: proposition_b.clone(),
-            guarantee_a: guarantee_a.clone(),
-            guarantee_b: guarantee_b.clone(),
-            dependencies_a,
-            dependencies_b,
-        });
-        common.push((
-            proposition_a,
-            proposition_b,
-            answer_a,
-            answer_b,
-            guarantee_a,
-            guarantee_b,
-        ));
-    }
-    if common.is_empty() {
-        return Ok(CommonRelationsEvaluation::Blocked {
-            code: "MISSING_PREMISES",
-            message: "保存済みの根拠から両対象に共通して支持される関係を確認できません。共通点が存在しないとは断定しません。".into(),
-        });
-    }
-    let origin = |guarantee: &Guarantee| match guarantee {
-        Guarantee::UserPremise => "直接提示",
-        Guarantee::Derived => "規則導出",
-        _ => "根拠付き",
-    };
-    let mut report = vec![COMMON_RELATIONS_REPORT_HEADER.to_string()];
-    for (proposition_a, proposition_b, answer_a, answer_b, guarantee_a, guarantee_b) in common {
-        report.push(format!(
-            "共通関係: {}（{}）／{}（{}）",
-            describe(&proposition_a),
-            origin(&guarantee_a),
-            describe(&proposition_b),
-            origin(&guarantee_b)
-        ));
-        report.extend(relation_explanation_lines(
+        let explanation_lines_a = relation_explanation_lines(
             memory,
             &proposition_a,
             &answer_a,
             &format!("{}側の根拠", subject_a),
-        ));
-        report.extend(relation_explanation_lines(
+        );
+        let explanation_lines_b = relation_explanation_lines(
             memory,
             &proposition_b,
             &answer_b,
             &format!("{}側の根拠", subject_b),
-        ));
-    }
-    let report = report.join("\n");
-    let overall_guarantee = if any_derived {
-        Guarantee::Derived
-    } else {
-        Guarantee::UserPremise
-    };
-    let artifact = CommonRelationsReportArtifact {
-        kind: COMMON_RELATIONS_REPORT_KIND.into(),
-        result_id: result_id.into(),
-        report_sha256: digest(report.as_bytes()),
-        subject_a: subject_a.into(),
-        subject_b: subject_b.into(),
-        scope: scope.into(),
-        shared_proofs,
-    };
-    let artifact_bytes = canonical(&artifact)?;
-    if report.len().saturating_add(artifact_bytes.len()) > max_evidence_bytes {
-        return Ok(CommonRelationsEvaluation::Blocked {
-            code: "RESOURCE_LIMIT",
-            message: "共通関係の出力と再検証artifactが要求の証拠予算を超えました。".into(),
+        );
+        supported.push(SupportedCommonRelation {
+            proposition_a,
+            proposition_b,
+            guarantee_a,
+            guarantee_b,
+            dependencies_a,
+            dependencies_b,
+            explanation_lines_a,
+            explanation_lines_b,
         });
     }
-    Ok(CommonRelationsEvaluation::Complete(CommonRelationsAnswer {
-        report,
-        artifact_bytes,
-        proof_dependencies: dependencies.into_iter().collect(),
-        guarantee: overall_guarantee,
-    }))
+    common_relations_answer_from_supported(
+        subject_a,
+        subject_b,
+        scope,
+        result_id,
+        max_evidence_bytes,
+        supported,
+    )
+}
+
+fn indexed_common_relations_answer(
+    index: &crate::store::MemoryIndexSnapshot<'_, '_>,
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+    result_id: &str,
+) -> Result<CommonRelationsEvaluation> {
+    if max_actions == 0 {
+        return Ok(CommonRelationsEvaluation::Blocked {
+            code: "RESOURCE_LIMIT",
+            message: "共通関係の候補を選ぶ推論予算がありません。".into(),
+        });
+    }
+    let candidate_record_budget = usize::try_from(max_actions - 1).unwrap_or(usize::MAX);
+    let candidate_records =
+        index.common_relation_candidates(subject_a, subject_b, scope, candidate_record_budget)?;
+    let candidate_record_actions = u32::try_from(candidate_records.len())
+        .map_err(|_| failure("RESOURCE_LIMIT", "common-relation record count overflowed"))?;
+    let selection_actions = candidate_record_actions.checked_add(1).ok_or_else(|| {
+        failure(
+            "RESOURCE_LIMIT",
+            "common-relation selection action count overflowed",
+        )
+    })?;
+    let remaining_actions = max_actions.checked_sub(selection_actions).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "common-relation candidate selection exhausted the action budget",
+        )
+    })?;
+
+    let mut candidates = BTreeSet::new();
+    let mut include_candidate = |proposition: &Proposition| {
+        if proposition.scope == scope
+            && (proposition.subject == subject_a
+                || proposition.subject == subject_b
+                || proposition.subject.starts_with('$')
+                || proposition.subject.starts_with('?'))
+            && !proposition.predicate.starts_with(['$', '?'])
+            && !proposition.object.starts_with(['$', '?'])
+        {
+            candidates.insert((
+                proposition.predicate.clone(),
+                proposition.object.clone(),
+                proposition.negative,
+            ));
+        }
+    };
+    for record in &candidate_records {
+        match &record.value {
+            crate::store::IndexedMemoryValue::Fact(fact)
+                if fact.valid
+                    && !matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown) =>
+            {
+                include_candidate(&fact.proposition);
+            }
+            crate::store::IndexedMemoryValue::Rule(rule) if rule.valid => {
+                for proposition in std::iter::once(&rule.premise)
+                    .chain(rule.additional_premises.iter())
+                    .chain(std::iter::once(&rule.conclusion))
+                {
+                    include_candidate(proposition);
+                }
+            }
+            crate::store::IndexedMemoryValue::Fact(_)
+            | crate::store::IndexedMemoryValue::Rule(_)
+            | crate::store::IndexedMemoryValue::Condition(_) => {}
+        }
+    }
+    drop(include_candidate);
+    if candidates.is_empty() {
+        return Ok(CommonRelationsEvaluation::Blocked {
+            code: "MISSING_PREMISES",
+            message: "二つの対象について比較できる保存済み関係がありません。共通点がないとは断定しません。".into(),
+        });
+    }
+    let candidate_count = u32::try_from(candidates.len()).map_err(|_| {
+        failure(
+            "RESOURCE_LIMIT",
+            "common-relation candidate count exceeds the bounded representation",
+        )
+    })?;
+    let query_count = candidate_count.checked_mul(2).ok_or_else(|| {
+        failure(
+            "RESOURCE_LIMIT",
+            "common-relation query count exceeds the bounded action representation",
+        )
+    })?;
+    if query_count > remaining_actions {
+        return Ok(CommonRelationsEvaluation::Blocked {
+            code: "RESOURCE_LIMIT",
+            message: "各比較候補を両方の対象について照合する推論予算が不足しています。".into(),
+        });
+    }
+    let per_query_budget = remaining_actions / query_count;
+    if per_query_budget == 0 {
+        return Ok(CommonRelationsEvaluation::Blocked {
+            code: "RESOURCE_LIMIT",
+            message: "関係比較を最後まで行う推論予算がありません。".into(),
+        });
+    }
+
+    let mut supported = Vec::new();
+    for (predicate, object, negative) in candidates {
+        let proposition_a = Proposition {
+            subject: subject_a.into(),
+            predicate,
+            object,
+            negative,
+            scope: scope.into(),
+            temporal_scope: None,
+            condition_refs: Default::default(),
+        };
+        let proposition_b = Proposition {
+            subject: subject_b.into(),
+            ..proposition_a.clone()
+        };
+        let (memory_a, answer_a) =
+            indexed_common_relation_query(index, &proposition_a, per_query_budget)?;
+        let (memory_b, answer_b) =
+            indexed_common_relation_query(index, &proposition_b, per_query_budget)?;
+        if answer_a.status == "CONFLICT" || answer_b.status == "CONFLICT" {
+            return Ok(CommonRelationsEvaluation::Blocked {
+                code: "CONFLICTING_PREMISES",
+                message:
+                    "比較対象のいずれかに肯定・否定の競合があります。共通関係を選択せず停止します。"
+                        .into(),
+            });
+        }
+        if !matches!(
+            answer_a.status.as_str(),
+            "SUPPORTED" | "CONTRADICTED" | "UNKNOWN"
+        ) || !matches!(
+            answer_b.status.as_str(),
+            "SUPPORTED" | "CONTRADICTED" | "UNKNOWN"
+        ) {
+            return Ok(CommonRelationsEvaluation::Blocked {
+                code: "UNSUPPORTED_RELATION_RESULT",
+                message: "比較対象の関係照合が既知の終端状態を返しませんでした。".into(),
+            });
+        }
+        if answer_a.status != "SUPPORTED" || answer_b.status != "SUPPORTED" {
+            continue;
+        }
+        let guarantee_a = relations::answer_guarantee(&answer_a);
+        let guarantee_b = relations::answer_guarantee(&answer_b);
+        let dependencies_a = relations::answer_dependencies(&answer_a);
+        let dependencies_b = relations::answer_dependencies(&answer_b);
+        let explanation_lines_a = relation_explanation_lines(
+            &memory_a,
+            &proposition_a,
+            &answer_a,
+            &format!("{}側の根拠", subject_a),
+        );
+        let explanation_lines_b = relation_explanation_lines(
+            &memory_b,
+            &proposition_b,
+            &answer_b,
+            &format!("{}側の根拠", subject_b),
+        );
+        supported.push(SupportedCommonRelation {
+            proposition_a,
+            proposition_b,
+            guarantee_a,
+            guarantee_b,
+            dependencies_a,
+            dependencies_b,
+            explanation_lines_a,
+            explanation_lines_b,
+        });
+    }
+    common_relations_answer_from_supported(
+        subject_a,
+        subject_b,
+        scope,
+        result_id,
+        max_evidence_bytes,
+        supported,
+    )
+}
+
+fn indexed_common_relation_query(
+    index: &crate::store::MemoryIndexSnapshot<'_, '_>,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<(MemoryState, relations::QueryOutcome)> {
+    let (memory, projection_actions) =
+        relations::active_relation_projection(index, proposition, max_actions)?;
+    let query_budget = max_actions.checked_sub(projection_actions).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "common-relation proof exhausted its projection action budget",
+        )
+    })?;
+    let mut answer = relations::query(&memory, proposition, query_budget)?;
+    answer.steps = projection_actions
+        .checked_add(answer.steps)
+        .ok_or_else(|| failure("RELATION_BUDGET", "common-relation action count overflowed"))?;
+    Ok((memory, answer))
 }
 
 /// Rebuild the detailed explanation of a retained common-relations report
@@ -2006,6 +2254,72 @@ impl Engine {
                 outcomes,
             })
         })
+    }
+
+    fn indexed_common_relations_answer(
+        &self,
+        actor: &str,
+        replay: CommonRelationsReplay<'_>,
+    ) -> Result<Option<(u64, Result<CommonRelationsEvaluation>)>> {
+        self.store.with_relation_index(actor, |index| {
+            let revision = index.revision();
+            let answer = match indexed_common_relations_answer(
+                index,
+                replay.subject_a,
+                replay.subject_b,
+                replay.scope,
+                replay.max_actions,
+                replay.max_evidence_bytes,
+                replay.result_id,
+            ) {
+                Ok(answer) => Ok(answer),
+                Err(error)
+                    if matches!(
+                        &error,
+                        Error::Contract { code, .. } if code == "RELATION_BUDGET"
+                    ) =>
+                {
+                    Ok(CommonRelationsEvaluation::Blocked {
+                        code: "RESOURCE_LIMIT",
+                        message: error.to_string(),
+                    })
+                }
+                Err(error) => Err(error),
+            };
+            Ok((revision, answer))
+        })
+    }
+
+    fn active_common_relations_answer(
+        &self,
+        actor: &str,
+        replay: CommonRelationsReplay<'_>,
+    ) -> Result<(u64, Result<CommonRelationsEvaluation>)> {
+        if let Some(answer) = self.indexed_common_relations_answer(actor, replay)? {
+            return Ok(answer);
+        }
+
+        // Rebuild a cold or stale derived index from the authenticated current
+        // snapshot once, then retry against one revision-matched transaction.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(answer) = self.indexed_common_relations_answer(actor, replay)? {
+            return Ok(answer);
+        }
+
+        // If another writer advances the head during rebuild, use the
+        // immutable snapshot already loaded for this request.
+        let answer = common_relations_answer(
+            &memory,
+            replay.subject_a,
+            replay.subject_b,
+            replay.scope,
+            replay.max_actions,
+            replay.max_evidence_bytes,
+            replay.result_id,
+        );
+        Ok((memory.revision, answer))
     }
 
     fn active_conjunction_relation_queries(
@@ -6333,21 +6647,32 @@ impl Engine {
                 subject_b,
                 scope,
             } => {
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
-                let answer = match common_relations_answer(
-                    &memory,
+                let replay = CommonRelationsReplay {
                     subject_a,
                     subject_b,
                     scope,
-                    request.budget.max_actions,
-                    request.budget.max_evidence_bytes,
-                    &result.id,
-                )? {
-                    CommonRelationsEvaluation::Complete(answer) => answer,
-                    CommonRelationsEvaluation::Blocked { code, message } => {
+                    max_actions: request.budget.max_actions,
+                    max_evidence_bytes: request.budget.max_evidence_bytes,
+                    result_id: &result.id,
+                };
+                let (memory_revision, evaluation) =
+                    self.active_common_relations_answer(actor, replay)?;
+                result.actor_memory_revision = Some(memory_revision);
+                state.result = Some(result.clone());
+                let answer = match evaluation {
+                    Ok(CommonRelationsEvaluation::Complete(answer)) => answer,
+                    Ok(CommonRelationsEvaluation::Blocked { code, message }) => {
                         return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                     }
+                    Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            &message,
+                        );
+                    }
+                    Err(error) => return Err(error),
                 };
                 let report_ref =
                     self.store
@@ -11870,6 +12195,226 @@ mod active_relation_projection_tests {
             .active_relation_query("alice", &target, 128)
             .expect("query updated index revision");
         assert_eq!(after_tombstone.status, "UNKNOWN");
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated test store");
+    }
+
+    #[test]
+    fn indexed_common_relations_use_bounded_subject_candidates_and_preserve_artifacts() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-common-relations-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request = RequestEnvelope::new(
+            "active-common-seed-case",
+            "active-common-seed-input",
+            "alice",
+            "保存共通関係",
+        );
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register relation source");
+
+        let mut full_memory = MemoryState::default();
+        let nera_rock = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "rock"),
+            &source_input,
+        )
+        .expect("Nera relation");
+        let miko_rock = relations::assert_fact(
+            &mut full_memory,
+            proposition("Miko", "is", "rock"),
+            &source_input,
+        )
+        .expect("Miko relation");
+        let mineral_rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "is", "rock"),
+            proposition("$subject", "is", "mineral"),
+            &source_input,
+        )
+        .expect("common variable-subject rule");
+        for ordinal in 0..80 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(
+                    &format!("unrelated-{ordinal}"),
+                    "is",
+                    &format!("unrelated-{ordinal}"),
+                ),
+                &source_input,
+            )
+            .expect("unrelated retained history");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let selected_ids = engine
+            .store
+            .with_relation_index("alice", |index| {
+                let candidates = index.common_relation_candidates("Nera", "Miko", "lab", 8)?;
+                Ok((
+                    index.revision(),
+                    candidates
+                        .into_iter()
+                        .map(|record| record.value.id().to_owned())
+                        .collect::<BTreeSet<_>>(),
+                ))
+            })
+            .expect("read subject index")
+            .expect("save_memory creates the current relation index");
+        assert_eq!(selected_ids.0, full_memory.revision);
+        assert_eq!(
+            selected_ids.1,
+            BTreeSet::from([
+                nera_rock.id.clone(),
+                miko_rock.id.clone(),
+                mineral_rule.id.clone(),
+            ])
+        );
+
+        // Force the ordinary Core route through its cold-index rebuild path.
+        let connection = rusqlite::Connection::open(directory.join("state.sqlite3"))
+            .expect("open derived index for cold-start setup");
+        connection
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .expect("mark actor index cold");
+        drop(connection);
+
+        let mut request = RequestEnvelope::new(
+            "active-common-query-case",
+            "active-common-query-input",
+            "alice",
+            "[scope=lab]NeraとMikoの共通点は何ですか",
+        );
+        request.budget.max_actions = 64;
+        let result = engine
+            .execute("alice", request.clone())
+            .expect("run the normal Japanese AskCommonRelations route");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.actor_memory_revision, Some(full_memory.revision));
+        assert_eq!(result.guarantee, Guarantee::Derived);
+        assert!(result.dependencies.contains(&nera_rock.id));
+        assert!(result.dependencies.contains(&miko_rock.id));
+        assert!(result.dependencies.contains(&mineral_rule.id));
+        assert!(
+            !result
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.contains("unrelated"))
+        );
+
+        let result_id = base_result(&request).id;
+        let indexed = engine
+            .store
+            .with_relation_index("alice", |index| {
+                Ok((
+                    index.revision(),
+                    indexed_common_relations_answer(
+                        index,
+                        "Nera",
+                        "Miko",
+                        "lab",
+                        10_000,
+                        request.budget.max_evidence_bytes,
+                        &result_id,
+                    )?,
+                ))
+            })
+            .expect("evaluate indexed common relations")
+            .expect("current index is available");
+        assert_eq!(indexed.0, full_memory.revision);
+        let indexed_answer = match indexed.1 {
+            CommonRelationsEvaluation::Complete(answer) => answer,
+            CommonRelationsEvaluation::Blocked { code, message } => {
+                panic!("indexed query unexpectedly blocked: {code}: {message}")
+            }
+        };
+        let full_answer = match common_relations_answer(
+            &full_memory,
+            "Nera",
+            "Miko",
+            "lab",
+            10_000,
+            request.budget.max_evidence_bytes,
+            &result_id,
+        )
+        .expect("full-snapshot reference evaluation")
+        {
+            CommonRelationsEvaluation::Complete(answer) => answer,
+            CommonRelationsEvaluation::Blocked { code, message } => {
+                panic!("full-snapshot reference unexpectedly blocked: {code}: {message}")
+            }
+        };
+        assert_eq!(indexed_answer, full_answer);
+
+        let artifact_ref = result
+            .dependencies
+            .iter()
+            .find(|dependency| {
+                dependency.len() == 64 && dependency.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .expect("common-relations report artifact reference");
+        assert_eq!(
+            engine
+                .store
+                .get_bytes("alice", &request.case_id, artifact_ref)
+                .expect("read adopted common-relations artifact"),
+            indexed_answer.artifact_bytes
+        );
+
+        let mut budget_request = RequestEnvelope::new(
+            "active-common-budget-case",
+            "active-common-budget-input",
+            "alice",
+            "[scope=lab]NeraとMikoの共通点は何ですか",
+        );
+        budget_request.budget.max_actions = 3;
+        let budget_stop = engine
+            .execute("alice", budget_request)
+            .expect("suspend when candidate selection exceeds the sealed budget");
+        assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
+        assert_eq!(
+            budget_stop.actor_memory_revision,
+            Some(full_memory.revision),
+            "{budget_stop:?}"
+        );
+        assert!(
+            budget_stop
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("RESOURCE_LIMIT:"))
+        );
+
+        // The former full-table route cannot fit the same request budget;
+        // this records the bounded selection as the difference in behavior.
+        let former_full_scan = common_relations_answer(
+            &full_memory,
+            "Nera",
+            "Miko",
+            "lab",
+            64,
+            request.budget.max_evidence_bytes,
+            &result_id,
+        )
+        .expect("run old full-snapshot path at the normal route budget");
+        assert!(matches!(
+            former_full_scan,
+            CommonRelationsEvaluation::Blocked {
+                code: "RESOURCE_LIMIT",
+                ..
+            }
+        ));
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated test store");

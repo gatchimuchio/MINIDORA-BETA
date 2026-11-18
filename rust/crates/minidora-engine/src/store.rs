@@ -204,6 +204,38 @@ impl MemoryIndexSnapshot<'_, '_> {
         )
     }
 
+    /// Select only indexed relations that can seed a common-relation query
+    /// for either named subject. Variable-subject Rules remain eligible so
+    /// Core can bind their conclusions to the two requested subjects.
+    pub(crate) fn common_relation_candidates(
+        &self,
+        subject_a: &str,
+        subject_b: &str,
+        scope: &str,
+        max_records: usize,
+    ) -> Result<Vec<IndexedMemoryRecord>> {
+        let mut statement = sql(self.transaction.prepare(
+            "SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_common_subject_scope WHERE actor_id=?1 AND valid=1 AND scope=?2 AND record_kind IN ('FACT','RULE') AND subject IN (?3,?4) UNION ALL SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_common_subject_scope WHERE actor_id=?1 AND valid=1 AND scope=?2 AND record_kind IN ('FACT','RULE') AND subject >= '$' AND subject < '%' UNION ALL SELECT record_kind,record_id,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id FROM memory_index_record INDEXED BY memory_index_common_subject_scope WHERE actor_id=?1 AND valid=1 AND scope=?2 AND record_kind IN ('FACT','RULE') AND subject >= '?' AND subject < '@'",
+        ))?;
+        let rows = sql(statement.query_map(
+            params![self.actor, scope, subject_a, subject_b],
+            StoredMemoryIndexRow::read,
+        ))?;
+        let mut records = std::collections::BTreeMap::new();
+        for row in rows {
+            let record = sql(row)?.decode()?;
+            let id = record.value.id().to_owned();
+            records.entry(id).or_insert(record);
+            if records.len() > max_records {
+                return Err(failure(
+                    "RELATION_BUDGET",
+                    "common-relation candidate projection exceeds the sealed action budget",
+                ));
+            }
+        }
+        Ok(records.into_values().collect())
+    }
+
     pub(crate) fn out_of_scope_direct_facts(
         &self,
         proposition: &Proposition,
@@ -2175,6 +2207,8 @@ CREATE TABLE IF NOT EXISTS memory_index_record(
  PRIMARY KEY(actor_id,record_id));
 CREATE INDEX IF NOT EXISTS memory_index_relation_lookup
  ON memory_index_record(actor_id,valid,record_kind,predicate,scope,temporal_scope,condition_refs,subject,object);
+CREATE INDEX IF NOT EXISTS memory_index_common_subject_scope
+ ON memory_index_record(actor_id,valid,scope,subject,record_kind);
 CREATE INDEX IF NOT EXISTS memory_index_condition_evidence
  ON memory_index_record(actor_id,valid,record_kind,subject,predicate,object,scope,temporal_scope);
 CREATE INDEX IF NOT EXISTS memory_index_condition_id

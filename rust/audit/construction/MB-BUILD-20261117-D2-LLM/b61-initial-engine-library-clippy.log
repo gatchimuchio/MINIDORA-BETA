@@ -1,0 +1,32 @@
+    Checking minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+error: this function has too many arguments (8/7)
+    --> crates/minidora-engine/src/core.rs:2249:5
+     |
+2249 | /     fn indexed_common_relations_answer(
+2250 | |         &self,
+2251 | |         actor: &str,
+2252 | |         subject_a: &str,
+...    |
+2257 | |         result_id: &str,
+2258 | |     ) -> Result<Option<(u64, Result<CommonRelationsEvaluation>)>> {
+     | |_________________________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this function has too many arguments (8/7)
+    --> crates/minidora-engine/src/core.rs:2288:5
+     |
+2288 | /     fn active_common_relations_answer(
+2289 | |         &self,
+2290 | |         actor: &str,
+2291 | |         subject_a: &str,
+...    |
+2296 | |         result_id: &str,
+2297 | |     ) -> Result<(u64, Result<CommonRelationsEvaluation>)> {
+     | |_________________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#too_many_arguments
+
+error: could not compile `minidora-engine` (lib) due to 2 previous errors
