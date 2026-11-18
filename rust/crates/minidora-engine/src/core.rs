@@ -795,6 +795,24 @@ pub(crate) fn indexed_relation_profile_answer_from_store(
     })
 }
 
+/// Re-evaluate a premise inventory from a revision-matched Store index.
+/// `None` means the index is cold or stale and the caller should use its
+/// authenticated snapshot path.
+pub(crate) fn indexed_premise_inventory_from_store(
+    store: &Store,
+    actor: &str,
+    subject: &str,
+    max_actions: u32,
+) -> Result<Option<(u64, Result<relations::RelationInventory>)>> {
+    store.with_relation_index(actor, |index| {
+        let revision = index.revision();
+        let inventory =
+            relations::active_relation_inventory_projection(index, subject, max_actions)
+                .map(|(inventory, _actions)| inventory);
+        Ok((revision, inventory))
+    })
+}
+
 fn relation_profile_answer_from_inventory(
     subject: &str,
     inventory: relations::RelationInventory,
@@ -2573,13 +2591,7 @@ impl Engine {
         subject: &str,
         max_actions: u32,
     ) -> Result<Option<(u64, Result<relations::RelationInventory>)>> {
-        self.store.with_relation_index(actor, |index| {
-            let revision = index.revision();
-            let inventory =
-                relations::active_relation_inventory_projection(index, subject, max_actions)
-                    .map(|(inventory, _actions)| inventory);
-            Ok((revision, inventory))
-        })
+        indexed_premise_inventory_from_store(&self.store, actor, subject, max_actions)
     }
 
     fn active_premise_inventory(

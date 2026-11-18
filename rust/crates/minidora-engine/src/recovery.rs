@@ -677,21 +677,29 @@ fn premise_memory_inventory(
     subject: &str,
     max_actions: u32,
 ) -> Result<(Vec<String>, Guarantee)> {
-    let (dependencies, guarantee) =
-        crate::relations::inventory_dependencies_and_guarantee(memory, subject, max_actions)
-            .map_err(|error| {
-                failure(
-                    "RECOVERY_MEMORY_PROOF_MISMATCH",
-                    format!("the retained premise inventory cannot be replayed: {error}"),
-                )
-            })?;
-    if dependencies.is_empty() {
+    premise_relation_inventory_summary(crate::relations::inventory_about(
+        memory,
+        subject,
+        max_actions,
+    ))
+}
+
+fn premise_relation_inventory_summary(
+    inventory: Result<crate::relations::RelationInventory>,
+) -> Result<(Vec<String>, Guarantee)> {
+    let inventory = inventory.map_err(|error| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            format!("the retained premise inventory cannot be replayed: {error}"),
+        )
+    })?;
+    if inventory.dependencies.is_empty() {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the retained premise inventory has no proof dependencies",
         ));
     }
-    Ok((dependencies, guarantee))
+    Ok((inventory.dependencies, inventory.guarantee))
 }
 
 fn conjunction_per_relation_budget(
@@ -2772,21 +2780,35 @@ fn inspect(
         })?;
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
-        let memory = store.load_memory(actor)?;
-        let current_inventory = if result.actor_memory_revision.is_some()
-            || matches!(
+        let current_inventory = if result.actor_memory_revision.is_some() {
+            match crate::core::indexed_premise_inventory_from_store(
+                store,
+                actor,
+                subject,
+                goal.budget.max_actions,
+            )? {
+                Some((_revision, inventory)) => premise_relation_inventory_summary(inventory).ok(),
+                None => {
+                    let memory = store.load_memory(actor)?;
+                    premise_memory_inventory(&memory, subject, goal.budget.max_actions).ok()
+                }
+            }
+        } else {
+            let memory = store.load_memory(actor)?;
+            if matches!(
                 bundle.meaning.parser_version.as_str(),
                 "declarative-ja-en-v68-previous-result-summary"
                     | "declarative-ja-en-v69-relation-profile-draft"
                     | "declarative-ja-en-v70-generic-transitive-verbs"
             ) {
-            premise_memory_inventory(&memory, subject, goal.budget.max_actions).ok()
-        } else {
-            let dependencies = crate::relations::explicit_premises_about(&memory, subject)
-                .into_iter()
-                .map(|fact| fact.id)
-                .collect();
-            Some((dependencies, Guarantee::UserPremise))
+                premise_memory_inventory(&memory, subject, goal.budget.max_actions).ok()
+            } else {
+                let dependencies = crate::relations::explicit_premises_about(&memory, subject)
+                    .into_iter()
+                    .map(|fact| fact.id)
+                    .collect();
+                Some((dependencies, Guarantee::UserPremise))
+            }
         };
         let Some((dependencies, guarantee)) = current_inventory else {
             return Err(failure(
@@ -4812,6 +4834,7 @@ mod tests {
             "alice",
             "ココについて、何が分かっていますか",
         );
+        request.budget.max_actions = 64;
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -4847,6 +4870,7 @@ mod tests {
         let retained_result = retained.result.as_ref().unwrap();
         assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
         assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+        let original_bytes = fs::read(&fixture.target).unwrap();
 
         drop(engine);
         let mut engine = Engine::open(&fixture.state).unwrap();
@@ -4857,6 +4881,77 @@ mod tests {
                 .unwrap(),
             Some(original_memory)
         );
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "premise-inventory-recovery-off-scope-history",
+            "alice",
+            "前提inventoryRecoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let Intent::InspectPremises { subject } = &goal.intent else {
+            panic!("retained premise inventory lost its typed subject");
+        };
+        let full_inventory =
+            crate::relations::inventory_about(&current_memory, subject, 10_000).unwrap();
+        let (indexed_revision, indexed_inventory) =
+            crate::core::indexed_premise_inventory_from_store(
+                &engine.store,
+                "alice",
+                subject,
+                goal.budget.max_actions,
+            )
+            .unwrap()
+            .expect("current premise subject index is available");
+        let indexed_inventory = indexed_inventory.unwrap();
+        assert_eq!(current_memory.facts.len(), 81);
+        assert_eq!(indexed_revision, current_memory.revision);
+        assert_eq!(indexed_inventory, full_inventory);
+        assert!(matches!(
+            crate::relations::inventory_about(
+                &current_memory,
+                subject,
+                goal.budget.max_actions,
+            ),
+            Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+        ));
         assert!(inspect(&engine.store, "alice", &retained, retained_result).is_ok());
 
         let invalidation = engine
@@ -4873,6 +4968,7 @@ mod tests {
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &retained, retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_PREMISES_CHANGED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
     #[test]
