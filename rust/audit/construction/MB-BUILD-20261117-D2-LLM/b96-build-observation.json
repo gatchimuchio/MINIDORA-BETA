@@ -1,0 +1,128 @@
+{
+  "schema": "MINIDORA_E1_W10_RELATION_OBJECTS_MISSING_ACTOR_MEMORY_SNAPSHOT_B96_V1",
+  "work_item": "Verify that ExplainPrevious Recovery fails closed when a saved AskRelationObjects ResultRecord points to an actor-memory revision number with no retained snapshot",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Etc/UTC",
+  "base_head": "d60bc3b2459aa7420551bd71df0e6de5f55bb387",
+  "implementation_commit": "c8e3a732de58a5525f642a0a08474730ded9c6b6",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "b97f9318a25ad611a2d11527b06b7b409bb2c38e1ec8709254e546d28a7958e1",
+  "permission_scope": "Continuing user authorization to implement in MINIDORA-BETA and retain work in its repository; local source regression and focused checks, direct main fast-forward push, and existing backup-reference rotation only.",
+  "other_writer_check": "Only /root was active in the collaboration tree; the worktree was clean at batch start.",
+  "design_sources": {
+    "AGENTS.md": "240fcdc302bf78e0e961862998182b2306b38b1642bb420cc4fd9121228a29b9",
+    "README.md": "4c968d391fc5c8cd05990cb80e83de8e8d6c4cd41d70e120c76c1c7482246423",
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "d60bc3b2459aa7420551bd71df0e6de5f55bb387",
+    "origin_main": "d60bc3b2459aa7420551bd71df0e6de5f55bb387",
+    "local_base": "refs/heads/codex/backup-main=d60bc3b2459aa7420551bd71df0e6de5f55bb387",
+    "local_previous": "refs/heads/codex/backup-main-prev=ebe38461cc2324356bc8bd11cdc72e74fcb3ef94",
+    "local_tags": [
+      "refs/tags/codex/backup-main=d60bc3b2459aa7420551bd71df0e6de5f55bb387",
+      "refs/tags/codex/backup-main-prev=ebe38461cc2324356bc8bd11cdc72e74fcb3ef94"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=d60bc3b2459aa7420551bd71df0e6de5f55bb387",
+      "refs/tags/codex/backup-main-prev=ebe38461cc2324356bc8bd11cdc72e74fcb3ef94"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "d60bc3b2459aa7420551bd71df0e6de5f55bb387"
+  },
+  "runtime": {
+    "os": "Linux x86_64 (Debian GNU/Linux 13)",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 68% used",
+    "repo_size_at_start": "86M",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+    "managed_cloud_environment": "The existing /workspace/MINIDORA-BETA checkout was clean at batch start. Pinned Rust/Cargo 1.99.1 were used with explicit toolchain and system compiler paths. Git CLI remote reads succeeded.",
+    "remote_access": "Git CLI only; no GitHub connector, deployment or external action was used."
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "change_type": "One Engine-library clone-only regression test; no production logic, schema, dependency, manifest or lockfile change.",
+    "producer": "A normal Japanese AskRelationObjects ResultRecord records a derived object list, direct-fact and Rule dependencies, exact sealed input and existing actor_memory_revision.",
+    "consumer": "ExplainPrevious Recovery -> verify_result_memory_provenance -> verify_explain_previous_relation_memory_result -> verify_explain_previous_relation_objects_memory_result -> result_memory_snapshot -> exact Store revision lookup.",
+    "route": "Commit a direct relation, a Rule, AskRelationObjects and ExplainPrevious through Engine; reopen Engine and verify valid saved-state inspect; choose and verify an absent revision; in a cloned CaseRevision only, rebind the saved relation-object result actor_memory_revision.",
+    "expected_and_observed": "Clone preserves the prior result ID and exact sealed input identity. Recovery stops with typed RECOVERY_MEMORY_REVISION_MISSING. Persisted case, actor-memory head and target bytes remain unchanged.",
+    "compatibility": "B77 exercised AskRelationObjects current-head Recovery; B96 verifies the specialized ExplainPrevious saved-result missing-revision boundary.",
+    "compatibility_limit": "The malformed CaseRevision is synthetic and never persisted. Persistent Store corruption, historical Rust schema records, SQLite migration and schema compatibility were not tested.",
+    "schema_version_changed": false,
+    "runtime_behavior_verified": true,
+    "persisted_case_revision_modified": false,
+    "persisted_actor_memory_head_modified": false,
+    "external_effects": "None; temporary fixture state and permissioned output are cleaned by the test."
+  },
+  "test_attempts": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib recovery::tests::relation_objects_explanation_rejects_missing_actor_memory_snapshot_revision --locked -- --exact --nocapture",
+      "result": "PASS: 1 passed, 0 failed, 289 filtered out; 1.51s.",
+      "log": "b96-relation-objects-missing-revision-test.log"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p minidora-engine --lib recovery::tests::relation_objects_explanation_ --locked -- --nocapture",
+      "result": "PASS: 2 passed, 0 failed, 288 filtered out; 3.03s.",
+      "log": "b96-relation-objects-explanation-filter.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "result": "PASS",
+      "log": "b96-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b96-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "Persistent Store corruption/repair, actual historical Rust-schema ResultRecord or SQLite reads and schema migration.",
+    "Full Engine/workspace runtime suites, workspace all-target Clippy/build, CLI, HTTP, browser and other operating systems.",
+    "Long-history scale, every Recovery consumer, complete CAP-D02/E1 acceptance, independent QA and E2-E8.",
+    "Release and deployment."
+  ],
+  "acceptance": {
+    "E1_W10": "PARTIAL",
+    "CAP_D02": "UNVERIFIED",
+    "E1_exit": false,
+    "release": "NOT_RELEASED"
+  },
+  "asset_classification": {
+    "batch_owned_current_assets_total": 10,
+    "保持": [
+      "rust/audit/IMPLEMENTATION_STATUS.md (existing status ledger updated in place)",
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv (existing trace row updated in place; CAP-D02 remains UNVERIFIED)"
+    ],
+    "保管済み": [
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/BUILD_BATCH_96.md",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b96-build-observation.json",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b96-relation-objects-missing-revision-test.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b96-relation-objects-explanation-filter.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b96-fmt-check.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b96-diff-check.log"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/recovery.rs (B96 regression test)",
+      "/workspace/.minidora-cloud/rust-target (shared Cargo target cache)"
+    ],
+    "ゴミ箱移動済み": [],
+    "保留": []
+  }
+}
