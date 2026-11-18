@@ -354,6 +354,20 @@ fn verify_previous_relation_context(
             )
         });
     }
+    if let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        && matches!(&prior_bundle.meaning.intent, Intent::AskConjunction { .. })
+    {
+        return verify_explain_previous_conjunction_memory_result(
+            store, state, None, previous, result, plan, goal,
+        )
+        .map_err(|error| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                format!("the saved conjunction behind the explanation changed: {error}"),
+            )
+        });
+    }
     let Some(prior_meaning) = crate::core::previous_relation_meaning(store, actor, case, previous)?
     else {
         return Ok(());
@@ -571,6 +585,132 @@ fn verify_explain_previous_relation_objects_memory_result(
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the relation-object explanation differs from its exact proof, dependencies or units",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_explain_previous_conjunction_memory_result(
+    store: &Store,
+    state: &CaseRevision,
+    current_memory: Option<&MemoryState>,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    let previous_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior conjunction result reference is missing",
+            )
+        })?;
+    if previous.id != previous_id || previous.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact prior conjunction result is not committed",
+        ));
+    }
+    let Some((_, prior_bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )?
+    else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the exact conjunction input bundle is not retained",
+        ));
+    };
+    if prior_bundle.request.actor_id != state.actor_id
+        || prior_bundle.request.case_id != state.case_id
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the conjunction input and committed result identities differ",
+        ));
+    }
+    let Intent::AskConjunction { propositions } = &prior_bundle.meaning.intent else {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the prior input does not retain a typed conjunction request",
+        ));
+    };
+    let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the conjunction result has no retained content plan",
+        )
+    })?;
+    let prior_render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the conjunction result has no retained render record",
+        )
+    })?;
+    let mut unsigned_prior_plan = prior_plan.clone();
+    unsigned_prior_plan.id.clear();
+    if prior_plan.id != identity(&unsigned_prior_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the retained conjunction result, content plan or render is invalid",
+        ));
+    }
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_plan)?;
+    verified_artifact(store, &state.actor_id, &state.case_id, prior_render)?;
+
+    if let Some(original_memory) = result_memory_snapshot(store, &state.actor_id, previous)? {
+        let original_outcomes = conjunction_memory_outcomes(
+            &original_memory,
+            propositions,
+            prior_bundle.request.budget.max_actions,
+        )?;
+        verify_conjunction_outcomes(propositions, original_outcomes, previous, prior_plan)?;
+    }
+
+    let outcomes = if let Some(memory) = current_memory {
+        conjunction_memory_outcomes(memory, propositions, goal.budget.max_actions)?
+    } else if let Some((_, outcomes)) =
+        crate::core::indexed_conjunction_relation_answers_from_store(
+            store,
+            &state.actor_id,
+            propositions,
+            conjunction_per_relation_budget(propositions, goal.budget.max_actions)?,
+        )?
+    {
+        outcomes?
+    } else {
+        let memory = store.load_memory(&state.actor_id)?;
+        conjunction_memory_outcomes(&memory, propositions, goal.budget.max_actions)?
+    };
+    verify_conjunction_outcomes(propositions, outcomes, previous, prior_plan)?;
+
+    if result.dependencies != vec![previous.id.clone()]
+        || result.guarantee != previous.guarantee
+        || plan.required_units != vec![previous.text.clone()]
+        || plan.text != result.text
+        || result.text != previous.text
+        || result.calculation.is_some()
+        || plan.dependencies.get(..result.dependencies.len())
+            != Some(result.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the conjunction explanation differs from its exact prior result",
         ));
     }
     Ok(())
@@ -818,10 +958,7 @@ fn premise_relation_inventory_summary(
     Ok((inventory.dependencies, inventory.guarantee))
 }
 
-fn conjunction_per_relation_budget(
-    propositions: &[Proposition],
-    goal: &GoalContract,
-) -> Result<u32> {
+fn conjunction_per_relation_budget(propositions: &[Proposition], max_actions: u32) -> Result<u32> {
     if !(2..=3).contains(&propositions.len()) {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -834,7 +971,7 @@ fn conjunction_per_relation_budget(
             "the retained conjunction clause count is out of range",
         )
     })?;
-    let per_relation_budget = goal.budget.max_actions / clause_count;
+    let per_relation_budget = max_actions / clause_count;
     if per_relation_budget == 0 {
         return Err(failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -842,6 +979,18 @@ fn conjunction_per_relation_budget(
         ));
     }
     Ok(per_relation_budget)
+}
+
+fn conjunction_memory_outcomes(
+    memory: &MemoryState,
+    propositions: &[Proposition],
+    max_actions: u32,
+) -> Result<Vec<crate::relations::QueryOutcome>> {
+    let per_relation_budget = conjunction_per_relation_budget(propositions, max_actions)?;
+    propositions
+        .iter()
+        .map(|proposition| crate::relations::query(memory, proposition, per_relation_budget))
+        .collect()
 }
 
 fn verify_conjunction_outcomes(
@@ -923,11 +1072,7 @@ fn verify_conjunction_memory_result(
     let Intent::AskConjunction { propositions } = &goal.intent else {
         return Ok(());
     };
-    let per_relation_budget = conjunction_per_relation_budget(propositions, goal)?;
-    let outcomes = propositions
-        .iter()
-        .map(|proposition| crate::relations::query(memory, proposition, per_relation_budget))
-        .collect::<Result<Vec<_>>>()?;
+    let outcomes = conjunction_memory_outcomes(memory, propositions, goal.budget.max_actions)?;
     verify_conjunction_outcomes(propositions, outcomes, result, plan)
 }
 
@@ -941,7 +1086,8 @@ fn verify_conjunction_memory_result_with_index(
     let Intent::AskConjunction { propositions } = &goal.intent else {
         return Ok(Some(()));
     };
-    let per_relation_budget = conjunction_per_relation_budget(propositions, goal)?;
+    let per_relation_budget =
+        conjunction_per_relation_budget(propositions, goal.budget.max_actions)?;
     let Some((_, outcomes)) = crate::core::indexed_conjunction_relation_answers_from_store(
         store,
         actor,
@@ -6060,6 +6206,201 @@ mod tests {
         assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
         let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn conjunction_explanation_rechecks_the_current_memory_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let bird = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "bird", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        let bird_id = bird.dependencies[0].clone();
+        let animal = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "animal", "alice", "ココは動物です"),
+            )
+            .unwrap();
+        let animal_id = animal.dependencies[0].clone();
+
+        let mut conjunction_request =
+            RequestEnvelope::new("case", "conjunction", "alice", "ココは鳥かつ動物ですか");
+        conjunction_request.budget.max_actions = 32;
+        let prior = engine.execute("alice", conjunction_request).unwrap();
+        assert_eq!(prior.lifecycle, Lifecycle::Commit, "{prior:?}");
+        assert!(prior.dependencies.contains(&bird_id));
+        assert!(prior.dependencies.contains(&animal_id));
+        let memory_revision = prior
+            .actor_memory_revision
+            .expect("the conjunction records the actor-memory revision it used");
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "conjunction-explanation", "alice", "詳しく説明して");
+        explanation_request.budget.max_actions = 32;
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior.text);
+        assert_eq!(explanation.dependencies, vec![prior.id.clone()]);
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        drop(engine);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            engine
+                .store
+                .load_memory_revision("alice", memory_revision)
+                .unwrap()
+                .unwrap()
+                .revision,
+            memory_revision
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        drop(database);
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let history_request = RequestEnvelope::new(
+            "history-case",
+            "conjunction-explanation-off-scope-history",
+            "alice",
+            "連言説明Recoveryの範囲外履歴",
+        );
+        let history_source = identity(&history_request).unwrap();
+        engine
+            .store
+            .register_input("alice", &history_request, &history_source)
+            .unwrap();
+        let mut current_memory = engine.store.load_memory("alice").unwrap();
+        let next_revision = current_memory.revision + 1;
+        for ordinal in 0..80 {
+            crate::relations::assert_fact(
+                &mut current_memory,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: format!("archive-object-{ordinal}"),
+                    negative: false,
+                    scope: format!("archive-{ordinal}"),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &history_source,
+            )
+            .unwrap();
+        }
+        current_memory.revision = next_revision;
+        engine.store.save_memory("alice", &current_memory).unwrap();
+
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let previous_id = retained
+            .bundle
+            .as_ref()
+            .and_then(|bundle| bundle.meaning.context_result_ref.as_deref())
+            .expect("the sealed explanation retains its prior-result reference");
+        let previous = retained
+            .prior_results
+            .get(previous_id)
+            .expect("the exact conjunction result remains retained");
+        verify_explain_previous_conjunction_memory_result(
+            &engine.store,
+            &retained,
+            Some(&current_memory),
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap();
+        assert_eq!(current_memory.facts.len(), 82);
+
+        let (_, prior_bundle) = engine
+            .store
+            .get_input_bundle("alice", "case", &previous.input_id, previous.input_version)
+            .unwrap()
+            .expect("the conjunction input remains retained");
+        let Intent::AskConjunction { propositions } = &prior_bundle.meaning.intent else {
+            panic!("the prior result lost its typed conjunction");
+        };
+        let per_relation_budget =
+            conjunction_per_relation_budget(propositions, goal.budget.max_actions).unwrap();
+        let (indexed_revision, indexed_outcomes) =
+            crate::core::indexed_conjunction_relation_answers_from_store(
+                &engine.store,
+                "alice",
+                propositions,
+                per_relation_budget,
+            )
+            .unwrap()
+            .expect("the current conjunction relation index is available");
+        assert_eq!(indexed_revision, current_memory.revision);
+        let indexed_outcomes = indexed_outcomes.unwrap();
+        let full_snapshot_outcomes =
+            conjunction_memory_outcomes(&current_memory, propositions, goal.budget.max_actions)
+                .unwrap();
+        assert_eq!(indexed_outcomes.len(), full_snapshot_outcomes.len());
+        for (indexed, full) in indexed_outcomes.iter().zip(&full_snapshot_outcomes) {
+            assert_eq!(indexed.status, full.status);
+            assert_eq!(indexed.facts, full.facts);
+            assert_eq!(indexed.used_rules, full.used_rules);
+            assert_eq!(
+                crate::relations::answer_dependencies(indexed),
+                crate::relations::answer_dependencies(full)
+            );
+            assert_eq!(
+                crate::relations::answer_guarantee(indexed),
+                crate::relations::answer_guarantee(full)
+            );
+        }
+
+        verify_explain_previous_conjunction_memory_result(
+            &engine.store,
+            &retained,
+            None,
+            previous,
+            &retained_result,
+            retained_result.content_plan.as_ref().unwrap(),
+            &goal,
+        )
+        .unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let invalidation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "invalidation-case",
+                    "invalidate-conjunction-bird",
+                    "alice",
+                    &format!("{bird_id}を無効化して"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(invalidation.lifecycle, Lifecycle::Commit);
+        let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"),
+            "{error:?}"
+        );
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
