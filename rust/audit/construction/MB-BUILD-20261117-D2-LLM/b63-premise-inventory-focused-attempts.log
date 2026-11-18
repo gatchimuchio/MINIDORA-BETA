@@ -1,0 +1,225 @@
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.78s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+
+thread 'core::active_relation_projection_tests::indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory' (228965) panicked at crates/minidora-engine/src/core.rs:12803:9:
+assertion failed: result.text.contains("鉱物")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::active_relation_projection_tests::indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory ... FAILED
+
+failures:
+
+failures:
+    core::active_relation_projection_tests::indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 271 filtered out; finished in 0.18s
+
+error: test failed, to rerun pass `-p minidora-engine --lib`
+   Compiling minidora-engine v0.7.0-alpha.11 (/workspace/MINIDORA-BETA/rust/crates/minidora-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.84s
+     Running unittests src/lib.rs (/workspace/.minidora-cloud/rust-target/debug/deps/minidora_engine-9246eb269b1b9b56)
+
+running 1 test
+test core::active_relation_projection_tests::indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 271 filtered out; finished in 0.25s
+
+     Running tests/core_actor_context_boundary_48.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_actor_context_boundary_48-c18d1856fee1bedb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_explanation_31.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_explanation_31-5be3032bc289dafb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_explanation_34.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_explanation_34-ff678d23dd93a7c0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_explanation_50.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_explanation_50-f462c34f59cde71b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_36.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_36-faf4379e00260844)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_38.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_38-2920f084d9ac90d6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_40.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_40-d1113a7aedd96859)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_41.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_41-9c99d99b5a1d458b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_42.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_42-dc93a92e90ba2cde)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_43.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_43-e30f75fbebdd55af)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_44.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_44-5a29fa73d340e9a7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_45.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_45-ca7073c1b8745ae5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_46.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_46-dfcd3800ee255f04)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_atomic_relation_comparison_47.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_atomic_relation_comparison_47-df5b29918f590b05)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_condition_evaluation_57.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_condition_evaluation_57-d50947bf83b502d6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/core_condition_scope_53.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_condition_scope_53-74c0f0d27bae9639)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_conjunctive_proof_55.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_conjunctive_proof_55-c04a691c13fe422e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_construction_observation_02.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_02-7d4ebcc30b61d430)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_construction_observation_04.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_04-3e99139bdaa5fffb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_construction_observation_05.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_05-0514b0b71a1a3ec2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_construction_observation_06.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_06-eb7613ed7e53a544)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_construction_observation_07.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_construction_observation_07-7a5ddd43e980bdb1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_meaning_composition_03.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_meaning_composition_03-3242e8efe6a64ba2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/core_proof_composition_learning_49.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_proof_composition_learning_49-eacf656b86397441)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_scope_classification_58.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_scope_classification_58-672808ad9af852aa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_scope_polarity_54.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_scope_polarity_54-ad09081fa9bc2b8e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_temporal_correction_52.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_temporal_correction_52-28755a1ccb52014d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/core_temporal_scope_51.rs (/workspace/.minidora-cloud/rust-target/debug/deps/core_temporal_scope_51-bb9efd06e5ed7e3b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/input_machine_observation_01.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_01-3a0757cdc8ee2e8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/input_machine_observation_02.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_02-76750ed711909c59)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/input_machine_observation_03.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_03-083830c33cc51b46)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/input_machine_observation_04.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_04-34478f48411c1278)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/input_machine_observation_05.rs (/workspace/.minidora-cloud/rust-target/debug/deps/input_machine_observation_05-866a4dacac3d88e5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s

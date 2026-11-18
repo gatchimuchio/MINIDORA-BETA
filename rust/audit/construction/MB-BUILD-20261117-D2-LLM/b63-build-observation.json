@@ -1,0 +1,156 @@
+{
+  "schema": "MINIDORA_E1_W10_PREMISE_INVENTORY_PROJECTION_B63_V1",
+  "work_item": "Goal-related bounded candidate selection for ordinary Japanese InspectPremises Core route",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "3394d20e7480888dad8d7a9e3829443b6d018750",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "57c85c0d0e6626b35b442ea6f4992474861fdd8b8ff10cef2d479db8217c3ae8",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs": {
+    "local_base": "refs/heads/codex/backup-main=6809f31fad1eeacee85e619d220e6757e032da96",
+    "local_previous": "refs/heads/codex/backup-main-prev=b8429c4a75a57f256256145a2f231293999fe6bf",
+    "local_tags_preserved": [
+      "refs/tags/codex/backup-main=63873b0061857ba3e76690dfba22497cf4632c82",
+      "refs/tags/codex/backup-main-prev=3513de1c2a34c4a95c42319f96952504d9d41e5e"
+    ],
+    "remote_backup_refs_preserved": [
+      "refs/remotes/origin/codex/backup-main=c820916a78f3564f2fec518cb2b2f68787426204",
+      "refs/remotes/origin/codex/backup-main-prev=1e84a3e83a2d9a76f30e067ca433b203d35570d5"
+    ]
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target"
+  },
+  "implementation": {
+    "source_path": "rust/crates/minidora-engine/src/core.rs",
+    "ordinary_entry": "Engine::execute -> Intent::InspectPremises",
+    "candidate_source": "Revision-matched Store relation index, using the existing subject Facts and exact/variable-subject Rule selector across scopes",
+    "consumer": "Existing relation shape planning, active relation proof projection, proof evaluator and Core inventory adopter",
+    "core_ownership": "Core retains disclosure, conflict rendering, dependency IDs, guarantee and adoption; Store supplies derived candidate records only",
+    "budget": "Candidate selection, relation shape planning and proof projection/evaluation are charged to the sealed max_actions allowance",
+    "memory_revision": "Indexed revision is recorded on success and on RESOURCE_LIMIT stop",
+    "index_fallback": "A cold/stale index is rebuilt once from the authenticated loaded current snapshot and retried; if a concurrent head advance prevents indexed retry, the request uses its immutable loaded snapshot with the existing full-snapshot computation",
+    "recovery": "Exact retained-snapshot replay remains unchanged and is not bounded by this batch",
+    "schema": "No persisted memory schema, API, parser grammar, or Store index schema change"
+  },
+  "fixture": {
+    "stored_records": {
+      "facts": 84,
+      "rules": 1,
+      "conditions": 0,
+      "unrelated_facts": 80
+    },
+    "selected_records": {
+      "requested_subject_facts": 4,
+      "exact_subject_rules": 0,
+      "variable_subject_rules": 1,
+      "unrelated_records": 0
+    },
+    "scopes": ["lab", "archive"],
+    "conflicting_supports_retained": true,
+    "normal_japanese_request": "Neraについて、何が分かっていますか",
+    "normal_route_action_budget": 64,
+    "normal_route_lifecycle": "COMMIT",
+    "actor_memory_revision": 1,
+    "facts_conflicts_dependencies_and_guarantee_match_10000_action_reference": true,
+    "unrelated_facts_in_dependencies": false,
+    "full_snapshot_inventory_at_64_actions": "RESOURCE_LIMIT",
+    "cold_index_deleted_rebuilt_and_retried": true,
+    "budget_stop": {
+      "action_budget": 8,
+      "lifecycle": "SUSPEND",
+      "reason_code": "RESOURCE_LIMIT",
+      "result_actor_memory_revision": 1
+    }
+  },
+  "checks": [
+    {
+      "command": "cargo test -p minidora-engine --locked indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: ordinary Japanese Core route, subject candidate selection, inventory parity, cold rebuild and revision-bearing budget stop",
+      "log": "b63-premise-inventory-focused-test.log"
+    },
+    {
+      "command": "cargo test -p minidora-engine --locked premise_inventory_recovery_pins_and_rechecks_its_memory_revision -- --nocapture",
+      "exit_code": 0,
+      "result": "PASS: existing exact-revision Recovery and invalidation regression; Recovery remains full-snapshot",
+      "log": "b63-premise-inventory-recovery-test.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b63-fmt-check.log"
+    },
+    {
+      "command": "cargo check -p minidora-engine --all-targets --locked",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b63-engine-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b63-engine-library-clippy.log"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "PASS",
+      "log": "b63-diff-check.log"
+    }
+  ],
+  "test_attempt_note": "The initial focused assertion inspected rendered result.text and failed because the inventory lines are adopted in ContentPlan.required_units; the assertion was corrected to inspect that consumer boundary. The final focused test passes. Both attempts are preserved in b63-premise-inventory-focused-attempts.log.",
+  "gate_assessment": {
+    "E1-W10": "PARTIAL: ordinary Japanese InspectPremises subject candidate and bounded proof inventory slice only",
+    "CAP-D02": "UNVERIFIED: full long-history acceptance predicate not established",
+    "E1_exit": "NOT_CLAIMED"
+  },
+  "asset_closure": {
+    "base_tracked_paths": 1154,
+    "modified_source_paths": [
+      "rust/crates/minidora-engine/src/core.rs"
+    ],
+    "updated_existing_audit_paths": [
+      "docs/redesign/03_REQUIREMENT_TRACE.tsv",
+      "rust/audit/IMPLEMENTATION_STATUS.md",
+      "rust/audit/requirements.tsv",
+      "rust/audit/rust-requirement-observations.json",
+      "rust/docs/IMPLEMENTATION_CHOICES.md"
+    ],
+    "new_batch_paths": [
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/BUILD_BATCH_63.md",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-build-observation.json",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-premise-inventory-focused-attempts.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-premise-inventory-focused-test.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-premise-inventory-recovery-test.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-fmt-check.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-engine-check.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-engine-library-clippy.log",
+      "rust/audit/construction/MB-BUILD-20261117-D2-LLM/b63-diff-check.log"
+    ],
+    "deleted_files": 0,
+    "deleted_records": 0
+  },
+  "limitations": [
+    "Cold-index rebuild and concurrent-head fallback still read the loaded full snapshot.",
+    "Recovery continues exact retained-snapshot replay and is not bounded by this candidate selector.",
+    "Only an 80-unrelated-Fact fixture was exercised; broad long-history resource envelopes remain unverified.",
+    "Other relation and learning consumers, derived summaries/caches/model adaptations, and broad fresh-process/session/model-version reuse remain unverified.",
+    "The full engine package and workspace all-target Clippy were not rerun in B63.",
+    "Full CAP-D02 acceptance, E1 exit, release and deployment are not established."
+  ],
+  "release": "NOT_RELEASED"
+}

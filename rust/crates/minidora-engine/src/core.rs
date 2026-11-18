@@ -2389,6 +2389,46 @@ impl Engine {
         Ok((memory.revision, answer))
     }
 
+    fn indexed_premise_inventory(
+        &self,
+        actor: &str,
+        subject: &str,
+        max_actions: u32,
+    ) -> Result<Option<(u64, Result<relations::RelationInventory>)>> {
+        self.store.with_relation_index(actor, |index| {
+            let revision = index.revision();
+            let inventory =
+                relations::active_relation_inventory_projection(index, subject, max_actions)
+                    .map(|(inventory, _actions)| inventory);
+            Ok((revision, inventory))
+        })
+    }
+
+    fn active_premise_inventory(
+        &self,
+        actor: &str,
+        subject: &str,
+        max_actions: u32,
+    ) -> Result<(u64, Result<relations::RelationInventory>)> {
+        if let Some(inventory) = self.indexed_premise_inventory(actor, subject, max_actions)? {
+            return Ok(inventory);
+        }
+
+        // Rebuild a cold or stale derived index once from the authenticated
+        // snapshot, then retry against one revision-matched transaction.
+        let memory = self.store.load_memory(actor)?;
+        self.store
+            .rebuild_relation_index_if_current(actor, &memory)?;
+        if let Some(inventory) = self.indexed_premise_inventory(actor, subject, max_actions)? {
+            return Ok(inventory);
+        }
+
+        // A concurrent writer may advance the head during rebuild. Preserve
+        // this request's immutable snapshot as its safe fallback.
+        let inventory = relations::inventory_about(&memory, subject, max_actions);
+        Ok((memory.revision, inventory))
+    }
+
     fn active_conjunction_relation_queries(
         &self,
         actor: &str,
@@ -7180,71 +7220,38 @@ impl Engine {
                 }
             }
             Intent::InspectPremises { subject } => {
-                let memory = self.store.load_memory(actor)?;
-                result.actor_memory_revision = Some(memory.revision);
-                let scanned_records = memory
-                    .facts
-                    .len()
-                    .checked_add(memory.rules.len())
-                    .ok_or_else(|| {
-                        failure(
-                            "RESOURCE_LIMIT",
-                            "relation inventory scan count overflowed its bounded representation",
-                        )
-                    })?;
-                let action_budget =
-                    usize::try_from(request.budget.max_actions).unwrap_or(usize::MAX);
-                if scanned_records > action_budget {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "保存済み関係を列挙する走査量が要求の推論予算を超えました。",
-                    );
-                }
-                let remaining_actions = request
-                    .budget
-                    .max_actions
-                    .saturating_sub(u32::try_from(scanned_records).unwrap_or(u32::MAX));
-                let query_shapes = match relations::query_shapes_about(
-                    &memory,
-                    subject,
-                    usize::try_from(remaining_actions).unwrap_or(usize::MAX),
-                ) {
-                    Ok(shapes) => shapes,
+                let (memory_revision, inventory) =
+                    self.active_premise_inventory(actor, subject, request.budget.max_actions)?;
+                result.actor_memory_revision = Some(memory_revision);
+                state.result = Some(result.clone());
+                let inventory = match inventory {
+                    Ok(inventory) => inventory,
                     Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
                             "RESOURCE_LIMIT",
-                            "対象について確認する関係候補が要求の推論予算を超えました。",
+                            "保存済み関係を列挙・導出する作業記憶予算が不足しています。",
+                        );
+                    }
+                    Err(Error::Contract { code, .. }) if code == "MISSING_PREMISES" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "MISSING_PREMISES",
+                            "この対象について有効な提示前提または規則導出はありません。",
+                        );
+                    }
+                    Err(Error::Contract { code, .. }) if code == "UNSUPPORTED_RELATION_RESULT" => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "UNSUPPORTED_RELATION_RESULT",
+                            "関係の列挙が既知の終端状態を返しませんでした。",
                         );
                     }
                     Err(error) => return Err(error),
                 };
-                if query_shapes.is_empty() {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "MISSING_PREMISES",
-                        "この対象について有効な提示前提または規則導出はありません。",
-                    );
-                }
-                let query_count = u32::try_from(query_shapes.len()).map_err(|_| {
-                    failure(
-                        "RESOURCE_LIMIT",
-                        "relation query count exceeds the bounded representation",
-                    )
-                })?;
-                let per_query_budget = remaining_actions / query_count;
-                if per_query_budget == 0 {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "対象のすべての関係を確認する推論予算がありません。",
-                    );
-                }
 
                 let disclosure = format!(
                     "会話に保存された「{subject}」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。"
@@ -7259,52 +7266,13 @@ impl Engine {
                     );
                 }
                 let mut lines = vec![disclosure];
-                let mut reported_facts = BTreeMap::new();
-                let mut contested_fact_ids = BTreeSet::new();
-                let mut dependencies = BTreeSet::new();
-                let mut has_conflict = false;
-                for shape in query_shapes {
-                    let answer = match relations::query(&memory, &shape, per_query_budget) {
-                        Ok(answer) => answer,
-                        Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "RESOURCE_LIMIT",
-                                "保存済み関係を導出する計算が要求の推論予算を超えました。",
-                            );
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    match answer.status.as_str() {
-                        "SUPPORTED" | "CONTRADICTED" => {}
-                        "CONFLICT" => has_conflict = true,
-                        "UNKNOWN" | "MISSING_PREMISES" => continue,
-                        _ => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "UNSUPPORTED_RELATION_RESULT",
-                                "関係の列挙が既知の終端状態を返しませんでした。",
-                            );
-                        }
-                    }
-                    dependencies.extend(relations::answer_dependencies(&answer));
-                    if answer.status == "CONFLICT" {
-                        contested_fact_ids.extend(answer.facts.iter().map(|fact| fact.id.clone()));
-                    }
-                    for fact in answer.facts {
-                        reported_facts.insert(fact.id.clone(), fact);
-                    }
-                }
-                if reported_facts.is_empty() {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "MISSING_PREMISES",
-                        "この対象について有効な提示前提または規則導出はありません。",
-                    );
-                }
+                let relations::RelationInventory {
+                    mut facts,
+                    contested_fact_ids,
+                    has_conflict,
+                    dependencies,
+                    guarantee,
+                } = inventory;
                 if has_conflict {
                     let line = "一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。".to_string();
                     evidence_bytes = evidence_bytes
@@ -7321,27 +7289,22 @@ impl Engine {
                     }
                     lines.push(line);
                 }
-                let mut facts: Vec<_> = reported_facts.into_values().collect();
                 facts.sort_by(|left, right| {
                     left.proposition
                         .cmp(&right.proposition)
                         .then_with(|| left.id.cmp(&right.id))
                 });
-                let mut any_derived = false;
                 for fact in &facts {
                     let (category, origin) = match &fact.guarantee {
                         Guarantee::UserPremise => ("提示前提", format!("提示前提ID: {}", fact.id)),
-                        Guarantee::Derived => {
-                            any_derived = true;
-                            (
-                                "規則導出",
-                                format!(
-                                    "導出ID: {}; 依存ID: {}",
-                                    fact.id,
-                                    fact.dependencies.join(", ")
-                                ),
-                            )
-                        }
+                        Guarantee::Derived => (
+                            "規則導出",
+                            format!(
+                                "導出ID: {}; 依存ID: {}",
+                                fact.id,
+                                fact.dependencies.join(", ")
+                            ),
+                        ),
                         Guarantee::Computed => ("計算記録", format!("計算記録ID: {}", fact.id)),
                         Guarantee::SourceReport => ("出典報告", format!("出典報告ID: {}", fact.id)),
                         Guarantee::Hypothesis | Guarantee::Unknown => {
@@ -7373,27 +7336,8 @@ impl Engine {
                     lines.push(line);
                 }
                 units.extend(lines);
-                result.dependencies = dependencies.into_iter().collect();
-                result.guarantee = if any_derived {
-                    Guarantee::Derived
-                } else if facts
-                    .iter()
-                    .any(|fact| matches!(&fact.guarantee, Guarantee::UserPremise))
-                {
-                    Guarantee::UserPremise
-                } else if facts
-                    .iter()
-                    .any(|fact| matches!(&fact.guarantee, Guarantee::Computed))
-                {
-                    Guarantee::Computed
-                } else if facts
-                    .iter()
-                    .any(|fact| matches!(&fact.guarantee, Guarantee::SourceReport))
-                {
-                    Guarantee::SourceReport
-                } else {
-                    Guarantee::Unknown
-                };
+                result.dependencies = dependencies;
+                result.guarantee = guarantee;
             }
             Intent::DraftRelationProfile { subject } => {
                 let (memory_revision, answer) = self.active_relation_profile_answer(
@@ -12718,6 +12662,184 @@ mod active_relation_projection_tests {
 
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated conjunction store");
+    }
+
+    #[test]
+    fn indexed_premise_inventory_uses_subject_candidates_and_preserves_the_full_inventory() {
+        let serial = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "minidora-active-premise-inventory-test-{}-{serial}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create isolated store directory");
+        let mut engine = Engine::open(&directory).expect("open isolated engine");
+        let source_request = RequestEnvelope::new(
+            "active-premise-seed-case",
+            "active-premise-seed-input",
+            "alice",
+            "保存関係",
+        );
+        let source_input = identity(&source_request).expect("source input fingerprint");
+        engine
+            .store
+            .register_input("alice", &source_request, &source_input)
+            .expect("register relation source");
+
+        let mut full_memory = MemoryState::default();
+        let rock = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "has", "rock"),
+            &source_input,
+        )
+        .expect("Nera premise");
+        let mineral_rule = relations::add_rule(
+            &mut full_memory,
+            proposition("$subject", "has", "rock"),
+            proposition("$subject", "is", "mineral"),
+            &source_input,
+        )
+        .expect("variable-subject inventory rule");
+        let positive = relations::assert_fact(
+            &mut full_memory,
+            proposition("Nera", "is", "tall"),
+            &source_input,
+        )
+        .expect("positive conflicting premise");
+        let negative = relations::assert_fact(
+            &mut full_memory,
+            Proposition {
+                negative: true,
+                ..proposition("Nera", "is", "tall")
+            },
+            &source_input,
+        )
+        .expect("negative conflicting premise");
+        let archived = relations::assert_fact(
+            &mut full_memory,
+            Proposition {
+                scope: "archive".into(),
+                ..proposition("Nera", "likes", "blue")
+            },
+            &source_input,
+        )
+        .expect("relation in a second scope");
+        for ordinal in 0..80 {
+            relations::assert_fact(
+                &mut full_memory,
+                proposition(
+                    &format!("unrelated-{ordinal}"),
+                    "is",
+                    &format!("unrelated-{ordinal}"),
+                ),
+                &source_input,
+            )
+            .expect("unrelated retained history");
+        }
+        full_memory.revision = 1;
+        engine
+            .store
+            .save_memory("alice", &full_memory)
+            .expect("persist actor memory and its derived index");
+
+        let indexed = engine
+            .store
+            .with_relation_index("alice", |index| {
+                let candidates = index.relation_profile_candidates("Nera", 8)?;
+                let candidate_ids = candidates
+                    .into_iter()
+                    .map(|record| record.value.id().to_owned())
+                    .collect::<BTreeSet<_>>();
+                let (inventory, actions) =
+                    relations::active_relation_inventory_projection(index, "Nera", 64)?;
+                Ok((index.revision(), candidate_ids, inventory, actions))
+            })
+            .expect("read premise inventory index")
+            .expect("save_memory creates the current relation index");
+        assert_eq!(indexed.0, full_memory.revision);
+        assert_eq!(
+            indexed.1,
+            BTreeSet::from([
+                rock.id.clone(),
+                mineral_rule.id.clone(),
+                positive.id.clone(),
+                negative.id.clone(),
+                archived.id.clone(),
+            ])
+        );
+        assert!(indexed.3 <= 64);
+        let full_inventory = relations::inventory_about(&full_memory, "Nera", 10_000)
+            .expect("full-snapshot premise inventory reference");
+        assert_eq!(indexed.2, full_inventory);
+        assert!(
+            matches!(
+                relations::inventory_about(&full_memory, "Nera", 64),
+                Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+            ),
+            "the full-snapshot baseline must exceed the same action budget"
+        );
+
+        // Force the normal Japanese Core route through cold-index reconstruction.
+        let connection = rusqlite::Connection::open(directory.join("state.sqlite3"))
+            .expect("open derived index for cold-start setup");
+        connection
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .expect("mark actor index cold");
+        drop(connection);
+
+        let mut request = RequestEnvelope::new(
+            "active-premise-query-case",
+            "active-premise-query-input",
+            "alice",
+            "Neraについて、何が分かっていますか",
+        );
+        request.budget.max_actions = 64;
+        let result = engine
+            .execute("alice", request)
+            .expect("run ordinary Japanese premise inspection through Core");
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.actor_memory_revision, Some(full_memory.revision));
+        assert_eq!(result.dependencies, full_inventory.dependencies);
+        assert_eq!(result.guarantee, full_inventory.guarantee);
+        let content_units = result
+            .content_plan
+            .as_ref()
+            .expect("adopted premise inventory")
+            .required_units
+            .join("\n");
+        assert!(content_units.contains("mineral"), "{content_units}");
+        assert!(content_units.contains("archive"), "{content_units}");
+        assert!(content_units.contains("対立根拠として"), "{content_units}");
+        assert!(
+            !result
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.contains("unrelated"))
+        );
+
+        let mut small_request = RequestEnvelope::new(
+            "active-premise-budget-case",
+            "active-premise-budget-input",
+            "alice",
+            "Neraについて、何が分かっていますか",
+        );
+        small_request.budget.max_actions = 8;
+        let budget_stop = engine
+            .execute("alice", small_request)
+            .expect("run a bounded premise inspection");
+        assert_eq!(budget_stop.lifecycle, Lifecycle::Suspend, "{budget_stop:?}");
+        assert_eq!(
+            budget_stop.actor_memory_revision,
+            Some(full_memory.revision)
+        );
+        assert!(
+            budget_stop
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("RESOURCE_LIMIT:"))
+        );
+
+        drop(engine);
+        fs::remove_dir_all(directory).expect("remove isolated store directory");
     }
 
     #[test]
