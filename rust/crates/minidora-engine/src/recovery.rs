@@ -238,6 +238,230 @@ fn recompute_source_question_artifact(
     }
 }
 
+fn verify_saved_previous_relation_query_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+    explanation: (&ResultRecord, &ContentPlan),
+    goal: &GoalContract,
+) -> Result<()> {
+    let (result, plan) = explanation;
+    let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        return Ok(());
+    };
+    let Intent::AskPreviousRelation {
+        proposition,
+        explain,
+        explicit_scope,
+    } = &prior_bundle.meaning.intent
+    else {
+        return Ok(());
+    };
+    if previous.lifecycle != Lifecycle::Commit
+        || previous.calculation.is_some()
+        || prior_bundle.request.actor_id != actor
+        || prior_bundle.request.case_id != case
+        || identity(&prior_bundle.request)? != previous.id
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation input and committed result identities differ",
+        ));
+    }
+
+    let anchor_id = prior_bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the saved AskPreviousRelation has no retained result anchor",
+            )
+        })?;
+    let anchor = state.prior_results.get(anchor_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation anchor is no longer retained",
+        )
+    })?;
+    if anchor.id != anchor_id || anchor.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation anchor is not the exact committed result",
+        ));
+    }
+
+    let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation has no retained ContentPlan",
+        )
+    })?;
+    let prior_render = previous.render.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation has no retained render record",
+        )
+    })?;
+    let mut unsigned_plan = prior_plan.clone();
+    unsigned_plan.id.clear();
+    if prior_plan.id != identity(&unsigned_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || !crate::core::validate_render(prior_plan, prior_render)
+        || prior_plan.dependencies.get(..previous.dependencies.len())
+            != Some(previous.dependencies.as_slice())
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation output or render identity is inconsistent",
+        ));
+    }
+
+    let original_memory = result_memory_snapshot(store, actor, previous)?.ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_REVISION_MISSING",
+            "the saved AskPreviousRelation has no retained actor-memory revision",
+        )
+    })?;
+    let original_resolved = match crate::core::resolve_previous_relation_proposition(
+        &original_memory,
+        anchor,
+        proposition,
+        explicit_scope.as_deref(),
+    ) {
+        crate::core::PreviousRelationResolution::Resolved(value) => value,
+        crate::core::PreviousRelationResolution::Missing
+        | crate::core::PreviousRelationResolution::Ambiguous => {
+            return Err(failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the saved AskPreviousRelation no longer resolves to one direct premise in its original revision",
+            ));
+        }
+    };
+    let original_answer = crate::relations::query(
+        &original_memory,
+        &original_resolved,
+        prior_bundle.request.budget.max_actions,
+    )?;
+    let original_units = crate::core::previous_relation_success_units(
+        &original_memory,
+        &original_resolved,
+        &original_answer,
+        *explain,
+    )
+    .ok_or_else(|| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation no longer has its adopted answer in the original revision",
+        )
+    })?;
+    if crate::relations::answer_dependencies(&original_answer) != previous.dependencies
+        || crate::relations::answer_guarantee(&original_answer) != previous.guarantee
+        || original_units != prior_plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation differs from its original actor-memory proof revision",
+        ));
+    }
+
+    let current = crate::core::indexed_previous_relation_query_from_store(
+        store,
+        actor,
+        anchor,
+        proposition,
+        explicit_scope.as_deref(),
+        goal.budget.max_actions,
+    )?;
+    let (current_memory, current_resolved, current_answer) = if let Some(query) = current {
+        let resolved = match query.resolution {
+            Some(crate::core::PreviousRelationResolution::Resolved(value)) => value,
+            Some(
+                crate::core::PreviousRelationResolution::Missing
+                | crate::core::PreviousRelationResolution::Ambiguous,
+            )
+            | None => {
+                return Err(failure(
+                    "RECOVERY_CONTEXT_PROOF_CHANGED",
+                    "the saved AskPreviousRelation anchor no longer resolves uniquely at the current head",
+                ));
+            }
+        };
+        let answer = query.answer?.ok_or_else(|| {
+            failure(
+                "RECOVERY_CONTEXT_PROOF_CHANGED",
+                "the saved AskPreviousRelation has no supported or contradicted result at the current head",
+            )
+        })?;
+        (query.memory, resolved, answer)
+    } else {
+        let memory = store.load_memory(actor)?;
+        let resolved = match crate::core::resolve_previous_relation_proposition(
+            &memory,
+            anchor,
+            proposition,
+            explicit_scope.as_deref(),
+        ) {
+            crate::core::PreviousRelationResolution::Resolved(value) => value,
+            crate::core::PreviousRelationResolution::Missing
+            | crate::core::PreviousRelationResolution::Ambiguous => {
+                return Err(failure(
+                    "RECOVERY_CONTEXT_PROOF_CHANGED",
+                    "the saved AskPreviousRelation anchor no longer resolves uniquely at the current head",
+                ));
+            }
+        };
+        let answer = crate::relations::query(&memory, &resolved, goal.budget.max_actions)?;
+        (memory, resolved, answer)
+    };
+    let current_units = crate::core::previous_relation_success_units(
+        &current_memory,
+        &current_resolved,
+        &current_answer,
+        *explain,
+    )
+    .ok_or_else(|| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation no longer has its adopted answer at the current head",
+        )
+    })?;
+    if current_resolved != original_resolved
+        || crate::relations::answer_dependencies(&current_answer) != previous.dependencies
+        || crate::relations::answer_guarantee(&current_answer) != previous.guarantee
+        || current_units != prior_plan.required_units
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation anchor or proof changed at the current head",
+        ));
+    }
+
+    if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none()
+        && (result.dependencies != [previous.id.clone()]
+            || result.guarantee != previous.guarantee
+            || result.calculation.is_some()
+            || plan.required_units != [previous.text.clone()]
+            || plan.text != result.text
+            || result.text != previous.text
+            || plan.guarantee != result.guarantee
+            || plan.dependencies.get(..result.dependencies.len())
+                != Some(result.dependencies.as_slice()))
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the explanation does not preserve the exact saved AskPreviousRelation result",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_previous_relation_context(
     store: &Store,
     actor: &str,
@@ -382,6 +606,21 @@ fn verify_previous_relation_context(
             )
         });
     }
+    verify_saved_previous_relation_query_context(
+        store,
+        actor,
+        case,
+        state,
+        previous,
+        (result, plan),
+        goal,
+    )
+    .map_err(|error| {
+        failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            format!("the saved prior-relation answer changed: {error}"),
+        )
+    })?;
     let Some(prior_meaning) = crate::core::previous_relation_meaning(store, actor, case, previous)?
     else {
         return Ok(());
