@@ -1,0 +1,128 @@
+{
+  "schema": "MINIDORA_E1_W10_SAVED_ASK_PREVIOUS_RELATION_EXPLANATION_ANCHOR_RECOVERY_RUNTIME_B81_V1",
+  "work_item": "Runtime regression verification for the saved typed AskPreviousRelation -> ExplainPrevious Recovery current-head anchor recheck",
+  "observed_date": "2026-11-18",
+  "client_timezone": "Asia/Tokyo",
+  "base_head": "664c4e1cce027ef891953a94585720363ac01e9d",
+  "implementation_commit": "70411f2881a245c1dbbfd950e41cc15a072515c9",
+  "branch": "main",
+  "version": "0.7.0-alpha.11",
+  "schema_version": "minidora-rust/0.7.0-alpha.11",
+  "tested_source_diff_sha256": "d025050a55e733cac3c02f2431b82560ec8c2042c1cbd3474ee4fbac7e5586f0",
+  "design_sources": {
+    "01_施工仕様書.md": "de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0",
+    "02_施工工程表.md": "d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a",
+    "03_Codex施工指示書.md": "14bcce642e3c6281f4922e1ac788dcef6e1328451aebf82d245922cb9d901d3d"
+  },
+  "restoration_refs_at_batch_start": {
+    "main": "664c4e1cce027ef891953a94585720363ac01e9d",
+    "origin_main": "664c4e1cce027ef891953a94585720363ac01e9d",
+    "local_base": "refs/heads/codex/backup-main=664c4e1cce027ef891953a94585720363ac01e9d",
+    "local_previous": "refs/heads/codex/backup-main-prev=fd29c62b8346bff4aab98a9cea66be98e8477750",
+    "local_tags": [
+      "refs/tags/codex/backup-main=664c4e1cce027ef891953a94585720363ac01e9d",
+      "refs/tags/codex/backup-main-prev=fd29c62b8346bff4aab98a9cea66be98e8477750"
+    ],
+    "remote_tags": [
+      "refs/tags/codex/backup-main=664c4e1cce027ef891953a94585720363ac01e9d",
+      "refs/tags/codex/backup-main-prev=fd29c62b8346bff4aab98a9cea66be98e8477750"
+    ],
+    "remote_backup_branches": [
+      "refs/heads/codex/backup-main=8c425bf28af09b0284101836da598d53fb8d6756",
+      "refs/heads/codex/backup-main-prev=e9a275591d9f062d033c07d2a9a4e239414269a6"
+    ],
+    "rollback_main": "664c4e1cce027ef891953a94585720363ac01e9d"
+  },
+  "runtime": {
+    "os": "Linux x86_64",
+    "kernel": "6.18.57",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "cargo": "1.99.1 (5f94df478 2026-08-27)",
+    "target_cache": "/workspace/.minidora-cloud/rust-target",
+    "capacity_at_start": "63G total / 20G available / 67% used",
+    "repo_size_at_start": "81M",
+    "cargo_toml_sha256": "3a54553a0c6d15836b00cf556a821bb011da7295bc11c15ad2ad9b0d25ae8785",
+    "cargo_lock_sha256": "b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc",
+    "rust_toolchain_sha256": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+    "capacity_at_batch_start": "63G total / 20G available / 67% used",
+    "repo_size_at_batch_start": "82M"
+  },
+  "implementation": {
+    "files": [
+      "rust/crates/minidora-engine/src/recovery.rs"
+    ],
+    "route": "One targeted Rust engine-library regression test exercises the normal Japanese typed AskPreviousRelation -> ExplainPrevious Recovery path; it checks exact previous-text/dependency/guarantee linkage, Engine reopen with cold-index fallback, indexed current-head evaluation over 80 off-scope Facts against a 10,000-action full-snapshot reference, then premise invalidation stop and existing target-byte preservation.",
+    "current_head_index": "reuses indexed_previous_relation_query_from_store; validates current resolution and answer from one revision-matched relation-index transaction",
+    "cold_or_stale_index": "None loads authenticated current actor memory and resolves the same prior ResultRecord dependency anchor against the snapshot",
+    "retained_revision_replay": "requires and loads the saved AskPreviousRelation actor_memory_revision; recomputes the original resolved proposition, relation answer and previous_relation_success_units, then checks prior dependencies, guarantee, ContentPlan and render identity",
+    "preserved_contracts": [
+      "sealed input and committed result actor, case and identity",
+      "direct-result context anchor lifecycle and identity",
+      "exact retained-memory revision proof provenance",
+      "current-head resolved proposition, dependencies, guarantee and answer-unit equality",
+      "ExplainPrevious exact prior-text linkage for unparsed saved relation explanations",
+      "RECOVERY_CONTEXT_PROOF_CHANGED stop boundary",
+      "existing Core route, schema, API, result format and decision authority unchanged"
+    ],
+    "schema_version_changed": false,
+    "runtime_behavior_verified": true,
+    "change_type": "test-only; no production behavior, API, schema, manifest, lockfile, or design source changed",
+    "runtime_verification_scope": "one bounded saved typed AskPreviousRelation -> ExplainPrevious Recovery route only"
+  },
+  "test_attempts": [
+    {
+      "command": "cargo test -p minidora-engine --lib recovery::tests::saved_previous_relation_explanation_rechecks_anchor_and_current_head --locked -- --exact --nocapture",
+      "result": "PASS: 1 passed, 0 failed, 274 filtered out; completed in 1.74s",
+      "log": "b81-focused-recovery-test.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "cargo check --workspace --all-targets --locked",
+      "result": "PASS: compile check only; no tests were executed by this command",
+      "log": "b81-workspace-check.log"
+    },
+    {
+      "command": "cargo clippy -p minidora-engine --lib --locked -- -D warnings",
+      "result": "PASS",
+      "log": "b81-engine-library-clippy.log"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "result": "PASS",
+      "log": "b81-fmt-check.log"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "log": "b81-diff-check.log"
+    }
+  ],
+  "not_run": [
+    "full minidora-engine test suite and workspace/all-features runtime suite",
+    "workspace all-target Clippy",
+    "full CAP-D02 or E1 acceptance, condition-closure acceptance, multi-writer acceptance, and large-history immutable-revision replay at scale",
+    "CLI/UI/output-delivery regression suite, other operating systems, independent QA, E2-E8 acceptance, release, or deployment"
+  ],
+  "asset_classification": {
+    "保持": [
+      "D2 source documents, Git history, frozen beta assets and existing user assets were unchanged"
+    ],
+    "保管済み": [
+      "B81 BUILD_BATCH report, machine observation, focused runtime test, workspace check, library Clippy, format and diff-check logs"
+    ],
+    "稼働中": [
+      "rust/crates/minidora-engine/src/recovery.rs (one regression test added)",
+      "existing shared Cargo target cache updated by the focused test, compile check and Clippy"
+    ],
+    "ゴミ箱移動済み": 0,
+    "保留": [],
+    "temporary_fixture": "The regression test owns a temporary Engine fixture and its Drop cleanup; no residual fixture path or manual deletion",
+    "windows_storage_scope": "not applicable to this Linux execution"
+  },
+  "status": {
+    "E1_W10": "PARTIAL",
+    "CAP-D02": "UNVERIFIED",
+    "release_or_deployment_claimed": false
+  }
+}
