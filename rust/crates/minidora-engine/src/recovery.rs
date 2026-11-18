@@ -295,6 +295,23 @@ fn verify_saved_previous_relation_query_context(
             "the saved AskPreviousRelation anchor is not the exact committed result",
         ));
     }
+    let Some((_, anchor_bundle)) =
+        store.get_input_bundle(actor, case, &anchor.input_id, anchor.input_version)?
+    else {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation anchor is not bound to its sealed input identity",
+        ));
+    };
+    if anchor_bundle.request.actor_id != actor
+        || anchor_bundle.request.case_id != case
+        || identity(&anchor_bundle.request)? != anchor.id
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved AskPreviousRelation anchor is not bound to its sealed input identity",
+        ));
+    }
 
     let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
         failure(
@@ -7005,6 +7022,95 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
         assert!(error.to_string().contains("not the exact committed result"));
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+    }
+
+    #[test]
+    fn saved_previous_relation_explanation_rejects_unbound_anchor_input() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let premise = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "premise", "alice", "ココは鳥です"),
+            )
+            .unwrap();
+        assert_eq!(premise.lifecycle, Lifecycle::Commit, "{premise:?}");
+
+        let explicit_answer = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "explicit-query", "alice", "ココは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            explicit_answer.lifecycle,
+            Lifecycle::Commit,
+            "{explicit_answer:?}"
+        );
+
+        let prior_relation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "prior-relation-why", "alice", "なぜそれは鳥ですか"),
+            )
+            .unwrap();
+        assert_eq!(
+            prior_relation.lifecycle,
+            Lifecycle::Commit,
+            "{prior_relation:?}"
+        );
+        let (_, prior_bundle) = engine
+            .store
+            .get_input_bundle(
+                "alice",
+                "case",
+                &prior_relation.input_id,
+                prior_relation.input_version,
+            )
+            .unwrap()
+            .expect("the typed AskPreviousRelation input is retained");
+        let anchor_id = prior_bundle
+            .meaning
+            .context_result_ref
+            .clone()
+            .expect("the saved AskPreviousRelation retains its direct-result anchor");
+        assert_eq!(anchor_id, explicit_answer.id);
+
+        let mut explanation_request =
+            RequestEnvelope::new("case", "explanation", "alice", "詳しく説明して");
+        explanation_request.output_path = Some(fixture.target.clone());
+        explanation_request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", explanation_request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, prior_relation.text);
+
+        drop(engine);
+        let engine = Engine::open(&fixture.state).unwrap();
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap().clone();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert!(inspect(&engine.store, "alice", &retained, &retained_result).is_ok());
+
+        let mut unbound_anchor = retained.clone();
+        let anchor = unbound_anchor
+            .prior_results
+            .get_mut(&anchor_id)
+            .expect("the persisted case retains the original anchor");
+        assert_eq!(anchor.id, anchor_id);
+        assert_eq!(anchor.lifecycle, Lifecycle::Commit);
+        anchor.input_id = format!("{}-unbound", anchor.input_id);
+        let error = inspect(&engine.store, "alice", &unbound_anchor, &retained_result).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
+        assert!(
+            error
+                .to_string()
+                .contains("not bound to its sealed input identity")
+        );
+        assert_eq!(engine.latest("alice", "case").unwrap().unwrap(), retained);
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
     }
 
