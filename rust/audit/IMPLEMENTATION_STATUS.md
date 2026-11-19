@@ -1015,3 +1015,26 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `dfd7da8
 今回の接続は通常のローカルファイル経路。OSやSQLiteの同期I/O呼出しには実行中の割込み保証がなく、実時間の上限測定は `NOT_RUN`。W17全幅とE1出口は `PARTIAL`、E04は `UNVERIFIED`。E2合同ゲート、体系QC、独立QAは `NOT_RUN`。次のE1結合点はW18で循環AとBの本番経路を照合し、K5の適応が後続別要求のK4・K6で実消費される境界を確認する。
 
 復旧2世代のローカル参照・GitHubタグは `222288d` と `f95f3b1`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（Core、Store、Output、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B103 — D3-C E1-W13/W18 保存済み合成規則を別ケースの生成と実作用へ接続
+
+着工点は `aab4a869adde33bc09c85e31cc484c614bcdaec3`。D2仕様・D2工程・D3-C指示の採用SHAを照合。Coreは通常の `AskWhy` が利用者の保存済み合成規則を証明に使うとき、当該規則と親規則の型付き文法断片を生成モデルに渡す。別ケースへの継承元は利用者の規則記憶であり、渡す断片を現在の証明に含まれる規則に限定する。断片から要求ごとにモデルを構成し、V7の計算成果物に規則IDを残す。
+
+採用後はV7を消費したContentPlanから描画し、許可先の実ファイルと受領を元Goalへ戻す。復旧は当時と現在の証明を照合し、固定された規則IDから同じモデルと系列を再生する。型付き生成のV5と、封印済みの同一ケースの先行説明を使うV6も検査した。SQLiteスキーマ・依存版変更なし。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `e2c32ec827e765f6226e4361dffe34769f124fa2cef254dd5114af2c89a55227`。最終検査は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib recovery::tests::ordinary_why_ --locked -- --nocapture` | 2 PASS。規則が揃う前は保留し作用0。規則形成とCore再起動後は、別ケースの初回入力からV7を生成し、実ファイル・同一作用IDの受領・Goal COMMITまで到達。同一意味計画・証明を用いたV5の型付き対照と比べ、同じ候補集合の14箇所で実分布が変わり、最終文面は同じ。別利用者には適用せず、別scopeではそのscopeの規則だけを使用。親規則失効後は再使用と復旧を停止。中断したV7の実ファイルを同一IDで再送せず照合し、V6も再生した。 |
+| `cargo test -p minidora-engine --test core_proof_composition_learning_49 --test core_atomic_explanation_50 --test core_construction_observation_06 --locked` | 3 PASS。証明保存型合成、従来型付き生成、権限・予算・取消・未知結果の停止。 |
+| `cargo test -p minidora-cli --test normal_route conjunctive_rule_joins_two_new_subject_premises_and_explains_both --locked`、同 `why_question` フィルタ | 1 PASSと2 PASS。通常CLIの複合規則・二前提・失効と、既存の説明・省略追問。 |
+| `cargo test -p minidora-engine --lib local_file --locked` | 2 PASS。元Goalの締切停止と作用の二重取得拒否。 |
+| `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+初回の検査コンパイルでは新しい対照用fixtureの `input::seal` の参照が未解決だった。crate内の正しい参照に修正し、上記を再検査した。
+
+W18は証明保存型学習から別ケースの推論、生成、ファイル作用、元Goalまでの結合を確認した範囲で `PARTIAL`。K6の経路差は規則形成による保留から実作用への差であり、同じ証明への文法適応で観測した差は生成候補の分布。観測から形成した仮説の保持・区別を含むW12との結合とE1出口は未確認。CAP-D05は `UNVERIFIED`。E2合同ゲート、体系QC、独立QAは `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `aab4a86` と `222288d`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、Recoveryの検査、CLIの検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。

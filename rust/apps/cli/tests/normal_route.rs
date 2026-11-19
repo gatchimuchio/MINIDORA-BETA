@@ -2714,7 +2714,7 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
     .unwrap();
     assert_eq!(
         compute["kind"],
-        "minidora.core-computation.relation-meaning.v5"
+        "minidora.core-computation.relation-meaning.v7"
     );
     let meaning_plan = &compute["relation_meaning_plan"];
     assert_eq!(meaning_plan["conclusion"]["subject"], "Mira");

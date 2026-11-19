@@ -5703,7 +5703,6 @@ mod tests {
         let mut parent_a = String::new();
         for (id, text) in [
             ("rule-a", rule_a),
-            ("rule-b", rule_b),
             ("premise-a", "[scope=lab]甲は鳥です"),
             ("premise-b", "[scope=lab]乙は鳥です"),
         ] {
@@ -5724,7 +5723,43 @@ mod tests {
             .unwrap()
         };
         let question = "なぜ[scope=lab]乙は温血動物ですか";
-        let baseline = execute(&mut engine, "control-case", "why-b", question);
+        let cross_target = fixture.directory.join("other-case-report.txt");
+        let mut cross_request = RequestEnvelope::new("cross-case", "why-b", "alice", question);
+        cross_request.budget.max_actions = 128;
+        cross_request.output_path = Some(cross_target.clone());
+        cross_request
+            .permissions
+            .write_paths
+            .insert(cross_target.clone());
+        let mut before_request = cross_request.clone();
+        before_request.case_id = "before-case".into();
+        let before = engine.execute("alice", before_request).unwrap();
+        assert_eq!(before.lifecycle, Lifecycle::Suspend);
+        assert!(before.content_plan.is_none());
+        assert!(
+            engine
+                .store
+                .actions("alice", "before-case")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!cross_target.exists());
+        let formed = execute(&mut engine, "case", "rule-b", rule_b);
+        assert_eq!(formed.lifecycle, Lifecycle::Commit, "{formed:?}");
+
+        let question_input = RequestEnvelope::new("control-case", "why-b", "alice", question);
+        let Intent::AskWhy { proposition } = crate::input::seal(&question_input, None)
+            .unwrap()
+            .meaning
+            .intent
+        else {
+            panic!("ordinary question did not seal an AskWhy");
+        };
+        let mut control_request = RequestEnvelope::new("control-case", "why-b", "alice", "");
+        control_request.budget.max_actions = 128;
+        let baseline = engine
+            .compose_atomic_explanation("alice", control_request, proposition)
+            .unwrap();
         assert_eq!(baseline.lifecycle, Lifecycle::Commit, "{baseline:?}");
         let control = read_compute(&engine, "control-case", &baseline);
         assert_eq!(
@@ -5741,7 +5776,7 @@ mod tests {
         let source_compute = read_compute(&engine, "case", &source);
         assert_eq!(
             source_compute["kind"],
-            "minidora.core-computation.relation-meaning.v5"
+            "minidora.core-computation.relation-meaning.v7"
         );
         drop(engine);
 
@@ -5805,10 +5840,88 @@ mod tests {
         assert!(!model.vocabulary.contains("甲"));
         let retained = engine.latest("alice", "case").unwrap().unwrap();
         let original_bytes = fs::read(&fixture.target).unwrap();
+        let cross_result = engine.execute("alice", cross_request).unwrap();
+        assert_eq!(
+            cross_result.lifecycle,
+            Lifecycle::Commit,
+            "{cross_result:?}"
+        );
+        assert_eq!(cross_result.guarantee, baseline.guarantee);
+        assert_eq!(cross_result.dependencies, baseline.dependencies);
+        let cross = read_compute(&engine, "cross-case", &cross_result);
+        assert_eq!(
+            cross["kind"],
+            "minidora.core-computation.relation-meaning.v7"
+        );
+        assert_eq!(
+            cross["adaptation"]["rule_ids"],
+            actual["adaptation"]["rule_ids"]
+        );
+        assert!(cross["adaptation"].get("source_result_id").is_none());
+        assert_eq!(
+            cross["relation_meaning_plan"],
+            control["relation_meaning_plan"]
+        );
+        assert_eq!(
+            cross["content_generation"]["token_steps"],
+            actual["content_generation"]["token_steps"]
+        );
+        let cross_plan = cross_result.content_plan.as_ref().unwrap();
+        assert_eq!(cross_plan.model_artifact_ref, *model_ref);
+        let cross_render = cross_result.render.as_ref().unwrap();
+        let cross_actions = engine.store.actions("alice", "cross-case").unwrap();
+        assert_eq!(cross_actions.len(), 1);
+        assert_eq!(cross_actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(
+            cross_actions[0].exact_request_sha256,
+            cross_render.actual_sha256
+        );
+        assert_eq!(
+            cross_actions[0].receipt.as_ref(),
+            cross_result.receipts.first()
+        );
+        assert_eq!(fs::read(&cross_target).unwrap(), cross_render.bytes);
+        let graph: serde_json::Value = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes(
+                    "alice",
+                    "cross-case",
+                    cross_result.execution_graph_ref.as_ref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph[2]["compute"],
+            *cross_plan.dependencies.last().unwrap()
+        );
+        assert_eq!(graph[3]["content"], graph[1]["content"]);
+        assert_eq!(graph[4]["render"], graph[1]["render"]);
+        let cross_retained = engine.latest("alice", "cross-case").unwrap().unwrap();
+        assert!(cross_retained.prior_results.is_empty());
+        assert_eq!(
+            cross_retained
+                .bundle
+                .as_ref()
+                .unwrap()
+                .meaning
+                .context_result_ref,
+            None
+        );
         drop(engine);
 
         let mut engine = Engine::open(&fixture.state).unwrap();
         inspect(&engine.store, "alice", &retained, &adapted).unwrap();
+        inspect(&engine.store, "alice", &cross_retained, &cross_result).unwrap();
+        let foreign = engine
+            .execute(
+                "bob",
+                RequestEnvelope::new("bob-case", "why-b", "bob", question),
+            )
+            .unwrap();
+        assert_eq!(foreign.lifecycle, Lifecycle::Suspend);
+        assert!(foreign.content_plan.is_none());
         for (id, text) in [
             (
                 "other-rule-a",
@@ -5835,10 +5948,21 @@ mod tests {
         let outside_compute = read_compute(&engine, "case", &outside);
         assert_eq!(
             outside_compute["kind"],
-            "minidora.core-computation.relation-meaning.v5"
+            "minidora.core-computation.relation-meaning.v7"
         );
-        assert!(outside_compute.get("adaptation").is_none());
+        let outside_rules = outside_compute["adaptation"]["rule_ids"]
+            .as_array()
+            .unwrap();
+        let applied_rules = cross["adaptation"]["rule_ids"].as_array().unwrap();
+        assert_eq!(outside_rules.len(), 3);
+        assert!(outside_rules.iter().all(|id| !applied_rules.contains(id)));
+        assert!(
+            outside_compute["adaptation"]
+                .get("source_result_id")
+                .is_none()
+        );
         inspect(&engine.store, "alice", &retained, &adapted).unwrap();
+        inspect(&engine.store, "alice", &cross_retained, &cross_result).unwrap();
 
         let invalidation = execute(
             &mut engine,
@@ -5855,6 +5979,23 @@ mod tests {
         assert!(
             error.to_string().contains("RECOVERY_PROOF_INVALIDATED"),
             "{error:?}"
+        );
+        let error = inspect(&engine.store, "alice", &cross_retained, &cross_result).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_PROOF_INVALIDATED"),
+            "{error:?}"
+        );
+        let no_longer_supported = execute(
+            &mut engine,
+            "cross-case",
+            "why-after-invalidation",
+            question,
+        );
+        assert_eq!(no_longer_supported.lifecycle, Lifecycle::Suspend);
+        assert!(no_longer_supported.content_plan.is_none());
+        assert_eq!(
+            engine.store.actions("alice", "cross-case").unwrap(),
+            cross_actions
         );
         assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
         assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
@@ -5922,7 +6063,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             compute["kind"],
-            "minidora.core-computation.relation-meaning.v5"
+            "minidora.core-computation.relation-meaning.v7"
         );
         assert_eq!(compute["relation_meaning_plan"]["asked"]["subject"], "シロ");
         assert_eq!(compute["relation_meaning_plan"]["asked"]["scope"], "lab");

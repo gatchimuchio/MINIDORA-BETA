@@ -220,6 +220,7 @@ const CORE_COMPUTATION_ARTIFACT_KIND_V3: &str = "minidora.core-computation.relat
 const CORE_COMPUTATION_ARTIFACT_KIND_V4: &str = "minidora.core-computation.relation-meaning.v4";
 const CORE_COMPUTATION_ARTIFACT_KIND_V5: &str = "minidora.core-computation.relation-meaning.v5";
 const CORE_COMPUTATION_ARTIFACT_KIND_V6: &str = "minidora.core-computation.relation-meaning.v6";
+const CORE_COMPUTATION_ARTIFACT_KIND_V7: &str = "minidora.core-computation.relation-meaning.v7";
 const CORE_COMPUTATION_ARTIFACT_KIND: &str = CORE_COMPUTATION_ARTIFACT_KIND_V4;
 const CORE_RELATION_MEANING_PLAN_SCHEMA: &str = "core-relation-meaning-plan-v1";
 const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
@@ -384,11 +385,24 @@ struct CoreComputationArtifactGeneratedContent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RuleGrammarAdaptation {
-    source_result_id: String,
-    source_compute_ref: String,
-    rule_ids: Vec<String>,
+#[serde(untagged, deny_unknown_fields)]
+enum RuleGrammarAdaptation {
+    PriorResult {
+        source_result_id: String,
+        source_compute_ref: String,
+        rule_ids: Vec<String>,
+    },
+    ActorRules {
+        rule_ids: Vec<String>,
+    },
+}
+
+fn generated_artifact_kind(adaptation: Option<&RuleGrammarAdaptation>) -> &'static str {
+    match adaptation {
+        None => CORE_COMPUTATION_ARTIFACT_KIND_V5,
+        Some(RuleGrammarAdaptation::PriorResult { .. }) => CORE_COMPUTATION_ARTIFACT_KIND_V6,
+        Some(RuleGrammarAdaptation::ActorRules { .. }) => CORE_COMPUTATION_ARTIFACT_KIND_V7,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -7598,12 +7612,21 @@ impl Engine {
                             )
                         })?;
                     let selected_adaptation = if uses_composed_rule {
-                        match select_rule_grammar_adaptation(
+                        let selection = select_rule_grammar_adaptation(
                             &self.store,
                             &bundle,
                             previous,
                             &meaning_plan,
-                        ) {
+                        )
+                        .and_then(|selection| match selection {
+                            Some(selection) => Ok(Some(selection)),
+                            None => Ok(rule_grammar_documents(&meaning_plan, None)?.map(
+                                |(rule_ids, documents)| {
+                                    (RuleGrammarAdaptation::ActorRules { rule_ids }, documents)
+                                },
+                            )),
+                        });
+                        match selection {
                             Ok(selection) => selection,
                             Err(error) => {
                                 return self.stop(
@@ -8446,12 +8469,7 @@ impl Engine {
                     actor,
                     &request.case_id,
                     &CoreComputationArtifactGeneratedContent {
-                        kind: if applied_rule_adaptation.is_some() {
-                            CORE_COMPUTATION_ARTIFACT_KIND_V6
-                        } else {
-                            CORE_COMPUTATION_ARTIFACT_KIND_V5
-                        }
-                        .into(),
+                        kind: generated_artifact_kind(applied_rule_adaptation.as_ref()).into(),
                         calculation: result.calculation.clone(),
                         units: units.clone(),
                         evidence: result.evidence.clone(),
@@ -9755,7 +9773,11 @@ fn select_rule_grammar_adaptation(
     let value: serde_json::Value = serde_json::from_slice(&bytes)?;
     if !matches!(
         value.get("kind").and_then(serde_json::Value::as_str),
-        Some(CORE_COMPUTATION_ARTIFACT_KIND_V5 | CORE_COMPUTATION_ARTIFACT_KIND_V6)
+        Some(
+            CORE_COMPUTATION_ARTIFACT_KIND_V5
+                | CORE_COMPUTATION_ARTIFACT_KIND_V6
+                | CORE_COMPUTATION_ARTIFACT_KIND_V7
+        )
     ) {
         return Ok(None);
     }
@@ -9764,7 +9786,7 @@ fn select_rule_grammar_adaptation(
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
     if plan.id != identity(&unsigned_plan)?
-        || (artifact.kind == CORE_COMPUTATION_ARTIFACT_KIND_V6) != artifact.adaptation.is_some()
+        || artifact.kind != generated_artifact_kind(artifact.adaptation.as_ref())
         || artifact.units != plan.required_units
         || artifact.dependencies != source.dependencies
         || source_meaning.dependencies != source.dependencies
@@ -9777,8 +9799,26 @@ fn select_rule_grammar_adaptation(
         ));
     }
 
-    // Only share exact composed rules and their parents. Earlier claims,
-    // facts and response bytes cannot supply training documents.
+    Ok(
+        rule_grammar_documents(current, Some(source_meaning))?.map(|(rule_ids, documents)| {
+            (
+                RuleGrammarAdaptation::PriorResult {
+                    source_result_id: source.id.clone(),
+                    source_compute_ref: source_compute_ref.clone(),
+                    rule_ids,
+                },
+                documents,
+            )
+        }),
+    )
+}
+
+fn rule_grammar_documents(
+    current: &CoreRelationMeaningPlan,
+    shared_with: Option<&CoreRelationMeaningPlan>,
+) -> Result<Option<(Vec<String>, Vec<String>)>> {
+    // Use only the composed rule and its exact parents from the verified
+    // proof. Claim, fact, condition-evidence and response text are excluded.
     for unit in &current.units {
         let CoreSemanticMeaning::Rule {
             record_id,
@@ -9798,14 +9838,15 @@ fn select_rule_grammar_adaptation(
             }) else {
                 break;
             };
-            let Some(retained_rule) = source_meaning
-                .units
-                .iter()
-                .find(|candidate| candidate.meaning == current_rule.meaning)
-            else {
+            if shared_with.is_some_and(|source| {
+                !source
+                    .units
+                    .iter()
+                    .any(|candidate| candidate.meaning == current_rule.meaning)
+            }) {
                 break;
-            };
-            retained_rules.push(&retained_rule.meaning);
+            }
+            retained_rules.push(&current_rule.meaning);
         }
         if retained_rules.len() != rule_ids.len() {
             continue;
@@ -9821,14 +9862,7 @@ fn select_rule_grammar_adaptation(
                 }
             }
         }
-        return Ok(Some((
-            RuleGrammarAdaptation {
-                source_result_id: source.id.clone(),
-                source_compute_ref: source_compute_ref.clone(),
-                rule_ids,
-            },
-            documents,
-        )));
+        return Ok(Some((rule_ids, documents)));
     }
     Ok(None)
 }
@@ -9931,12 +9965,7 @@ fn verify_generated_relation_replay(
         )
         .is_ok_and(|expected| expected == request);
     let has_adaptation = !rule_documents.is_empty();
-    let expected_kind = if has_adaptation {
-        CORE_COMPUTATION_ARTIFACT_KIND_V6
-    } else {
-        CORE_COMPUTATION_ARTIFACT_KIND_V5
-    };
-    if artifact.kind != expected_kind
+    if artifact.kind != generated_artifact_kind(artifact.adaptation.as_ref())
         || artifact.adaptation.is_some() != has_adaptation
         || artifact.calculation != previous.calculation
         || artifact.units != plan.required_units
@@ -9984,7 +10013,11 @@ pub(crate) fn verify_generated_why_computation(
     let value: serde_json::Value = serde_json::from_slice(&bytes)?;
     if !matches!(
         value.get("kind").and_then(serde_json::Value::as_str),
-        Some(CORE_COMPUTATION_ARTIFACT_KIND_V5 | CORE_COMPUTATION_ARTIFACT_KIND_V6)
+        Some(
+            CORE_COMPUTATION_ARTIFACT_KIND_V5
+                | CORE_COMPUTATION_ARTIFACT_KIND_V6
+                | CORE_COMPUTATION_ARTIFACT_KIND_V7
+        )
     ) {
         return Ok(None);
     }
@@ -10045,30 +10078,56 @@ pub(crate) fn verify_generated_why_computation(
             "the generated meaning does not use the original goal's output budget",
         ));
     }
-    let rule_documents = if let Some(adaptation) = &artifact.adaptation {
-        let bundle = state.bundle.as_ref().ok_or_else(|| {
-            failure(
-                "MODEL_ADAPTATION_SOURCE_MISMATCH",
-                "sealed adaptation input is missing",
-            )
-        })?;
-        let previous = state.prior_results.get(&adaptation.source_result_id);
-        match select_rule_grammar_adaptation(
-            store,
-            bundle,
-            previous,
-            &artifact.relation_meaning_plan,
-        )? {
-            Some((source, documents)) if source == *adaptation => documents,
-            _ => {
+    let rule_documents = match &artifact.adaptation {
+        Some(
+            adaptation @ RuleGrammarAdaptation::PriorResult {
+                source_result_id, ..
+            },
+        ) => {
+            let bundle = state.bundle.as_ref().ok_or_else(|| {
+                failure(
+                    "MODEL_ADAPTATION_SOURCE_MISMATCH",
+                    "sealed adaptation input is missing",
+                )
+            })?;
+            let previous = state.prior_results.get(source_result_id);
+            let Some((source, documents)) = select_rule_grammar_adaptation(
+                store,
+                bundle,
+                previous,
+                &artifact.relation_meaning_plan,
+            )?
+            else {
+                return Err(failure(
+                    "MODEL_ADAPTATION_SOURCE_MISMATCH",
+                    "retained shared rule source is unavailable",
+                ));
+            };
+            if source != *adaptation {
                 return Err(failure(
                     "MODEL_ADAPTATION_SOURCE_MISMATCH",
                     "retained shared rules no longer reproduce the exact adaptation source",
                 ));
             }
+            documents
         }
-    } else {
-        Vec::new()
+        Some(RuleGrammarAdaptation::ActorRules { rule_ids }) => {
+            let source = rule_grammar_documents(&artifact.relation_meaning_plan, None)?;
+            let ordinary = state.bundle.as_ref().is_some_and(|bundle| {
+                bundle.meaning.source_kind == "USER_REQUEST"
+                    && matches!(bundle.meaning.intent, Intent::AskWhy { .. })
+            });
+            match source {
+                Some((ids, documents)) if ordinary && ids == *rule_ids => documents,
+                _ => {
+                    return Err(failure(
+                        "MODEL_ADAPTATION_SOURCE_MISMATCH",
+                        "retained actor-memory rules no longer reproduce the exact adaptation source",
+                    ));
+                }
+            }
+        }
+        None => Vec::new(),
     };
     verify_generated_relation_replay(
         store,
