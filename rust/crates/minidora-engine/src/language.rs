@@ -2566,11 +2566,43 @@ pub fn generate_semantic_meaning_until(
     request: &MeaningGenerationRequest,
     deadline: Instant,
 ) -> Result<MeaningGenerationOutput> {
+    generate_semantic_meaning_with_rules_until(request, &[], deadline)
+}
+
+pub(crate) fn replay_semantic_meaning_with_rules(
+    request: &MeaningGenerationRequest,
+    rule_documents: &[String],
+) -> Result<MeaningGenerationOutput> {
+    generate_semantic_meaning_with_rules_until(request, rule_documents, model_deadline())
+}
+
+pub(crate) fn generate_semantic_meaning_with_rules_until(
+    request: &MeaningGenerationRequest,
+    rule_documents: &[String],
+    deadline: Instant,
+) -> Result<MeaningGenerationOutput> {
     poll_model(deadline)?;
     validate_meaning_generation_request(request)?;
     let training_documents = meaning_generation_training_documents(request)?;
-    let training_corpus_revision = identity(&training_documents)?;
-    let model = SequenceModel::train_until(&training_documents, 3, 1, deadline)?;
+    let (model, training_corpus_revision, training_lineage) = if rule_documents.is_empty() {
+        (
+            SequenceModel::train_until(&training_documents, 3, 1, deadline)?,
+            identity(&training_documents)?,
+            "ephemeral non-neural char n-gram fit over individual typed grammar fragments and lexical alternatives; no complete response surfaces and no cross-request learning",
+        )
+    } else {
+        let mut model = SequenceModel::train_until(rule_documents, 3, 1, deadline)?;
+        model.learn_until(&training_documents, deadline)?;
+        (
+            model,
+            identity(&(
+                "retained-rule-grammar-v1",
+                rule_documents,
+                &training_documents,
+            ))?,
+            "non-neural char n-gram learned from retained shared rule grammar fragments, then from current typed grammar fragments and lexical alternatives",
+        )
+    };
     let context_state_sha256 = identity(&(
         MEANING_GENERATION_SCHEMA,
         request,
@@ -2727,7 +2759,7 @@ pub fn generate_semantic_meaning_until(
         conditional_distribution_version: MEANING_DISTRIBUTION_VERSION.into(),
         model_revision: model_revision.clone(),
         model_artifact_ref: None,
-        model_training_lineage: "ephemeral non-neural char n-gram fit over individual typed grammar fragments and lexical alternatives; no complete response surfaces and no cross-request learning".into(),
+        model_training_lineage: training_lineage.into(),
         training_corpus_revision,
         transform_version: model.version.clone(),
         transform_order: model.order,

@@ -3374,7 +3374,7 @@ fn inspect(
         if matches!(goal.intent, Intent::AskWhy { .. }) {
             generated_compute_ref = crate::core::verify_generated_why_computation(
                 store,
-                (actor, case),
+                state,
                 result,
                 plan,
                 proposition,
@@ -5522,6 +5522,177 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].phase, EffectPhase::Confirmed);
         assert_eq!(actions[0].idempotency_key, fixture.token);
+    }
+
+    #[test]
+    fn ordinary_why_adapts_from_shared_retained_rules_after_restart() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let execute = |engine: &mut Engine, case: &str, id: &str, text: &str| {
+            let mut request = RequestEnvelope::new(case, id, "alice", text);
+            request.budget.max_actions = 128;
+            engine.execute("alice", request).unwrap()
+        };
+        let rule_a = "もし[scope=lab]Xは鳥なら[scope=lab]Xは動物";
+        let rule_b = "もし[scope=lab]Xは動物なら[scope=lab]Xは温血動物";
+        let mut parent_a = String::new();
+        for (id, text) in [
+            ("rule-a", rule_a),
+            ("rule-b", rule_b),
+            ("premise-a", "[scope=lab]甲は鳥です"),
+            ("premise-b", "[scope=lab]乙は鳥です"),
+        ] {
+            let result = execute(&mut engine, "case", id, text);
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            if id == "rule-a" {
+                parent_a.clone_from(&result.dependencies[0]);
+            }
+        }
+        let read_compute = |engine: &Engine, case: &str, result: &ResultRecord| {
+            let plan = result.content_plan.as_ref().unwrap();
+            serde_json::from_slice::<serde_json::Value>(
+                &engine
+                    .store
+                    .get_bytes("alice", case, plan.dependencies.last().unwrap())
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let question = "なぜ[scope=lab]乙は温血動物ですか";
+        let baseline = execute(&mut engine, "control-case", "why-b", question);
+        assert_eq!(baseline.lifecycle, Lifecycle::Commit, "{baseline:?}");
+        let control = read_compute(&engine, "control-case", &baseline);
+        assert_eq!(
+            control["kind"],
+            "minidora.core-computation.relation-meaning.v5"
+        );
+        let source = execute(
+            &mut engine,
+            "case",
+            "why-a",
+            "なぜ[scope=lab]甲は温血動物ですか",
+        );
+        assert_eq!(source.lifecycle, Lifecycle::Commit, "{source:?}");
+        let source_compute = read_compute(&engine, "case", &source);
+        assert_eq!(
+            source_compute["kind"],
+            "minidora.core-computation.relation-meaning.v5"
+        );
+        drop(engine);
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new("case", "why-b", "alice", question);
+        request.budget.max_actions = 128;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adapted = engine.execute("alice", request).unwrap();
+        assert_eq!(adapted.lifecycle, Lifecycle::Commit, "{adapted:?}");
+        let actual = read_compute(&engine, "case", &adapted);
+        assert_eq!(
+            actual["kind"],
+            "minidora.core-computation.relation-meaning.v6"
+        );
+        assert_eq!(actual["adaptation"]["source_result_id"], source.id);
+        assert_eq!(
+            actual["adaptation"]["rule_ids"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(
+            actual["relation_meaning_plan"],
+            control["relation_meaning_plan"]
+        );
+        assert_eq!(adapted.dependencies, baseline.dependencies);
+        assert_eq!(adapted.guarantee, baseline.guarantee);
+        let base_steps = control["content_generation"]["token_steps"]
+            .as_array()
+            .unwrap();
+        let actual_steps = actual["content_generation"]["token_steps"]
+            .as_array()
+            .unwrap();
+        let changed_distributions = base_steps
+            .iter()
+            .zip(actual_steps)
+            .filter(|(base, actual)| {
+                base["unit_id"] == actual["unit_id"]
+                    && base["fragment_index"] == actual["fragment_index"]
+                    && base["admissible_tokens"] == actual["admissible_tokens"]
+                    && base["admissible_tokens"]
+                        .as_array()
+                        .is_some_and(|support| support.len() > 1)
+                    && base["distribution"] != actual["distribution"]
+            })
+            .count();
+        assert!(
+            changed_distributions > 0,
+            "real admissible-token probabilities must change"
+        );
+        eprintln!(
+            "B99 comparable distributions changed={changed_distributions}, rendered text changed={}",
+            baseline.text != adapted.text,
+        );
+        let model_ref = &adapted.content_plan.as_ref().unwrap().model_artifact_ref;
+        let model: language::SequenceModel =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", model_ref).unwrap())
+                .unwrap();
+        assert!(!model.vocabulary.contains("甲"));
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        drop(engine);
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        inspect(&engine.store, "alice", &retained, &adapted).unwrap();
+        for (id, text) in [
+            (
+                "other-rule-a",
+                "もし[scope=other]Xは鳥なら[scope=other]Xは動物",
+            ),
+            (
+                "other-rule-b",
+                "もし[scope=other]Xは動物なら[scope=other]Xは温血動物",
+            ),
+            ("other-premise", "[scope=other]乙は鳥です"),
+        ] {
+            let result = execute(&mut engine, "other-case", id, text);
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        }
+        let mut outside = RequestEnvelope::new(
+            "case",
+            "why-other",
+            "alice",
+            "なぜ[scope=other]乙は温血動物ですか",
+        );
+        outside.context_ref = Some(source.id.clone());
+        let outside = engine.execute("alice", outside).unwrap();
+        assert_eq!(outside.lifecycle, Lifecycle::Commit, "{outside:?}");
+        let outside_compute = read_compute(&engine, "case", &outside);
+        assert_eq!(
+            outside_compute["kind"],
+            "minidora.core-computation.relation-meaning.v5"
+        );
+        assert!(outside_compute.get("adaptation").is_none());
+        inspect(&engine.store, "alice", &retained, &adapted).unwrap();
+
+        let invalidation = execute(
+            &mut engine,
+            "case",
+            "invalidate",
+            &format!("{parent_a}を無効化して"),
+        );
+        assert_eq!(
+            invalidation.lifecycle,
+            Lifecycle::Commit,
+            "{invalidation:?}"
+        );
+        let error = inspect(&engine.store, "alice", &retained, &adapted).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_PROOF_INVALIDATED"),
+            "{error:?}"
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
     }
 
     #[test]

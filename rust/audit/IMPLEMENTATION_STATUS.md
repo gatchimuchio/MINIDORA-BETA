@@ -940,3 +940,19 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1、検査対象差分SHA-256 `f9f77a48e6
 中断検査の再利用時にfixtureのSQLite入力版が `u64` で結合できず、`i64` への検査付き変換で是正した。CLIの初回検査では旧文面の固定文字列が不一致だったため、置換された文面とV5を検査し、同じ前提・結論・親規則・失効の成立を再確認した。
 
 保存された規則の適応が後続のK2とK4へ届く範囲を観測した。現在の文法生成は要求内モデルを使用し、W13の永続モデル適応とE1出口は未成立。一般の長大な証明と過去版実DBの移行、E2合同ゲート、体系QC・独立QAは `NOT_RUN`。復旧2世代は `43df4b1` と `5794396`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、Recovery、CLI回帰、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。テストの一時状態とファイルはfixtureが処理。
+
+
+## 2026-11-19 JST B99 — D3-C E1-W13 保存済み合成規則から文面モデルを適応
+
+着工点は `a8aeb3bcc7db8a2ebe7bf56751312c5a0bf83119`。D2仕様・D2工程・D3-C指示の採用SHAを照合。唯一のEngine/Coreは、同じactor・caseのInputが固定した確定済み通常 `AskWhy` を一件参照する。後続の証明と完全に一致する合成規則と二つの親規則だけを選び、範囲・時点・条件参照を照合して、保存済みの型付き規則から文法断片を再構成する。前回の完成文、主体固有の事実と主張は学習材料に含めない。既存の `SequenceModel::learn_until` で今回の文法を学び、適応したモデルで実際の候補分布を計算する。V6は出所結果ID・計算参照・学習に使った規則ID・モデル・トークン観測を保持する。復旧は同じ出所と現在も有効な証明を照合し、元のモデルと出力記録を再生する。学習材料の選択は一つの元記録に限り、過去の適応モデルを再帰的に合成しない。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `487cdaa274568c9352bc6fdffe8e11291814b0409369ae496d314a1956cb0d30`。最終検査はすべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib recovery::tests::ordinary_why_ --locked -- --nocapture` | 2 PASS。新しい主体の同一質問・同一意味計画・同一証明で、未適応V5と再起動後の適応V6を比較。候補集合が同じ14箇所で確率分布が変化。実文面は同じ。モデル語彙に前回の主体を表す文字がないことを確認。別スコープはV5で成立し、元版と現行版の証明を照合してV6を再生。親規則失効後は既存ファイルを確定しない。B98のV5復旧も確認。 |
+| `cargo test -p minidora-engine --test core_atomic_explanation_50 --locked` | 1 PASS。従来の直接型付きV5生成と再利用。 |
+| `cargo test --manifest-path rust/Cargo.toml -p minidora-cli --test normal_route conjunctive_rule_joins_two_new_subject_premises_and_explains_both --locked` | 1 PASS。通常の複合規則・文面・失効経路。 |
+| `cargo check -p minidora-engine --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+W13は同一ケース内での実分布差と版再生まで `PARTIAL`。ケースを越えた適応、出力文面の差、K6の動作差、E1出口は未成立。E2合同ゲート・体系QC・独立QAは `NOT_RUN`。次は元Goalの未充足から必要計算を選び、実引数を作用と成果判定につなぐW14〜W16の境界を照合する。復旧2世代は `a8aeb3b` と `43df4b1`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、language、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
