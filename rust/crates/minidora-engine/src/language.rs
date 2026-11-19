@@ -2055,21 +2055,62 @@ pub fn compose_typed_meaning(
     })
 }
 
-fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Result<()> {
-    if request.units.is_empty() || request.units.len() > MAX_MEANING_UNITS {
+// Larger comparisons previously used a bounded full report. Keep the same
+// model ceiling for grammar generation so multi-axis comparisons can retain
+// every row instead of being forced into the short explanation envelope.
+pub(crate) const MAX_COMPARISON_GENERATION_BYTES: usize = MAX_MODEL_BYTES;
+
+struct MeaningGenerationLimits {
+    units: usize,
+    unit_bytes: usize,
+    bytes: usize,
+    tokens: usize,
+    fragments: usize,
+}
+
+impl MeaningGenerationLimits {
+    fn for_purpose(purpose: MeaningCompositionPurpose) -> Self {
+        if purpose == MeaningCompositionPurpose::Compare {
+            Self {
+                units: 128,
+                unit_bytes: MAX_COMPARISON_GENERATION_BYTES,
+                bytes: MAX_COMPARISON_GENERATION_BYTES,
+                tokens: MAX_MODEL_TOKENS,
+                fragments: 4096,
+            }
+        } else {
+            Self {
+                units: MAX_MEANING_UNITS,
+                unit_bytes: MAX_MEANING_UNIT_BYTES,
+                bytes: MAX_MEANING_OUTPUT_BYTES,
+                tokens: MAX_MEANING_TOKENS,
+                fragments: 512,
+            }
+        }
+    }
+}
+
+fn validate_meaning_generation_request(
+    request: &MeaningGenerationRequest,
+    limits: &MeaningGenerationLimits,
+) -> Result<()> {
+    if request.units.is_empty() || request.units.len() > limits.units {
         return Err(failure(
             "MEANING_UNIT_LIMIT",
-            "meaning generation requires one to sixteen Core-authored grammar units",
+            format!(
+                "meaning generation requires 1..={} Core-authored grammar units",
+                limits.units
+            ),
         ));
     }
     if request.max_output_bytes == 0
-        || request.max_output_bytes > MAX_MEANING_OUTPUT_BYTES
+        || request.max_output_bytes > limits.bytes
         || request.max_tokens == 0
-        || request.max_tokens > MAX_MEANING_TOKENS
+        || request.max_tokens > limits.tokens
     {
         return Err(failure(
             "MEANING_BUDGET",
-            "output byte and token budgets must each be in 1..=8192",
+            "output byte or token budget is outside the grammar purpose envelope",
         ));
     }
 
@@ -2114,7 +2155,7 @@ fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Re
             fragment_count += 1;
             let fragment_bytes = match fragment {
                 MeaningGrammarFragment::Literal { value } => {
-                    validate_grammar_text(value, false)?;
+                    validate_grammar_text(value, false, limits.unit_bytes)?;
                     possible_unit_bytes = possible_unit_bytes
                         .checked_add(value.len())
                         .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "unit size overflow"))?;
@@ -2133,7 +2174,7 @@ fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Re
                     let mut unique = BTreeSet::new();
                     let mut max_length = 0usize;
                     for alternative in alternatives {
-                        validate_grammar_text(alternative, true)?;
+                        validate_grammar_text(alternative, true, limits.unit_bytes)?;
                         if !unique.insert(alternative) {
                             return Err(failure(
                                 "MEANING_GRAMMAR_CHOICE",
@@ -2166,10 +2207,10 @@ fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Re
                 .checked_add(fragment_bytes)
                 .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "grammar byte count overflow"))?;
         }
-        if possible_unit_bytes > MAX_MEANING_UNIT_BYTES {
+        if possible_unit_bytes > limits.unit_bytes {
             return Err(failure(
                 "MEANING_UNIT_TEXT",
-                "the longest realization of a grammar unit exceeds 384 bytes",
+                "the longest realization of a grammar unit exceeds its byte envelope",
             ));
         }
         if unit.evidence_ids.len() > 16
@@ -2184,7 +2225,7 @@ fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Re
                 "grammar evidence labels must be unique bounded ASCII identifiers",
             ));
         }
-        if unit.dependencies.len() > MAX_MEANING_UNITS
+        if unit.dependencies.len() > limits.units
             || unit
                 .dependencies
                 .iter()
@@ -2197,7 +2238,7 @@ fn validate_meaning_generation_request(request: &MeaningGenerationRequest) -> Re
             ));
         }
     }
-    if grammar_bytes > MAX_MEANING_INPUT_BYTES || fragment_count > 512 {
+    if grammar_bytes > limits.bytes || fragment_count > limits.fragments {
         return Err(failure(
             "MEANING_GRAMMAR_LIMIT",
             "semantic grammar exceeds its byte or fragment envelope",
@@ -2289,9 +2330,9 @@ fn meaning_generation_order(request: &MeaningGenerationRequest) -> Result<Vec<us
     Ok(order)
 }
 
-fn validate_grammar_text(value: &str, trim: bool) -> Result<()> {
+fn validate_grammar_text(value: &str, trim: bool, max_bytes: usize) -> Result<()> {
     if value.is_empty()
-        || value.len() > MAX_MEANING_UNIT_BYTES
+        || value.len() > max_bytes
         || (trim && value.trim() != value)
         || value.chars().any(char::is_control)
     {
@@ -2544,6 +2585,12 @@ fn meaning_generation_training_documents(
     if request.format == MeaningCompositionFormat::Bullets {
         documents.extend(["・".to_owned(), "\n".to_owned()]);
     }
+    if request.purpose == MeaningCompositionPurpose::Compare {
+        // Repeated comparison axes share the same lexical fragments. The
+        // request still contains every occurrence required by the decoder.
+        let mut seen = BTreeSet::new();
+        documents.retain(|document| seen.insert(document.clone()));
+    }
     let total = documents.iter().try_fold(0usize, |total, document| {
         total
             .checked_add(document.len())
@@ -2582,7 +2629,8 @@ pub(crate) fn generate_semantic_meaning_with_rules_until(
     deadline: Instant,
 ) -> Result<MeaningGenerationOutput> {
     poll_model(deadline)?;
-    validate_meaning_generation_request(request)?;
+    let limits = MeaningGenerationLimits::for_purpose(request.purpose);
+    validate_meaning_generation_request(request, &limits)?;
     let training_documents = meaning_generation_training_documents(request)?;
     let (model, training_corpus_revision, training_lineage) = if rule_documents.is_empty() {
         (
@@ -2651,10 +2699,10 @@ pub(crate) fn generate_semantic_meaning_with_rules_until(
             .get(byte_start..byte_end)
             .ok_or_else(|| failure("MEANING_REVERSE_CHECK", "generated unit span is invalid"))?
             .to_owned();
-        if text.is_empty() || text.len() > MAX_MEANING_UNIT_BYTES {
+        if text.is_empty() || text.len() > limits.unit_bytes {
             return Err(failure(
                 "MEANING_UNIT_TEXT",
-                "generated unit is empty or exceeds the 384-byte semantic envelope",
+                "generated unit is empty or exceeds its semantic byte envelope",
             ));
         }
         let surface_sha256 = identity(&(

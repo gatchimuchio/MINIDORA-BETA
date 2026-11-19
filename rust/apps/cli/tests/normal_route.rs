@@ -5469,6 +5469,8 @@ fn natural_common_relation_questions_compare_two_subjects_using_shared_proofs() 
 
 #[test]
 fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_summary() {
+    use std::collections::BTreeSet;
+
     let scratch = Scratch::new();
     let actor = "relation-comparison-owner";
     let case = "relation-comparison-case";
@@ -5520,21 +5522,24 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
         &[
             "--input",
             "compare-relation-inventories",
+            "--max-actions",
+            "128",
             "[scope=biology]ココとミケの保存済みの関係を比較して",
         ],
     ));
     assert_eq!(comparison["lifecycle"], "COMMIT");
     assert_eq!(comparison["guarantee"], "HYPOTHESIS");
     let comparison_text = comparison["text"].as_str().unwrap();
+    assert!(comparison_text.starts_with("・保存済みの関係を左右で比較します。"));
     for marker in [
         "保存記録の網羅性",
-        "ココは鳥である",
-        "ミケは鳥である",
-        "ココは動物である",
-        "ミケは動物である",
-        "羽毛持ち",
-        "ミケは猫である",
-        "規則からの導出",
+        "「ココ」",
+        "「ミケ」",
+        "「鳥」",
+        "「動物」",
+        "「羽毛持ち」",
+        "「猫」",
+        "保存規則からの導出",
     ] {
         assert!(comparison_text.contains(marker), "missing {marker}");
     }
@@ -5563,7 +5568,7 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
         comparison_report_ref
     );
     let artifact: Value = serde_json::from_slice(&artifact_bytes).unwrap();
-    assert_eq!(artifact["kind"], "minidora.relation-comparison-report.v1");
+    assert_eq!(artifact["kind"], "minidora.relation-comparison-content.v5");
     assert_eq!(artifact["result_id"], comparison["id"]);
     assert_eq!(artifact["scope"], "biology");
     assert_eq!(
@@ -5583,6 +5588,75 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
                 .all(|fact| { fact["proposition"]["scope"] == "biology" })
         );
     }
+    let meaning_plan = &artifact["meaning_plan"];
+    assert_eq!(meaning_plan["subject_a"], "ココ");
+    assert_eq!(meaning_plan["subject_b"], "ミケ");
+    assert_eq!(meaning_plan["scope"], "biology");
+    let rows = meaning_plan["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 4);
+    for (class, left, right) in [
+        ("COMMON", Some(&coco_bird), Some(&mike_bird)),
+        ("LEFT_ONLY", Some(&coco_feathers), None),
+        ("RIGHT_ONLY", None, Some(&mike_cat)),
+    ] {
+        let refs = |record: Option<&Value>| {
+            record.map_or_else(Vec::new, |record| vec![record["dependencies"][0].clone()])
+        };
+        assert!(rows.iter().any(|row| {
+            row["class"] == class
+                && row["left_fact_ids"] == Value::Array(refs(left))
+                && row["right_fact_ids"] == Value::Array(refs(right))
+        }));
+    }
+    assert_eq!(
+        rows.iter().filter(|row| row["class"] == "COMMON").count(),
+        2
+    );
+
+    let generated = &artifact["content_generation"];
+    assert_eq!(generated["schema"], "core-meaning-generation-v1");
+    assert_eq!(generated["stop_reason"], "EOS");
+    assert_eq!(generated["text"], comparison["text"]);
+    let generated_proof_ids = generated["evidence_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    for expected in [
+        meaning_plan["proof_ids"].as_array().unwrap().as_slice(),
+        &comparison["dependencies"].as_array().unwrap()[1..],
+    ] {
+        assert_eq!(
+            generated_proof_ids,
+            expected
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<BTreeSet<_>>()
+        );
+    }
+    let token_steps = generated["token_steps"].as_array().unwrap();
+    assert!(token_steps.iter().any(|step| {
+        step["distribution"]
+            .as_array()
+            .is_some_and(|support| support.len() > 1)
+    }));
+    let plan = &comparison["content_plan"];
+    assert_eq!(generated["model_revision"], plan["model_revision"]);
+    assert_eq!(generated["model_artifact_ref"], plan["model_artifact_ref"]);
+    assert_eq!(plan["text"], comparison["text"]);
+    let required_units = generated["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|unit| unit["text"].clone())
+        .collect();
+    assert_eq!(plan["required_units"], Value::Array(required_units));
+    assert_eq!(comparison["render"]["status"], "RENDERED");
+    assert_eq!(
+        comparison["render"]["bytes"],
+        serde_json::json!(comparison_text.as_bytes())
+    );
 
     let summary = record(&execute_in_case(
         &scratch.0,
@@ -5639,23 +5713,43 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
         &[
             "--input",
             "compare-conflicting-relations",
+            "--max-actions",
+            "128",
             "[scope=biology]ココとミケの関係を比較して",
         ],
     ));
     assert_eq!(conflicting_comparison["lifecycle"], "COMMIT");
+    assert_eq!(conflicting_comparison["guarantee"], "HYPOTHESIS");
     let conflict_text = conflicting_comparison["text"].as_str().unwrap();
+    assert!(conflict_text.contains("競合"), "{conflict_text}");
     assert!(
-        conflict_text.contains("競合は解消せず"),
-        "conflict text was: {conflict_text}"
+        conflict_text.contains("「ココ」") && conflict_text.contains("「鳥」"),
+        "{conflict_text}"
     );
-    assert!(conflict_text.contains("競合根拠を含む関係"));
-    assert!(conflict_text.contains("対立根拠あり"));
-    assert!(conflict_text.contains("ココは鳥である"));
-    assert!(conflict_text.contains("ココは鳥ではない"));
     assert!(
-        !conflict_text.contains("両側で確認した同じ関係: ココは鳥である"),
-        "contested support was mislabeled as an unambiguous common relation"
+        conflict_text.contains("ではない") || conflict_text.contains("ではありません"),
+        "{conflict_text}"
     );
+    let conflict_ref = conflicting_comparison["dependencies"][0].as_str().unwrap();
+    let conflict_artifact: Value = serde_json::from_slice(
+        &store
+            .get_bytes(conflict_actor, conflict_case, conflict_ref)
+            .unwrap(),
+    )
+    .unwrap();
+    let contested_rows = conflict_artifact["meaning_plan"]["rows"]
+        .as_array()
+        .unwrap();
+    assert_eq!(contested_rows.len(), 2);
+    assert!(contested_rows.iter().all(|row| row["class"] == "CONTESTED"));
+    assert!(contested_rows.iter().any(|row| {
+        row["left_fact_ids"] == serde_json::json!([coco_positive["dependencies"][0]])
+            && row["right_fact_ids"] == serde_json::json!([mike_positive["dependencies"][0]])
+    }));
+    assert!(contested_rows.iter().any(|row| {
+        row["left_fact_ids"] == serde_json::json!([coco_negative["dependencies"][0]])
+            && row["right_fact_ids"] == serde_json::json!([])
+    }));
     for source in [&coco_positive, &coco_negative, &mike_positive] {
         for dependency in source["dependencies"].as_array().unwrap() {
             assert!(
@@ -5668,6 +5762,31 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
             );
         }
     }
+
+    let exhausted = stopped(
+        &execute_in_case(
+            &scratch.0,
+            actor,
+            case,
+            &[
+                "--input",
+                "relation-comparison-low-budget",
+                "--max-actions",
+                "32",
+                "[scope=biology]ココとミケの関係を比較して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        exhausted["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert!(exhausted["content_plan"].is_null());
+    assert!(exhausted["render"].is_null());
 
     let no_memory = stopped(
         &execute_in_case(
@@ -5690,6 +5809,69 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
             .contains("MISSING_PREMISES")
     );
     assert!(no_memory["dependencies"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn relation_comparison_generates_every_axis_beyond_short_explanation_size() {
+    let scratch = Scratch::new();
+    let actor = "multi-axis-comparison-owner";
+    let case = "multi-axis-comparison-case";
+    let long_object = "記録".repeat(40);
+    for (input, premise) in (0..13)
+        .map(|index| {
+            (
+                format!("left-{index}"),
+                format!("[scope=lab]甲は資料{index}"),
+            )
+        })
+        .chain([
+            ("left-long".into(), format!("[scope=lab]甲は{long_object}")),
+            ("right-long".into(), format!("[scope=lab]乙は{long_object}")),
+        ])
+    {
+        record(&execute_in_case(
+            &scratch.0,
+            actor,
+            case,
+            &["--input", &input, &premise],
+        ));
+    }
+
+    let comparison = record(&execute_in_case(
+        &scratch.0,
+        actor,
+        case,
+        &[
+            "--input",
+            "compare-all",
+            "--max-actions",
+            "256",
+            "[scope=lab]甲と乙の関係を比較して",
+        ],
+    ));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let source_ref = comparison["dependencies"][0].as_str().unwrap();
+    let artifact: Value =
+        serde_json::from_slice(&store.get_bytes(actor, case, source_ref).unwrap()).unwrap();
+    let rows = artifact["meaning_plan"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 14);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["class"] == "LEFT_ONLY")
+            .count(),
+        13
+    );
+    assert_eq!(
+        rows.iter().filter(|row| row["class"] == "COMMON").count(),
+        1
+    );
+    let generation = &artifact["content_generation"];
+    assert!(generation["units"].as_array().unwrap().len() > 16);
+    assert!(generation["units"].as_array().unwrap().iter().any(|unit| {
+        let text = unit["text"].as_str().unwrap();
+        text.len() > 384 && text.matches(&long_object).count() == 2
+    }));
+    assert_eq!(generation["text"], comparison["text"]);
 }
 
 #[test]
@@ -5739,6 +5921,8 @@ fn saved_relation_comparison_explanation_revalidates_both_scoped_inventories() {
         &[
             "--input",
             "compare-relations-for-explanation",
+            "--max-actions",
+            "128",
             "[scope=biology]ココとミケの保存済みの関係を比較して",
         ],
     ));
@@ -5749,7 +5933,13 @@ fn saved_relation_comparison_explanation_revalidates_both_scoped_inventories() {
         &scratch.0,
         actor,
         comparison_case,
-        &["--input", "explain-relation-comparison", "詳しく説明して"],
+        &[
+            "--input",
+            "explain-relation-comparison",
+            "--max-actions",
+            "128",
+            "詳しく説明して",
+        ],
     ));
     assert_eq!(explanation["lifecycle"], "COMMIT");
     assert_eq!(explanation["guarantee"], "HYPOTHESIS");
@@ -5758,11 +5948,12 @@ fn saved_relation_comparison_explanation_revalidates_both_scoped_inventories() {
     for marker in [
         "前回の保存関係比較を詳しく説明します",
         "左右のscope別inventoryを再計算",
-        "両側で確認した同じ関係",
-        "ココ側で確認した関係",
-        "ミケ側で確認した関係",
-        "直接提示された前提",
-        "規則からの導出",
+        "「ココ」",
+        "「ミケ」",
+        "「羽毛持ち」",
+        "「猫」",
+        "「動物」",
+        "保存規則からの導出",
         "関係が偽または存在しない証明ではありません",
         "現実世界の真偽は確認していません",
     ] {
@@ -5790,6 +5981,8 @@ fn saved_relation_comparison_explanation_revalidates_both_scoped_inventories() {
         &[
             "--input",
             "compare-relations-before-invalidation",
+            "--max-actions",
+            "128",
             "[scope=biology]ココとミケの保存済みの関係を比較して",
         ],
     ));
@@ -5811,6 +6004,8 @@ fn saved_relation_comparison_explanation_revalidates_both_scoped_inventories() {
             &[
                 "--input",
                 "explain-stale-relation-comparison",
+                "--max-actions",
+                "128",
                 "詳しく説明して",
             ],
         ),

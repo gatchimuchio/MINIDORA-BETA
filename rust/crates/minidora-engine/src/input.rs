@@ -8,6 +8,8 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
 pub const PARSER_VERSION: &str = "declarative-ja-en-v84-quoted-relation-boundary";
+pub(crate) const COMPARISON_PARSER_VERSION: &str =
+    "declarative-ja-en-v85-generated-relation-comparison";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 6] = ['「', '『', '"', '\'', '“', '‘'];
 
@@ -126,8 +128,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Err(error) => return Err(error),
     };
+    let parser_version = if matches!(intent, Intent::CompareRelationInventories { .. }) {
+        COMPARISON_PARSER_VERSION
+    } else {
+        PARSER_VERSION
+    };
     let meaning = MeaningIR {
-        parser_version: PARSER_VERSION.into(),
+        parser_version: parser_version.into(),
         intent,
         // Offsets are UTF-8 byte offsets into the exact original, not normalized
         // character indices. Keeping the complete source avoids lossy mappings.
@@ -142,7 +149,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         context_result_ref: previous.map(|result| result.id.clone()),
     };
     let raw_sha256 = digest(request.text.as_bytes());
-    let fingerprint = identity(&(request, &raw_sha256, &context_sha256, PARSER_VERSION))?;
+    let fingerprint = identity(&(request, &raw_sha256, &context_sha256, parser_version))?;
     let semantic_signature = identity(&meaning)?;
     Ok(InputBundle {
         request: request.clone(),

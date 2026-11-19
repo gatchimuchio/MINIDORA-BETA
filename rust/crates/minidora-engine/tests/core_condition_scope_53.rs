@@ -234,6 +234,52 @@ fn typed_condition_refs_bind_rules_queries_correction_and_comparison() {
     assert!(!comparison.text.contains("両側で確認した同じ関係"));
 
     let store = Store::open(directory.path()).expect("inspect persisted conditioned relations");
+    let mut normal_request = RequestEnvelope::new(
+        "b53-condition-comparison",
+        "compare-ordinary",
+        actor,
+        &format!("[scope={scope}]AsterとBerylの保存済みの関係を比較して"),
+    );
+    normal_request.budget.max_actions = 128;
+    let normal_comparison = engine.execute(actor, normal_request).unwrap();
+    assert_eq!(
+        normal_comparison.lifecycle,
+        Lifecycle::Commit,
+        "{normal_comparison:?}"
+    );
+    assert!(normal_comparison.text.contains(dry));
+    assert!(normal_comparison.text.contains(wet));
+    let artifact: serde_json::Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                actor,
+                "b53-condition-comparison",
+                &normal_comparison.dependencies[0],
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    let rows = artifact["meaning_plan"]["rows"].as_array().unwrap();
+    for (classification, source, side) in [
+        ("LEFT_ONLY", &aster, "left_fact_ids"),
+        ("RIGHT_ONLY", &beryl, "right_fact_ids"),
+    ] {
+        assert!(rows.iter().any(|row| {
+            row["class"] == classification && row[side] == json!([source.dependencies[0]])
+        }));
+    }
+    assert!(rows.iter().all(|row| row["class"] != "COMMON"));
+    assert_eq!(
+        artifact["content_generation"]["text"],
+        normal_comparison.text
+    );
+    let archived_proofs = artifact["content_generation"]["evidence_ids"]
+        .as_array()
+        .unwrap();
+    for condition in store.load_memory(actor).unwrap().conditions {
+        assert!(archived_proofs.contains(&json!(condition.id)));
+    }
+
     let memory = store.load_memory(actor).expect("load actor memory");
     assert!(memory.facts.iter().any(|fact| {
         fact.id == premise_id && !fact.valid && fact.proposition.condition_refs.contains(dry)

@@ -239,9 +239,16 @@ const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 const GROUP_MEAN_HYPOTHESIS_PREDICATE: &str = "GROUP_MEAN_HYPOTHESIS_RESULT_V1";
 
-pub(crate) fn goal_predicates(intent: &Intent, requires_file: bool) -> Vec<String> {
+pub(crate) const RELATION_COMPARISON_PREDICATE: &str = "GENERATED_RELATION_COMPARISON_V1";
+
+pub(crate) fn goal_predicates(meaning: &MeaningIR, requires_file: bool) -> Vec<String> {
     let mut predicates = Vec::new();
-    match intent {
+    match &meaning.intent {
+        Intent::CompareRelationInventories { .. }
+            if meaning.parser_version == input::COMPARISON_PARSER_VERSION =>
+        {
+            predicates.push(RELATION_COMPARISON_PREDICATE.into());
+        }
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::AskWhy { .. } => predicates.push(RELATION_EXPLANATION_PREDICATE.into()),
@@ -276,7 +283,9 @@ fn verify_report_goal_content(
     let Some(predicate) = goal.required_predicates.iter().find(|predicate| {
         matches!(
             predicate.as_str(),
-            RELATION_EXPLANATION_PREDICATE | GROUP_MEAN_HYPOTHESIS_PREDICATE
+            RELATION_EXPLANATION_PREDICATE
+                | GROUP_MEAN_HYPOTHESIS_PREDICATE
+                | RELATION_COMPARISON_PREDICATE
         )
     }) else {
         return Ok(());
@@ -295,7 +304,7 @@ fn verify_report_goal_content(
     if !matches {
         return Err(failure(
             "GOAL_REPORT_MISMATCH",
-            "元Goalが要求した証明または仮説成果と採用内容が一致しません。",
+            "元Goalが要求した報告成果と採用内容が一致しません。",
         ));
     }
     Ok(())
@@ -531,6 +540,8 @@ const RELATION_COMPARISON_REPORT_KIND: &str = "minidora.relation-comparison-repo
 const RELATION_COMPARISON_CONTENT_KIND: &str = "minidora.relation-comparison-content.v2";
 const RELATION_COMPARISON_CONTENT_KIND_V3: &str = "minidora.relation-comparison-content.v3";
 const RELATION_COMPARISON_CONTENT_KIND_V4: &str = "minidora.relation-comparison-content.v4";
+const RELATION_COMPARISON_CONTENT_KIND_V5: &str = "minidora.relation-comparison-content.v5";
+const RELATION_COMPARISON_GENERATED_HEADING: &str = "保存済みの関係を左右で比較します。";
 const RELATION_COMPARISON_REPORT_HEADER: &str = "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。";
 const RELATION_COMPARISON_CONTENT_HEADER: &str = "左右の保存関係根拠を照合した比較です。";
 
@@ -2260,6 +2271,48 @@ struct RelationComparisonContentArtifact {
     content_composition: language::MeaningCompositionReport,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationComparisonMeaningPlan {
+    subject_a: String,
+    subject_b: String,
+    scope: String,
+    rows: Vec<RelationComparisonMeaningRow>,
+    proof_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationComparisonMeaningRow {
+    class: RelationComparisonClass,
+    left_fact_ids: Vec<String>,
+    right_fact_ids: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum RelationComparisonClass {
+    Common,
+    LeftOnly,
+    RightOnly,
+    Contested,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationComparisonGeneratedArtifact {
+    kind: String,
+    result_id: String,
+    report_sha256: String,
+    subject_a: String,
+    subject_b: String,
+    scope: String,
+    inventory_a: relations::RelationInventory,
+    inventory_b: relations::RelationInventory,
+    meaning_plan: RelationComparisonMeaningPlan,
+    content_generation: language::MeaningGenerationReport,
+}
+
 struct RelationComparisonArtifactView {
     canonical_bytes: Vec<u8>,
     kind: String,
@@ -2273,6 +2326,10 @@ struct RelationComparisonArtifactView {
     content: Option<(
         language::MeaningCompositionRequest,
         language::MeaningCompositionReport,
+    )>,
+    generated: Option<(
+        RelationComparisonMeaningPlan,
+        language::MeaningGenerationReport,
     )>,
 }
 
@@ -4297,10 +4354,7 @@ impl Engine {
             permissions: request.permissions.clone(),
             budget: request.budget.clone(),
             required_graph_ref,
-            required_predicates: goal_predicates(
-                &bundle.meaning.intent,
-                request.output_path.is_some(),
-            ),
+            required_predicates: goal_predicates(&bundle.meaning, request.output_path.is_some()),
         };
         state.goal_sha256 = Some(self.store.put_artifact(actor, &request.case_id, &goal)?);
         self.advance(&mut state, Lifecycle::Running, None)?;
@@ -4365,6 +4419,7 @@ impl Engine {
         let content_request = None;
         let content_composition = None;
         let mut content_generation = None;
+        let mut generation_proof_ids = None;
         let mut applied_rule_adaptation = None;
         let mut generation_model = None;
         let mut generation_emission = None;
@@ -5494,9 +5549,7 @@ impl Engine {
                         .dependencies
                         .extend(prior.dependencies.iter().cloned());
                     result.guarantee = original_answer.guarantee;
-                } else if prior.text.starts_with(RELATION_COMPARISON_REPORT_HEADER)
-                    || prior.text.starts_with(RELATION_COMPARISON_CONTENT_HEADER)
-                {
+                } else if is_saved_relation_comparison_result(&prior) {
                     if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
                         return self.stop(
                             &mut state,
@@ -5563,6 +5616,7 @@ impl Engine {
                                 | RELATION_COMPARISON_CONTENT_KIND
                                 | RELATION_COMPARISON_CONTENT_KIND_V3
                                 | RELATION_COMPARISON_CONTENT_KIND_V4
+                                | RELATION_COMPARISON_CONTENT_KIND_V5
                         )
                         || matches!(
                             artifact.kind.as_str(),
@@ -5670,11 +5724,74 @@ impl Engine {
                             "前回比較の左右いずれかの保存根拠・競合状態が変わっています。新しい比較を行ってください。",
                         );
                     }
-                    let (report, expected_content_units) = if let Some((
-                        content_request,
-                        content_composition,
-                    )) = &artifact.content
-                    {
+                    let (report, expected_content_units) = if artifact.generated.is_some() {
+                        let prior_bundle = self.store.get_input_bundle(
+                            actor,
+                            &request.case_id,
+                            &prior.input_id,
+                            prior.input_version,
+                        )?;
+                        let Some((_, prior_bundle)) = prior_bundle else {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RELATION_COMPARISON_ARTIFACT_UNAVAILABLE",
+                                "前回比較の封印入力を取得できません。",
+                            );
+                        };
+                        let expected_intent = Intent::CompareRelationInventories {
+                            subject_a: artifact.subject_a.clone(),
+                            subject_b: artifact.subject_b.clone(),
+                            scope: artifact.scope.clone(),
+                        };
+                        if prior_bundle.meaning.parser_version != input::COMPARISON_PARSER_VERSION
+                            || prior_bundle.meaning.intent != expected_intent
+                            || identity(&prior_bundle.request)? != prior.id
+                        {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RELATION_COMPARISON_ARTIFACT_INVALID",
+                                "前回比較の型付き入力が記録と一致しません。",
+                            );
+                        }
+                        let replay = RelationComparisonReplay {
+                            subject_a: &artifact.subject_a,
+                            subject_b: &artifact.subject_b,
+                            scope: &artifact.scope,
+                            max_actions: request.budget.max_actions,
+                            max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
+                            generated: true,
+                        };
+                        let verified = verify_generated_comparison(
+                            &artifact,
+                            &inventory_a,
+                            &inventory_b,
+                            &prior,
+                            prior_plan,
+                            replay,
+                        )
+                        .and_then(|answer| {
+                            verify_generated_comparison_model(
+                                &self.store,
+                                actor,
+                                &request.case_id,
+                                prior_plan,
+                            )?;
+                            Ok(answer)
+                        });
+                        match verified {
+                            Ok(content) => content,
+                            Err(error) => {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    "RELATION_COMPARISON_ARTIFACT_INVALID",
+                                    &error.to_string(),
+                                );
+                            }
+                        }
+                    } else if let Some((content_request, content_composition)) = &artifact.content {
                         let regenerated_request = match artifact.kind.as_str() {
                             RELATION_COMPARISON_CONTENT_KIND => {
                                 relation_comparison_content_request_v2(
@@ -5765,14 +5882,18 @@ impl Engine {
                         );
                     }
                     let mut expected_dependencies = vec![report_ref];
-                    expected_dependencies.extend(
-                        inventory_a
-                            .dependencies
-                            .iter()
-                            .chain(&inventory_b.dependencies)
-                            .cloned()
-                            .collect::<BTreeSet<_>>(),
-                    );
+                    if let Some((plan, _)) = &artifact.generated {
+                        expected_dependencies.extend(plan.proof_ids.iter().cloned());
+                    } else {
+                        expected_dependencies.extend(
+                            inventory_a
+                                .dependencies
+                                .iter()
+                                .chain(&inventory_b.dependencies)
+                                .cloned()
+                                .collect::<BTreeSet<_>>(),
+                        );
+                    }
                     if prior.dependencies != expected_dependencies {
                         return self.stop(
                             &mut state,
@@ -5781,7 +5902,7 @@ impl Engine {
                             "前回比較の依存記録が左右の再検証済みinventoryと一致しません。",
                         );
                     }
-                    let explanation = relation_comparison_explanation_units(&prior.id, &report);
+                    let explanation = relation_comparison_explanation_units(&prior);
                     if explanation.join("\n").len() > request.budget.max_evidence_bytes {
                         return self.stop(
                             &mut state,
@@ -7199,26 +7320,36 @@ impl Engine {
                         "このscopeで二つの対象について比較できる支持記録がありません。共通点や差異がないとは断定しません。",
                     );
                 }
-                let mut report = relation_comparison_report(
-                    subject_a,
-                    subject_b,
-                    scope,
-                    &inventory_a,
-                    &inventory_b,
-                );
-                let mut comparison_units = vec![report.clone()];
-                let artifact_bytes;
-                let (content_request, content_kind) = relation_comparison_content_request(
-                    &inventories.comparison_rules,
-                    subject_a,
-                    subject_b,
-                    scope,
-                    &inventory_a,
-                    &inventory_b,
-                    request.budget.max_evidence_bytes,
-                )?;
-                if let Some(content_request) = content_request {
-                    let composition = match language::compose_typed_meaning(&content_request) {
+                let generated = goal
+                    .required_predicates
+                    .iter()
+                    .any(|predicate| predicate == RELATION_COMPARISON_PREDICATE);
+                let (report, comparison_units, artifact_bytes) = if generated {
+                    let meaning_plan = relation_comparison_meaning_plan(
+                        subject_a,
+                        subject_b,
+                        scope,
+                        &inventory_a,
+                        &inventory_b,
+                    );
+                    let grammar = comparison_generation_request(
+                        &meaning_plan,
+                        &inventory_a,
+                        &inventory_b,
+                        request.budget.max_evidence_bytes,
+                    )?;
+                    let generation = started
+                        .checked_add(Duration::from_millis(goal.budget.deadline_ms))
+                        .ok_or_else(|| {
+                            failure(
+                                "INVALID_DEADLINE",
+                                "execution deadline overflows this clock",
+                            )
+                        })
+                        .and_then(|deadline| {
+                            language::generate_semantic_meaning_until(&grammar, deadline)
+                        });
+                    let mut generation = match generation {
                         Ok(value) => value,
                         Err(error) => {
                             return self.stop(
@@ -7229,59 +7360,131 @@ impl Engine {
                             );
                         }
                     };
-                    let expected_proofs = relation_comparison_proof_ids(&inventory_a, &inventory_b);
-                    let composed_proofs = composition
-                        .evidence_ids
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>();
-                    if composed_proofs != expected_proofs {
+                    if let Err(error) = validate_meaning_generation(
+                        &grammar,
+                        &meaning_plan.proof_ids,
+                        &generation.report,
+                    ) {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
-                            "CONTENT_PROOF_MAPPING",
-                            "比較の新内容計画が左右の関係proof IDを完全には保持しません。",
+                            "CONTENT_PLAN_INVALID",
+                            &error.to_string(),
                         );
                     }
-                    comparison_units = match composed_content_units(&content_request, &composition)
-                    {
-                        Ok(value) => value,
-                        Err(error) => {
+                    let report = generation.report.text.clone();
+                    let comparison_units = generation
+                        .report
+                        .units
+                        .iter()
+                        .map(|unit| unit.text.clone())
+                        .collect::<Vec<_>>();
+                    let model_ref = digest(&canonical(&generation.model)?);
+                    generation.report.model_artifact_ref = Some(model_ref);
+                    let artifact_bytes = canonical(&RelationComparisonGeneratedArtifact {
+                        kind: RELATION_COMPARISON_CONTENT_KIND_V5.into(),
+                        result_id: result.id.clone(),
+                        report_sha256: digest(report.as_bytes()),
+                        subject_a: subject_a.clone(),
+                        subject_b: subject_b.clone(),
+                        scope: scope.clone(),
+                        inventory_a: inventory_a.clone(),
+                        inventory_b: inventory_b.clone(),
+                        meaning_plan: meaning_plan.clone(),
+                        content_generation: generation.report.clone(),
+                    })?;
+                    generation_proof_ids = Some(meaning_plan.proof_ids);
+                    content_generation = Some(generation.report);
+                    generation_model = Some(generation.model);
+                    generation_emission = Some(generation.emission);
+                    (report, comparison_units, artifact_bytes)
+                } else {
+                    let mut report = relation_comparison_report(
+                        subject_a,
+                        subject_b,
+                        scope,
+                        &inventory_a,
+                        &inventory_b,
+                    );
+                    let mut comparison_units = vec![report.clone()];
+                    let artifact_bytes;
+                    let (content_request, content_kind) = relation_comparison_content_request(
+                        &inventories.comparison_rules,
+                        subject_a,
+                        subject_b,
+                        scope,
+                        &inventory_a,
+                        &inventory_b,
+                        request.budget.max_evidence_bytes,
+                    )?;
+                    if let Some(content_request) = content_request {
+                        let composition = match language::compose_typed_meaning(&content_request) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    "CONTENT_PLAN_UNAVAILABLE",
+                                    &error.to_string(),
+                                );
+                            }
+                        };
+                        let expected_proofs =
+                            relation_comparison_proof_ids(&inventory_a, &inventory_b);
+                        let composed_proofs = composition
+                            .evidence_ids
+                            .iter()
+                            .cloned()
+                            .collect::<BTreeSet<_>>();
+                        if composed_proofs != expected_proofs {
                             return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,
-                                "CONTENT_PLAN_INVALID",
-                                &error.to_string(),
+                                "CONTENT_PROOF_MAPPING",
+                                "比較の新内容計画が左右の関係proof IDを完全には保持しません。",
                             );
                         }
-                    };
-                    report = composition.text.clone();
-                    approved_surfaces = Some(vec![report.clone()]);
-                    artifact_bytes = canonical(&RelationComparisonContentArtifact {
-                        kind: content_kind.into(),
-                        result_id: result.id.clone(),
-                        report_sha256: digest(report.as_bytes()),
-                        subject_a: subject_a.clone(),
-                        subject_b: subject_b.clone(),
-                        scope: scope.clone(),
-                        inventory_a: inventory_a.clone(),
-                        inventory_b: inventory_b.clone(),
-                        content_request,
-                        content_composition: composition,
-                    })?;
-                } else {
-                    let artifact = RelationComparisonReportArtifact {
-                        kind: RELATION_COMPARISON_REPORT_KIND.into(),
-                        result_id: result.id.clone(),
-                        report_sha256: digest(report.as_bytes()),
-                        subject_a: subject_a.clone(),
-                        subject_b: subject_b.clone(),
-                        scope: scope.clone(),
-                        inventory_a: inventory_a.clone(),
-                        inventory_b: inventory_b.clone(),
-                    };
-                    artifact_bytes = canonical(&artifact)?;
-                }
+                        comparison_units =
+                            match composed_content_units(&content_request, &composition) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    return self.stop(
+                                        &mut state,
+                                        Lifecycle::Suspend,
+                                        "CONTENT_PLAN_INVALID",
+                                        &error.to_string(),
+                                    );
+                                }
+                            };
+                        report = composition.text.clone();
+                        approved_surfaces = Some(vec![report.clone()]);
+                        artifact_bytes = canonical(&RelationComparisonContentArtifact {
+                            kind: content_kind.into(),
+                            result_id: result.id.clone(),
+                            report_sha256: digest(report.as_bytes()),
+                            subject_a: subject_a.clone(),
+                            subject_b: subject_b.clone(),
+                            scope: scope.clone(),
+                            inventory_a: inventory_a.clone(),
+                            inventory_b: inventory_b.clone(),
+                            content_request,
+                            content_composition: composition,
+                        })?;
+                    } else {
+                        let artifact = RelationComparisonReportArtifact {
+                            kind: RELATION_COMPARISON_REPORT_KIND.into(),
+                            result_id: result.id.clone(),
+                            report_sha256: digest(report.as_bytes()),
+                            subject_a: subject_a.clone(),
+                            subject_b: subject_b.clone(),
+                            scope: scope.clone(),
+                            inventory_a: inventory_a.clone(),
+                            inventory_b: inventory_b.clone(),
+                        };
+                        artifact_bytes = canonical(&artifact)?;
+                    }
+                    (report, comparison_units, artifact_bytes)
+                };
                 if report.len().saturating_add(artifact_bytes.len())
                     > request.budget.max_evidence_bytes
                 {
@@ -7292,22 +7495,37 @@ impl Engine {
                         "関係比較の出力と再検証artifactが要求の証拠予算を超えました。",
                     );
                 }
+                if let Some(model) = &generation_model {
+                    self.store.put_artifact(actor, &request.case_id, model)?;
+                }
                 let report_ref = self
                     .store
                     .put_bytes(actor, &request.case_id, &artifact_bytes)?;
                 units.extend(comparison_units);
                 result.dependencies.push(report_ref);
-                result.dependencies.extend(
-                    inventory_a
-                        .dependencies
-                        .iter()
-                        .chain(&inventory_b.dependencies)
-                        .cloned()
-                        .collect::<BTreeSet<_>>(),
-                );
+                if let Some(proof_ids) = &generation_proof_ids {
+                    result.dependencies.extend(proof_ids.iter().cloned());
+                } else {
+                    result.dependencies.extend(
+                        inventory_a
+                            .dependencies
+                            .iter()
+                            .chain(&inventory_b.dependencies)
+                            .cloned()
+                            .collect::<BTreeSet<_>>(),
+                    );
+                }
                 // The report contrasts only the saved record set; omitted facts
                 // and outside-world truth have not been checked.
                 result.guarantee = Guarantee::Hypothesis;
+                if generated {
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: RELATION_COMPARISON_PREDICATE,
+                        guarantee: Guarantee::Hypothesis,
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                }
             }
             Intent::AskCommonRelations {
                 subject_a,
@@ -8731,10 +8949,13 @@ impl Engine {
         };
         plan.dependencies.push(compute_artifact.clone());
         if let Some(generation_report) = content_generation.as_ref()
-            && let Err(error) = validate_relation_content_plan_adoption(
+            && let Err(error) = validate_generated_content_plan_adoption(
                 &result,
                 generation_report,
                 &emission,
+                generation_proof_ids
+                    .as_deref()
+                    .unwrap_or(&result.dependencies),
                 &compute_artifact,
                 &request.locale,
                 &plan,
@@ -10399,10 +10620,11 @@ fn verify_generated_relation_replay(
         .iter()
         .map(|unit| unit.text.clone())
         .collect::<Vec<_>>();
-    let content_plan_matches = validate_relation_content_plan_adoption(
+    let content_plan_matches = validate_generated_content_plan_adoption(
         previous,
         generation_report,
         &replay.emission,
+        &previous.dependencies,
         compute_ref,
         &plan.locale,
         plan,
@@ -11728,13 +11950,29 @@ fn validate_relation_meaning_generation(
     request: &language::MeaningGenerationRequest,
     report: &language::MeaningGenerationReport,
 ) -> Result<()> {
+    let expected_request =
+        relation_meaning_plan_to_generation_request(plan, request.max_output_bytes)?;
+    if expected_request != *request {
+        return Err(failure(
+            "MEANING_REVERSE_CHECK",
+            "the generation grammar differs from the Core relation meaning plan",
+        ));
+    }
+    validate_meaning_generation(request, &plan.dependencies, report)
+}
+
+fn validate_meaning_generation(
+    request: &language::MeaningGenerationRequest,
+    proof_ids: &[String],
+    report: &language::MeaningGenerationReport,
+) -> Result<()> {
     if report.schema != "core-meaning-generation-v1"
         || report.grammar_version != "core-typed-meaning-fragment-grammar-v1"
         || report.stop_reason != "EOS"
         || report.max_output_bytes != request.max_output_bytes
         || report.max_tokens != request.max_tokens
         || report.units.len() != request.units.len()
-        || report.required_unit_ids.len() != plan.required_units.len()
+        || report.required_unit_ids.len() != request.units.len()
         || report.text.len() > report.max_output_bytes
         || report.decoder_token_count != report.token_steps.len()
         || report
@@ -11748,7 +11986,11 @@ fn validate_relation_meaning_generation(
             "generated report failed its schema, dependency, EOS, budget or byte round trip",
         ));
     }
-    let expected_unit_ids = plan.required_units.iter().cloned().collect::<BTreeSet<_>>();
+    let expected_unit_ids = request
+        .units
+        .iter()
+        .map(|unit| unit.id.clone())
+        .collect::<BTreeSet<_>>();
     let traced_unit_ids = report
         .units
         .iter()
@@ -11773,7 +12015,7 @@ fn validate_relation_meaning_generation(
             "the generated sequence does not contain each planned semantic unit exactly once",
         ));
     }
-    let expected_dependencies = plan.dependencies.iter().cloned().collect::<BTreeSet<_>>();
+    let expected_dependencies = proof_ids.iter().cloned().collect::<BTreeSet<_>>();
     let actual_dependencies = report.evidence_ids.iter().cloned().collect::<BTreeSet<_>>();
     if expected_dependencies != actual_dependencies {
         return Err(failure(
@@ -11784,16 +12026,6 @@ fn validate_relation_meaning_generation(
     let mut previous_end = 0usize;
     let mut emitted_ids = BTreeSet::new();
     for trace in &report.units {
-        let semantic_unit = plan
-            .units
-            .iter()
-            .find(|unit| unit.id == trace.unit_id)
-            .ok_or_else(|| {
-                failure(
-                    "MEANING_REVERSE_CHECK",
-                    "the generated sequence references an unknown Core meaning unit",
-                )
-            })?;
         let grammar_unit = request
             .units
             .iter()
@@ -11804,14 +12036,6 @@ fn validate_relation_meaning_generation(
                     "the generated sequence references an unknown semantic grammar unit",
                 )
             })?;
-        let expected_semantic_sha256 = identity(&(
-            "core-semantic-meaning-unit-v1",
-            &semantic_unit.id,
-            semantic_unit.role,
-            &semantic_unit.meaning,
-            &semantic_unit.evidence_ids,
-            &semantic_unit.dependencies,
-        ))?;
         let expected_surface_sha256 = identity(&(
             grammar_unit.id.as_str(),
             grammar_unit.role,
@@ -11826,9 +12050,7 @@ fn validate_relation_meaning_generation(
                 "a generated unit span is outside the final output bytes",
             ));
         };
-        if semantic_unit.id != grammar_unit.id
-            || grammar_unit.semantic_sha256 != expected_semantic_sha256
-            || trace.unit_id != grammar_unit.id
+        if trace.unit_id != grammar_unit.id
             || trace.role != grammar_unit.role
             || trace.evidence_ids != grammar_unit.evidence_ids
             || trace.dependencies != grammar_unit.dependencies
@@ -11945,10 +12167,11 @@ fn validate_relation_meaning_adoption(input: RelationMeaningAdoptionInput<'_>) -
 /// Verify the exact fields that K7 is about to seal in ContentPlan. A
 /// mismatched generated unit, proof dependency, model artifact or observed
 /// emission remains unadopted.
-fn validate_relation_content_plan_adoption(
+fn validate_generated_content_plan_adoption(
     result: &ResultRecord,
     report: &language::MeaningGenerationReport,
     emission: &language::ModelEmission,
+    proof_ids: &[String],
     compute_artifact_ref: &str,
     locale: &str,
     plan: &ContentPlan,
@@ -11962,7 +12185,7 @@ fn validate_relation_content_plan_adoption(
     expected_dependencies.push(compute_artifact_ref.to_owned());
     let observation_ref = digest(&canonical(emission)?);
     let proof_dependencies = report.evidence_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let expected_proof_dependencies = result.dependencies.iter().cloned().collect::<BTreeSet<_>>();
+    let expected_proof_dependencies = proof_ids.iter().cloned().collect::<BTreeSet<_>>();
     let id_matches = if plan.id.is_empty() {
         true
     } else {
@@ -12357,6 +12580,266 @@ fn relation_comparison_map(
             .push(fact);
     }
     grouped
+}
+
+fn relation_comparison_meaning_plan(
+    subject_a: &str,
+    subject_b: &str,
+    scope: &str,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+) -> RelationComparisonMeaningPlan {
+    let left = relation_comparison_map(inventory_a);
+    let right = relation_comparison_map(inventory_b);
+    let keys = left.keys().chain(right.keys()).collect::<BTreeSet<_>>();
+    let rows = keys
+        .into_iter()
+        .map(|key| {
+            let left = left.get(key).map(Vec::as_slice).unwrap_or_default();
+            let right = right.get(key).map(Vec::as_slice).unwrap_or_default();
+            let contested = left
+                .iter()
+                .any(|fact| inventory_a.contested_fact_ids.contains(&fact.id))
+                || right
+                    .iter()
+                    .any(|fact| inventory_b.contested_fact_ids.contains(&fact.id));
+            let class = match (contested, left.is_empty(), right.is_empty()) {
+                (true, _, _) => RelationComparisonClass::Contested,
+                (false, false, false) => RelationComparisonClass::Common,
+                (false, false, true) => RelationComparisonClass::LeftOnly,
+                (false, true, false) => RelationComparisonClass::RightOnly,
+                _ => unreachable!("comparison keys originate in either inventory"),
+            };
+            RelationComparisonMeaningRow {
+                class,
+                left_fact_ids: left.iter().map(|fact| fact.id.clone()).collect(),
+                right_fact_ids: right.iter().map(|fact| fact.id.clone()).collect(),
+            }
+        })
+        .collect();
+    RelationComparisonMeaningPlan {
+        subject_a: subject_a.into(),
+        subject_b: subject_b.into(),
+        scope: scope.into(),
+        rows,
+        proof_ids: relation_comparison_proof_ids(inventory_a, inventory_b)
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn comparison_generation_request(
+    plan: &RelationComparisonMeaningPlan,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    max_output_bytes: usize,
+) -> Result<language::MeaningGenerationRequest> {
+    use language::{
+        MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle,
+        MeaningGrammarFragment::Literal, MeaningGrammarUnit, MeaningRole,
+    };
+
+    let literal = |value: &str| Literal {
+        value: value.into(),
+    };
+    let mut units = vec![MeaningGrammarUnit {
+        id: "opening".into(),
+        role: MeaningRole::Opening,
+        semantic_sha256: identity(&("relation-comparison-v5", plan))?,
+        evidence_ids: Vec::new(),
+        dependencies: Vec::new(),
+        fragments: vec![literal(RELATION_COMPARISON_GENERATED_HEADING)],
+    }];
+    for (id, role, subject, inventory) in [
+        ("left", MeaningRole::SubjectA, &plan.subject_a, inventory_a),
+        ("right", MeaningRole::SubjectB, &plan.subject_b, inventory_b),
+    ] {
+        let mut fragments = vec![
+            grammar_choice(
+                "operand",
+                if id == "left" {
+                    &["左の対象は", "左側の対象は"]
+                } else {
+                    &["右の対象は", "右側の対象は"]
+                },
+            ),
+            literal("「"),
+            literal(subject),
+            literal("」です。範囲「"),
+            literal(&plan.scope),
+            literal("」"),
+        ];
+        fragments.push(literal(if inventory.facts.is_empty() {
+            "に比較できる保存根拠はありません。"
+        } else {
+            "の有効な保存根拠を参照します。"
+        }));
+        units.push(MeaningGrammarUnit {
+            id: id.into(),
+            role,
+            semantic_sha256: identity(&(
+                "relation-comparison-operand-v1",
+                subject,
+                &plan.scope,
+                inventory,
+            ))?,
+            evidence_ids: Vec::new(),
+            dependencies: vec!["opening".into()],
+            fragments,
+        });
+    }
+    let left = inventory_a
+        .facts
+        .iter()
+        .map(|fact| (fact.id.as_str(), fact))
+        .collect::<BTreeMap<_, _>>();
+    let right = inventory_b
+        .facts
+        .iter()
+        .map(|fact| (fact.id.as_str(), fact))
+        .collect::<BTreeMap<_, _>>();
+    let mut represented = BTreeSet::new();
+    for (index, row) in plan.rows.iter().enumerate() {
+        let (role, labels) = match row.class {
+            RelationComparisonClass::Common => (
+                MeaningRole::Commonality,
+                &["両側の支持：", "共通する支持："][..],
+            ),
+            RelationComparisonClass::LeftOnly => (
+                MeaningRole::Difference,
+                &["左側のみで確認した支持：", "左の記録でのみ確認した支持："][..],
+            ),
+            RelationComparisonClass::RightOnly => (
+                MeaningRole::Difference,
+                &["右側のみで確認した支持：", "右の記録でのみ確認した支持："][..],
+            ),
+            RelationComparisonClass::Contested => (
+                MeaningRole::Difference,
+                &["競合根拠を含む関係：", "対立根拠がある関係："][..],
+            ),
+        };
+        let mut fragments = vec![grammar_choice("comparison_class", labels)];
+        let mut facts = Vec::new();
+        for (ids, inventory, slot) in [
+            (&row.left_fact_ids, &left, "left"),
+            (&row.right_fact_ids, &right, "right"),
+        ] {
+            let side = ids
+                .iter()
+                .map(|id| {
+                    inventory.get(id.as_str()).copied().ok_or_else(|| {
+                        failure(
+                            "CONTENT_PROOF_MAPPING",
+                            "the comparison row references an absent operand fact",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if let Some(fact) = side.first() {
+                if !facts.is_empty() {
+                    fragments.push(literal("／"));
+                }
+                append_proposition_surface(&mut fragments, &fact.proposition, slot);
+                fragments.push(literal("（"));
+                let origins = side
+                    .iter()
+                    .map(|fact| guarantee_label(&fact.guarantee))
+                    .collect::<BTreeSet<_>>();
+                fragments.push(literal(&origins.into_iter().collect::<Vec<_>>().join("・")));
+                fragments.push(literal("）"));
+            }
+            facts.extend(side);
+        }
+        if let Some(fact) = facts.first()
+            && !fact.proposition.condition_refs.is_empty()
+        {
+            fragments.push(literal("（適用条件"));
+            fragments.push(literal(
+                &fact
+                    .proposition
+                    .condition_refs
+                    .iter()
+                    .map(|id| condition_reference_label(id))
+                    .collect::<Vec<_>>()
+                    .join("、"),
+            ));
+            fragments.push(literal("）"));
+        }
+        fragments.push(literal(
+            if row.class == RelationComparisonClass::Contested {
+                "。競合は解消していません。"
+            } else {
+                "。"
+            },
+        ));
+        let evidence_ids = facts
+            .iter()
+            .flat_map(|fact| std::iter::once(&fact.id).chain(&fact.dependencies))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .take(16)
+            .collect::<Vec<_>>();
+        represented.extend(evidence_ids.iter().cloned());
+        units.push(MeaningGrammarUnit {
+            id: format!("relation_{index:02}"),
+            role,
+            semantic_sha256: identity(&("relation-comparison-row-v1", &plan.scope, row, &facts))?,
+            evidence_ids,
+            dependencies: vec!["left".into(), "right".into()],
+            fragments,
+        });
+    }
+    let other_proofs = plan
+        .proof_ids
+        .iter()
+        .filter(|id| !represented.contains(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for (index, proof_ids) in other_proofs.chunks(16).enumerate() {
+        units.push(MeaningGrammarUnit {
+            id: format!("proof_{index:02}"),
+            role: MeaningRole::Evidence,
+            semantic_sha256: identity(&("relation-comparison-additional-proof-v1", proof_ids))?,
+            evidence_ids: proof_ids.to_vec(),
+            dependencies: vec!["left".into(), "right".into()],
+            fragments: vec![
+                grammar_choice(
+                    "proof",
+                    &["照合に用いた追加の根拠参照は", "比較を支える別の根拠参照は"],
+                ),
+                literal(&proof_ids.len().to_string()),
+                literal("件です。"),
+            ],
+        });
+    }
+    units.push(MeaningGrammarUnit {
+        id: "limitation".into(),
+        role: MeaningRole::Limitation,
+        semantic_sha256: identity(&("relation-comparison-coverage-limit-v1", &plan.scope))?,
+        evidence_ids: Vec::new(),
+        dependencies: units.iter().map(|unit| unit.id.clone()).collect(),
+        fragments: vec![
+            grammar_choice(
+                "missing_support",
+                &[
+                    "片側で支持が見つからなくても",
+                    "一方で支持を確認できなくても",
+                ],
+            ),
+            literal("関係が存在しないとは言えません。"),
+            literal("保存記録の網羅性と現実世界の真偽は確認していません。"),
+        ],
+    });
+    let max_output_bytes = max_output_bytes.min(language::MAX_COMPARISON_GENERATION_BYTES);
+    Ok(language::MeaningGenerationRequest {
+        purpose: MeaningCompositionPurpose::Compare,
+        format: MeaningCompositionFormat::Bullets,
+        style: MeaningCompositionStyle::Neutral,
+        units,
+        max_output_bytes,
+        max_tokens: max_output_bytes,
+    })
 }
 
 fn relation_comparison_content_request_v2(
@@ -12839,6 +13322,7 @@ fn decode_relation_comparison_artifact(bytes: &[u8]) -> Result<RelationCompariso
             inventory_a: artifact.inventory_a,
             inventory_b: artifact.inventory_b,
             content: None,
+            generated: None,
         });
     }
     if matches!(
@@ -12859,6 +13343,23 @@ fn decode_relation_comparison_artifact(bytes: &[u8]) -> Result<RelationCompariso
             inventory_a: artifact.inventory_a,
             inventory_b: artifact.inventory_b,
             content: Some((artifact.content_request, artifact.content_composition)),
+            generated: None,
+        });
+    }
+    if kind == RELATION_COMPARISON_CONTENT_KIND_V5 {
+        let artifact: RelationComparisonGeneratedArtifact = serde_json::from_value(value)?;
+        return Ok(RelationComparisonArtifactView {
+            canonical_bytes: canonical(&artifact)?,
+            kind: artifact.kind,
+            result_id: artifact.result_id,
+            report_sha256: artifact.report_sha256,
+            subject_a: artifact.subject_a,
+            subject_b: artifact.subject_b,
+            scope: artifact.scope,
+            inventory_a: artifact.inventory_a,
+            inventory_b: artifact.inventory_b,
+            content: None,
+            generated: Some((artifact.meaning_plan, artifact.content_generation)),
         });
     }
     Err(failure(
@@ -12874,6 +13375,7 @@ pub(crate) struct RelationComparisonReplay<'a> {
     pub scope: &'a str,
     pub max_actions: u32,
     pub max_evidence_bytes: usize,
+    pub generated: bool,
 }
 
 pub(crate) fn verify_relation_comparison_memory_result(
@@ -13003,64 +13505,79 @@ fn verify_relation_comparison_inventories(
             "the retained comparison inventories differ from the actor-memory revision",
         ));
     }
-    let (content_request, content_kind) = relation_comparison_content_request(
-        rules,
-        replay.subject_a,
-        replay.subject_b,
-        replay.scope,
-        inventory_a,
-        inventory_b,
-        replay.max_evidence_bytes,
-    )?;
-    let (report, expected_units) = if let Some(content_request) = content_request {
-        if artifact.kind != content_kind {
-            return Err(failure(
-                "RECOVERY_MEMORY_PROOF_MISMATCH",
-                "the retained comparison content version differs from Core's selected version",
-            ));
-        }
-        let composition = language::compose_typed_meaning(&content_request)?;
-        let expected_proofs = relation_comparison_proof_ids(inventory_a, inventory_b);
-        let composed_proofs = composition
-            .evidence_ids
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if composed_proofs != expected_proofs
-            || artifact.content.as_ref() != Some(&(content_request.clone(), composition.clone()))
-        {
-            return Err(failure(
-                "RECOVERY_MEMORY_PROOF_MISMATCH",
-                "the retained comparison composition differs from its exact Core proof request",
-            ));
-        }
-        let units = composed_content_units(&content_request, &composition)?;
-        (composition.text, units)
+    if replay.generated != artifact.generated.is_some() {
+        return Err(failure(
+            "RECOVERY_MEMORY_PROOF_MISMATCH",
+            "the comparison artifact does not satisfy the sealed generation contract",
+        ));
+    }
+    let (report, expected_units) = if replay.generated {
+        verify_generated_comparison(&artifact, inventory_a, inventory_b, result, plan, replay)?
     } else {
-        if artifact.kind != RELATION_COMPARISON_REPORT_KIND || artifact.content.is_some() {
-            return Err(failure(
-                "RECOVERY_MEMORY_PROOF_MISMATCH",
-                "the retained comparison report artifact has an unexpected content variant",
-            ));
-        }
-        let report = relation_comparison_report(
+        let (content_request, content_kind) = relation_comparison_content_request(
+            rules,
             replay.subject_a,
             replay.subject_b,
             replay.scope,
             inventory_a,
             inventory_b,
-        );
-        (report.clone(), vec![report])
+            replay.max_evidence_bytes,
+        )?;
+        if let Some(content_request) = content_request {
+            if artifact.kind != content_kind {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the retained comparison content version differs from Core's selected version",
+                ));
+            }
+            let composition = language::compose_typed_meaning(&content_request)?;
+            let expected_proofs = relation_comparison_proof_ids(inventory_a, inventory_b);
+            let composed_proofs = composition
+                .evidence_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if composed_proofs != expected_proofs
+                || artifact.content.as_ref()
+                    != Some(&(content_request.clone(), composition.clone()))
+            {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the retained comparison composition differs from its exact Core proof request",
+                ));
+            }
+            let units = composed_content_units(&content_request, &composition)?;
+            (composition.text, units)
+        } else {
+            if artifact.kind != RELATION_COMPARISON_REPORT_KIND || artifact.content.is_some() {
+                return Err(failure(
+                    "RECOVERY_MEMORY_PROOF_MISMATCH",
+                    "the retained comparison report artifact has an unexpected content variant",
+                ));
+            }
+            let report = relation_comparison_report(
+                replay.subject_a,
+                replay.subject_b,
+                replay.scope,
+                inventory_a,
+                inventory_b,
+            );
+            (report.clone(), vec![report])
+        }
     };
     let mut expected_dependencies = vec![report_ref.clone()];
-    expected_dependencies.extend(
-        inventory_a
-            .dependencies
-            .iter()
-            .chain(&inventory_b.dependencies)
-            .cloned()
-            .collect::<BTreeSet<_>>(),
-    );
+    if let Some((plan, _)) = &artifact.generated {
+        expected_dependencies.extend(plan.proof_ids.iter().cloned());
+    } else {
+        expected_dependencies.extend(
+            inventory_a
+                .dependencies
+                .iter()
+                .chain(&inventory_b.dependencies)
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+        );
+    }
     if artifact.report_sha256 != digest(report.as_bytes())
         || report.len().saturating_add(artifact_bytes.len()) > replay.max_evidence_bytes
         || result.text != report
@@ -13080,23 +13597,112 @@ fn verify_relation_comparison_inventories(
     Ok(())
 }
 
-pub(crate) fn relation_comparison_explanation_units(
-    prior_result_id: &str,
-    report: &str,
-) -> Vec<String> {
+fn verify_generated_comparison(
+    artifact: &RelationComparisonArtifactView,
+    inventory_a: &relations::RelationInventory,
+    inventory_b: &relations::RelationInventory,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    replay: RelationComparisonReplay<'_>,
+) -> Result<(String, Vec<String>)> {
+    let expected_plan = relation_comparison_meaning_plan(
+        replay.subject_a,
+        replay.subject_b,
+        replay.scope,
+        inventory_a,
+        inventory_b,
+    );
+    let Some((meaning_plan, report)) = &artifact.generated else {
+        return Err(failure(
+            "CONTENT_PLAN_INVALID",
+            "the generated comparison artifact is missing",
+        ));
+    };
+    if result.actor_memory_revision.is_none() || meaning_plan != &expected_plan {
+        return Err(failure(
+            "CONTENT_PLAN_INVALID",
+            "the retained comparison requires a pinned memory revision and the verified operands",
+        ));
+    }
+    let grammar = comparison_generation_request(
+        &expected_plan,
+        inventory_a,
+        inventory_b,
+        replay.max_evidence_bytes,
+    )?;
+    let mut generation = language::generate_semantic_meaning(&grammar)?;
+    generation.report.model_artifact_ref = Some(digest(&canonical(&generation.model)?));
+    validate_meaning_generation(&grammar, &expected_plan.proof_ids, &generation.report)?;
+    if generation.report != *report {
+        return Err(failure(
+            "CONTENT_PLAN_INVALID",
+            "the retained comparison generation does not replay exactly",
+        ));
+    }
+    let compute_ref = plan.dependencies.last().ok_or_else(|| {
+        failure(
+            "CONTENT_ADOPTION_MISMATCH",
+            "the comparison content has no compute artifact",
+        )
+    })?;
+    validate_generated_content_plan_adoption(
+        result,
+        report,
+        &generation.emission,
+        &meaning_plan.proof_ids,
+        compute_ref,
+        "ja",
+        plan,
+    )?;
+    Ok((
+        report.text.clone(),
+        report.units.iter().map(|unit| unit.text.clone()).collect(),
+    ))
+}
+
+pub(crate) fn verify_generated_comparison_model(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    plan: &ContentPlan,
+) -> Result<()> {
+    // The proof replay checks the expected canonical digests; require both
+    // actual artifacts to be intact and bound to this case.
+    store.get_bytes(actor, case, &plan.model_artifact_ref)?;
+    store.get_bytes(actor, case, &plan.model_observation_ref)?;
+    Ok(())
+}
+
+pub(crate) fn relation_comparison_explanation_units(previous: &ResultRecord) -> Vec<String> {
     let mut explanation = vec![format!(
-        "前回の保存関係比較を詳しく説明します（比較結果ID: {prior_result_id}）。同じactorの現在有効な記憶から左右のscope別inventoryを再計算し、前回と一致することを確認しました。"
+        "前回の保存関係比較を詳しく説明します（比較結果ID: {}）。同じactorの現在有効な記憶から左右のscope別inventoryを再計算し、前回と一致することを確認しました。",
+        previous.id
     )];
-    explanation.extend(report.lines().skip(1).map(str::to_string));
+    explanation.extend(previous.text.lines().skip(1).map(str::to_string));
+    if is_generated_comparison_text(&previous.text) {
+        explanation.extend(
+            previous
+                .dependencies
+                .iter()
+                .skip(1)
+                .map(|proof_id| format!("照合した根拠ID: {proof_id}")),
+        );
+    }
     explanation.push(
         "比較分類は保存済みの前提・規則の範囲に限られます。片側で支持を確認できないことは、関係が偽または存在しない証明ではありません。記録の網羅性と現実世界の真偽は確認していません。".into(),
     );
     explanation
 }
 
+fn is_generated_comparison_text(text: &str) -> bool {
+    text.strip_prefix('・')
+        .is_some_and(|body| body.starts_with(RELATION_COMPARISON_GENERATED_HEADING))
+}
+
 pub(crate) fn is_saved_relation_comparison_result(result: &ResultRecord) -> bool {
     result.text.starts_with(RELATION_COMPARISON_REPORT_HEADER)
         || result.text.starts_with(RELATION_COMPARISON_CONTENT_HEADER)
+        || is_generated_comparison_text(&result.text)
 }
 
 pub(crate) fn is_common_relations_result(result: &ResultRecord) -> bool {

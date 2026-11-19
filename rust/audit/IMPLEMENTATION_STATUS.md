@@ -1137,3 +1137,22 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。最終検査のソース差分SHA-256
 E2は6/7のため未通過。G03はW07〜W09へ戻し、まず関係比較で左右の型付き根拠と比較結果を意味計画からL6へ渡す。数量・書式も同じ要件で再判定する。E3、体系QC、独立QAは `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `4c29d14` と `75ac7b3`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（Input、Recoveryと付属検査、条件と二前提の検査2件、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+## 2026-11-19 JST B108 — D3-C E2差戻し W07〜W09 関係比較の意味生成
+
+着工点は `5443b970fb59be6658d8a0d18425fbccac9fb9d8`。D2仕様・D2工程・D3-C指示の採用SHAを照合した。唯一のCoreが、通常の保存関係比較で左右の有効なinventoryから、共通・左側の支持・右側の支持・競合を型付き計画に保持する。各行は左右別のFact IDと証明依存を持つ。比較軸は述語、目的語、極性、範囲、時点、条件参照で区別する。条件参照の値と、評価に使った保存記録のIDをそれぞれ保持する。
+
+比較の封印版は `declarative-ja-en-v85-generated-relation-comparison`、元Goal述語は `GENERATED_RELATION_COMPARISON_V1`。Coreは型付き比較計画から意味単位と局所語彙の選択肢を作り、既存L6で箇条書きを生成する。K7は必須単位・左右の証明参照・生成モデル・出力観測を照合し、`minidora.relation-comparison-content.v5` を採用計画と実描画へ接続する。保証区分は保存記録の範囲を表す `HYPOTHESIS`。競合は保留し、片側の支持未確認から関係の不存在を導かない。通常の追問では両側の根拠を再計算し、再生した比較と保存モデルを確かめる。旧v1〜v4および直接型付きAPIの保存形式を読み取れる。
+
+比較生成は既存モデルの16,384バイト・トークンの上限と要求の証拠予算で停止する。説明向けの16単位・1単位384バイトを超える実比較を確認した。実CLIで14軸のすべてを、384バイトを超える共通関係の両値とともに採用した。規則と複数前提を含むCLI fixtureは既定の予算32で上流の証明投影が停止した。32での非採用を明示検査し、成功側は128、14軸は256を使用した。製品の既定値は32。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。最終検査のソース差分SHA-256は `58e36831b7e21543bc57885e48a82e53a274ffd88e810f20fdd8ffa77e5d99d6`。隔離SQLiteを使い、CLIの実表示、保存された比較計画と生成系列、許可したローカル出力を確認した。
+
+- `cargo test -p minidora-cli --test normal_route relation_comparison --locked` で通常比較3件がPASS。両側の支持、片側の支持、競合、別actor、範囲外、予算不足、要約、詳説、証拠失効、14軸と長い共通関係を検査した。
+- `cargo test -p minidora-engine --lib relation_comparison --locked` で5件がPASS。実ファイル作成後に中断点を再現して再起動し、同じ作用ID・採用計画・実ファイルの更新時刻を確認した。別の真正なモデル参照への差し替えと前提失効は拒否した。
+- `cargo test -p minidora-engine --lib input::tests --locked` で39件、同 `ordinary_why_` で2件がPASS。 `cargo test -p minidora-engine --locked --no-fail-fast` の対象6統合ターゲットで6件がPASS。対象は `core_atomic_relation_comparison_36/38/43`、`core_temporal_scope_51`、`core_condition_scope_53`、`core_atomic_explanation_50`。通常比較で同じ述語・対象でも別条件を左右に分け、条件記録IDが生成の依存に入ることを確認した。
+- `cargo test -p minidora-cli --test normal_route calculation_sequence_route --locked` で5件がPASS。 `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` がPASS。
+
+局所判定は関係比較のL6とK7接続が `NORMAL_PATH_PRESENT`。G03は数量と利用者指定書式の型付き生成が残るため `PARTIAL`。B107の6/7は当該版の履歴であり、B108のE2合同7ゲート再判定は `NOT_RUN`。E3、E7体系QC、E8独立QA、公開・配布も `NOT_RUN`。次は算術の封印済み厳密値を生成・採用へ渡す。
+
+復旧2世代のローカル参照・GitHubタグは `5443b97` と `4c29d14`。資産は計9件。保持2件（実装台帳と要求トレース）、稼働中7件（Core、Input、Language、Recovery、通常CLI検査、条件付き検査、既存の共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。

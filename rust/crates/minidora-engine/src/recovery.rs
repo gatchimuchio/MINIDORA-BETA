@@ -7,8 +7,9 @@
 //! authentication and trusted ownership of ancestor directories remain required.
 use crate::{
     core::{
-        RELATION_EXPLANATION_PREDICATE, calculation_sequence_nodes, goal_predicates,
-        run_calculation_sequence, store_execution_graph, validate_render, verify_goal_content,
+        RELATION_COMPARISON_PREDICATE, RELATION_EXPLANATION_PREDICATE, calculation_sequence_nodes,
+        goal_predicates, run_calculation_sequence, store_execution_graph, validate_render,
+        verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -1744,6 +1745,10 @@ fn verify_relation_comparison_memory_result(
             scope,
             max_actions: goal.budget.max_actions,
             max_evidence_bytes: goal.budget.max_evidence_bytes,
+            generated: goal
+                .required_predicates
+                .iter()
+                .any(|predicate| predicate == RELATION_COMPARISON_PREDICATE),
         },
     )
 }
@@ -1783,6 +1788,10 @@ fn verify_relation_comparison_memory_result_with_index(
             scope,
             max_actions: goal.budget.max_actions,
             max_evidence_bytes: goal.budget.max_evidence_bytes,
+            generated: goal
+                .required_predicates
+                .iter()
+                .any(|predicate| predicate == RELATION_COMPARISON_PREDICATE),
         },
     )
 }
@@ -2135,6 +2144,7 @@ fn verify_explain_previous_relation_comparison_memory_result(
         scope,
         max_actions: prior_bundle.request.budget.max_actions,
         max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
+        generated: prior_bundle.meaning.parser_version == crate::input::COMPARISON_PARSER_VERSION,
     };
     if previous.actor_memory_revision.is_some() {
         let original_memory = result_memory_snapshot(store, &state.actor_id, previous)?
@@ -2184,11 +2194,18 @@ fn verify_explain_previous_relation_comparison_memory_result(
         )?;
     }
 
+    if original_replay.generated {
+        crate::core::verify_generated_comparison_model(
+            store,
+            &state.actor_id,
+            &state.case_id,
+            prior_plan,
+        )?;
+    }
     let expected_dependencies = std::iter::once(previous.id.clone())
         .chain(previous.dependencies.iter().cloned())
         .collect::<Vec<_>>();
-    let expected_units =
-        crate::core::relation_comparison_explanation_units(&previous.id, &previous.text);
+    let expected_units = crate::core::relation_comparison_explanation_units(previous);
     if expected_dependencies != result.dependencies
         || expected_units != plan.required_units
         || report_bytes.len() > goal.budget.max_evidence_bytes
@@ -3185,8 +3202,10 @@ fn inspect(
         ));
     }
     let legacy_predicates = ["SUPPORTED_CONTENT", "EXACT_RENDER", "CONFIRMED_FILE"];
-    if goal.required_predicates != legacy_predicates
-        && goal.required_predicates != goal_predicates(&goal.intent, true)
+    let requires_generated_comparison =
+        bundle.meaning.parser_version == crate::input::COMPARISON_PARSER_VERSION;
+    if goal.required_predicates != goal_predicates(&bundle.meaning, true)
+        && (requires_generated_comparison || goal.required_predicates != legacy_predicates)
     {
         return Err(failure(
             "UNSUPPORTED_RECOVERY_GOAL",
@@ -3948,7 +3967,9 @@ fn inspect(
             ));
         }
     }
-    if generated_compute_ref.is_none() {
+    if requires_generated_comparison {
+        crate::core::verify_generated_comparison_model(store, actor, case, plan)?;
+    } else if generated_compute_ref.is_none() {
         let model_bytes = store.get_bytes(actor, case, &plan.model_artifact_ref)?;
         let model: language::SequenceModel = serde_json::from_slice(&model_bytes)?;
         model.validate()?;
@@ -9691,9 +9712,47 @@ mod tests {
         inspect(&engine.store, "alice", &retained, &retained_result)
             .unwrap_or_else(|error| panic!("{error:?}"));
         let original_bytes = fs::read(&fixture.target).unwrap();
+        let original_modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+
+        // Change only the model reference and re-sign the local plan envelope.
+        // The alternative is an actual model artifact from a prior operation.
+        let mut swapped = retained_result.clone();
+        let swapped_plan = swapped.content_plan.as_mut().unwrap();
+        swapped_plan.model_artifact_ref = coco
+            .content_plan
+            .as_ref()
+            .unwrap()
+            .model_artifact_ref
+            .clone();
+        assert_ne!(
+            swapped_plan.model_artifact_ref,
+            retained_result
+                .content_plan
+                .as_ref()
+                .unwrap()
+                .model_artifact_ref,
+        );
+        swapped_plan.id.clear();
+        swapped_plan.id = identity(&*swapped_plan).unwrap();
+        swapped.render.as_mut().unwrap().plan_id = swapped_plan.id.clone();
+        let mismatch = inspect(&engine.store, "alice", &retained, &swapped).unwrap_err();
+        assert!(
+            mismatch.to_string().contains("CONTENT_ADOPTION_MISMATCH"),
+            "{mismatch:?}"
+        );
 
         drop(engine);
+        let action_id = retain_attempted_prefix(&fixture.state);
         let mut engine = Engine::open(&fixture.state).unwrap();
+        let replayed = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(replayed.lifecycle, Lifecycle::Commit, "{replayed:?}");
+        assert_eq!(replayed.receipts[0].action_id, action_id);
+        assert_eq!(replayed.content_plan, retained_result.content_plan);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            original_modified
+        );
         assert_eq!(
             engine
                 .store
