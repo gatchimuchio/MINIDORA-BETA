@@ -3024,7 +3024,12 @@ pub(crate) fn next_direct_retrieval<'a>(
     let mut root = source;
     let mut visited = BTreeSet::new();
     let mut steps = Vec::new();
-    while root.lifecycle == Lifecycle::Commit || direct_preconnection_stop(root).is_some() {
+    let mut only_legacy_stops = true;
+    loop {
+        let stop = direct_preconnection_stop(root);
+        if root.lifecycle != Lifecycle::Commit && stop.is_none() {
+            break;
+        }
         if !visited.insert(&root.id) {
             return Err(invalid());
         }
@@ -3038,16 +3043,13 @@ pub(crate) fn next_direct_retrieval<'a>(
                 Err(invalid())
             };
         }
-        let legacy_stop = matches!(
-            direct_preconnection_stop(root),
-            Some(DirectPreconnectionStop::LegacySingleContinuation)
-        );
+        let legacy_stop = matches!(stop, Some(DirectPreconnectionStop::LegacyNoPending));
         if legacy_stop
             && (sealed.meaning.parser_version
                 != crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION
                 || sealed.meaning.context_result_ref.is_none())
         {
-            return if steps.is_empty() {
+            return if only_legacy_stops {
                 Ok(None)
             } else {
                 Err(invalid())
@@ -3060,7 +3062,11 @@ pub(crate) fn next_direct_retrieval<'a>(
             .and_then(|id| prior_results.get(id))
             .ok_or_else(invalid)?;
         if legacy_stop
-            && (parent.lifecycle != Lifecycle::Commit
+            && ((parent.lifecycle != Lifecycle::Commit
+                && !matches!(
+                    direct_preconnection_stop(parent),
+                    Some(DirectPreconnectionStop::LegacyNoPending)
+                ))
                 || store
                     .get_input_bundle(actor, case, &parent.input_id, parent.input_version)?
                     .is_none_or(|(_, prior)| {
@@ -3069,7 +3075,8 @@ pub(crate) fn next_direct_retrieval<'a>(
                                 != crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION
                     }))
         {
-            return if steps.is_empty() {
+            // V1 also wrote this stop when there was no continuable lineage.
+            return if only_legacy_stops {
                 Ok(None)
             } else {
                 Err(invalid())
@@ -3086,7 +3093,8 @@ pub(crate) fn next_direct_retrieval<'a>(
         {
             return Err(invalid());
         }
-        steps.push((parent, root, sealed));
+        only_legacy_stops &= legacy_stop;
+        steps.push((parent, root, sealed, stop));
         root = parent;
     }
     let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
@@ -3115,19 +3123,22 @@ pub(crate) fn next_direct_retrieval<'a>(
         .flat_map(|packet| &packet.redirect_chain)
         .cloned()
         .collect();
-    for (index, (parent, result, sealed)) in steps.into_iter().rev().enumerate() {
+    let mut legacy_stops_allowed = false;
+    for (parent, result, sealed, stop) in steps.into_iter().rev() {
         let request = &sealed.request;
-        if let Some(stop) = direct_preconnection_stop(result) {
+        if let Some(stop) = stop {
             let uri = urls.peek().map(String::as_str);
-            if matches!(stop, DirectPreconnectionStop::LegacySingleContinuation) {
-                // B138 could commit exactly one continuation of the original retrieval.
-                if index != 1 {
+            if matches!(stop, DirectPreconnectionStop::LegacyNoPending) {
+                if !legacy_stops_allowed {
                     return Err(invalid());
                 }
-            } else if uri.is_none_or(|uri| {
-                url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str()))
-            }) {
-                return Err(invalid());
+            } else {
+                legacy_stops_allowed = false;
+                if uri.is_none_or(|uri| {
+                    url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str()))
+                }) {
+                    return Err(invalid());
+                }
             }
             verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
             // This request observed no URL, so the pending slot has not moved.
@@ -3155,6 +3166,10 @@ pub(crate) fn next_direct_retrieval<'a>(
             return Err(invalid());
         }
         observed_routes.extend(packet.redirect_chain.iter().cloned());
+        // B138 could commit one continuation directly from the original retrieval.
+        legacy_stops_allowed = parent.id == root.id
+            && sealed.meaning.parser_version
+                == crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION;
     }
     let Some(uri) = urls.next() else {
         return Ok(None);
@@ -3184,14 +3199,14 @@ enum DirectPreconnectionStop<'a> {
     NoComputeBudget,
     InsufficientActions,
     NoEvidenceBytes,
-    LegacySingleContinuation,
+    LegacyNoPending,
 }
 
 impl DirectPreconnectionStop<'_> {
     fn has_predecessor_artifact(&self) -> bool {
         !matches!(
             self,
-            Self::NoComputeBudget | Self::InsufficientActions | Self::LegacySingleContinuation
+            Self::NoComputeBudget | Self::InsufficientActions | Self::LegacyNoPending
         )
     }
 }
@@ -3203,7 +3218,7 @@ fn direct_preconnection_stop(result: &ResultRecord) -> Option<DirectPreconnectio
     let (code, detail) = result.reason.as_deref()?.split_once(": ")?;
     match (code, detail) {
         (crate::core::NO_PENDING_DIRECT_URL, crate::core::NO_PENDING_DIRECT_URL_MESSAGE) => {
-            return Some(DirectPreconnectionStop::LegacySingleContinuation);
+            return Some(DirectPreconnectionStop::LegacyNoPending);
         }
         ("RESOURCE_LIMIT", crate::core::NO_COMPUTE_BUDGET) => {
             return Some(DirectPreconnectionStop::NoComputeBudget);
@@ -3271,7 +3286,7 @@ fn verify_direct_preconnection_stop(
     {
         return Err(invalid());
     }
-    if matches!(stop, DirectPreconnectionStop::LegacySingleContinuation) {
+    if matches!(stop, DirectPreconnectionStop::LegacyNoPending) {
         // The old resolver suspended after sealing, before constructing a Goal.
         if stopped.goal_sha256.is_none()
             && result.text == crate::core::NO_PENDING_DIRECT_URL_MESSAGE
@@ -3338,7 +3353,7 @@ fn verify_direct_preconnection_stop(
                 && sufficient_actions
                 && first_hop_wait_matches(store, &stopped, &request.permissions, uri, detail)?
         }
-        DirectPreconnectionStop::LegacySingleContinuation => unreachable!("checked above"),
+        DirectPreconnectionStop::LegacyNoPending => unreachable!("checked above"),
     };
     if !matches_original_stop {
         return Err(invalid());

@@ -2957,7 +2957,151 @@ def check_direct_url_budget_continuation(cli, fixture: Fixture, state_path: Path
     return results
 
 
-def run_candidate_recovery(binary: Path, directory: Path) -> dict:
+def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
+                                   legacy_binary: Path) -> dict:
+    """Consume authentic v1 stops emitted by the supplied, separately built B138 CLI."""
+    start, hop, kept, pending, later, terminal = [
+        f"/legacy-b138-direct-{part}" for part in ("start", "hop", "kept", "pending", "later", "terminal")
+    ]
+    pending_text, later_text = "旧版で取得した測定は73です。", "未取得だった最後の測定は89です。"
+    fixture.responses.update({
+        kept: (b"Original legacy body.", "text/plain"),
+        pending: (pending_text.encode(), "text/plain; charset=utf-8"),
+        later: (later_text.encode(), "text/plain; charset=utf-8"),
+        terminal: (b"Fully observed legacy body.", "text/plain"),
+    })
+    fixture.redirects.update({start: hop, hop: kept})
+    allow = ("--allow-read-host", fixture.host, "--deadline-ms", "5000")
+    command = "前回の取得で未接続の次のURLを取得して"
+    old = partial(cli, binary_path=legacy_binary)
+    connect = f"CONNECT {fixture.host}:443 HTTP/1.1"
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def uri(path: str) -> str:
+        return f"https://{fixture.host}{path}"
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def latest(case: str) -> dict:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as connection:
+            (reference,) = connection.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1",
+                (case,),
+            ).fetchone()
+        return load(reference)
+
+    def counts() -> tuple[int, int]:
+        return len(fixture.connects), len(fixture.events)
+
+    def old_stop(case: str, input_id: str, previous: dict) -> tuple[dict, tuple[str, ...]]:
+        arguments = ("--input", input_id, *allow, command)
+        before = counts()
+        result = old("run", *arguments, case_id=case, expected_exit=2)
+        assert result["reason"].startswith("NO_PENDING_DIRECT_URL: ")
+        assert result["guarantee"] == "UNKNOWN"
+        assert result["evidence"] == result["receipts"] == result["dependencies"] == []
+        assert result["calculation"] is result["content_plan"] is result["render"] is result["execution_graph_ref"] is None
+        snapshot = latest(case)
+        assert snapshot["result"] == result and snapshot["goal_sha256"] is None
+        assert snapshot["prior_results"][previous["id"]] == previous
+        meaning = snapshot["bundle"]["meaning"]
+        assert meaning["parser_version"] == "direct-source-continuation-v1"
+        assert meaning["intent"]["kind"] == "FETCH_NEXT_UNOBSERVED_SOURCE"
+        assert meaning["context_result_ref"] == previous["id"]
+        assert counts() == before
+        return result, arguments
+
+    case = "legacy-b138-direct-budget"
+    original_args = ("--input", "original", *allow, "--max-actions", "6",
+                     "fetch " + " ".join(map(uri, (start, pending, later))))
+    original = old("run", *original_args, case_id=case, expected_exit=2)
+    assert original["reason"] == "EVIDENCE_UNAVAILABLE: HTTP_START_BUDGET_EXHAUSTED: The original Goal has no remaining HTTP starts"
+    (packet,) = original["evidence"]
+    assert packet["request_uri"] == uri(start) and packet["final_uri"] == uri(kept)
+    assert packet["redirect_chain"] == list(map(uri, (start, hop, kept)))
+    assert original["dependencies"] == [packet["id"]] and original["receipts"] == []
+    assert fixture.connects[starts:] == [connect] * 3
+    assert [event["path"] for event in fixture.events[seen:]] == [start, hop, kept]
+
+    first_args = ("--input", "first", *allow, command)
+    before = counts()
+    first = old("run", *first_args, case_id=case)
+    (first_packet,) = first["evidence"]
+    assert first_packet["request_uri"] == first_packet["final_uri"] == uri(pending)
+    assert first_packet["extracted_text"] == pending_text
+    assert first["dependencies"] == [original["id"], first_packet["id"]]
+    assert latest(case)["bundle"]["meaning"]["parser_version"] == "direct-source-continuation-v1"
+    assert fixture.connects[before[0]:] == [connect]
+    assert [event["path"] for event in fixture.events[before[1]:]] == [pending]
+    stop1, stop1_args = old_stop(case, "legacy-stop-1", first)
+    stop2, stop2_args = old_stop(case, "legacy-stop-2", stop1)
+    prior_replays = [(original_args, original, 2), (first_args, first, 0),
+                     (stop1_args, stop1, 2), (stop2_args, stop2, 2)]
+    before = counts()
+    for arguments, result, exit_code in prior_replays:
+        assert cli("run", *arguments, case_id=case, expected_exit=exit_code) == result
+    assert counts() == before and latest(case)["result"] == stop2
+
+    resumed_args = ("--input", "resumed-current", *allow, command)
+    resumed = cli("run", *resumed_args, case_id=case)
+    (resumed_packet,) = resumed["evidence"]
+    assert resumed["guarantee"] == "SOURCE_REPORT" and resumed["receipts"] == []
+    assert resumed_packet["request_uri"] == resumed_packet["final_uri"] == uri(later)
+    assert resumed_packet["extracted_text"] == later_text and resumed_packet["failure"] is None
+    assert resumed["dependencies"] == [stop2["id"], resumed_packet["id"]]
+    graph = load(resumed["execution_graph_ref"])
+    anchor, packet_ref = (graph[1][node] for node in ("previous-direct-retrieval", "source-0"))
+    assert load(anchor) == stop2 and load(packet_ref) == resumed_packet
+    assert graph[5]["source-0"] == {"previous-direct-retrieval": anchor}
+    assert graph[5]["compute"] == {"source-0": packet_ref}
+    assert cli("run", *resumed_args, case_id=case) == resumed
+    assert fixture.connects[before[0]:] == [connect]
+    assert [event["path"] for event in fixture.events[before[1]:]] == [later]
+    before = counts()
+    exhausted = cli("run", "--input", "exhausted-current", *allow, command,
+                    case_id=case, expected_exit=2)
+    assert exhausted["reason"].startswith("NO_PENDING_DIRECT_URL: ")
+    assert exhausted["evidence"] == exhausted["receipts"] == []
+    for arguments, result, exit_code in prior_replays:
+        assert cli("run", *arguments, case_id=case, expected_exit=exit_code) == result
+    assert counts() == before and latest(case)["result"] == exhausted
+
+    # A genuine old terminal lineage must not become a newly actionable source.
+    terminal_case = "legacy-b138-direct-terminal"
+    terminal_args = ("--input", "original", *allow, f"fetch {uri(terminal)}")
+    terminal_original = old("run", *terminal_args, case_id=terminal_case)
+    terminal1, terminal1_args = old_stop(terminal_case, "legacy-stop-1", terminal_original)
+    terminal2, terminal2_args = old_stop(terminal_case, "legacy-stop-2", terminal1)
+    before = counts()
+    for arguments, result, exit_code in [
+        (terminal_args, terminal_original, 0), (terminal1_args, terminal1, 2), (terminal2_args, terminal2, 2),
+    ]:
+        assert cli("run", *arguments, case_id=terminal_case, expected_exit=exit_code) == result
+    terminal_current = cli("run", "--input", "terminal-current", *allow, command,
+                           case_id=terminal_case, expected_exit=2)
+    assert terminal_current["reason"].startswith("NO_PENDING_DIRECT_URL: ")
+    assert terminal_current["evidence"] == terminal_current["receipts"] == []
+    assert counts() == before
+    assert [event["path"] for event in fixture.events[seen:]] == [start, hop, kept, pending, later, terminal]
+    assert fixture.connects[starts:] == [connect] * 6
+    assert not fixture.errors, fixture.errors
+    digest = hashlib.sha256()
+    with legacy_binary.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return {"legacy_binary_sha256": digest.hexdigest(), "original": original, "first": first,
+            "legacy_stops": [stop1, stop2], "resumed": resumed, "exhausted": exhausted,
+            "terminal_control": {"original": terminal_original, "legacy_stops": [terminal1, terminal2],
+                                 "current": terminal_current},
+            "observed_requests": fixture.events[seen:], "connect_count": len(fixture.connects) - starts,
+            "scope": "Authentic separately built B138 v1 CLI state and current normal CLI; no store or blob mutation/injection"}
+
+
+def run_candidate_recovery(binary: Path, directory: Path,
+                           legacy_b138_binary: Path | None = None) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
     first_body = b"First observed body."
@@ -2982,14 +3126,17 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     environment["SSL_CERT_FILE"] = str(ca)
 
     def command_line(command: str, *arguments: str, case_id: str = case,
-                     actor_id: str = "fixture-local", db_path: Path = state_path) -> list[str]:
-        return [str(binary), command, "--db", str(db_path), "--case", case_id,
+                     actor_id: str = "fixture-local", db_path: Path = state_path,
+                     binary_path: Path = binary) -> list[str]:
+        return [str(binary_path), command, "--db", str(db_path), "--case", case_id,
                 "--actor", actor_id, "--json", *arguments]
 
     def cli(command: str, *arguments: str, case_id: str = case,
-            actor_id: str = "fixture-local", expected_exit: int = 0, db_path: Path = state_path) -> dict:
+            actor_id: str = "fixture-local", expected_exit: int = 0, db_path: Path = state_path,
+            binary_path: Path = binary) -> dict:
         process = subprocess.run(
-            command_line(command, *arguments, case_id=case_id, actor_id=actor_id, db_path=db_path),
+            command_line(command, *arguments, case_id=case_id, actor_id=actor_id, db_path=db_path,
+                         binary_path=binary_path),
             env=environment, capture_output=True, text=True, timeout=15, check=False,
         )
         assert process.returncode == expected_exit, (process.returncode, process.stdout, process.stderr)
@@ -3080,7 +3227,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         direct_budget_state = directory / "direct-url-budget-state"
         direct_url_budget = check_direct_url_budget_continuation(
             partial(cli, db_path=direct_budget_state), fixture, direct_budget_state)
-        return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
+        report = {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
                 "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
@@ -3095,6 +3242,11 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "source_after_budget": source_after_budget, "next_direct_url": next_direct_url,
                 "direct_url_regrant": direct_url_regrant, "direct_url_wait": direct_url_wait,
                 "direct_url_budget": direct_url_budget}
+        if legacy_b138_binary is not None:
+            legacy_state = directory / "legacy-b138-direct-budget-state"
+            report["legacy_b138_direct_budget"] = check_legacy_b138_direct_budget(
+                partial(cli, db_path=legacy_state), fixture, legacy_state, legacy_b138_binary)
+        return report
     finally:
         fixture.close()
 
@@ -3102,9 +3254,12 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--legacy-b138-binary", type=Path,
+                        help="optionally regress authentic saved v1 continuation state using a separately built B138 CLI")
     parser.add_argument("--evidence-output", type=Path)
     arguments = parser.parse_args()
     binary = arguments.binary.resolve(strict=True)
+    legacy_b138_binary = arguments.legacy_b138_binary.resolve(strict=True) if arguments.legacy_b138_binary else None
     with tempfile.TemporaryDirectory(prefix="minidora-tls-fixture-") as raw:
         directory = Path(raw)
         certificate, key, ca = certificates(directory)
@@ -3155,7 +3310,7 @@ def main() -> None:
             "transport_observations": fixture.events,
             "cases": cases,
             "source_followup": source_followup,
-            "candidate_recovery": run_candidate_recovery(binary, directory / "candidate-recovery"),
+            "candidate_recovery": run_candidate_recovery(binary, directory / "candidate-recovery", legacy_b138_binary),
             "scope": "Actual compiled CLI/reqwest/native-TLS transport, persisted separate-process source follow-up and fixture source bytes; not LIVE Internet or benchmark acceptance",
         }
         if arguments.evidence_output:
