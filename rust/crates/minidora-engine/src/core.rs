@@ -239,6 +239,8 @@ const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
 pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
 const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
+pub(crate) const GENERATED_RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V2";
+const LEGACY_RELATION_GENERATION_BYTES: usize = 8192;
 const GROUP_MEAN_HYPOTHESIS_PREDICATE: &str = "GROUP_MEAN_HYPOTHESIS_RESULT_V1";
 
 pub(crate) const RELATION_COMPARISON_PREDICATE: &str = "GENERATED_RELATION_COMPARISON_V1";
@@ -254,6 +256,11 @@ pub(crate) fn goal_predicates(meaning: &MeaningIR, requires_file: bool) -> Vec<S
         }
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        Intent::AskWhy { .. }
+            if meaning.parser_version == input::RELATION_EXPLANATION_PARSER_VERSION =>
+        {
+            predicates.push(GENERATED_RELATION_EXPLANATION_PREDICATE.into());
+        }
         Intent::AskWhy { .. } => predicates.push(RELATION_EXPLANATION_PREDICATE.into()),
         Intent::RetainPreviousGroupMeanHypothesis
         | Intent::ExplainPreviousGroupMeanHypothesis
@@ -287,6 +294,7 @@ fn verify_report_goal_content(
         matches!(
             predicate.as_str(),
             RELATION_EXPLANATION_PREDICATE
+                | GENERATED_RELATION_EXPLANATION_PREDICATE
                 | GROUP_MEAN_HYPOTHESIS_PREDICATE
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
@@ -8174,14 +8182,17 @@ impl Engine {
                 result.dependencies = answer_dependencies.clone();
                 result.guarantee = answer_guarantee.clone();
                 state.result = Some(result.clone());
-                // Use the typed generator when the ordinary question actually
-                // consumes a proof composed from the actor's saved rules.
+                let requires_generation = goal
+                    .required_predicates
+                    .iter()
+                    .any(|predicate| predicate == GENERATED_RELATION_EXPLANATION_PREDICATE);
+                // Actor-composed rules can additionally adapt the generator.
                 let uses_composed_rule = bundle.meaning.source_kind == "USER_REQUEST"
                     && memory.rules.iter().any(|rule| {
                         rule.source_input == "derived:proof-composition-v1"
                             && answer.used_rules.contains(&rule.id)
                     });
-                if direct_input.is_some() || uses_composed_rule {
+                if requires_generation || direct_input.is_some() || uses_composed_rule {
                     let Some(explained) = relation_explanation_target(proposition, &answer) else {
                         return self.stop(
                             &mut state,
@@ -8209,7 +8220,10 @@ impl Engine {
                     };
                     let generation_request = match relation_meaning_plan_to_generation_request(
                         &meaning_plan,
-                        request.budget.max_evidence_bytes,
+                        relation_explanation_output_budget(
+                            &bundle.meaning,
+                            request.budget.max_evidence_bytes,
+                        ),
                     ) {
                         Ok(value) => value,
                         Err(error) => {
@@ -8349,7 +8363,11 @@ impl Engine {
                     units.extend(explanation_units);
                 }
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: RELATION_EXPLANATION_PREDICATE,
+                    predicate: if requires_generation {
+                        GENERATED_RELATION_EXPLANATION_PREDICATE
+                    } else {
+                        RELATION_EXPLANATION_PREDICATE
+                    },
                     guarantee: answer_guarantee,
                     dependencies: answer_dependencies,
                     units: units.clone(),
@@ -11095,9 +11113,15 @@ pub(crate) fn verify_generated_why_computation(
             ));
         }
     }
+    let output_budget = state.bundle.as_ref().map_or(
+        budget
+            .max_evidence_bytes
+            .min(LEGACY_RELATION_GENERATION_BYTES),
+        |bundle| relation_explanation_output_budget(&bundle.meaning, budget.max_evidence_bytes),
+    );
     let expected_request = relation_meaning_plan_to_generation_request(
         &artifact.relation_meaning_plan,
-        budget.max_evidence_bytes,
+        output_budget,
     )?;
     if expected_request.max_output_bytes != artifact.content_generation.max_output_bytes
         || expected_request.max_tokens != artifact.content_generation.max_tokens
@@ -11847,6 +11871,14 @@ fn relation_meaning_plan_to_composition_request(
     })
 }
 
+fn relation_explanation_output_budget(meaning: &MeaningIR, budget: usize) -> usize {
+    if meaning.parser_version == input::RELATION_EXPLANATION_PARSER_VERSION {
+        budget
+    } else {
+        budget.min(LEGACY_RELATION_GENERATION_BYTES)
+    }
+}
+
 fn relation_meaning_plan_to_generation_request(
     plan: &CoreRelationMeaningPlan,
     max_output_bytes: usize,
@@ -11910,7 +11942,7 @@ fn relation_meaning_plan_to_generation_request(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let max_output_bytes = max_output_bytes.min(8192);
+    let max_output_bytes = max_output_bytes.min(language::MAX_RELATION_GENERATION_BYTES);
     if max_output_bytes == 0 {
         return Err(failure(
             "CONTENT_PLAN_UNAVAILABLE",
@@ -13169,7 +13201,7 @@ fn comparison_generation_request(
             literal("保存記録の網羅性と現実世界の真偽は確認していません。"),
         ],
     });
-    let max_output_bytes = max_output_bytes.min(language::MAX_COMPARISON_GENERATION_BYTES);
+    let max_output_bytes = max_output_bytes.min(language::MAX_RELATION_GENERATION_BYTES);
     Ok(language::MeaningGenerationRequest {
         purpose: MeaningCompositionPurpose::Compare,
         format: plan.format.unwrap_or(MeaningCompositionFormat::Bullets),

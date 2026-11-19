@@ -2054,10 +2054,9 @@ pub fn compose_typed_meaning(
     })
 }
 
-// Larger comparisons previously used a bounded full report. Keep the same
-// model ceiling for grammar generation so multi-axis comparisons can retain
-// every row instead of being forced into the short explanation envelope.
-pub(crate) const MAX_COMPARISON_GENERATION_BYTES: usize = MAX_MODEL_BYTES;
+// Relation reports can have many proof units or long source values.
+// Use the model ceiling for their grammar without shrinking stored values.
+pub(crate) const MAX_RELATION_GENERATION_BYTES: usize = MAX_MODEL_BYTES;
 pub(crate) const MAX_EXACT_FIELD_GENERATION_BYTES: usize = MAX_MODEL_BYTES;
 // The lossless math projection can use one token per byte, plus EOS.
 pub(crate) const MAX_EXACT_FIELD_GENERATION_TOKENS: usize = MAX_MODEL_TOKENS + 1;
@@ -2072,11 +2071,14 @@ struct MeaningGenerationLimits {
 
 impl MeaningGenerationLimits {
     fn for_request(request: &MeaningGenerationRequest) -> Self {
-        if request.purpose == MeaningCompositionPurpose::Compare {
+        if matches!(
+            request.purpose,
+            MeaningCompositionPurpose::Compare | MeaningCompositionPurpose::Explain
+        ) {
             Self {
                 units: 128,
-                unit_bytes: MAX_COMPARISON_GENERATION_BYTES,
-                bytes: MAX_COMPARISON_GENERATION_BYTES,
+                unit_bytes: MAX_RELATION_GENERATION_BYTES,
+                bytes: MAX_RELATION_GENERATION_BYTES,
                 tokens: MAX_MODEL_TOKENS,
                 fragments: 4096,
             }

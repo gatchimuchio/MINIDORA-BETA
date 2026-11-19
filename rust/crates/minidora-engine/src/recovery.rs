@@ -7,9 +7,9 @@
 //! authentication and trusted ownership of ancestor directories remain required.
 use crate::{
     core::{
-        RELATION_COMPARISON_PREDICATE, RELATION_EXPLANATION_PREDICATE, calculation_sequence_nodes,
-        goal_predicates, run_calculation_sequence, store_execution_graph, validate_render,
-        verify_goal_content,
+        GENERATED_RELATION_EXPLANATION_PREDICATE, RELATION_COMPARISON_PREDICATE,
+        RELATION_EXPLANATION_PREDICATE, calculation_sequence_nodes, goal_predicates,
+        run_calculation_sequence, store_execution_graph, validate_render, verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -3211,9 +3211,12 @@ fn inspect(
     let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
+    let requires_generated_why =
+        bundle.meaning.parser_version == crate::input::RELATION_EXPLANATION_PARSER_VERSION;
     if goal.required_predicates != goal_predicates(&bundle.meaning, true)
         && (requires_generated_comparison
             || requires_generated_calculation
+            || requires_generated_why
             || goal.required_predicates != legacy_predicates)
     {
         return Err(failure(
@@ -3221,10 +3224,12 @@ fn inspect(
             "unrecognized completion predicates remain unresolved",
         ));
     }
-    let requires_proof_explanation = goal
-        .required_predicates
-        .iter()
-        .any(|predicate| predicate == RELATION_EXPLANATION_PREDICATE);
+    let requires_proof_explanation = goal.required_predicates.iter().any(|predicate| {
+        matches!(
+            predicate.as_str(),
+            RELATION_EXPLANATION_PREDICATE | GENERATED_RELATION_EXPLANATION_PREDICATE
+        )
+    });
     let plan = result.content_plan.as_ref().ok_or_else(|| {
         failure(
             "RECOVERY_DATA_UNAVAILABLE",
@@ -3480,6 +3485,12 @@ fn inspect(
                 (&memory, &answer),
                 &goal.budget,
             )?;
+            if requires_generated_why && generated_compute_ref.is_none() {
+                return Err(failure(
+                    "RECOVERY_GENERATED_PROOF_REQUIRED",
+                    "the sealed explanation goal requires its typed generation artifact",
+                ));
+            }
         }
         // Revision-pinned results use the complete lineage regardless of the
         // parser release that sealed their input.

@@ -1875,26 +1875,25 @@ fn active_relation_inventory_from_seeds(
     let mut supporting_rules = BTreeMap::new();
     let mut contested_fact_ids = BTreeSet::new();
     let mut has_conflict = false;
-    let query_count = usize::try_from(query_count).unwrap_or(usize::MAX);
-    for (position, shape) in query_shapes.into_iter().enumerate() {
+    for shape in query_shapes {
         let remaining_actions = max_actions.checked_sub(actions).ok_or_else(|| {
             failure(
                 "RELATION_BUDGET",
                 "relation-profile query planning exceeds the sealed action budget",
             )
         })?;
-        let remaining_queries = u32::try_from(query_count.saturating_sub(position))
-            .map_err(|_| failure("RELATION_BUDGET", "relation query count overflowed"))?;
-        let per_query_budget = remaining_actions / remaining_queries;
-        if per_query_budget < 2 {
-            return Err(failure(
+        // A longer proof can use the remaining inventory budget. Each shape
+        // is charged its actual work, and no inventory is returned until all
+        // shapes are evaluated. Reserve one action for the proof evaluator.
+        let projection_budget = remaining_actions.checked_sub(1).ok_or_else(|| {
+            failure(
                 "RELATION_BUDGET",
-                "no proof budget remains for every relation query",
-            ));
-        }
+                "no action remains for relation proof evaluation",
+            )
+        })?;
 
         let (projected, projection_actions) =
-            active_relation_projection(index, &shape, per_query_budget - 1)?;
+            active_relation_projection(index, &shape, projection_budget)?;
         for rule in &projected.rules {
             supporting_rules.insert(rule.id.clone(), rule.clone());
         }
@@ -1904,7 +1903,7 @@ fn active_relation_inventory_from_seeds(
                 "relation-profile proof projection action count overflowed",
             )
         })?;
-        let proof_budget = per_query_budget
+        let proof_budget = remaining_actions
             .checked_sub(projection_actions)
             .ok_or_else(|| {
                 failure(

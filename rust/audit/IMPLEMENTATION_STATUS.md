@@ -1192,3 +1192,34 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。検査ソース差分SHA-256は `dc7d
 G03の指定書式は日本語の保存関係比較の二書式で `NORMAL_PATH_PRESENT`。任意書式、他用途の書式変更、英語の明示書式は検査範囲外。説明・条件・比較・数値・書式の関連経路を当該版で検査した。次はG01〜G07を同一版で合同判定する。B110のE2合同判定、E3、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `b31fad2` と `cafcf1c`。資産は計10件。保持2件（実装台帳と要求トレース）、稼働中8件（Domain、Input、Core、Language、Recovery、CLI検査、旧形式の直接比較検査、既存共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。
+
+## 2026-11-19 JST B111 — D3-C E2 同版合同判定 7/7
+
+着工点は `1ae9099661b7653775b57ed084930a473c9ec031`。採用記録 `270b6482dff22cef7559363776f52806a0074fb0fd7fd0081b7772e62c2b9ef5` と D2仕様 `de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0`、D2工程 `d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a`、D3-C指示 `fa4bfbb6d4c897df943fcebe64e2eb1e766834fabcf7187d9e78598d7e7445e3` のSHA-256を照合した。適用範囲はE1 `CORE_SHAPED` を前提とするD3-C第3節の合同試運転と、その未達箇所の施工。
+
+着工時の実CLIで「もしXは鳥ならXは動物」と「弥生は鳥」を保存した。「なぜ弥生は動物ですか」は旧Goalで出力を採用し、保存モデル `bounded-finite-surface-literal-exact-v1` は完成文候補2件を保持していた。旧Coreは合成規則を消費する通常質問だけを型付き生成へ渡していた。新規 `AskWhy` は `declarative-ja-en-v88-generated-relation-explanation` で封印し、元Goalに `RELATION_PROOF_EXPLANATION_V2` を要求する。直接根拠、規則導出、反対命題を支持する証明を、それぞれ型付き命題・証明・根拠IDとしてL6に渡す。K7が実系列と証明を照合し、同じ採用計画から描画と許可ファイルを確定する。保存したモデル・意味計画・EOSまでの系列を復旧で検証する。旧V1の完成文候補を使った実ファイルは保存済み採用計画と同一作用IDで復旧した。新規説明は既存モデルの16,384バイト上限を使い、旧封印の8,192バイト上限を維持した。
+
+訂正後一覧の初回回帰検査は既定32で `RESOURCE_LIMIT`、exit 101。合計23アクションの一覧で、最初の証明投影に必要な4が均等配分で3に制限されていた。関係インデックスの一覧は封印済み合計から投影と評価の実消費を差し引き、全照会が揃ってから返す。既定32で訂正後の4件を採用し、不足する20では計画・受領なしで停止した。旧前提とそれに依存した導出が外れ、別scopeの同じ前提と無関係な色の前提は残った。旧訂正結果と履歴を保持した。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品版 `0.7.0-alpha.11`。最終ソース差分SHA-256は `6b672188aee71b9a94f06862765403930d75e18aae36e18877d06cb4060137f5`。六つのソース・試験ファイルの `git diff --binary` を対象とする。隔離SQLiteを使い、対照の原入力、主体、モデル、証拠版、元Goal、権限、予算を固定した。実出力はfixtureで許可したローカルファイルに限定した。
+
+| ゲート | 判定 | 同版の実観測 |
+|---|---|---|
+| CORE-G01 | PASS | 主体・極性・範囲・時点・引用を分別した。条件IDを証拠Factと区別し、`TRUE`、`FALSE`、`UNKNOWN`、`CONFLICT` と `AND`、`OR`、`NOT` を評価した。未成立・未確定の条件に依存する採用を停止し、適用範囲内の証拠と条件記録IDを採用・描画に渡した。別actorの先行結果と引用由来の作用を拒否した。 |
+| CORE-G02 | PASS | 二前提の根拠両方と規則IDを証明に保持し、欠落・矛盾・別scopeで依存する推論を停止した。無関係Factの追加で採否・採用計画・描画は同一。反事実の一時状態を通常記憶から隔離して証明を照合した。 |
+| CORE-G03 | PASS | 初見の通常説明と条件付き証明、両側の根拠による比較、式・有理数・単位を含む算術に型付き意味とL6の生成系列を観測した。日本語の保存関係比較で同じ証拠から段落と箇条書きを生成し、Goalの指定とK7の採用、出力の実バイトを照合した。選択分布とEOSを含む保存モデルを再生した。 |
+| CORE-G04 | PASS | 訂正・失効後の別入力と再起動で現行の記憶を消費し、旧記録と依存外の結果を保持した。訂正後の一覧は元の省略されていない証拠集合を読み戻し、作成済みファイルと同一作用で復旧した。 |
+| CORE-G05 | PASS | 新しい主体で保存規則の合成により証明が2段から1段へ短縮した。別ケース・再起動で合成規則と親規則を消費し、同じ証明を使う対照との生成分布差と確認済み出力を観測した。根拠失効とscope外で停止し、標本の反例は保持中の仮説へ結び付けた。経験的採用は保留。 |
+| CORE-G06 | PASS | 連続計算で厳密な途中結果を後段が消費し、封印された全必要成果と実ファイル受領が揃って確定した。一成果欠落、期限、無許可、取消、結果不明では停止し、重複作用を防いだ。 |
+| CORE-G07 | PASS | 説明・段落比較・訂正後一覧で、実作用の `ATTEMPTED` までの履歴を複製し、それぞれ2プロセスでGoal、意味、依存、採用計画、描画、作用IDを照合した。説明と比較の生成系列を検証し、ファイルのinode・実バイト・更新時刻を保持した。証拠のみ、条件記録のみ、モデル参照のみを変えた対照では依存側だけの差または復旧拒否を確認した。 |
+
+`rust/` で実行した最終検査はexit 0。Rustテスト計168件と独立CLI復旧を確認した。
+
+- `cargo test -p minidora-engine --locked --no-fail-fast` の17統合ターゲットで22件。対象は `core_condition_evaluation_57`、`core_condition_scope_53`、`core_scope_polarity_54`、`core_temporal_scope_51`、`core_temporal_correction_52`、`core_scope_classification_58`、`core_actor_context_boundary_48`、`core_construction_observation_02/04/05/06/07`、`core_conjunctive_proof_55`、`core_atomic_explanation_50`、`core_atomic_relation_comparison_36`、`core_meaning_composition_03`、`core_proof_composition_learning_49`。
+- `cargo test -p minidora-engine --lib --locked` の `recovery::tests::`、`input::tests`、`meaning_compare::tests`、`language::tests`、`indexed_premise_inventory`、`indexed_relation_profile` で127件。旧結果の読み戻し、固定記憶版、条件・モデル差、取消・無許可・結果不明、期限と二重作用を検査した。
+- `cargo test -p minidora-cli --test normal_route --locked` の `why_question`、`ordinary_why_generates_a_long_premise`、`requested_comparison_layout`、`relation_comparison`、`scalar_arithmetic_generation`、`calculation_sequence_route`、`declared_rule_transfers`、`conjunctive_rule_joins`、`conditional_premises_form_reusable_scoped_proof`、`natural_premise_correction_invalidates`、`premise_inventory`、`relation_profile` で19件。450バイトの原子前提が根拠IDと実描画に残ることも確認した。
+- `cargo build -p minidora-cli --locked` 後、独立CLIを3経路で各2回起動し、真正な履歴接頭部と出力から回復した。初回の照合スクリプトで成果物の参照位置を誤り、保存スキーマを読み直して最終再実行した。 `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`git diff --check` もPASS。
+
+D3-CのE2出口を `CORE_GATES_PASSED` と判定した。次工程はE3の最小Input。今回の書式検査は日本語の保存関係比較の二書式。大きな履歴や並行更新下での固定版検査とインデックスの予算差は体系QCの範囲に残る。R2要求の受入列は `UNVERIFIED`。E3、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `1ae9099` と `b31fad2`。資産は計9件。保持2件（実装台帳と要求トレース）、稼働中7件（Core、Input、Language、Recovery、関係投影、CLI検査、既存共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。

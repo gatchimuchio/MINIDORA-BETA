@@ -876,6 +876,116 @@ fn record(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+fn assert_why_generation(directory: &Path, actor: &str, case: &str, result: &Value) -> Value {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let plan = &result["content_plan"];
+    let compute_ref = plan["dependencies"].as_array().unwrap().last().unwrap();
+    let artifact: Value = serde_json::from_slice(
+        &store
+            .get_bytes(actor, case, compute_ref.as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let generation = &artifact["content_generation"];
+    assert_eq!(generation["schema"], "core-meaning-generation-v1");
+    assert_eq!(generation["stop_reason"], "EOS");
+    assert_eq!(generation["text"], result["text"]);
+    assert_eq!(generation["text"], plan["text"]);
+    assert_eq!(generation["model_revision"], plan["model_revision"]);
+    assert_eq!(generation["model_artifact_ref"], plan["model_artifact_ref"]);
+    let steps = generation["token_steps"].as_array().unwrap();
+    assert_eq!(steps.last().unwrap()["token"], "<EOS>");
+    assert!(steps.iter().any(|step| {
+        step["distribution"]
+            .as_array()
+            .is_some_and(|distribution| distribution.len() > 1)
+    }));
+    let proof_set = |values: &Value| {
+        values
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    assert_eq!(
+        proof_set(&generation["evidence_ids"]),
+        proof_set(&result["dependencies"])
+    );
+    assert_eq!(
+        artifact["relation_proof_dependencies"],
+        result["dependencies"]
+    );
+    let required_units = generation["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|unit| unit["text"].clone())
+        .collect();
+    assert_eq!(plan["required_units"], Value::Array(required_units));
+    let observation: Value = serde_json::from_slice(
+        &store
+            .get_bytes(actor, case, plan["model_observation_ref"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(observation["text"], result["text"]);
+    assert_eq!(
+        observation["decoder_version"],
+        generation["decoder_version"]
+    );
+    assert!(observation["authorized_surfaces"].is_null());
+    assert_eq!(result["render"]["status"], "RENDERED");
+    assert_eq!(
+        result["render"]["bytes"],
+        serde_json::json!(result["text"].as_str().unwrap().as_bytes())
+    );
+    artifact
+}
+
+fn assert_why_record<'a>(artifact: &'a Value, kind: &str, record_id: &Value) -> &'a Value {
+    let unit = artifact["relation_meaning_plan"]["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|unit| unit["meaning"]["kind"] == kind && &unit["meaning"]["record_id"] == record_id)
+        .unwrap();
+    let trace = artifact["content_generation"]["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|trace| trace["unit_id"] == unit["id"])
+        .unwrap();
+    assert!(
+        trace["evidence_ids"]
+            .as_array()
+            .unwrap()
+            .contains(record_id)
+    );
+    assert!(
+        trace["text"]
+            .as_str()
+            .unwrap()
+            .contains(record_id.as_str().unwrap())
+    );
+    &unit["meaning"]
+}
+
+fn assert_why_proposition(
+    proposition: &Value,
+    subject: &str,
+    object: &str,
+    scope: &str,
+    negative: bool,
+) {
+    assert_eq!(proposition["subject"], subject);
+    assert_eq!(proposition["predicate"], "is");
+    assert_eq!(proposition["object"], object);
+    assert_eq!(proposition["scope"], scope);
+    assert_eq!(proposition["negative"], negative);
+}
+
 #[test]
 fn scalar_arithmetic_generation_preserves_exact_fields_and_real_render() {
     let scratch = Scratch::new();
@@ -2509,8 +2619,20 @@ fn declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage() {
     ));
     assert_eq!(why["guarantee"], "DERIVED");
     let why_text = why["text"].as_str().unwrap();
-    assert!(why_text.contains("直接提示された前提: ミサゴは鳥である"));
-    assert!(why_text.contains("適用規則（範囲: biology）: $xは鳥である ならば $xは動物である"));
+    let artifact = assert_why_generation(&scratch.0, "owner", "learning-transfer", &why);
+    assert_why_proposition(
+        &artifact["relation_meaning_plan"]["conclusion"],
+        "ミサゴ",
+        "動物",
+        "biology",
+        false,
+    );
+    let premise = assert_why_record(&artifact, "FACT", &Value::from(new_bird_id));
+    assert_why_proposition(&premise["proposition"], "ミサゴ", "鳥", "biology", false);
+    let rule = assert_why_record(&artifact, "RULE", &Value::from(rule_id));
+    assert_why_proposition(&rule["premises"][0], "$x", "鳥", "biology", false);
+    assert_why_proposition(&rule["conclusion"], "$x", "動物", "biology", false);
+    assert!(why_text.contains("「ミサゴ」") && why_text.contains("「鳥」"));
     assert_eq!(why["dependencies"], new_answer["dependencies"]);
 
     record(&execute_in_case(
@@ -2754,11 +2876,26 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
         ],
     ));
     let explanation = why["text"].as_str().unwrap();
-    assert!(explanation.contains("Miraはbirdである"));
-    assert!(explanation.contains("Miraはfeatheredである"));
-    assert!(
-        explanation.contains("適用規則（範囲: biology）: $xはbirdである かつ $xはfeatheredである")
+    let artifact = assert_why_generation(&scratch.0, "owner", "new-subject", &why);
+    assert_why_proposition(
+        &artifact["relation_meaning_plan"]["conclusion"],
+        "Mira",
+        "warm-blooded",
+        "biology",
+        false,
     );
+    let rule = assert_why_record(&artifact, "RULE", &Value::from(rule_id));
+    assert_eq!(rule["premises"].as_array().unwrap().len(), 2);
+    for (object, fact) in [("bird", &bird), ("feathered", &feathered)] {
+        let premise = assert_why_record(&artifact, "FACT", &fact["dependencies"][0]);
+        assert_why_proposition(&premise["proposition"], "Mira", object, "biology", false);
+        assert!(rule["premises"].as_array().unwrap().iter().any(|premise| {
+            premise["subject"] == "$x"
+                && premise["object"] == object
+                && premise["scope"] == "biology"
+        }));
+        assert!(explanation.contains(&format!("「{object}」")));
+    }
     assert_eq!(why["dependencies"], answer["dependencies"]);
 
     let followup_rule = record(&execute_in_case(
@@ -3002,18 +3139,26 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
         "english-new-subject",
         &["--input", "robin-why", "Why is Robin warm-blooded?"],
     ));
-    assert!(
-        english_why["text"]
-            .as_str()
-            .unwrap()
-            .contains("Robinはbirdである")
+    let artifact = assert_why_generation(
+        &scratch.0,
+        "english-owner",
+        "english-new-subject",
+        &english_why,
     );
-    assert!(
-        english_why["text"]
-            .as_str()
-            .unwrap()
-            .contains("Robinはfeatheredである")
+    assert_why_proposition(
+        &artifact["relation_meaning_plan"]["conclusion"],
+        "Robin",
+        "warm-blooded",
+        "default",
+        false,
     );
+    for (object, source) in [("bird", &english_bird), ("feathered", &english_feathered)] {
+        let premise = assert_why_record(&artifact, "FACT", &source["dependencies"][0]);
+        assert_why_proposition(&premise["proposition"], "Robin", object, "default", false);
+    }
+    let rule = assert_why_record(&artifact, "RULE", &english_rule["dependencies"][0]);
+    assert_eq!(rule["premises"].as_array().unwrap().len(), 2);
+    assert_eq!(english_why["dependencies"], english_answer["dependencies"]);
 
     let shared_variable_rule = record(&execute_in_case(
         &scratch.0,
@@ -3063,17 +3208,28 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
         "relation-rule-consumer",
         &["--input", "robin-why-animal", "Why is Robin an animal?"],
     ));
-    assert!(
-        bound_subject_why["text"]
-            .as_str()
-            .unwrap()
-            .contains("Ospreyはbirdである")
+    let artifact = assert_why_generation(
+        &scratch.0,
+        "shared-variable-owner",
+        "relation-rule-consumer",
+        &bound_subject_why,
     );
-    assert!(
-        bound_subject_why["text"]
-            .as_str()
-            .unwrap()
-            .contains("OspreyはRobinである")
+    assert_why_proposition(
+        &artifact["relation_meaning_plan"]["conclusion"],
+        "Robin",
+        "animal",
+        "default",
+        false,
+    );
+    for (object, source) in [("bird", &joined_subject_bird), ("Robin", &bound_relation)] {
+        let premise = assert_why_record(&artifact, "FACT", &source["dependencies"][0]);
+        assert_why_proposition(&premise["proposition"], "Osprey", object, "default", false);
+    }
+    let rule = assert_why_record(&artifact, "RULE", &shared_variable_rule["dependencies"][0]);
+    assert_eq!(rule["premises"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        bound_subject_why["dependencies"],
+        bound_subject_answer["dependencies"]
     );
 }
 
@@ -4255,6 +4411,31 @@ fn natural_premise_correction_invalidates_only_exact_scope_and_dependents() {
         "SUSPEND",
     );
 
+    // A smaller sealed allowance must stop the entire inventory, even if
+    // some of its shapes have already been evaluated.
+    let budget_limited = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "coco-after-correction-list-low-budget",
+                "--max-actions",
+                "20",
+                "ココとは何ですか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        budget_limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert!(budget_limited["content_plan"].is_null());
+    assert_eq!(budget_limited["receipts"], serde_json::json!([]));
     let listing = record(&execute(
         &scratch.0,
         "owner",
@@ -4787,48 +4968,40 @@ fn natural_why_question_explains_only_current_relation_proofs() {
     assert_eq!(why["lifecycle"], "COMMIT");
     assert_eq!(why["guarantee"], "DERIVED");
     let why_text = why["text"].as_str().unwrap();
-    assert!(why_text.contains("提示された証拠が支える結論: ココは動物である"));
-    assert!(why_text.contains("直接提示された前提: ココは鳥である"));
-    assert!(why_text.contains("適用規則（範囲: default）: $xは鳥である ならば $xは動物である"));
-    assert!(
-        why["dependencies"]
-            .as_array()
-            .unwrap()
-            .contains(&rule["dependencies"][0])
-    );
-    assert!(
-        why["dependencies"]
-            .as_array()
-            .unwrap()
-            .contains(&bird["dependencies"][0])
-    );
-    let model_observation_ref = why["content_plan"]["model_observation_ref"]
-        .as_str()
-        .unwrap();
-    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
-    let model_observation: Value = serde_json::from_slice(
-        &store
-            .get_bytes("owner", "normal-route", model_observation_ref)
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(model_observation["text"], why["text"]);
-    assert!(model_observation["sequence_probability"].is_string());
+    assert!(why_text.contains("「ココ」") && why_text.contains("「動物」"));
+    assert!(why_text.contains("現実世界の真偽を確認したものではありません"));
+    let artifact = assert_why_generation(&scratch.0, "owner", "normal-route", &why);
     assert_eq!(
-        model_observation["decoder_version"],
-        "bounded-finite-surface-literal-exact-v1"
+        artifact["kind"],
+        "minidora.core-computation.relation-meaning.v5"
     );
-    let approved_surfaces = model_observation["authorized_surfaces"].as_array().unwrap();
-    assert_eq!(approved_surfaces.len(), 2);
-    assert!(approved_surfaces.contains(&why["text"]));
-    for surface in approved_surfaces {
-        let surface = surface.as_str().unwrap();
-        assert!(surface.contains("直接提示された前提: ココは鳥である"));
-        assert!(surface.contains("適用規則（範囲: default）: $xは鳥である ならば $xは動物である"));
-        assert!(surface.contains("現実世界での真偽確認ではありません。"));
-    }
+    let meaning = &artifact["relation_meaning_plan"];
+    assert_why_proposition(&meaning["conclusion"], "ココ", "動物", "default", false);
+    assert_eq!(meaning["answer_status"], "SUPPORTED");
+    let proof_fact = assert_why_record(&artifact, "FACT", &bird["dependencies"][0]);
+    assert_why_proposition(&proof_fact["proposition"], "ココ", "鳥", "default", false);
+    let proof_rule = assert_why_record(&artifact, "RULE", &rule["dependencies"][0]);
+    assert_why_proposition(&proof_rule["premises"][0], "$x", "鳥", "default", false);
+    assert_why_proposition(&proof_rule["conclusion"], "$x", "動物", "default", false);
 
-    record(&execute(
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v88-generated-relation-explanation"
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let goal = sequence_artifact(&store, &saved["goal_sha256"]);
+    assert_eq!(
+        goal["required_predicates"],
+        serde_json::json!([
+            "RELATION_PROOF_EXPLANATION_V2",
+            "SUPPORTED_CONTENT",
+            "EXACT_RENDER"
+        ])
+    );
+    assert_eq!(goal["intent"]["proposition"], meaning["asked"]);
+
+    let english_rule = record(&execute(
         &scratch.0,
         "owner",
         &[
@@ -4837,7 +5010,7 @@ fn natural_why_question_explains_only_current_relation_proofs() {
             "If X is a bird then X is an animal",
         ],
     ));
-    record(&execute(
+    let english_premise = record(&execute(
         &scratch.0,
         "owner",
         &["--input", "why-english-premise", "Coco is a bird"],
@@ -4848,12 +5021,17 @@ fn natural_why_question_explains_only_current_relation_proofs() {
         &["--input", "why-coco-animal-en", "Why is Coco an animal?"],
     ));
     assert_eq!(english["guarantee"], "DERIVED");
-    assert!(
-        english["text"]
-            .as_str()
-            .unwrap()
-            .contains("適用規則（範囲: default）:")
+    let artifact = assert_why_generation(&scratch.0, "owner", "normal-route", &english);
+    assert_why_proposition(
+        &artifact["relation_meaning_plan"]["conclusion"],
+        "Coco",
+        "animal",
+        "default",
+        false,
     );
+    let fact = assert_why_record(&artifact, "FACT", &english_premise["dependencies"][0]);
+    assert_why_proposition(&fact["proposition"], "Coco", "bird", "default", false);
+    assert_why_record(&artifact, "RULE", &english_rule["dependencies"][0]);
 
     let missing = stopped(
         &execute(
@@ -4870,6 +5048,8 @@ fn natural_why_question_explains_only_current_relation_proofs() {
             .unwrap()
             .contains("MISSING_PREMISES")
     );
+    assert!(missing["content_plan"].is_null());
+    assert!(missing["render"].is_null());
 
     let negative = record(&execute(
         &scratch.0,
@@ -4883,23 +5063,18 @@ fn natural_why_question_explains_only_current_relation_proofs() {
     ));
     assert_eq!(refuted_why["lifecycle"], "COMMIT");
     assert_eq!(refuted_why["guarantee"], "USER_PREMISE");
+    let artifact = assert_why_generation(&scratch.0, "owner", "normal-route", &refuted_why);
+    let meaning = &artifact["relation_meaning_plan"];
+    assert_eq!(meaning["answer_status"], "CONTRADICTED");
+    assert_why_proposition(&meaning["asked"], "ミケ", "鳥", "default", false);
+    assert_why_proposition(&meaning["conclusion"], "ミケ", "鳥", "default", true);
+    let fact = assert_why_record(&artifact, "FACT", &negative["dependencies"][0]);
+    assert_why_proposition(&fact["proposition"], "ミケ", "鳥", "default", true);
     assert!(
         refuted_why["text"]
             .as_str()
             .unwrap()
-            .contains("問われた関係「ミケは鳥である」は支持されず")
-    );
-    assert!(
-        refuted_why["text"]
-            .as_str()
-            .unwrap()
-            .contains("直接提示された前提: ミケは鳥ではない")
-    );
-    assert!(
-        refuted_why["dependencies"]
-            .as_array()
-            .unwrap()
-            .contains(&negative["dependencies"][0])
+            .contains("は支持されず")
     );
     record(&execute(
         &scratch.0,
@@ -4920,6 +5095,48 @@ fn natural_why_question_explains_only_current_relation_proofs() {
             .as_str()
             .unwrap()
             .contains("CONFLICTING_PREMISES")
+    );
+    assert!(conflict["content_plan"].is_null());
+    assert!(conflict["render"].is_null());
+}
+
+#[test]
+fn ordinary_why_generates_a_long_premise_without_losing_its_value() {
+    let scratch = Scratch::new();
+    let object = "灰".repeat(150);
+    let premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "long-premise", &format!("ミケは{object}")],
+    ));
+    let why = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "long-premise-why",
+            &format!("なぜミケは{object}ですか"),
+        ],
+    ));
+    assert_eq!(why["guarantee"], "USER_PREMISE");
+    let artifact = assert_why_generation(&scratch.0, "owner", "normal-route", &why);
+    let fact = assert_why_record(&artifact, "FACT", &premise["dependencies"][0]);
+    assert_why_proposition(&fact["proposition"], "ミケ", &object, "default", false);
+    assert!(
+        why["text"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("「{object}」"))
+    );
+    assert!(
+        artifact["content_generation"]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unit| {
+                unit["text"].as_str().unwrap().len() > 384
+                    && unit["text"].as_str().unwrap().contains(&object)
+            })
     );
 }
 

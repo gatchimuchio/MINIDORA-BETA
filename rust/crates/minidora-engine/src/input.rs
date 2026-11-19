@@ -13,6 +13,8 @@ pub(crate) const COMPARISON_PARSER_VERSION: &str =
 const FORMATTED_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v87-formatted-relation-comparison";
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
+pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v88-generated-relation-explanation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 6] = ['「', '『', '"', '\'', '“', '‘'];
 
@@ -178,6 +180,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         } => FORMATTED_COMPARISON_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
+        Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
