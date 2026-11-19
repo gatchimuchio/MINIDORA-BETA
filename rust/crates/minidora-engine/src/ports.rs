@@ -599,6 +599,7 @@ pub fn fetch(
         raw_url,
         permissions,
         &mut RetrievalBudget::standalone(budget)?,
+        &|| Ok(()),
     )
 }
 
@@ -606,6 +607,7 @@ pub(crate) fn fetch_with_budget(
     raw_url: &str,
     permissions: &Permissions,
     budget: &mut RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
 ) -> Result<EvidencePacket> {
     let mut url = approved_url(raw_url, permissions)?;
     if budget.remaining_bytes == 0 {
@@ -617,6 +619,7 @@ pub(crate) fn fetch_with_budget(
     let mut redirects: Vec<String> = Vec::new();
     let mut previous_status = 0;
     loop {
+        check_admission()?;
         let host = url.host_str().expect("approved domain");
         if let Err(error) = budget.reserve_start(host) {
             return retain_redirect_refusal(raw_url, &redirects, previous_status, error);
@@ -657,6 +660,8 @@ pub(crate) fn fetch_with_budget(
                 );
             }
         };
+        // DNS and client setup can outlive an authorization to start a hop.
+        check_admission()?;
         let Ok(remaining) = budget.time_remaining() else {
             return packet(
                 &redirects,

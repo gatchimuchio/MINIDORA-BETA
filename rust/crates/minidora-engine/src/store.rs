@@ -1200,10 +1200,21 @@ impl Store {
     }
 
     fn latest_case(&self, case: &str) -> Result<Option<CaseRevision>> {
-        let sha: Option<String> = sql(self.connection.query_row(
+        self.latest_case_ref(case)?
+            .map(|sha| self.read_blob(&sha))
+            .transpose()
+    }
+
+    fn latest_case_ref(&self, case: &str) -> Result<Option<String>> {
+        sql(self.connection.query_row(
             "SELECT state_sha256 FROM case_revision WHERE case_id=?1 ORDER BY revision DESC LIMIT 1", [case], |r| r.get(0),
-        ).optional())?;
-        sha.map(|sha| self.read_blob(&sha)).transpose()
+        ).optional())
+    }
+
+    /// Compare the head with an exact revision already verified and held by Core.
+    pub(crate) fn is_case_head(&self, actor: &str, case: &str, reference: &str) -> Result<bool> {
+        Self::require_case(&self.connection, actor, case)?;
+        Ok(self.latest_case_ref(case)?.as_deref() == Some(reference))
     }
 
     pub fn append_case(&self, actor: &str, revision: &CaseRevision) -> Result<()> {

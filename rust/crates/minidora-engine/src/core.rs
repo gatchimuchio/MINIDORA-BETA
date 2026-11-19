@@ -3704,6 +3704,18 @@ impl Engine {
         match attempt {
             Ok(value) => Ok(value),
             Err(error) => {
+                if read_case_changed(&error)
+                    && let Some(saved) = self.store.get_input_result(
+                        actor,
+                        &request.case_id,
+                        &request.input_id,
+                        request.input_version,
+                    )?
+                    && saved.lifecycle == Lifecycle::Cancel
+                    && saved.id == identity(&request)?
+                {
+                    return Ok(saved);
+                }
                 // Preserve a typed terminal for the SAME accepted request only;
                 // never repair a concurrently advanced request or hide integrity errors.
                 if let Ok(Some(mut state)) = self.store.load_case(actor, &request.case_id)
@@ -4627,6 +4639,16 @@ impl Engine {
             renderer_version: Some(output::RENDERER_VERSION.into()),
         };
         state.goal_sha256 = Some(self.store.put_artifact(actor, &request.case_id, &goal)?);
+        let mut result = base_result(&request);
+        if matches!(
+            goal.intent,
+            Intent::Retrieve { .. }
+                | Intent::Search { .. }
+                | Intent::SearchWithFallback { .. }
+                | Intent::FetchPreviousSearchCandidate { .. }
+        ) {
+            state.result = Some(result.clone());
+        }
         self.advance(&mut state, Lifecycle::Running, None)?;
         if matches!(bundle.meaning.intent, Intent::Cancel) {
             let mut cancellation = base_result(&request);
@@ -4679,7 +4701,6 @@ impl Engine {
                 &format!("必須成果の残件: {:?}", graph.residuals()),
             );
         }
-        let mut result = base_result(&request);
         let mut units = Vec::new();
         let mut approved_surfaces = None;
         let mut report_goal_content = None;
@@ -4725,6 +4746,20 @@ impl Engine {
                 }
             }
             Ok(budget)
+        };
+        let read_admission = |state: &CaseRevision| -> Result<_> {
+            let reference = digest(&canonical(state)?);
+            let store = &self.store;
+            let case = request.case_id.as_str();
+            Ok(move || {
+                if !store.is_case_head(actor, case, &reference)? {
+                    return Err(failure(
+                        READ_CASE_CHANGED,
+                        "The case changed before the HTTP request could start",
+                    ));
+                }
+                Ok(())
+            })
         };
         match &goal.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
@@ -5433,8 +5468,10 @@ impl Engine {
                         &goal.permissions,
                         &goal.budget,
                         &mut budget,
+                        &read_admission(&state)?,
                     ) {
                         Ok(observation) => observation,
+                        Err(error) if read_case_changed(&error) => return Err(error),
                         Err(error) => {
                             state.result = Some(result);
                             return self.stop(
@@ -5472,16 +5509,6 @@ impl Engine {
                                 Lifecycle::Running,
                                 Some("SEARCH_PRIMARY_FAILURE_OBSERVED".into()),
                             )?;
-                            if self
-                                .store
-                                .load_case(actor, &request.case_id)?
-                                .is_none_or(|latest| latest.revision != state.revision)
-                            {
-                                return Err(failure(
-                                    "CASE_BUSY_OR_RECOVERY_REQUIRED",
-                                    "The case changed before the alternate search could start",
-                                ));
-                            }
                             failed_primary = Some(observation);
                             provider = fallback;
                             continue;
@@ -5645,9 +5672,11 @@ impl Engine {
                             candidate,
                             &goal.permissions,
                             &mut budget,
+                            &read_admission(&state)?,
                         )
                     }) {
                         Ok(packet) => packet,
+                        Err(error) if read_case_changed(&error) => return Err(error),
                         Err(error) => {
                             let code = match &error {
                                 Error::Contract { code, .. } => code.as_str(),
@@ -8622,30 +8651,24 @@ impl Engine {
                     }
                 };
                 for (source_index, uri) in urls.iter().enumerate() {
-                    if source_index > 0
-                        && self
-                            .store
-                            .load_case(actor, &request.case_id)?
-                            .is_none_or(|latest| latest.revision != state.revision)
-                    {
-                        return Err(failure(
-                            "CASE_BUSY_OR_RECOVERY_REQUIRED",
-                            "The case changed before the next source could start",
-                        ));
-                    }
-                    let packet =
-                        match ports::fetch_with_budget(uri, &goal.permissions, &mut retrieval) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                state.result = Some(result);
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Suspend,
-                                    "EVIDENCE_UNAVAILABLE",
-                                    &e.to_string(),
-                                );
-                            }
-                        };
+                    let packet = match ports::fetch_with_budget(
+                        uri,
+                        &goal.permissions,
+                        &mut retrieval,
+                        &read_admission(&state)?,
+                    ) {
+                        Ok(packet) => packet,
+                        Err(error) if read_case_changed(&error) => return Err(error),
+                        Err(error) => {
+                            state.result = Some(result);
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "EVIDENCE_UNAVAILABLE",
+                                &error.to_string(),
+                            );
+                        }
+                    };
                     let observed = self.store.put_artifact(actor, &request.case_id, &packet)?;
                     if packet.failure.is_none() && packet.extracted_text.is_some() {
                         graph.observe(
@@ -10251,6 +10274,12 @@ fn apply_premise_correction(
     invalidated.push(replacement_fact.id);
     Ok((invalidated, invalidated_count))
 }
+const READ_CASE_CHANGED: &str = "HTTP_CASE_REVISION_CHANGED";
+
+fn read_case_changed(error: &Error) -> bool {
+    matches!(error, Error::Contract { code, .. } if code == READ_CASE_CHANGED)
+}
+
 fn verify_retained_retry_source(
     store: &Store,
     state: &CaseRevision,

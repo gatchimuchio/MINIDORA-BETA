@@ -239,6 +239,7 @@ pub fn search(
         permissions,
         budget,
         &mut ports::RetrievalBudget::standalone(budget)?,
+        &|| Ok(()),
     )
 }
 
@@ -248,6 +249,7 @@ pub(crate) fn search_with_budget(
     permissions: &Permissions,
     budget: &ResourceBudget,
     retrieval: &mut ports::RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
 ) -> Result<SearchObservation> {
     if query.trim().is_empty()
         || query.chars().count() > 512
@@ -266,7 +268,7 @@ pub(crate) fn search_with_budget(
         ));
     }
     let uri = provider.request_uri(query)?;
-    let listing = ports::fetch_with_budget(uri.as_str(), permissions, retrieval)?;
+    let listing = ports::fetch_with_budget(uri.as_str(), permissions, retrieval, check_admission)?;
     parse_listing(provider, query, listing)
 }
 
@@ -875,6 +877,7 @@ pub fn fetch_candidate(
         candidate,
         permissions,
         &mut ports::RetrievalBudget::standalone(budget)?,
+        &|| Ok(()),
     )
 }
 
@@ -882,6 +885,7 @@ pub(crate) fn fetch_candidate_with_budget(
     candidate: &SearchCandidate,
     permissions: &Permissions,
     retrieval: &mut ports::RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
 ) -> Result<EvidencePacket> {
     if candidate.rank == 0
         || candidate.provider_id != candidate.provider.provider_id()
@@ -894,7 +898,7 @@ pub(crate) fn fetch_candidate_with_budget(
         ));
     }
     let body_uri = candidate_body_uri(candidate)?;
-    ports::fetch_with_budget(&body_uri, permissions, retrieval)
+    ports::fetch_with_budget(&body_uri, permissions, retrieval, check_admission)
 }
 
 #[cfg(test)]

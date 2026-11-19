@@ -84,6 +84,7 @@ class Fixture:
         self.hosts = (host, *additional_hosts)
         self.responses = responses or {}
         self.redirects: dict[str, str] = {}
+        self.response_gates: dict[str, threading.Event] = {}
         self.failure_responses: dict[str, tuple[str, bytes, str]] = {}
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(certificate, key)
@@ -104,8 +105,16 @@ class Fixture:
 
     def close(self) -> None:
         self.stop.set()
+        for gate in self.response_gates.values():
+            gate.set()
         self.worker.join(timeout=2)
         self.listener.close()
+
+    def wait_for_request(self, process, seen: int, expected: tuple[str, str]) -> None:
+        limit = time.monotonic() + 5
+        while expected not in [(event["host"], event["path"]) for event in self.events[seen:]]:
+            assert process.poll() is None and time.monotonic() < limit
+            time.sleep(0.01)
 
     def accept(self) -> None:
         while not self.stop.is_set():
@@ -139,6 +148,8 @@ class Fixture:
                     assert headers.get("accept-encoding") == "identity"
                     assert not {"authorization", "proxy-authorization", "cookie"} & headers.keys()
                     self.events.append({"host": host, "path": path, "request_header_names": sorted(headers)})
+                    if (gate := self.response_gates.get(path)) is not None:
+                        assert gate.wait(10)
                     if path == "/drop":
                         return
                     if path == "/unframed":
@@ -832,19 +843,13 @@ def check_interrupted_retrieval(cli, command_line, environment, fixture: Fixture
         assert hashlib.sha256(raw).hexdigest() == reference
         return json.loads(raw)
 
-    def wait_for_request(process, seen: int, expected: tuple[str, str]) -> None:
-        limit = time.monotonic() + 5
-        while expected not in [(event["host"], event["path"]) for event in fixture.events[seen:]]:
-            assert process.poll() is None and time.monotonic() < limit
-            time.sleep(0.01)
-
     case = "interrupted-direct-retrieval"
     arguments = ("--input", "fetch", *grants, f"fetch https://{first}/429 https://{second}/slow-body")
     seen, starts = len(fixture.events), len(fixture.connects)
     with subprocess.Popen(command_line("run", *arguments, case_id=case), env=environment,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
-            wait_for_request(process, seen, (second, "/slow-body"))
+            fixture.wait_for_request(process, seen, (second, "/slow-body"))
             checkpoint = latest(case)
         finally:
             process.kill()
@@ -878,7 +883,7 @@ def check_interrupted_retrieval(cli, command_line, environment, fixture: Fixture
     with subprocess.Popen(command_line("run", *arguments, case_id=case), env=environment,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
         try:
-            wait_for_request(process, seen, (first, "/slow-body"))
+            fixture.wait_for_request(process, seen, (first, "/slow-body"))
             cli("run", "--input", "cancel", "中止", case_id=case, expected_exit=5)
             _, errors = process.communicate(timeout=8)
             assert process.returncode != 0, errors
@@ -891,6 +896,80 @@ def check_interrupted_retrieval(cli, command_line, environment, fixture: Fixture
     assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == [(first, "/slow-body")]
     assert not fixture.errors, fixture.errors
     return {"checkpoint": checkpoint, "replay": replay, "cancelled": cancelled, "deferred": deferred}
+
+
+def check_redirect_cancellation(cli, command_line, environment, fixture: Fixture, state_path: Path) -> dict:
+    first, second = fixture.hosts
+    target = f"https://{second}/ok"
+    grants = ("--allow-read-host", first, "--allow-read-host", second, "--deadline-ms", "15000")
+    body_case = "cancel-redirect-candidate"
+    output = state_path.parent / "cancelled-redirect.txt"
+    cli("run", "--input", "listing", *grants, "検索 wikipedia: candidate replay", case_id=body_case)
+
+    def case_head(case_id: str) -> tuple:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+            return database.execute(
+                "SELECT revision,state_sha256,lifecycle FROM case_revision WHERE case_id=? "
+                "ORDER BY revision DESC LIMIT 1", (case_id,),
+            ).fetchone()
+
+    results = {}
+    for case, path, extra_flags, query, expected_prefix, authorized in (
+        ("cancel-redirect-direct", "/held-redirect", ("--output", str(output), "--allow-write", str(output)),
+         f"fetch https://{first}/ok https://{first}/held-redirect", ["/ok"], True),
+        ("cancel-redirect-search", "/w/rest.php/v1/search/page?q=redirect+cancel&limit=5", (),
+         "検索 wikipedia -> crossref: redirect cancel", [], True),
+        (body_case, "/wiki/First?action=raw", (), "1件目の本文を取得して", [], True),
+        ("denied-redirect-cancellation", "/held-redirect", (), f"fetch https://{first}/held-redirect", [], False),
+    ):
+        gate = threading.Event()
+        fixture.response_gates[path] = gate
+        fixture.redirects[path] = target
+        arguments = ("--input", "original", *grants, *extra_flags, query)
+        seen, starts = len(fixture.events), len(fixture.connects)
+        with subprocess.Popen(command_line("run", *arguments, case_id=case), env=environment,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            try:
+                fixture.wait_for_request(process, seen, (first, path))
+                initial = case_head(case)
+                assert initial[-1] == "RUNNING"
+                if authorized:
+                    cli("run", "--input", "cancel", "中止", case_id=case, expected_exit=5)
+                else:
+                    denied = cli("run", "--input", "cancel", "中止", case_id=case,
+                                 actor_id="other-fixture-actor", expected_exit=3)
+                    assert "CASE_ACCESS_DENIED" in denied["reason"]
+                after_cancel = case_head(case)
+                assert after_cancel[-1] == ("CANCEL" if authorized else "RUNNING")
+                assert authorized or after_cancel == initial
+                gate.set()
+                raw, errors = process.communicate(timeout=8)
+                assert process.returncode == (5 if authorized else 0), errors
+            finally:
+                gate.set()
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+                fixture.response_gates.pop(path)
+                fixture.redirects.pop(path)
+        result = json.loads(raw)
+        expected = [(first, uri) for uri in [*expected_prefix, path]]
+        if authorized:
+            assert case_head(case) == after_cancel
+            assert result["lifecycle"] == "CANCEL" and result["render"] is None and result["receipts"] == []
+            assert [packet["request_uri"] for packet in result["evidence"]] == [
+                f"https://{first}{uri}" for uri in expected_prefix
+            ]
+            replay = cli("run", *arguments, case_id=case, expected_exit=5)
+            assert replay == result and case_head(case) == after_cancel
+        else:
+            expected.append((second, "/ok"))
+            assert result["evidence"][0]["redirect_chain"] == [f"https://{first}{path}", target]
+        assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == expected
+        assert len(fixture.connects) == starts + len(expected)
+        results[case] = result
+    assert not output.exists() and not fixture.errors, fixture.errors
+    return results
 
 
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
@@ -989,9 +1068,11 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         retry_continuation = check_retry_continuation(cli, fixture, search_goals["retry_after"][0])
         search_fallback = check_ordered_search(cli, fixture, state_path, directory)
         interrupted_retrieval = check_interrupted_retrieval(cli, command_line, environment, fixture, state_path)
+        cancelled_redirects = check_redirect_cancellation(cli, command_line, environment, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
-                "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval}
+                "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
+                "cancelled_redirects": cancelled_redirects}
     finally:
         fixture.close()
 
