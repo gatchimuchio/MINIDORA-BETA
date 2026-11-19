@@ -1156,3 +1156,20 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。最終検査のソース差分SHA-256
 局所判定は関係比較のL6とK7接続が `NORMAL_PATH_PRESENT`。G03は数量と利用者指定書式の型付き生成が残るため `PARTIAL`。B107の6/7は当該版の履歴であり、B108のE2合同7ゲート再判定は `NOT_RUN`。E3、E7体系QC、E8独立QA、公開・配布も `NOT_RUN`。次は算術の封印済み厳密値を生成・採用へ渡す。
 
 復旧2世代のローカル参照・GitHubタグは `5443b97` と `4c29d14`。資産は計9件。保持2件（実装台帳と要求トレース）、稼働中7件（Core、Input、Language、Recovery、通常CLI検査、条件付き検査、既存の共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。
+
+## 2026-11-19 JST B109 — D3-C E2差戻し W07〜W09 算術の厳密値の意味生成
+
+着工点は `cafcf1ccbfff07e8a9cb410b78a85429e26718a5`。現行D2仕様・D2工程・D3-C指示の採用SHAを照合した。通常の単一式 `Calculate` は `declarative-ja-en-v86-generated-exact-calculation` で封印し、`EXACT_CALCULATION_V2` を元Goalに求める。唯一Coreが厳密計算した `Calculation` の式・有理数・単位を別々の必須値としてL6へ渡す。表示は従来の等式を先頭に保ち、出力予算に収まる場合は符号と整数・分数・単位付き数量の区分も生成する。語句選択では複数候補の条件付き分布を記録し、式・数値・単位は各一つの確定トークンとしてバイトを保持する。等式だけが入る予算では、厳密値の後にEOSで終わる。等式も入らない場合は停止する。
+
+K7は封印式から再計算した `Calculation`、式・有理数・単位のトークン、生成モデルと採用出力を照合する。計算成果物 `minidora.exact-calculation-content.v1` は意味計画と生成系列を保存し、`ContentPlan` と実描画がその成果物を消費する。復旧は同じ生成系列と参照を再検証して既存の作用IDを照合する。旧 `EXACT_CALCULATION_V1` と従来の必要述語列の保存結果は旧出力で復旧できる。詳説・訂正・連続計算は保存された型付き計算値の既存経路を使う。文字列置換の検査は実際の前回出力を使って対象文字列以外のバイトも保全した。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象差分SHA-256は `d2fe3ab3d2e4173a513ff7b5792e59e2cd914ce154aa0142a14361b47b9ebc22`。通常CLIと隔離SQLiteで、負の有理数・単位付きの負の数量・式中のフォームフィード・8,001桁の整数について実ファイル、必要値トークン、語句選択、EOS、確認済みreceiptを照合した。確定値をまとめて記録するため、桁数に比例して詳細な次トークン分布を複製しない。既存モデルの16,384バイト上限を適用する。
+
+- `cargo test -p minidora-cli --test normal_route <filter> --locked` の `scalar_arithmetic_generation`、`calculation_followup`、`mixed_unit_arithmetic`、`explicit_operand_correction`、`calculation_sequence_route`、`natural_previous_answer_edit`、`authenticated_http_and_cli_share_actual_case_result`、`relation_comparison` で16件PASS。
+- `cargo test -p minidora-engine --lib recovery::tests:: --locked -- --test-threads=5` で64件PASS。数値・モデルの差し替えとGoalの格下げを拒否し、旧版と新版の作成済みファイルを同一作用IDで照合。期限、取消、無許可、結果不明、二重作用の境界も確認した。
+- `cargo test -p minidora-engine --test input_machine_observation_01 --locked` で1件、`cargo test -p minidora-engine --lib <filter> --locked` の `input::tests` 39件と `language::tests` 13件がPASS。
+- `cargo build -p minidora-cli --locked` 後、`python3 tools/previous_text_edit_route_recovery_test.py --binary <built-cli>` がPASS。別CLIプロセスで前回算術出力から作った置換結果を復旧し、確認済みreceiptとファイルのinode・更新時刻・サイズの一致を確認した。 `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`git diff --check` がPASS。
+
+通常の単一式算術のL6とK7接続は `NORMAL_PATH_PRESENT`。数値は本束の範囲で成立し、利用者指定書式が残るためG03は `PARTIAL`。E2の7ゲート合同再判定、E3、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `cafcf1c` と `5443b97`。資産は計10件。保持2件（実装台帳と要求トレース）、稼働中8件（Core、Input、Language、Recovery、CLI検査、入力観測検査、前回答編集の復旧検査、既存共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。

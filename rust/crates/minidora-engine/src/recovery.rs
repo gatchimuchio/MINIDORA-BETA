@@ -2195,7 +2195,7 @@ fn verify_explain_previous_relation_comparison_memory_result(
     }
 
     if original_replay.generated {
-        crate::core::verify_generated_comparison_model(
+        crate::core::verify_generated_model_artifacts(
             store,
             &state.actor_id,
             &state.case_id,
@@ -3204,8 +3204,12 @@ fn inspect(
     let legacy_predicates = ["SUPPORTED_CONTENT", "EXACT_RENDER", "CONFIRMED_FILE"];
     let requires_generated_comparison =
         bundle.meaning.parser_version == crate::input::COMPARISON_PARSER_VERSION;
+    let requires_generated_calculation =
+        bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
     if goal.required_predicates != goal_predicates(&bundle.meaning, true)
-        && (requires_generated_comparison || goal.required_predicates != legacy_predicates)
+        && (requires_generated_comparison
+            || requires_generated_calculation
+            || goal.required_predicates != legacy_predicates)
     {
         return Err(failure(
             "UNSUPPORTED_RECOVERY_GOAL",
@@ -3434,7 +3438,13 @@ fn inspect(
     } else {
         None
     };
-    let mut generated_compute_ref = None;
+    let mut generated_compute_ref = if requires_generated_calculation {
+        Some(crate::core::verify_generated_calculation_computation(
+            store, actor, case, &goal, result, plan,
+        )?)
+    } else {
+        None
+    };
     if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
@@ -3968,7 +3978,7 @@ fn inspect(
         }
     }
     if requires_generated_comparison {
-        crate::core::verify_generated_comparison_model(store, actor, case, plan)?;
+        crate::core::verify_generated_model_artifacts(store, actor, case, plan)?;
     } else if generated_compute_ref.is_none() {
         let model_bytes = store.get_bytes(actor, case, &plan.model_artifact_ref)?;
         let model: language::SequenceModel = serde_json::from_slice(&model_bytes)?;
@@ -5572,6 +5582,10 @@ mod tests {
     }
 
     fn attempted_prefix() -> Fixture {
+        attempted_calculation_prefix(false)
+    }
+
+    fn attempted_calculation_prefix(legacy: bool) -> Fixture {
         let directory = std::env::temp_dir().join(format!(
             "minidora-recovery-{}-{}",
             std::process::id(),
@@ -5588,10 +5602,14 @@ mod tests {
         request.permissions.write_paths.insert(target.clone());
         {
             let mut engine = Engine::open(&state).unwrap();
-            assert_eq!(
-                engine.execute("alice", request).unwrap().lifecycle,
-                Lifecycle::Commit
-            );
+            let adopted = if legacy {
+                engine
+                    .execute_legacy_calculation_fixture("alice", request)
+                    .unwrap()
+            } else {
+                engine.execute("alice", request).unwrap()
+            };
+            assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
         }
         let token = retain_attempted_prefix(&state);
         Fixture {
@@ -5762,7 +5780,11 @@ mod tests {
         let result = engine.execute("alice", request).unwrap();
         assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
         assert_eq!(result.calculation.as_ref().unwrap().exact_value, "7/2");
-        assert_eq!(result.render.as_ref().unwrap().bytes, b"7/2 = 7/2");
+        assert!(result.text.starts_with("7/2 = 7/2。"));
+        assert_eq!(
+            result.render.as_ref().unwrap().bytes,
+            result.text.as_bytes()
+        );
         let display = engine.latest("alice", "display").unwrap().unwrap();
         let goal: GoalContract = serde_json::from_slice(
             &engine
@@ -5773,9 +5795,33 @@ mod tests {
         .unwrap();
         assert_eq!(
             goal.required_predicates,
-            ["EXACT_CALCULATION_V1", "SUPPORTED_CONTENT", "EXACT_RENDER"]
+            ["EXACT_CALCULATION_V2", "SUPPORTED_CONTENT", "EXACT_RENDER"]
         );
         assert!(matches!(&goal.intent, Intent::Calculate { expression } if expression == "7/2"));
+
+        let mut compact = RequestEnvelope::new("compact", "arithmetic", "alice", "7/2");
+        compact.budget.max_evidence_bytes = "7/2 = 7/2".len();
+        let compact_result = engine.execute("alice", compact.clone()).unwrap();
+        assert_eq!(
+            compact_result.lifecycle,
+            Lifecycle::Commit,
+            "{compact_result:?}"
+        );
+        assert_eq!(compact_result.render.as_ref().unwrap().bytes, b"7/2 = 7/2");
+        let plan = compact_result.content_plan.as_ref().unwrap();
+        let compact_compute: serde_json::Value = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "compact", plan.dependencies.last().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(compact_compute["content_generation"]["stop_reason"], "EOS");
+        compact.input_id = "shorter".into();
+        compact.budget.max_evidence_bytes -= 1;
+        let stopped = engine.execute("alice", compact).unwrap();
+        assert_eq!(stopped.lifecycle, Lifecycle::Suspend);
+        assert!(stopped.content_plan.is_none() && stopped.render.is_none());
 
         let fixture = attempted_prefix();
         let store = Store::open(&fixture.state).unwrap();
@@ -5790,7 +5836,7 @@ mod tests {
         assert_eq!(
             goal.required_predicates,
             [
-                "EXACT_CALCULATION_V1",
+                "EXACT_CALCULATION_V2",
                 "SUPPORTED_CONTENT",
                 "EXACT_RENDER",
                 "CONFIRMED_FILE"
@@ -5808,18 +5854,69 @@ mod tests {
             Some(case.clone())
         );
         assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
-        assert_eq!(fs::read(&fixture.target).unwrap(), b"2+3 = 5");
+        assert_eq!(fs::read(&fixture.target).unwrap(), result.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
 
-        // The former predicate list is still valid for retained files.
-        let mut legacy_case = case.clone();
+        let mut mismatched = result.clone();
+        let mismatched_plan = mismatched.content_plan.as_mut().unwrap();
+        let unrelated_model =
+            language::SequenceModel::train(&["another model".into()], 2, 1).unwrap();
+        mismatched_plan.model_artifact_ref = store
+            .put_artifact("alice", "case", &unrelated_model)
+            .unwrap();
+        mismatched_plan.id.clear();
+        mismatched_plan.id = identity(&*mismatched_plan).unwrap();
+        mismatched.render.as_mut().unwrap().plan_id = mismatched_plan.id.clone();
+        let error = inspect(&store, "alice", &case, &mismatched).unwrap_err();
+        assert!(
+            matches!(error, Error::Contract { ref code, .. } if code == "CONTENT_ADOPTION_MISMATCH"),
+            "{error:?}"
+        );
+
+        let mut downgraded_case = case.clone();
         goal.required_predicates.remove(0);
-        legacy_case.goal_sha256 = Some(store.put_artifact("alice", "case", &goal).unwrap());
-        inspect(&store, "alice", &legacy_case, result).unwrap();
+        downgraded_case.goal_sha256 = Some(store.put_artifact("alice", "case", &goal).unwrap());
+        let error = inspect(&store, "alice", &downgraded_case, result).unwrap_err();
+        assert!(
+            matches!(error, Error::Contract { ref code, .. } if code == "UNSUPPORTED_RECOVERY_GOAL"),
+            "{error:?}"
+        );
 
         let recovered = reconcile(&store, "alice", "case").unwrap();
         assert_eq!(recovered.lifecycle, Lifecycle::Commit);
         assert_eq!(recovered.calculation, result.calculation);
         assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(recovered.receipts[0].action_id, fixture.token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), result.text.as_bytes());
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn legacy_arithmetic_goal_retains_its_original_adoption_and_file() {
+        let fixture = attempted_calculation_prefix(true);
+        let store = Store::open(&fixture.state).unwrap();
+        let mut case = store.load_case("alice", "case").unwrap().unwrap();
+        let saved = case.result.as_ref().unwrap().clone();
+        let mut goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", case.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.required_predicates[0], "EXACT_CALCULATION_V1");
+        inspect(&store, "alice", &case, &saved).unwrap();
+
+        goal.required_predicates.remove(0);
+        case.goal_sha256 = Some(store.put_artifact("alice", "case", &goal).unwrap());
+        inspect(&store, "alice", &case, &saved).unwrap();
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit);
+        assert_eq!(recovered.content_plan, saved.content_plan);
+        assert_eq!(recovered.receipts[0].action_id, fixture.token);
         assert_eq!(fs::read(&fixture.target).unwrap(), b"2+3 = 5");
     }
 
@@ -11378,7 +11475,8 @@ mod tests {
             fresh.permissions.write_paths.insert(new_target.clone());
             let completed = engine.execute("alice", fresh).unwrap();
             assert_eq!(completed.lifecycle, Lifecycle::Commit);
-            assert_eq!(fs::read(&new_target).unwrap(), b"7+8 = 15");
+            assert!(completed.text.starts_with("7+8 = 15。"));
+            assert_eq!(fs::read(&new_target).unwrap(), completed.text.as_bytes());
         }
     }
 
@@ -11439,7 +11537,11 @@ mod tests {
             let result = engine.execute("alice", request.clone()).unwrap();
             assert_eq!(result.lifecycle, Lifecycle::Suspend, "{checkpoint:?}");
             assert!(result.reason.as_deref().unwrap().starts_with("DEADLINE:"));
-            assert_eq!(result.render.as_ref().unwrap().bytes, b"7+8 = 15");
+            assert!(result.text.starts_with("7+8 = 15。"));
+            assert_eq!(
+                result.render.as_ref().unwrap().bytes,
+                result.text.as_bytes()
+            );
 
             drop(engine);
             let mut restored = Engine::open(&fixture.state).unwrap();
@@ -11465,7 +11567,7 @@ mod tests {
             assert_eq!(commits, 0, "{checkpoint:?}");
             match phase {
                 Some(EffectPhase::Confirmed) => {
-                    assert_eq!(fs::read(&fixture.target).unwrap(), b"7+8 = 15");
+                    assert_eq!(fs::read(&fixture.target).unwrap(), result.text.as_bytes());
                     assert_eq!(result.receipts[0].phase, EffectPhase::Confirmed);
                     assert_eq!(result.receipts[0].action_id, actions[0].action_id);
                     assert!(result.execution_graph_ref.is_some());

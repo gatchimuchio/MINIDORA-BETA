@@ -236,6 +236,8 @@ const DIRECT_TYPED_CONDITION_PARSER: &str = "core-typed-condition-definition-v1"
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
 const DIRECT_RELATION_COMPARISON_PARSER: &str = "core-typed-relation-comparison-v1";
 const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
+pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
+const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 const GROUP_MEAN_HYPOTHESIS_PREDICATE: &str = "GROUP_MEAN_HYPOTHESIS_RESULT_V1";
 
@@ -248,6 +250,9 @@ pub(crate) fn goal_predicates(meaning: &MeaningIR, requires_file: bool) -> Vec<S
             if meaning.parser_version == input::COMPARISON_PARSER_VERSION =>
         {
             predicates.push(RELATION_COMPARISON_PREDICATE.into());
+        }
+        Intent::Calculate { .. } if meaning.parser_version == input::CALCULATION_PARSER_VERSION => {
+            predicates.push(GENERATED_CALCULATION_PREDICATE.into());
         }
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
@@ -286,6 +291,7 @@ fn verify_report_goal_content(
             RELATION_EXPLANATION_PREDICATE
                 | GROUP_MEAN_HYPOTHESIS_PREDICATE
                 | RELATION_COMPARISON_PREDICATE
+                | GENERATED_CALCULATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -319,13 +325,14 @@ pub(crate) fn verify_goal_content(
     result: &ResultRecord,
     plan: &ContentPlan,
 ) -> Result<()> {
-    if !goal
-        .required_predicates
-        .iter()
-        .any(|predicate| predicate == EXACT_CALCULATION_PREDICATE)
-    {
+    let Some(predicate) = goal.required_predicates.iter().find(|predicate| {
+        matches!(
+            predicate.as_str(),
+            EXACT_CALCULATION_PREDICATE | GENERATED_CALCULATION_PREDICATE
+        )
+    }) else {
         return Ok(());
-    }
+    };
     let Intent::Calculate { expression } = &goal.intent else {
         return Err(failure(
             "GOAL_CALCULATION_MISMATCH",
@@ -333,12 +340,18 @@ pub(crate) fn verify_goal_content(
         ));
     };
     let calculation = language::calculate(expression)?;
-    let required_unit = exact_calculation_unit(&calculation);
+    let equation = exact_calculation_unit(&calculation);
+    let matches_surface = if predicate == EXACT_CALCULATION_PREDICATE {
+        plan.required_units.as_slice() == std::slice::from_ref(&equation) && plan.text == equation
+    } else {
+        plan.text
+            .strip_prefix(&equation)
+            .is_some_and(|tail| tail.is_empty() || tail.starts_with('。'))
+    };
     if result.calculation.as_ref() != Some(&calculation)
         || result.guarantee != Guarantee::Computed
         || plan.guarantee != Guarantee::Computed
-        || plan.required_units.as_slice() != std::slice::from_ref(&required_unit)
-        || plan.text != required_unit
+        || !matches_surface
     {
         return Err(failure(
             "GOAL_CALCULATION_MISMATCH",
@@ -346,6 +359,224 @@ pub(crate) fn verify_goal_content(
         ));
     }
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct CalculationMeaningPlan {
+    calculation_sha256: String,
+    expression: String,
+    rational: String,
+    unit: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct GeneratedCalculationArtifact<'a> {
+    kind: &'static str,
+    meaning_plan: &'a CalculationMeaningPlan,
+    content_generation: &'a language::MeaningGenerationReport,
+}
+
+impl CalculationMeaningPlan {
+    fn from_calculation(calculation: &Calculation) -> Result<Self> {
+        // The exact calculator emits a canonical rational or the same
+        // rational followed by one supported unit.
+        let (rational, unit) = calculation.exact_value.split_once(' ').map_or(
+            (calculation.exact_value.as_str(), None),
+            |(number, unit)| (number, Some(unit.to_owned())),
+        );
+        Ok(Self {
+            calculation_sha256: identity(calculation)?,
+            expression: calculation.expression.clone(),
+            rational: rational.into(),
+            unit,
+        })
+    }
+
+    fn generation_request(&self, budget: usize) -> Result<language::MeaningGenerationRequest> {
+        use language::{
+            MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle,
+            MeaningGrammarFragment::{ExactField, Literal},
+            MeaningGrammarUnit, MeaningRole,
+        };
+
+        let max_output_bytes = budget.min(language::MAX_EXACT_FIELD_GENERATION_BYTES);
+        let mut fragments = vec![
+            ExactField {
+                value: self.expression.clone(),
+            },
+            Literal {
+                value: " = ".into(),
+            },
+            ExactField {
+                value: self.rational.clone(),
+            },
+        ];
+        let mut equation_bytes = self.expression.len() + 3 + self.rational.len();
+        if let Some(unit) = &self.unit {
+            equation_bytes += 1 + unit.len();
+            fragments.push(Literal { value: " ".into() });
+            fragments.push(ExactField {
+                value: unit.clone(),
+            });
+        }
+        let sign = if self.rational == "0" {
+            ""
+        } else if self.rational.starts_with('-') {
+            "負の"
+        } else {
+            "正の"
+        };
+        let classification = match (
+            self.unit.is_some(),
+            self.rational.contains('/'),
+            self.rational == "0",
+        ) {
+            (false, _, true) => "ゼロです。".into(),
+            (true, _, true) => "ゼロの数量です。".into(),
+            (false, false, false) => format!("{sign}整数です。"),
+            (false, true, false) => format!("{sign}分数です。"),
+            (true, false, false) => format!("{sign}整数で表される数量です。"),
+            (true, true, false) => format!("{sign}分数で表される数量です。"),
+        };
+        let intros = ["この値は", "結果は"];
+        let max_intro_bytes = intros.iter().map(|intro| intro.len()).max().unwrap_or(0);
+        // If the output budget is just enough for the exact equation, the
+        // decoder still emits its typed fields and can end directly at EOS.
+        if equation_bytes + "。".len() + max_intro_bytes + classification.len() <= max_output_bytes
+        {
+            fragments.extend([
+                Literal {
+                    value: "。".into()
+                },
+                grammar_choice("classification_intro", &intros),
+                Literal {
+                    value: classification,
+                },
+            ]);
+        }
+        Ok(language::MeaningGenerationRequest {
+            purpose: MeaningCompositionPurpose::ShortComposition,
+            format: MeaningCompositionFormat::Paragraph,
+            style: MeaningCompositionStyle::Neutral,
+            units: vec![MeaningGrammarUnit {
+                id: "exact_equation".into(),
+                role: MeaningRole::Body,
+                semantic_sha256: identity(&("exact-calculation-meaning-v1", self))?,
+                evidence_ids: Vec::new(),
+                dependencies: Vec::new(),
+                fragments,
+            }],
+            max_output_bytes,
+            max_tokens: language::MAX_EXACT_FIELD_GENERATION_TOKENS,
+        })
+    }
+
+    fn validate_generation(
+        request: &language::MeaningGenerationRequest,
+        report: &language::MeaningGenerationReport,
+    ) -> Result<()> {
+        validate_meaning_generation(request, &[], report)?;
+        let mut steps = report.token_steps.iter().peekable();
+        let unit = &request.units[0];
+        for (index, fragment) in unit.fragments.iter().enumerate() {
+            let mut tokens = Vec::new();
+            while steps
+                .peek()
+                .is_some_and(|step| step.fragment_index == index && step.unit_id == unit.id)
+            {
+                tokens.push(steps.next().expect("peeked step"));
+            }
+            let text = tokens
+                .iter()
+                .map(|step| step.token.as_str())
+                .collect::<String>();
+            let matches = match fragment {
+                language::MeaningGrammarFragment::ExactField { value } => {
+                    text == *value
+                        && tokens.len() == 1
+                        && tokens[0].admissible_tokens.as_slice() == std::slice::from_ref(value)
+                        && tokens[0].selected_probability == "1"
+                        && tokens[0].distribution.as_slice()
+                            == [language::MeaningGenerationDistributionEntry {
+                                token: value.clone(),
+                                probability: "1".into(),
+                            }]
+                }
+                language::MeaningGrammarFragment::Literal { value } => text == *value,
+                language::MeaningGrammarFragment::Choice { alternatives, .. } => {
+                    alternatives.contains(&text)
+                }
+            };
+            if !matches {
+                return Err(failure(
+                    "GOAL_CALCULATION_MISMATCH",
+                    "the generated equation or classification does not retain its exact semantic fields",
+                ));
+            }
+        }
+        let emitted = report.token_steps[..report.token_steps.len() - 1]
+            .iter()
+            .map(|step| step.token.as_str())
+            .collect::<String>();
+        if steps.count() != 1 || emitted != report.text {
+            return Err(failure(
+                "GOAL_CALCULATION_MISMATCH",
+                "the verified arithmetic tokens do not reproduce the adopted output",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn verify_generated_calculation_computation(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    goal: &GoalContract,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    // The caller has already compared the full Calculation against the
+    // sealed expression in verify_goal_content.
+    let calculation = result
+        .calculation
+        .as_ref()
+        .filter(|_| result.dependencies.is_empty() && result.evidence.is_empty())
+        .ok_or_else(|| {
+            failure(
+                "GOAL_CALCULATION_MISMATCH",
+                "the retained calculation or its provenance is invalid",
+            )
+        })?;
+    let meaning_plan = CalculationMeaningPlan::from_calculation(calculation)?;
+    let request = meaning_plan.generation_request(goal.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning(&request)?;
+    CalculationMeaningPlan::validate_generation(&request, &replay.report)?;
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    let artifact = GeneratedCalculationArtifact {
+        kind: GENERATED_CALCULATION_KIND,
+        meaning_plan: &meaning_plan,
+        content_generation: &replay.report,
+    };
+    let compute_ref = digest(&canonical(&artifact)?);
+    validate_generated_content_plan_adoption(
+        result,
+        &replay.report,
+        &replay.emission,
+        &[],
+        &compute_ref,
+        "ja",
+        plan,
+    )?;
+    if result.text != replay.report.text {
+        return Err(failure(
+            "CONTENT_ADOPTION_MISMATCH",
+            "the saved result differs from the replayed arithmetic sequence",
+        ));
+    }
+    store.get_bytes(actor, case, &compute_ref)?;
+    verify_generated_model_artifacts(store, actor, case, plan)?;
+    Ok(compute_ref)
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -3437,6 +3668,25 @@ impl Engine {
         self.execute_with_bundle(actor, request, None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn execute_legacy_calculation_fixture(
+        &mut self,
+        actor: &str,
+        request: RequestEnvelope,
+    ) -> Result<ResultRecord> {
+        let mut bundle = input::seal(&request, None)?;
+        assert!(matches!(bundle.meaning.intent, Intent::Calculate { .. }));
+        bundle.meaning.parser_version = input::PARSER_VERSION.into();
+        bundle.semantic_signature = identity(&bundle.meaning)?;
+        bundle.fingerprint = identity(&(
+            &request,
+            &bundle.raw_sha256,
+            &bundle.context_sha256,
+            input::PARSER_VERSION,
+        ))?;
+        self.execute_with_bundle(actor, request, Some(bundle))
+    }
+
     fn execute_with_bundle(
         &mut self,
         actor: &str,
@@ -4420,6 +4670,7 @@ impl Engine {
         let content_composition = None;
         let mut content_generation = None;
         let mut generation_proof_ids = None;
+        let mut calculation_meaning_plan = None;
         let mut applied_rule_adaptation = None;
         let mut generation_model = None;
         let mut generation_emission = None;
@@ -4427,9 +4678,66 @@ impl Engine {
         match &goal.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
-                    units.push(exact_calculation_unit(&calculation));
-                    result.calculation = Some(calculation);
                     result.guarantee = Guarantee::Computed;
+                    if goal
+                        .required_predicates
+                        .iter()
+                        .any(|predicate| predicate == GENERATED_CALCULATION_PREDICATE)
+                    {
+                        let meaning_plan = CalculationMeaningPlan::from_calculation(&calculation)?;
+                        let grammar =
+                            meaning_plan.generation_request(goal.budget.max_evidence_bytes)?;
+                        let deadline = started
+                            .checked_add(Duration::from_millis(goal.budget.deadline_ms))
+                            .ok_or_else(|| {
+                                failure(
+                                    "INVALID_DEADLINE",
+                                    "execution deadline overflows this clock",
+                                )
+                            })?;
+                        let mut generation =
+                            match language::generate_semantic_meaning_until(&grammar, deadline) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    return self.stop(
+                                        &mut state,
+                                        Lifecycle::Suspend,
+                                        "LANGUAGE_RESOURCE_OR_COVERAGE",
+                                        &error.to_string(),
+                                    );
+                                }
+                            };
+                        if let Err(error) = CalculationMeaningPlan::validate_generation(
+                            &grammar,
+                            &generation.report,
+                        ) {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "CONTENT_PLAN_INVALID",
+                                &error.to_string(),
+                            );
+                        }
+                        units.extend(generation.report.units.iter().map(|unit| unit.text.clone()));
+                        generation.report.model_artifact_ref = Some(self.store.put_artifact(
+                            actor,
+                            &request.case_id,
+                            &generation.model,
+                        )?);
+                        report_goal_content = Some(ReportGoalContent {
+                            predicate: GENERATED_CALCULATION_PREDICATE,
+                            guarantee: Guarantee::Computed,
+                            dependencies: Vec::new(),
+                            units: units.clone(),
+                        });
+                        calculation_meaning_plan = Some(meaning_plan);
+                        content_generation = Some(generation.report);
+                        generation_model = Some(generation.model);
+                        generation_emission = Some(generation.emission);
+                    } else {
+                        units.push(exact_calculation_unit(&calculation));
+                    }
+                    result.calculation = Some(calculation);
                 }
                 Err(e) => {
                     let stop_code = match &e {
@@ -5772,7 +6080,7 @@ impl Engine {
                             replay,
                         )
                         .and_then(|answer| {
-                            verify_generated_comparison_model(
+                            verify_generated_model_artifacts(
                                 &self.store,
                                 actor,
                                 &request.case_id,
@@ -8755,7 +9063,19 @@ impl Engine {
             );
         }
         state.result = Some(result.clone());
-        let compute_artifact = if let (Some(relation_meaning), Some(relation_proof_dependencies)) =
+        let compute_artifact = if let (Some(meaning_plan), Some(content_generation)) =
+            (&calculation_meaning_plan, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &GeneratedCalculationArtifact {
+                    kind: GENERATED_CALCULATION_KIND,
+                    meaning_plan,
+                    content_generation,
+                },
+            )?
+        } else if let (Some(relation_meaning), Some(relation_proof_dependencies)) =
             (adopted_relation_meaning, relation_proof_dependencies)
         {
             if let Some(content_generation) = content_generation.clone() {
@@ -10548,6 +10868,7 @@ fn rule_grammar_documents(
             for fragment in core_semantic_meaning_fragments(meaning)? {
                 match fragment {
                     language::MeaningGrammarFragment::Literal { value } => documents.push(value),
+                    language::MeaningGrammarFragment::ExactField { .. } => {}
                     language::MeaningGrammarFragment::Choice { alternatives, .. } => {
                         documents.extend(alternatives);
                     }
@@ -13660,7 +13981,7 @@ fn verify_generated_comparison(
     ))
 }
 
-pub(crate) fn verify_generated_comparison_model(
+pub(crate) fn verify_generated_model_artifacts(
     store: &Store,
     actor: &str,
     case: &str,

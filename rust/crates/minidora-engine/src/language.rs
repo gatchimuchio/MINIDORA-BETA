@@ -1075,6 +1075,10 @@ pub struct MeaningCompositionReport {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub enum MeaningGrammarFragment {
+    /// An indivisible semantic value whose original bytes must be retained.
+    ExactField {
+        value: String,
+    },
     Literal {
         value: String,
     },
@@ -2059,6 +2063,9 @@ pub fn compose_typed_meaning(
 // model ceiling for grammar generation so multi-axis comparisons can retain
 // every row instead of being forced into the short explanation envelope.
 pub(crate) const MAX_COMPARISON_GENERATION_BYTES: usize = MAX_MODEL_BYTES;
+pub(crate) const MAX_EXACT_FIELD_GENERATION_BYTES: usize = MAX_MODEL_BYTES;
+// The lossless math projection can use one token per byte, plus EOS.
+pub(crate) const MAX_EXACT_FIELD_GENERATION_TOKENS: usize = MAX_MODEL_TOKENS + 1;
 
 struct MeaningGenerationLimits {
     units: usize,
@@ -2069,14 +2076,26 @@ struct MeaningGenerationLimits {
 }
 
 impl MeaningGenerationLimits {
-    fn for_purpose(purpose: MeaningCompositionPurpose) -> Self {
-        if purpose == MeaningCompositionPurpose::Compare {
+    fn for_request(request: &MeaningGenerationRequest) -> Self {
+        if request.purpose == MeaningCompositionPurpose::Compare {
             Self {
                 units: 128,
                 unit_bytes: MAX_COMPARISON_GENERATION_BYTES,
                 bytes: MAX_COMPARISON_GENERATION_BYTES,
                 tokens: MAX_MODEL_TOKENS,
                 fragments: 4096,
+            }
+        } else if request.units.iter().any(|unit| {
+            unit.fragments
+                .iter()
+                .any(|fragment| matches!(fragment, MeaningGrammarFragment::ExactField { .. }))
+        }) {
+            Self {
+                units: MAX_MEANING_UNITS,
+                unit_bytes: MAX_EXACT_FIELD_GENERATION_BYTES,
+                bytes: MAX_EXACT_FIELD_GENERATION_BYTES,
+                tokens: MAX_EXACT_FIELD_GENERATION_TOKENS,
+                fragments: 512,
             }
         } else {
             Self {
@@ -2156,6 +2175,24 @@ fn validate_meaning_generation_request(
             let fragment_bytes = match fragment {
                 MeaningGrammarFragment::Literal { value } => {
                     validate_grammar_text(value, false, limits.unit_bytes)?;
+                    possible_unit_bytes = possible_unit_bytes
+                        .checked_add(value.len())
+                        .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "unit size overflow"))?;
+                    value.len()
+                }
+                MeaningGrammarFragment::ExactField { value } => {
+                    if value.is_empty()
+                        || value.len() > limits.unit_bytes
+                        || value == EOS
+                        || value
+                            .chars()
+                            .any(|ch| ch.is_control() && !ch.is_whitespace())
+                    {
+                        return Err(failure(
+                            "MEANING_GRAMMAR_TEXT",
+                            "exact semantic field exceeds its text envelope",
+                        ));
+                    }
                     possible_unit_bytes = possible_unit_bytes
                         .checked_add(value.len())
                         .ok_or_else(|| failure("MEANING_GRAMMAR_LIMIT", "unit size overflow"))?;
@@ -2425,6 +2462,33 @@ impl<'a> MeaningGenerationDecoder<'a> {
                 "selected grammar token has no conditional probability",
             )
         })?;
+        let selected_probability = rational_text(selected_probability);
+        self.record_step(
+            unit_id,
+            fragment_index,
+            &selected,
+            admissible.iter().cloned().collect(),
+            distribution
+                .iter()
+                .map(|(token, probability)| MeaningGenerationDistributionEntry {
+                    token: token.clone(),
+                    probability: rational_text(probability),
+                })
+                .collect(),
+            selected_probability,
+        )?;
+        Ok(selected)
+    }
+
+    fn record_step(
+        &mut self,
+        unit_id: &str,
+        fragment_index: usize,
+        selected: &str,
+        admissible_tokens: Vec<String>,
+        distribution: Vec<MeaningGenerationDistributionEntry>,
+        selected_probability: String,
+    ) -> Result<()> {
         let context = semantic_context_tail(self.model, &self.history)?;
         let context_state_sha256 = identity(&(
             MEANING_GENERATION_SCHEMA,
@@ -2436,29 +2500,45 @@ impl<'a> MeaningGenerationDecoder<'a> {
         self.token_steps.push(MeaningGenerationTokenStep {
             unit_id: unit_id.into(),
             fragment_index,
-            token: selected.clone(),
-            admissible_tokens: admissible.iter().cloned().collect(),
-            distribution: distribution
-                .iter()
-                .map(|(token, probability)| MeaningGenerationDistributionEntry {
-                    token: token.clone(),
-                    probability: rational_text(probability),
-                })
-                .collect(),
-            selected_probability: rational_text(selected_probability),
+            token: selected.into(),
+            admissible_tokens,
+            distribution,
+            selected_probability,
             context_state_sha256,
         });
         if selected == EOS {
             self.history.push(EOS.into());
         } else {
-            self.output.push_str(&selected);
-            self.history.extend(self.model.encode(&selected));
+            self.output.push_str(selected);
+            self.history.extend(self.model.encode(selected));
             if self.history.len() > self.model.order.saturating_sub(1) {
                 let remove = self.history.len() - self.model.order.saturating_sub(1);
                 self.history.drain(..remove);
             }
         }
-        Ok(selected)
+        Ok(())
+    }
+
+    fn emit_exact_field(
+        &mut self,
+        unit_id: &str,
+        fragment_index: usize,
+        value: &str,
+    ) -> Result<()> {
+        poll_model(self.deadline)?;
+        // The typed value is the only admissible token. A large rational
+        // need not duplicate a proof and probability for every digit.
+        self.record_step(
+            unit_id,
+            fragment_index,
+            value,
+            vec![value.into()],
+            vec![MeaningGenerationDistributionEntry {
+                token: value.into(),
+                probability: "1".into(),
+            }],
+            "1".into(),
+        )
     }
 
     fn emit_literal(&mut self, unit_id: &str, fragment_index: usize, value: &str) -> Result<()> {
@@ -2555,6 +2635,9 @@ fn meaning_generation_training_documents(
         for fragment in &unit.fragments {
             match fragment {
                 MeaningGrammarFragment::Literal { value } => documents.push(value.clone()),
+                // Exact fields constrain the grammar. The fitted lexical
+                // distribution only sees wording and connectors.
+                MeaningGrammarFragment::ExactField { .. } => {}
                 MeaningGrammarFragment::Choice { alternatives, .. } => {
                     documents.extend(alternatives.iter().cloned());
                 }
@@ -2629,7 +2712,7 @@ pub(crate) fn generate_semantic_meaning_with_rules_until(
     deadline: Instant,
 ) -> Result<MeaningGenerationOutput> {
     poll_model(deadline)?;
-    let limits = MeaningGenerationLimits::for_purpose(request.purpose);
+    let limits = MeaningGenerationLimits::for_request(request);
     validate_meaning_generation_request(request, &limits)?;
     let training_documents = meaning_generation_training_documents(request)?;
     let (model, training_corpus_revision, training_lineage) = if rule_documents.is_empty() {
@@ -2688,6 +2771,9 @@ pub(crate) fn generate_semantic_meaning_with_rules_until(
                 MeaningGrammarFragment::Literal { value } => {
                     decoder.emit_literal(&unit.id, fragment_index, value)?
                 }
+                MeaningGrammarFragment::ExactField { value } => {
+                    decoder.emit_exact_field(&unit.id, fragment_index, value)?
+                }
                 MeaningGrammarFragment::Choice { alternatives, .. } => {
                     decoder.emit_choice(&unit.id, fragment_index, alternatives)?
                 }
@@ -2731,15 +2817,22 @@ pub(crate) fn generate_semantic_meaning_with_rules_until(
         }
     }
 
-    if !decoder
-        .output
-        .chars()
-        .last()
-        .is_some_and(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
+    let ends_in_exact_field = generation_order.last().is_some_and(|index| {
+        matches!(
+            request.units[*index].fragments.last(),
+            Some(MeaningGrammarFragment::ExactField { .. })
+        )
+    });
+    if !ends_in_exact_field
+        && !decoder
+            .output
+            .chars()
+            .last()
+            .is_some_and(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
     {
         return Err(failure(
             "MEANING_GRAMMAR_TERMINATION",
-            "the complete generated sequence must end at a declared sentence boundary",
+            "the complete generated sequence must end at a declared sentence or exact-value boundary",
         ));
     }
     let admissible_eos = BTreeSet::from([EOS.to_owned()]);
@@ -2803,7 +2896,13 @@ pub(crate) fn generate_semantic_meaning_with_rules_until(
         evidence_ids,
         token_steps: decoder.token_steps.clone(),
         context_state_sha256,
-        token_space_version: "core-japanese-char-grammar-space-v1".into(),
+        token_space_version: if request.units.iter().any(|unit| {
+            unit.fragments.iter().any(|fragment| matches!(fragment, MeaningGrammarFragment::ExactField { .. }))
+        }) {
+            "core-japanese-char-exact-field-grammar-space-v1"
+        } else {
+            "core-japanese-char-grammar-space-v1"
+        }.into(),
         conditional_distribution_version: MEANING_DISTRIBUTION_VERSION.into(),
         model_revision: model_revision.clone(),
         model_artifact_ref: None,

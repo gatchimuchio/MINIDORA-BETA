@@ -101,7 +101,8 @@ def main() -> None:
             assert edit["source_content_plan_sha256"] == plan_ref
             assert edit["source_render_sha256"] == render_ref
             assert edit["edit"]["source_document"] == prior["text"]
-            assert edit["edit"]["text"] == "4+1 = 5"
+            assert prior["text"].count("2+3") == 1
+            assert edit["edit"]["text"] == prior["text"].replace("2+3", "4+1", 1)
             result_sha = hashlib.sha256(canonical(result)).hexdigest()
             actions = connection.execute(
                 "SELECT sequence FROM action_history WHERE case_id=? ORDER BY sequence",

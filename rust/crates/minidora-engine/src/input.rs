@@ -10,6 +10,7 @@ use unicode_normalization::char::{canonical_combining_class, compose};
 pub const PARSER_VERSION: &str = "declarative-ja-en-v84-quoted-relation-boundary";
 pub(crate) const COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
+pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 6] = ['「', '『', '"', '\'', '“', '‘'];
 
@@ -128,10 +129,10 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Err(error) => return Err(error),
     };
-    let parser_version = if matches!(intent, Intent::CompareRelationInventories { .. }) {
-        COMPARISON_PARSER_VERSION
-    } else {
-        PARSER_VERSION
+    let parser_version = match &intent {
+        Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
+        Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
+        _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
         parser_version: parser_version.into(),
@@ -5166,7 +5167,7 @@ mod tests {
             Intent::Calculate { expression } if expression == "6+7"
         ));
         assert_eq!(bundle.request.input_version, 3);
-        assert_eq!(bundle.meaning.parser_version, PARSER_VERSION);
+        assert_eq!(bundle.meaning.parser_version, CALCULATION_PARSER_VERSION);
         assert_eq!(bundle.meaning.spans[0].start, 0);
         assert_eq!(bundle.meaning.spans[0].end, request.text.len());
         assert_eq!(bundle.meaning.spans[0].text, request.text);

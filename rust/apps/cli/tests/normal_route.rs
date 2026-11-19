@@ -877,6 +877,125 @@ fn record(output: &Output) -> Value {
 }
 
 #[test]
+fn scalar_arithmetic_generation_preserves_exact_fields_and_real_render() {
+    let scratch = Scratch::new();
+    let wide_rational = format!("1{}", "0".repeat(8000));
+    for (input_id, expression, rational, unit, classification) in [
+        ("scalar", "2/3-3/2", "-5/6", None, "負の分数です。"),
+        (
+            "quantity",
+            "0.5 m - 2 m",
+            "-3/2",
+            Some("m"),
+            "負の分数で表される数量です。",
+        ),
+        (
+            "expression-whitespace",
+            "2\u{000c}+3",
+            "5",
+            None,
+            "正の整数です。",
+        ),
+        (
+            "wide-integer",
+            "100000000^1000",
+            wide_rational.as_str(),
+            None,
+            "正の整数です。",
+        ),
+    ] {
+        let output_path = scratch.0.join(format!("{input_id}.txt"));
+        let path = output_path.to_str().unwrap();
+        let result = record(&execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                input_id,
+                "--output",
+                path,
+                "--allow-write",
+                path,
+                expression,
+            ],
+        ));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "COMPUTED");
+        let exact_value =
+            unit.map_or_else(|| rational.to_owned(), |unit| format!("{rational} {unit}"));
+        let calculation = &result["calculation"];
+        assert_eq!(calculation["expression"], expression);
+        assert_eq!(calculation["exact_value"], exact_value);
+        let rendered = result["text"].as_str().unwrap();
+        assert!(rendered.starts_with(&format!("{expression} = {exact_value}。")));
+        assert!(rendered.ends_with(classification));
+        assert_eq!(result["render"]["status"], "RENDERED");
+        assert_eq!(
+            result["render"]["bytes"],
+            serde_json::json!(rendered.as_bytes())
+        );
+        assert_eq!(std::fs::read(&output_path).unwrap(), rendered.as_bytes());
+        assert_eq!(result["receipts"][0]["phase"], "CONFIRMED");
+
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], expression);
+        assert_eq!(
+            saved["bundle"]["meaning"]["parser_version"],
+            minidora_engine::input::CALCULATION_PARSER_VERSION
+        );
+        let goal = sequence_artifact(&store, &saved["goal_sha256"]);
+        assert_eq!(
+            goal["required_predicates"],
+            serde_json::json!([
+                "EXACT_CALCULATION_V2",
+                "SUPPORTED_CONTENT",
+                "EXACT_RENDER",
+                "CONFIRMED_FILE"
+            ])
+        );
+        let plan = &result["content_plan"];
+        let compute_ref = plan["dependencies"].as_array().unwrap().last().unwrap();
+        let artifact = sequence_artifact(&store, compute_ref);
+        assert_eq!(artifact["kind"], "minidora.exact-calculation-content.v1");
+        let meaning_plan = &artifact["meaning_plan"];
+        assert_eq!(meaning_plan["expression"], expression);
+        assert_eq!(meaning_plan["rational"], rational);
+        assert_eq!(meaning_plan["unit"], serde_json::json!(unit));
+        assert_eq!(
+            meaning_plan["calculation_sha256"],
+            minidora_domain::identity(calculation).unwrap()
+        );
+
+        let generation = &artifact["content_generation"];
+        assert_eq!(generation["schema"], "core-meaning-generation-v1");
+        assert_eq!(generation["text"], rendered);
+        assert_eq!(generation["stop_reason"], "EOS");
+        assert_eq!(generation["model_revision"], plan["model_revision"]);
+        assert_eq!(generation["model_artifact_ref"], plan["model_artifact_ref"]);
+        assert_eq!(plan["required_units"], serde_json::json!([rendered]));
+        let steps = generation["token_steps"].as_array().unwrap();
+        assert_eq!(steps.last().unwrap()["token"], "<EOS>");
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["distribution"].as_array().unwrap().len() > 1)
+        );
+        for exact_field in [expression, rational].into_iter().chain(unit) {
+            let step = steps
+                .iter()
+                .find(|step| step["token"] == exact_field)
+                .unwrap();
+            assert_eq!(step["admissible_tokens"], serde_json::json!([exact_field]));
+            assert_eq!(
+                step["distribution"],
+                serde_json::json!([{"token": exact_field, "probability": "1"}])
+            );
+        }
+    }
+}
+
+#[test]
 fn calculation_followup_and_explicit_retry_survive_process_restarts() {
     let scratch = Scratch::new();
     let first = record(&execute(
@@ -7661,7 +7780,10 @@ fn natural_previous_answer_edit_consumes_and_chains_actual_rendered_output() {
     ));
     assert_eq!(edited["lifecycle"], "COMMIT");
     assert_eq!(edited["guarantee"], "USER_PREMISE");
-    assert!(edited["text"].as_str().unwrap().contains("4+1 = 5"));
+    let original_text = original["text"].as_str().unwrap();
+    assert_eq!(original_text.matches("2+3").count(), 1);
+    let expected_edit = original_text.replacen("2+3", "4+1", 1);
+    assert!(edited["text"].as_str().unwrap().contains(&expected_edit));
     assert!(
         edited["text"]
             .as_str()
@@ -7693,7 +7815,7 @@ fn natural_previous_answer_edit_consumes_and_chains_actual_rendered_output() {
     assert_eq!(artifact["source_content_plan_sha256"], content_ref);
     assert_eq!(artifact["source_render_sha256"], render_ref);
     assert_eq!(artifact["edit"]["source_document"], original["text"]);
-    assert_eq!(artifact["edit"]["text"], "4+1 = 5");
+    assert_eq!(artifact["edit"]["text"], expected_edit);
     assert_eq!(artifact["edit"]["spans"][0]["source_text"], "2+3");
 
     let graph: Value = serde_json::from_slice(
