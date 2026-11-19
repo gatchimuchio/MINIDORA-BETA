@@ -264,6 +264,8 @@ pub enum Intent {
         new: String,
     },
     AskPreviousGroupMean,
+    RetainPreviousGroupMeanHypothesis,
+    ExplainPreviousGroupMeanHypothesis,
     AskPreviousSourceQuestion {
         query: String,
     },

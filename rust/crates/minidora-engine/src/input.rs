@@ -2977,6 +2977,15 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = previous_group_mean_question_intent(body)? {
         return Ok(intent);
     }
+    match body {
+        "前回のグループ別統計から仮説を保持して" => {
+            return Ok(Intent::RetainPreviousGroupMeanHypothesis);
+        }
+        "前回の仮説を説明して" => {
+            return Ok(Intent::ExplainPreviousGroupMeanHypothesis);
+        }
+        _ => {}
+    }
     if let Some(intent) = previous_source_question_intent(body)? {
         return Ok(intent);
     }

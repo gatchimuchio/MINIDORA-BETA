@@ -1038,3 +1038,27 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `e2c32ec
 W18は証明保存型学習から別ケースの推論、生成、ファイル作用、元Goalまでの結合を確認した範囲で `PARTIAL`。K6の経路差は規則形成による保留から実作用への差であり、同じ証明への文法適応で観測した差は生成候補の分布。観測から形成した仮説の保持・区別を含むW12との結合とE1出口は未確認。CAP-D05は `UNVERIFIED`。E2合同ゲート、体系QC、独立QAは `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `aab4a86` と `222288d`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、Recoveryの検査、CLIの検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B104 — D3-C E1-W12 観測標本から仮説を保持し後続の説明へ接続
+
+着工点は `4fffd49582f77cbf829c993162d0d78ecb1065da`。D2仕様・D2工程・D3-C指示の採用SHAを照合。利用者がJSON表のグループ別統計を確定した同じケースで「前回のグループ別統計から仮説を保持して」と要求すると、Coreが封印入力・元表・確定済みの統計成果物を再照合する。同じ単位で二群以上を比較でき、標本の平均が単独で最大の群があり、その順位が同条件の再標本でも得られる可能性を、版付き成果物に `HYPOTHESIS_RETAINED` として保持する。
+
+成果物は元結果ID、標本と統計のSHA-256、群・測定項目・単位、標本での実数値、反例になる条件、未提示の母集団・観測時点・採用契約を保持する。通常の関係推論が参照するFact・Ruleとは別のケース成果物に置く。「前回の仮説を説明して」は保存済み成果物と元標本を再照合し、保証区分 `HYPOTHESIS` で採用保留の理由を説明する。許可された説明ファイルは実バイトと同一作用IDを照合してGoalへ帰還する。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `47f4172454eaf96eb7c847a62e91be8b7bab8ace1001fdd758a19494d05e372c`。最終検査は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib group_mean_hypothesis --locked -- --nocapture` | 2 PASS。乙の平均8を保持。前回結果なし、単群、同率、混合単位、別利用者を拒否。再起動後に同じ仮説を説明し、中断した作用を同一IDで再送せず照合。通常の事実照会は保留し、利用者のFact・Ruleは増えない。 |
+| `cargo test -p minidora-engine --test core_condition_evaluation_57 --test core_construction_observation_02 --locked` | 5 PASS。通常の条件評価と反事実の隔離を含む。 |
+| `cargo test -p minidora-engine --lib recovery::tests::ordinary_why_ --locked` | 2 PASS。B103の証明保存型学習と生成・復旧。 |
+| `cargo test -p minidora-cli --test normal_route natural_group_mean_question --locked`、同 `agreeing_examples_do_not_promote_a_universal_empirical_rule` フィルタ | 3 PASSと1 PASS。既存の数値比較と一般化の抑止。 |
+| `cargo build -p minidora-cli --locked`、続けて `minidora-rust --db … --case sample --actor alice --json --input …` を3プロセスで起動 | PASS。観測の計算、仮説保持、許可ファイルへの説明を順に実行し、ファイルと受領を同時に確認。 |
+| `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+初回検査ではfixtureの表を配列で渡して既存契約の形状検査で停止した。`columns` と `rows` を持つ入力に修正して再検査した。
+
+観測由来の仮説を別の通常要求で保持・説明する範囲を接続。再標本での実反例照合は未実装で、経験的採用契約は未提示。W12・W18・E1出口は `PARTIAL`、CAP-D05は `UNVERIFIED`、E2合同ゲート・体系QC・独立QAは `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `4fffd49` と `aab4a86`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（domain、Input、Core、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
