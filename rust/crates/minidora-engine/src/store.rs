@@ -4,8 +4,8 @@
 use minidora_domain::{
     ALPHA8_SCHEMA_VERSION, ALPHA10_SCHEMA_VERSION, ActionRecord, CaseRevision, ConditionRecord,
     EffectPhase, Fact, InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
-    PREVIOUS_SCHEMA_VERSION, Proposition, RelationRule, RequestEnvelope, Result, ResultRecord,
-    SCHEMA_VERSION, canonical, digest, failure, identity,
+    PREVIOUS_SCHEMA_VERSION, Proposition, RelationRule, RenderTarget, RequestEnvelope, Result,
+    ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
@@ -1611,7 +1611,14 @@ impl Store {
                         .result
                         .as_ref()
                         .and_then(|record| record.render.as_ref())
-                        .is_some_and(|render| render.actual_sha256 == action.exact_request_sha256)
+                        .is_some_and(|render| {
+                            render.actual_sha256 == action.exact_request_sha256
+                                && matches!(
+                                    &render.target,
+                                    Some(RenderTarget::LocalFile { path })
+                                        if path.to_str() == Some(action.target.as_str())
+                                )
+                        })
             }) {
                 return Err(failure(
                     "EFFECT_GOAL_NOT_ACTIVE",

@@ -5,15 +5,28 @@
 //! portable `std` path checks do not isolate hostile ancestor replacement.
 
 use minidora_domain::{
-    ActionRecord, ContentPlan, DeliveryReceipt, EffectPhase, RenderObservation, Result, digest,
-    failure,
+    ActionRecord, ContentPlan, DeliveryReceipt, EffectPhase, RenderObservation, RenderTarget,
+    Result, digest, failure,
 };
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
+pub(crate) const LEGACY_RENDERER_VERSION: &str = "utf8-bytes-v1";
+pub(crate) const RENDERER_VERSION: &str = "utf8-bytes-v2";
+
+/// Direct rendering retains the original observation format for callers
+/// without a sealed Goal.
 pub fn render(plan: &ContentPlan) -> Result<RenderObservation> {
+    render_inner(plan, None)
+}
+
+pub(crate) fn render_to(plan: &ContentPlan, target: RenderTarget) -> Result<RenderObservation> {
+    render_inner(plan, Some(target))
+}
+
+fn render_inner(plan: &ContentPlan, target: Option<RenderTarget>) -> Result<RenderObservation> {
     if plan.id.is_empty() {
         return Err(failure(
             "INVALID_CONTENT_PLAN",
@@ -21,12 +34,18 @@ pub fn render(plan: &ContentPlan) -> Result<RenderObservation> {
         ));
     }
     let bytes = plan.text.as_bytes().to_vec();
+    let renderer_version = if target.is_some() {
+        RENDERER_VERSION
+    } else {
+        LEGACY_RENDERER_VERSION
+    };
     Ok(RenderObservation {
         plan_id: plan.id.clone(),
-        renderer_version: "utf8-bytes-v1".into(),
+        renderer_version: renderer_version.into(),
         actual_sha256: digest(&bytes),
         bytes,
         status: "RENDERED".into(),
+        target,
     })
 }
 
@@ -239,6 +258,21 @@ fn write_file_inner(
             Some("WRITE_OR_DURABILITY_UNCONFIRMED"),
         )),
     }
+}
+
+pub(crate) fn matches_file_bytes(path: &Path, expected: &[u8]) -> bool {
+    let observation = (|| -> std::io::Result<bool> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_file() || metadata.len() != expected.len() as u64 {
+            return Ok(false);
+        }
+        let mut bytes = Vec::with_capacity(expected.len());
+        File::open(path)?
+            .take(expected.len() as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        Ok(bytes == expected)
+    })();
+    observation.unwrap_or(false)
 }
 
 #[cfg(test)]

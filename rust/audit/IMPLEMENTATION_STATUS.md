@@ -1248,3 +1248,25 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。検査対�
 原文保全・型・未解決状態を同Coreが実消費するD3-CのE3出口は `PASS`。時点と条件の新規修飾は対象を明示した日本語の単一関係に適用する。修飾付き訂正は停止を確認し、一般の日時・照応表現は未検証。次工程はE4最小Output。体系QC、独立QA、公開・配布は `NOT_RUN`。R2受入列は `UNVERIFIED`。
 
 復旧2世代のローカル参照・GitHubタグは `9b95adb` と `1ae9099`。終了時資産は計9件。保持2件（実装台帳と要求トレース）、稼働中7件（Input、Core、Recovery、関係型検証、CLI検査、入力観測検査、既存共有Cargoキャッシュ）。保管済み・ゴミ箱移動・保留は各0件。隔離した旧版の複製と検査用状態は終了済み。Windows保管と容量回収は非該当。
+
+## 2026-11-19 JST B113 — D3-C E4 最小Outputの描画と実受領
+
+着工点は `63944c454a820b2e4d34ce2754ae6c97beadea4d`。E3出口と現行3点セットを照合した。SHA-256はD2仕様 `de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0`、D2工程 `d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a`、D3-C指示 `fa4bfbb6d4c897df943fcebe64e2eb1e766834fabcf7187d9e78598d7e7445e3`。採用記録は `270b6482dff22cef7559363776f52806a0074fb0fd7fd0081b7772e62c2b9ef5`。第4節に沿い、採用内容の実UTF-8描画と許可したローカルファイルの実受領を同Coreの元Goal判定へ渡す。
+
+着工点の実CLIと認証付きループバックHTTPで、実バイト、指定ファイル、確認済み受領は一致した。描画観測には対象がなく、着工点の実バイナリと実採用計画による隔離検査で、`renderer_version` を空文字や未知の版へ変えても検証が成功した。根因はCoreの照合が計画ID、状態、実バイト、ハッシュまでだったこと。
+
+新規の元Goalは `utf8-bytes-v2` を封印する。Outputは採用計画のUTF-8、バイトのSHA-256、計画ID、版、状態、および `DISPLAY` または正確な `LOCAL_FILE` 対象を返す。Coreは描画と元Goalの版・対象を照合し、表示用の描画は `EXACT_RENDER` の観測として使う。ファイルが必要なGoalは同じ実バイトに結び付いた作用ID・許可・実ファイル読み戻し・確認済み `DeliveryReceipt` を必須とする。作用発行時のStoreも採用済み描画の正確な対象とハッシュを確認する。既存の前回答編集は共有の描画検証を使う。
+
+有効なハッシュで別途保存した描画観測について、未知の版、別ファイル、同じファイルを指す別表記、対象欠落、新規Goalへの旧版観測の差し替え、描画失敗の6例で `RECOVERY_RENDER_MISMATCH / SUSPEND` を確認した。元Goal、同じ作用ID、未確認状態、ファイルの内容と更新時刻を保持した。誤った対象の作用発行、既存の異なるファイル、無許可、予算不足、期限、取消、結果不明を検査し、未充足のGoalを確定しなかった。取消後に既発生の作用を読み戻せる場合も、元Goalの取消を保持した。
+
+旧保存版 `utf8-bytes-v1` は、旧Goalの封印先と独立した受領を使う。旧版の省略項目を再シリアライズ時も省略し、既存の成果物ハッシュを保持する。着工点と修正版それぞれの通常CLIで作成した日本語説明ファイルを用い、実履歴の `ATTEMPTED` までの複製を各2プロセスで復旧した。同じ元Goal、採用計画、描画、作用ID、ファイル内容・inode・更新時刻を照合し、再送と新規作用は0件。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。最終検査対象7ファイルの `git diff --binary` のSHA-256は `8559e54136cbbf1d9ec3ec027a2134652e665144e0893bda9b65756121939c2c`。隔離SQLite、許可済み一時ファイル、認証付きループバックHTTPを用いた。Rustテスト計124件PASS。
+
+- `cargo test -p minidora-domain --locked` 7件、`cargo test -p minidora-engine --locked --test core_construction_observation_06` 1件、`cargo test -p minidora-engine --locked --lib` の `output::tests::`、`recovery::tests::`、`store::tests::` 101件がPASS。ファイルの排他作成、既存内容保護、予算・期限・受領・取消・復旧を検査した。
+- `cargo test -p minidora-cli --locked --test normal_route` の近接15件がPASS。許可済みCLI・HTTPの実ファイル、CLIの表示、前回答との接続、比較の二書式、厳密値と連続計算、既存ファイル競合、暫定ストリームと最終結果を確認した。
+- `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo build -p minidora-cli --locked`、`git diff --check`、実CLIの旧版・新版の復旧がexit 0。復旧再実行の初回は旧版アーカイブの参照ディレクトリ指定で失敗し、リポジトリルートを指定して再実行した。
+
+D3-CのE4出口は `PASS`。日本語UTF-8の採用内容の描画とローカルファイルの実観測が同Coreの元Goal判定へ帰還した。次工程はE5通常三機の合同検査。体系QC、独立QA、公開・配布は `NOT_RUN`。R2受入列は `UNVERIFIED`。
+
+復旧2世代のローカル参照・GitHubタグは `63944c4` と `9b95adb`。終了時資産は計10件。保持2件（実装台帳と要求トレース）、稼働中8件（Domain、Core、前回答編集、Output、Recovery、Store、CLI検査、既存共有Cargoキャッシュ）。保管済み・ゴミ箱移動・保留は各0件。隔離した旧版複製と検査用状態は終了済み。Windows保管と容量回収は非該当。

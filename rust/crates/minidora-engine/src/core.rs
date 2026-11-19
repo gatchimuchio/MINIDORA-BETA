@@ -4612,6 +4612,7 @@ impl Engine {
             budget: request.budget.clone(),
             required_graph_ref,
             required_predicates: goal_predicates(&bundle.meaning, request.output_path.is_some()),
+            renderer_version: Some(output::RENDERER_VERSION.into()),
         };
         state.goal_sha256 = Some(self.store.put_artifact(actor, &request.case_id, &goal)?);
         self.advance(&mut state, Lifecycle::Running, None)?;
@@ -9376,13 +9377,17 @@ impl Engine {
                 "描画前に元Goalの締切へ達しました。",
             );
         }
-        let render = output::render(&plan)?;
-        if !validate_render(&plan, &render) {
+        let target = match &goal.output_path {
+            Some(path) => RenderTarget::LocalFile { path: path.clone() },
+            None => RenderTarget::Display,
+        };
+        let render = output::render_to(&plan, target)?;
+        if !validate_goal_render(&goal, &plan, &render) {
             return self.stop(
                 &mut state,
                 Lifecycle::Fail,
                 "RENDER_SEMANTIC_MISMATCH",
-                "出力の実バイトがCoreの採用内容と一致しません。",
+                "描画の版、対象、実バイトが元GoalとCoreの採用内容に一致しません。",
             );
         }
         let render_artifact = self.store.put_artifact(actor, &request.case_id, &render)?;
@@ -9411,7 +9416,7 @@ impl Engine {
         }
         // Required file effect is performed once under a durable, fully bound
         // identity. Physical output never independently closes the case.
-        if let Some(ref path) = request.output_path {
+        if let Some(ref path) = goal.output_path {
             if !graph.ready().iter().any(|id| id == "file") {
                 return self.stop(
                     &mut state,
@@ -9420,7 +9425,7 @@ impl Engine {
                     "ファイル作用を実行する予算がありません。",
                 );
             }
-            if !request.permissions.write_paths.contains(path) {
+            if !goal.permissions.write_paths.contains(path) {
                 return self.stop(
                     &mut state,
                     Lifecycle::Suspend,
@@ -9437,7 +9442,7 @@ impl Engine {
             ))?;
             let auth = self
                 .store
-                .put_artifact(actor, &request.case_id, &request.permissions)?;
+                .put_artifact(actor, &request.case_id, &goal.permissions)?;
             let exact = self
                 .store
                 .put_bytes(actor, &request.case_id, &render.bytes)?;
@@ -9524,7 +9529,7 @@ impl Engine {
                 || receipt.target != action.target
                 || receipt.content_sha256 != render.actual_sha256
                 || receipt.observed_bytes != Some(render.bytes.len() as u64)
-                || !matches_artifact(path, &render.bytes)
+                || !output::matches_file_bytes(path, &render.bytes)
             {
                 return self.stop(
                     &mut state,
@@ -14562,6 +14567,32 @@ pub fn validate_render(plan: &ContentPlan, render: &RenderObservation) -> bool {
         && render.plan_id == plan.id
         && render.bytes == plan.text.as_bytes()
         && render.actual_sha256 == digest(&render.bytes)
+        && matches!(
+            (render.renderer_version.as_str(), &render.target),
+            (output::LEGACY_RENDERER_VERSION, None) | (output::RENDERER_VERSION, Some(_))
+        )
+}
+
+pub(crate) fn validate_goal_render(
+    goal: &GoalContract,
+    plan: &ContentPlan,
+    render: &RenderObservation,
+) -> bool {
+    validate_render(plan, render)
+        && match goal.renderer_version.as_deref() {
+            None => render.renderer_version == output::LEGACY_RENDERER_VERSION,
+            Some(output::RENDERER_VERSION) => {
+                render.renderer_version == output::RENDERER_VERSION
+                    && match (&goal.output_path, &render.target) {
+                        (None, Some(RenderTarget::Display)) => true,
+                        (Some(expected), Some(RenderTarget::LocalFile { path })) => {
+                            expected.as_os_str() == path.as_os_str()
+                        }
+                        _ => false,
+                    }
+            }
+            Some(_) => false,
+        }
 }
 
 #[cfg(test)]
@@ -16027,22 +16058,6 @@ mod active_relation_projection_tests {
         drop(engine);
         fs::remove_dir_all(directory).expect("remove isolated comparison store");
     }
-}
-
-fn matches_artifact(path: &Path, expected: &[u8]) -> bool {
-    use std::io::Read;
-    let checked = (|| -> std::io::Result<bool> {
-        let metadata = std::fs::symlink_metadata(path)?;
-        if !metadata.is_file() || metadata.len() != expected.len() as u64 {
-            return Ok(false);
-        }
-        let mut bytes = Vec::with_capacity(expected.len());
-        std::fs::File::open(path)?
-            .take(expected.len() as u64 + 1)
-            .read_to_end(&mut bytes)?;
-        Ok(bytes == expected)
-    })();
-    checked.unwrap_or(false)
 }
 
 #[cfg(test)]

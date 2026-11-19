@@ -632,6 +632,9 @@ pub struct GoalContract {
     pub budget: ResourceBudget,
     pub required_predicates: Vec<String>,
     pub required_graph_ref: String,
+    /// Earlier goals used the original untargeted UTF-8 renderer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer_version: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentPlan {
@@ -646,12 +649,21 @@ pub struct ContentPlan {
     pub model_observation_ref: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RenderTarget {
+    Display,
+    LocalFile { path: PathBuf },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderObservation {
     pub plan_id: String,
     pub renderer_version: String,
     pub bytes: Vec<u8>,
     pub actual_sha256: String,
     pub status: String,
+    /// Destination of these rendered bytes. Delivery is observed separately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<RenderTarget>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

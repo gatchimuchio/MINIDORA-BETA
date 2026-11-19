@@ -118,6 +118,7 @@ fn seed_fetched_source_case_with_sources(
         budget: request.budget.clone(),
         required_predicates: vec!["SUPPORTED_CONTENT".into()],
         required_graph_ref: graph_ref.clone(),
+        renderer_version: None,
     };
     let goal_ref = store.put_artifact(actor, case, &goal).unwrap();
     let mut result = ResultRecord {
@@ -1623,6 +1624,7 @@ fn input_quote_and_unresolved_subject_boundaries_prevent_premises_and_effects() 
 fn requested_file_needs_separate_exact_permission_and_real_receipt() {
     let scratch = Scratch::new();
     let output_path = scratch.0.join("answer.txt");
+    let target = serde_json::json!({"kind": "LOCAL_FILE", "path": output_path});
     let denied = execute(
         &scratch.0,
         "owner",
@@ -1634,7 +1636,10 @@ fn requested_file_needs_separate_exact_permission_and_real_receipt() {
             "9*7",
         ],
     );
-    assert!(!denied.status.success());
+    let denied = stopped(&denied, 2, "SUSPEND");
+    assert_eq!(denied["render"]["status"], "RENDERED");
+    assert_eq!(denied["render"]["target"], target);
+    assert_eq!(denied["receipts"], serde_json::json!([]));
     assert!(!output_path.exists());
 
     let permitted = record(&execute(
@@ -1654,13 +1659,31 @@ fn requested_file_needs_separate_exact_permission_and_real_receipt() {
     let actual = std::fs::read_to_string(&output_path).unwrap();
     assert_eq!(actual, permitted["text"].as_str().unwrap());
     assert!(actual.contains("63"));
-    assert!(
-        permitted["receipts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|receipt| receipt["phase"] == "CONFIRMED")
+    let render = &permitted["render"];
+    assert_eq!(render["renderer_version"], "utf8-bytes-v2");
+    assert_eq!(render["target"], target);
+    assert_eq!(render["bytes"], serde_json::json!(actual.as_bytes()));
+    assert_eq!(
+        render["actual_sha256"],
+        minidora_domain::digest(actual.as_bytes())
     );
+    assert_eq!(render["plan_id"], permitted["content_plan"]["id"]);
+    let receipt = &permitted["receipts"][0];
+    assert_eq!(receipt["phase"], "CONFIRMED");
+    assert_eq!(receipt["target"], target["path"]);
+    assert_eq!(receipt["content_sha256"], render["actual_sha256"]);
+    assert_eq!(receipt["observed_bytes"], actual.len());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let actions = store.actions("owner", "normal-route").unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        serde_json::to_value(actions[0].receipt.as_ref().unwrap()).unwrap(),
+        *receipt
+    );
+    let case = inspect_normal_case(&scratch.0, "owner");
+    let goal = sequence_artifact(&store, &case["goal_sha256"]);
+    assert_eq!(goal["renderer_version"], render["renderer_version"]);
+    assert_eq!(goal["output_path"], target["path"]);
 }
 
 #[test]
@@ -1987,6 +2010,7 @@ fn http_streaming_separates_provisional_invalidation_and_final_core_results() {
 #[test]
 fn authenticated_http_and_cli_share_actual_case_result() {
     let scratch = Scratch::new();
+    let output_path = scratch.0.join("http-answer.txt");
     let token = "test-only-constant-not-a-secret-0123456789";
     let child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
         .args([
@@ -1997,6 +2021,8 @@ fn authenticated_http_and_cli_share_actual_case_result() {
             "owner",
             "--bind",
             "127.0.0.1:0",
+            "--allow-write",
+            output_path.to_str().unwrap(),
         ])
         .env("MINIDORA_API_TOKEN", token)
         .stdout(Stdio::null())
@@ -2024,16 +2050,34 @@ fn authenticated_http_and_cli_share_actual_case_result() {
         .unwrap()
         .parse()
         .unwrap();
-    let request =
+    let mut request =
         minidora_domain::RequestEnvelope::new("normal-route", "http-input", "owner", "16/4");
+    request.output_path = Some(output_path.clone());
+    request.permissions.write_paths.insert(output_path.clone());
     let body = serde_json::to_vec(&request).unwrap();
     assert_eq!(http(address, "incorrect", &body).0, 401);
+    assert!(!output_path.exists());
     let (status, api_record) = http(address, token, &body);
     assert_eq!(status, 200);
     assert_eq!(api_record["lifecycle"], "COMMIT");
     assert_eq!(api_record["calculation"]["exact_value"], "4");
+    let actual = std::fs::read(&output_path).unwrap();
+    assert_eq!(
+        api_record["render"]["target"],
+        serde_json::json!({"kind": "LOCAL_FILE", "path": output_path})
+    );
+    assert_eq!(api_record["render"]["bytes"], serde_json::json!(actual));
+    assert_eq!(
+        api_record["receipts"][0]["content_sha256"],
+        minidora_domain::digest(&actual)
+    );
     let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
     assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(
+        explanation["render"]["target"],
+        serde_json::json!({"kind": "DISPLAY"})
+    );
+    assert_eq!(explanation["receipts"], serde_json::json!([]));
     assert!(
         explanation["dependencies"]
             .as_array()

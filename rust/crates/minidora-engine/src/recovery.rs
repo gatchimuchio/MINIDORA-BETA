@@ -9,7 +9,8 @@ use crate::{
     core::{
         GENERATED_RELATION_EXPLANATION_PREDICATE, RELATION_COMPARISON_PREDICATE,
         RELATION_EXPLANATION_PREDICATE, calculation_sequence_nodes, goal_predicates,
-        run_calculation_sequence, store_execution_graph, validate_render, verify_goal_content,
+        run_calculation_sequence, store_execution_graph, validate_goal_render, validate_render,
+        verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -3288,11 +3289,16 @@ fn inspect(
             )
             && !saved_comparison_explanation
             && !saved_relation_profile_explanation)
-        || !validate_render(plan, render)
     {
         return Err(failure(
             "RECOVERY_CONTENT_MISMATCH",
-            "retained content identity/meaning/render is unverified",
+            "retained content identity or meaning is unverified",
+        ));
+    }
+    if !validate_goal_render(&goal, plan, render) {
+        return Err(failure(
+            "RECOVERY_RENDER_MISMATCH",
+            "retained renderer version, destination, status or bytes do not match the original goal and adopted plan",
         ));
     }
     if result.input_id != request.input_id
@@ -5372,6 +5378,7 @@ mod tests {
             budget: request.budget.clone(),
             required_predicates: Vec::new(),
             required_graph_ref: "fixture".into(),
+            renderer_version: None,
         };
         let state = CaseRevision {
             schema_version: minidora_domain::SCHEMA_VERSION.into(),
@@ -11383,6 +11390,81 @@ mod tests {
         );
         assert_eq!(restarted.actions("alice", "case").unwrap().len(), 1);
     }
+
+    #[test]
+    fn substituted_render_contract_cannot_confirm_an_actual_file() {
+        for change in [
+            "version",
+            "target",
+            "alias-target",
+            "missing-target",
+            "legacy",
+            "status",
+        ] {
+            let fixture = attempted_prefix();
+            let store = Store::open(&fixture.state).unwrap();
+            let mut state = store.load_case("alice", "case").unwrap().unwrap();
+            let mut result = state.result.clone().unwrap();
+            let render = result.render.as_mut().unwrap();
+            let bytes = fs::read(&fixture.target).unwrap();
+            let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+            assert_eq!(render.bytes, bytes);
+            let original_goal = state.goal_sha256.clone();
+            match change {
+                "version" => render.renderer_version = "unknown-renderer".into(),
+                "target" => {
+                    render.target = Some(RenderTarget::LocalFile {
+                        path: fixture.directory.join("different-report.txt"),
+                    })
+                }
+                "alias-target" => {
+                    let alias = fixture.directory.join(".").join("actual-report.txt");
+                    assert_eq!(alias, fixture.target);
+                    assert_ne!(alias.as_os_str(), fixture.target.as_os_str());
+                    render.target = Some(RenderTarget::LocalFile { path: alias });
+                }
+                "missing-target" => render.target = None,
+                "legacy" => {
+                    *render = crate::output::render(result.content_plan.as_ref().unwrap()).unwrap();
+                }
+                "status" => render.status = "FAILED".into(),
+                _ => unreachable!(),
+            }
+            // Publish the substituted observation with its own valid artifact
+            // identity so the original Goal must reject it on its merits.
+            store.put_artifact("alice", "case", render).unwrap();
+            advance(&store, &mut state, &result, Lifecycle::Suspend).unwrap();
+
+            let stopped = reconcile(&store, "alice", "case").unwrap();
+            assert_eq!(
+                stopped.lifecycle,
+                Lifecycle::Suspend,
+                "{change}: {stopped:?}"
+            );
+            assert!(
+                stopped.reason.unwrap().contains("RECOVERY_RENDER_MISMATCH"),
+                "{change}"
+            );
+            assert!(stopped.receipts.is_empty());
+            assert_eq!(
+                store
+                    .load_case("alice", "case")
+                    .unwrap()
+                    .unwrap()
+                    .goal_sha256,
+                original_goal
+            );
+            let actions = store.actions("alice", "case").unwrap();
+            assert_eq!(actions.len(), 1);
+            assert_eq!(actions[0].action_id, fixture.token);
+            assert_eq!(actions[0].phase, EffectPhase::Unknown);
+            assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+            assert_eq!(
+                fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+                modified
+            );
+        }
+    }
     #[test]
     fn missing_and_different_files_stay_unknown_and_are_never_rewritten() {
         for missing in [false, true] {
@@ -11551,6 +11633,24 @@ mod tests {
         let mut action = store.actions("alice", "case").unwrap().remove(0);
         action.phase = EffectPhase::Attempted;
         let deadline = Instant::now() + Duration::from_secs(30);
+        let mut misdirected = action.clone();
+        misdirected.target = fixture
+            .directory
+            .join("wrong-target.txt")
+            .to_str()
+            .unwrap()
+            .into();
+        let error = store
+            .save_live_file_phase("alice", &misdirected, revision, deadline)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("EFFECT_GOAL_NOT_ACTIVE"),
+            "{error:?}"
+        );
+        assert_eq!(
+            store.actions("alice", "case").unwrap()[0].phase,
+            EffectPhase::Prepared
+        );
         store
             .save_live_file_phase("alice", &action, revision, deadline)
             .unwrap();

@@ -3550,10 +3550,7 @@ pub(crate) fn previous_text_replacement(
     if plan.id != minidora_domain::identity(&unsigned_plan)?
         || plan.text != previous.text
         || plan.guarantee != previous.guarantee
-        || render.status != "RENDERED"
-        || render.plan_id != plan.id
-        || render.bytes != plan.text.as_bytes()
-        || render.actual_sha256 != digest(&render.bytes)
+        || !crate::core::validate_render(plan, render)
         || plan.required_units.is_empty()
     {
         return Err(failure(
