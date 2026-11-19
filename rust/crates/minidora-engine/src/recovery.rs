@@ -2840,6 +2840,78 @@ fn verify_search_candidate_context(
     }))
 }
 
+/// Authenticate the single original source context of a committed follow-up.
+pub(crate) fn committed_source_anchor<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+) -> Result<Option<&'a ResultRecord>> {
+    let (Some(bundle), Some(result)) = (&state.bundle, &state.result) else {
+        return Ok(None);
+    };
+    if state.lifecycle != Lifecycle::Commit
+        || result.lifecycle != Lifecycle::Commit
+        || !matches!(
+            bundle.meaning.intent,
+            Intent::AskPreviousSourceQuestion { .. }
+                | Intent::SummarizePreviousSource
+                | Intent::SummarizePreviousSourceConstrained { .. }
+        )
+    {
+        return Ok(None);
+    }
+
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    let request = &bundle.request;
+    let mismatch = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "The retained source follow-up does not match its sealed result",
+        )
+    };
+    if identity(request)? != result.id
+        || state.input_fingerprint.as_ref() != Some(&result.id)
+        || !store
+            .get_input_bundle(actor, case, &result.input_id, result.input_version)?
+            .is_some_and(|(_, registered)| &registered == bundle)
+    {
+        return Err(mismatch());
+    }
+    let goal_ref = state.goal_sha256.as_ref().ok_or_else(mismatch)?;
+    let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
+    if goal.input_fingerprint != result.id
+        || goal.intent != bundle.meaning.intent
+        || goal.permissions != request.permissions
+        || goal.output_path != request.output_path
+        || goal.budget != request.budget
+    {
+        return Err(mismatch());
+    }
+    let plan = result.content_plan.as_ref().ok_or_else(mismatch)?;
+    let mut unsigned_plan = plan.clone();
+    unsigned_plan.id.clear();
+    if plan.id != identity(&unsigned_plan)?
+        || plan.text != result.text
+        || plan.locale != request.locale
+        || plan.guarantee != result.guarantee
+    {
+        return Err(mismatch());
+    }
+
+    if matches!(goal.intent, Intent::AskPreviousSourceQuestion { .. }) {
+        verify_source_question_context(store, actor, case, state, result, plan, &goal)?;
+    } else {
+        verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
+    }
+    let source = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .ok_or_else(mismatch)?;
+    Ok(Some(source))
+}
+
 fn verify_source_summary_context(
     store: &Store,
     actor: &str,

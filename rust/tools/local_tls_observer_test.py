@@ -1371,6 +1371,105 @@ def check_sources_after_candidate_failure(cli, fixture: Fixture, state_path: Pat
     return outcomes
 
 
+def check_source_followup_chain(cli, fixture: Fixture, state_path: Path) -> dict:
+    case, path = "source-followup-chain", "/source-followup-chain"
+    first_sentence, second_sentence = "実測値は42です。", "予備値は7です。"
+    body = first_sentence + second_sentence
+    uri = f"https://{fixture.host}{path}"
+    fixture.responses[path] = (body.encode(), "text/plain; charset=utf-8")
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def load(reference: str) -> dict:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def fetch(case_id: str) -> dict:
+        return cli("run", "--input", "source", "--allow-read-host", fixture.host,
+                   f"fetch {uri}", case_id=case_id)
+
+    def question(input_id: str, term: str, case_id: str = case, expected_exit: int = 0) -> dict:
+        return cli("run", "--input", input_id, f"本文では{term}について何と書かれていますか",
+                   case_id=case_id, expected_exit=expected_exit)
+
+    source = fetch(case)
+    first = question("first", "実測値")
+    second = question("second", "予備値")
+    summary = cli("run", "--input", "summary", "取得した本文を要約して", case_id=case)
+    output = state_path.parent / f"{case}.txt"
+    constrained = cli("run", "--input", "constrained", "--output", str(output), "--allow-write", str(output),
+                      "取得した本文を2点以内、20字以内で要約して", case_id=case)
+    (receipt,) = constrained["receipts"]
+    before = output.stat()
+    retain_attempted_prefix(state_path, case, "constrained", receipt["action_id"])
+    recovered = cli("reconcile", case_id=case)
+    assert recovered["dependencies"] == constrained["dependencies"] and recovered["text"] == constrained["text"]
+    (restored_receipt,) = recovered["receipts"]
+    assert restored_receipt["action_id"] == receipt["action_id"]
+    assert "NO_RESEND" in restored_receipt["reason"]
+    assert output.read_bytes() == bytes(constrained["render"]["bytes"])
+    after = output.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    final = question("after-summary", "予備値")
+
+    source_ref = first["dependencies"][1]
+    packet = load(source_ref)
+    assert [packet] == source["evidence"] and packet["extracted_text"] == body
+    assert second_sentence not in first["text"] and first_sentence not in second["text"]
+    for result in (first, second, summary, constrained, final):
+        assert result["guarantee"] == "HYPOTHESIS" and result["evidence"] == [] and uri in result["text"]
+        source_id, packet_ref, report_ref = result["dependencies"]
+        assert (source_id, packet_ref) == (source["id"], source_ref)
+        report = load(report_ref)
+        assert report["source_result_id"] == source["id"]
+        if result["id"] in (summary["id"], constrained["id"]):
+            assert report["source_packet_ref"] == source_ref and report["summary"]["source_text"] == body
+            assert first_sentence in result["text"] and second_sentence in result["text"]
+        else:
+            (quote,) = report["candidates"]
+            assert quote["source_packet_ref"] == source_ref
+            assert quote["text"] == (first_sentence if result["id"] == first["id"] else second_sentence)
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+        (reference,) = database.execute(
+            "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1", (case,),
+        ).fetchone()
+    state = load(reference)
+    assert state["bundle"]["request"]["permissions"]["read_hosts"] == []
+    assert state["bundle"]["request"]["context_ref"] is None
+    assert state["bundle"]["meaning"]["context_result_ref"] == source["id"]
+    assert state["prior_results"][first["id"]] == first
+    assert state["prior_results"][recovered["id"]] == recovered
+
+    no_budget = cli("run", "--input", "no-budget", "--deadline-ms", "0",
+                    "取得した本文を要約して", case_id=case, expected_exit=2)
+    assert "RESOURCE_LIMIT" in no_budget["reason"] and no_budget["dependencies"] == []
+    cli("run", "--input", "unrelated", "2+3", case_id=case)
+    stopped = question("after-unrelated", "予備値", expected_exit=2)
+    assert "SOURCE_BODY_UNAVAILABLE" in stopped["reason"] and stopped["dependencies"] == []
+
+    unbound_case = "source-followup-unbound-report"
+    fetch(unbound_case)
+    anchor = question("first", "実測値", case_id=unbound_case)
+    report_ref = anchor["dependencies"][-1]
+    # Keep the report bytes while removing their case binding in this disposable store.
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        removed = database.execute("DELETE FROM case_artifact WHERE case_id=? AND sha256=?", (unbound_case, report_ref))
+        assert removed.rowcount == 1
+    try:
+        invalid = question("next", "予備値", case_id=unbound_case, expected_exit=4)
+        assert "INPUT_FAILURE" in invalid["reason"]
+        assert invalid["dependencies"] == [] and invalid["receipts"] == []
+    finally:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+            database.execute("INSERT INTO case_artifact(case_id,sha256) VALUES(?,?)", (unbound_case, report_ref))
+    cli("run", "--input", "new-calculation", "2+3", case_id=unbound_case)
+    assert [event["path"] for event in fixture.events[seen:]] == [path, path]
+    assert len(fixture.connects) == starts + 2
+    assert not fixture.errors, fixture.errors
+    return {"first": first, "second": second, "summary": summary, "constrained": constrained,
+            "recovered": recovered, "final": final, "no_budget": no_budget, "stopped": stopped, "unbound": invalid}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1472,12 +1571,14 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         deferred_redirects = check_redirect_retry_after(cli, fixture, state_path)
         after_failure = check_candidate_after_failure(cli, fixture, state_path)
         sources_after_failure = check_sources_after_candidate_failure(cli, fixture, state_path)
+        source_followup_chain = check_source_followup_chain(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
                 "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
                 "versioned_summaries": versioned_summaries, "after_failure": after_failure,
-                "sources_after_failure": sources_after_failure}
+                "sources_after_failure": sources_after_failure,
+                "source_followup_chain": source_followup_chain}
     finally:
         fixture.close()
 

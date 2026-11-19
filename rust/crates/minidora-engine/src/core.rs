@@ -3909,7 +3909,7 @@ impl Engine {
         {
             crate::recovery::close_cancelled_file_preparations(&self.store, cancelled)?;
         }
-        let implicit_search_context = request.context_ref.is_none() && direct_bundle.is_none();
+        let implicit_context = request.context_ref.is_none() && direct_bundle.is_none();
         let mut previous = if let Some(ref requested) = request.context_ref {
             latest.as_ref().and_then(|s| {
                 s.result
@@ -3953,7 +3953,7 @@ impl Engine {
             input::seal(&request, previous)
         };
         let sealed = sealed.and_then(|bundle| {
-            let Some(prior_case) = latest.as_ref().filter(|_| implicit_search_context) else {
+            let Some(prior_case) = latest.as_ref().filter(|_| implicit_context) else {
                 return Ok(bundle);
             };
             let requested_rank = match bundle.meaning.intent {
@@ -3963,11 +3963,19 @@ impl Engine {
                 | Intent::SummarizePreviousSourceConstrained { .. } => None,
                 _ => return Ok(bundle),
             };
-            if let Some(context) = search::committed_context_after_candidate_failure(
-                &self.store,
-                prior_case,
-                requested_rank,
-            )? {
+            let context = if prior_case.lifecycle == Lifecycle::Commit && requested_rank.is_none() {
+                if request.budget.max_actions == 0 || request.budget.deadline_ms == 0 {
+                    return Ok(bundle);
+                }
+                crate::recovery::committed_source_anchor(&self.store, prior_case)?
+            } else {
+                search::committed_context_after_candidate_failure(
+                    &self.store,
+                    prior_case,
+                    requested_rank,
+                )?
+            };
+            if let Some(context) = context {
                 previous = Some(context);
                 return input::seal(&request, previous);
             }
