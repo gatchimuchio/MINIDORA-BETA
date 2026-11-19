@@ -3431,19 +3431,37 @@ impl Engine {
             r.lifecycle = Lifecycle::Suspend;
             return Ok(r);
         }
-        if latest.is_some()
-            && self
-                .store
-                .actions(actor, &request.case_id)?
+        let blocked_effect = if let Some(current) = latest.as_ref() {
+            let actions = self.store.actions(actor, &request.case_id)?;
+            if actions
                 .iter()
-                .any(|a| matches!(a.phase, EffectPhase::Unknown | EffectPhase::Attempted))
-        {
-            if direct_bundle.is_some() {
-                let mut r = rejected(
-                    &request,
+                .any(|action| matches!(action.phase, EffectPhase::Unknown | EffectPhase::Attempted))
+            {
+                Some((
                     "EXTERNAL_EFFECT_UNKNOWN",
                     "既存作用の結果が未確定です。同一identityを再照合するまで新しい実行を開始しません。",
-                );
+                    "CANCELLED_WITH_ORIGINAL_UNKNOWN_EFFECT_ACCOUNTING",
+                ))
+            } else if current.lifecycle == Lifecycle::Suspend
+                && actions.iter().any(|action| {
+                    current.input_fingerprint.as_ref() == Some(&action.input_fingerprint)
+                        && crate::recovery::is_unattempted_local_write(action)
+                })
+            {
+                Some((
+                    "EFFECT_PREPARATION_UNRESOLVED",
+                    "前回の書き込みは試行前で停止しています。取り消してから新しい実行を開始してください。",
+                    "CANCELLED_WITH_ORIGINAL_PREPARATION_ACCOUNTING",
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some((code, message, cancel_reason)) = blocked_effect {
+            if direct_bundle.is_some() {
+                let mut r = rejected(&request, code, message);
                 r.lifecycle = Lifecycle::Suspend;
                 return Ok(r);
             }
@@ -3461,23 +3479,21 @@ impl Engine {
                         Lifecycle::Running,
                         Some(format!("AUTHORIZED_CANCEL_REQUEST:{fingerprint}")),
                     )?;
-                    self.advance(
-                        &mut old,
-                        Lifecycle::Cancel,
-                        Some("CANCELLED_WITH_ORIGINAL_UNKNOWN_EFFECT_ACCOUNTING".into()),
-                    )?;
+                    self.advance(&mut old, Lifecycle::Cancel, Some(cancel_reason.into()))?;
                     latest = Some(old);
                 }
                 early_bundle = Some(candidate);
             } else {
-                let mut r = rejected(
-                    &request,
-                    "EXTERNAL_EFFECT_UNKNOWN",
-                    "既存作用の結果が未確定です。同一identityを再照合するまで新しい実行を開始しません。",
-                );
+                let mut r = rejected(&request, code, message);
                 r.lifecycle = Lifecycle::Suspend;
                 return Ok(r);
             }
+        }
+        if let Some(cancelled) = latest
+            .as_ref()
+            .filter(|prior| prior.lifecycle == Lifecycle::Cancel)
+        {
+            crate::recovery::close_cancelled_file_preparations(&self.store, cancelled)?;
         }
         let previous = if let Some(ref requested) = request.context_ref {
             latest.as_ref().and_then(|s| {
@@ -8704,14 +8720,16 @@ impl Engine {
                 phase: EffectPhase::Proposed,
                 receipt: None,
             };
-            self.store.save_action(actor, &action)?;
+            self.store
+                .save_live_file_phase(actor, &action, state.revision)?;
             for phase in [
                 EffectPhase::Authorized,
                 EffectPhase::Prepared,
                 EffectPhase::Attempted,
             ] {
                 action.phase = phase;
-                self.store.save_action(actor, &action)?;
+                self.store
+                    .save_live_file_phase(actor, &action, state.revision)?;
             }
             let receipt = match output::write_file(&action, &render.bytes) {
                 Ok(receipt) => receipt,

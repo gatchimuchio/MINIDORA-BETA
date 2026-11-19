@@ -106,7 +106,8 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
         .ok_or_else(|| failure("INTEGRITY_FAILURE", "reconciliation lost result"))
 }
 
-/// Reconcile already-issued local file effects after the goal was cancelled.
+/// Reconcile local file actions after the goal was cancelled.
+/// Preparations belonging to cancelled inputs are closed without a write.
 /// Only the immutable original action's bytes, token, target and authorization
 /// are eligible. This records effect observations, never restarts/completes the
 /// cancelled goal or sends anything. Unobservable/unsupported effects remain
@@ -125,6 +126,7 @@ pub fn reconcile_cancelled_effects(
             "cancelled-effect observation requires a CANCEL case",
         ));
     }
+    close_cancelled_file_preparations(store, &state)?;
     for mut action in store.actions(actor, case)? {
         if action.phase != EffectPhase::Unknown {
             continue;
@@ -187,6 +189,38 @@ pub fn reconcile_cancelled_effects(
     // Case lifecycle/revision is deliberately unchanged. The canceled input's
     // historical result and original goal can never become COMMIT here.
     store.actions(actor, case)
+}
+
+pub(crate) fn is_unattempted_local_write(action: &ActionRecord) -> bool {
+    action.effect_class == "LOCAL_WRITE"
+        && matches!(
+            action.phase,
+            EffectPhase::Proposed | EffectPhase::Authorized | EffectPhase::Prepared
+        )
+}
+
+/// Skip a physical write and close only actions whose owning input was durably
+/// cancelled. An issued attempt keeps its existing observation path.
+pub(crate) fn close_cancelled_file_preparations(store: &Store, state: &CaseRevision) -> Result<()> {
+    if state.lifecycle != Lifecycle::Cancel {
+        return Err(failure(
+            "INVALID_RECOVERY_STATE",
+            "file preparation closure requires a cancelled goal",
+        ));
+    }
+    for mut action in store.actions(&state.actor_id, &state.case_id)? {
+        let owner_cancelled = state.input_fingerprint.as_ref() == Some(&action.input_fingerprint)
+            || state
+                .prior_results
+                .get(&action.input_fingerprint)
+                .is_some_and(|result| result.lifecycle == Lifecycle::Cancel);
+        if is_unattempted_local_write(&action) && owner_cancelled {
+            action.phase = EffectPhase::Cancelled;
+            action.receipt = None;
+            store.save_action(&state.actor_id, &action)?;
+        }
+    }
+    Ok(())
 }
 
 type Inspected = (ActionRecord, DeliveryReceipt, Scheduler, String);
@@ -10497,6 +10531,158 @@ mod tests {
             EffectPhase::Unknown
         );
     }
+    #[test]
+    fn sequence_cancel_closes_only_unattempted_local_write() {
+        for (cut, phase) in [
+            (0, EffectPhase::Proposed),
+            (1, EffectPhase::Authorized),
+            (2, EffectPhase::Prepared),
+        ] {
+            let fixture = sequence_file_preparation_prefix(cut);
+            let bytes = fs::read(&fixture.target).unwrap();
+            let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+            let stale_writer = Store::open(&fixture.state).unwrap();
+            let old = stale_writer.load_case("alice", "case").unwrap().unwrap();
+            let mut action = stale_writer.actions("alice", "case").unwrap().remove(0);
+            assert_eq!(action.phase, phase);
+            assert_eq!(action.action_id, fixture.token);
+            let mut engine = Engine::open(&fixture.state).unwrap();
+            if phase == EffectPhase::Prepared {
+                // Matching bytes alone cannot prove a write that was never issued.
+                let pending = engine.reconcile("alice", "case").unwrap();
+                assert_eq!(pending.lifecycle, Lifecycle::Suspend);
+                assert!(pending.receipts.is_empty());
+                let blocked = engine
+                    .execute(
+                        "alice",
+                        RequestEnvelope::new("case", "blocked-before-cancel", "alice", "1+1"),
+                    )
+                    .unwrap();
+                assert_eq!(blocked.lifecycle, Lifecycle::Suspend);
+                assert!(
+                    blocked
+                        .reason
+                        .unwrap()
+                        .starts_with("EFFECT_PREPARATION_UNRESOLVED")
+                );
+            }
+            let cancellation = engine
+                .execute(
+                    "alice",
+                    RequestEnvelope::new("case", "cancel-sequence", "alice", "キャンセル"),
+                )
+                .unwrap();
+            assert_eq!(cancellation.lifecycle, Lifecycle::Cancel);
+            assert_eq!(cancellation.receipts[0].phase, EffectPhase::Cancelled);
+            assert!(cancellation.receipts[0].observed_bytes.is_none());
+            let closed = stale_writer.actions("alice", "case").unwrap();
+            assert_eq!(closed.len(), 1);
+            assert_eq!(closed[0].action_id, fixture.token);
+            assert_eq!(closed[0].phase, EffectPhase::Cancelled);
+            assert!(closed[0].receipt.is_none());
+            let state = engine.latest("alice", "case").unwrap().unwrap();
+            assert_eq!(
+                state.prior_results[old.input_fingerprint.as_ref().unwrap()].lifecycle,
+                Lifecycle::Cancel
+            );
+            assert_eq!(
+                engine.reconcile_cancelled_effects("alice", "case").unwrap(),
+                closed
+            );
+            assert_eq!(engine.latest("alice", "case").unwrap(), Some(state));
+            action.phase = EffectPhase::Attempted;
+            let error = stale_writer
+                .save_live_file_phase("alice", &action, old.revision)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("EFFECT_GOAL_NOT_ACTIVE"),
+                "{error:?}"
+            );
+            assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+            assert_eq!(
+                fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+                modified
+            );
+
+            let new_target = fixture.directory.join("fresh-file.txt");
+            let mut fresh = RequestEnvelope::new("case", "fresh-write", "alice", "7+8");
+            fresh.output_path = Some(new_target.clone());
+            fresh.permissions.write_paths.insert(new_target.clone());
+            let completed = engine.execute("alice", fresh).unwrap();
+            assert_eq!(completed.lifecycle, Lifecycle::Commit);
+            assert_eq!(fs::read(&new_target).unwrap(), b"7+8 = 15");
+        }
+    }
+
+    #[test]
+    fn local_file_attempt_cannot_be_acquired_twice() {
+        let fixture = sequence_file_preparation_prefix(2);
+        let store = Store::open(&fixture.state).unwrap();
+        let revision = store.load_case("alice", "case").unwrap().unwrap().revision;
+        let mut action = store.actions("alice", "case").unwrap().remove(0);
+        action.phase = EffectPhase::Attempted;
+        store
+            .save_live_file_phase("alice", &action, revision)
+            .unwrap();
+        let other_writer = Store::open(&fixture.state).unwrap();
+        let error = other_writer
+            .save_live_file_phase("alice", &action, revision)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("EFFECT_ALREADY_ATTEMPTED"),
+            "{error:?}"
+        );
+        let actions = other_writer.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].action_id, fixture.token);
+    }
+
+    #[test]
+    fn cancelled_goal_restart_closes_preparation_left_before_cleanup() {
+        let fixture = sequence_file_preparation_prefix(2);
+        let store = Store::open(&fixture.state).unwrap();
+        let mut state = store.load_case("alice", "case").unwrap().unwrap();
+        state.parent_revision = Some(state.revision);
+        state.revision += 1;
+        state.lifecycle = Lifecycle::Cancel;
+        state.result.as_mut().unwrap().lifecycle = Lifecycle::Cancel;
+        store.append_case("alice", &state).unwrap();
+        drop(store);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let observed = engine.reconcile_cancelled_effects("alice", "case").unwrap();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].phase, EffectPhase::Cancelled);
+        assert!(observed[0].receipt.is_none());
+        assert_eq!(engine.latest("alice", "case").unwrap(), Some(state));
+    }
+
+    fn sequence_file_preparation_prefix(cut: i64) -> Fixture {
+        let mut fixture = empty_fixture();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "sequence",
+            "alice",
+            "calculation-sequence:\nbase: 2+3\nfinal: @{base}*2",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        {
+            let mut engine = Engine::open(&fixture.state).unwrap();
+            let result = engine.execute("alice", request).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        }
+        fixture.token = retain_attempted_prefix(&fixture.state);
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM action_history WHERE sequence>?1", [cut])
+            .unwrap();
+        fixture
+    }
+
     #[test]
     fn authorized_cancel_stops_pending_goal_and_retains_unknown_effect_identity() {
         let fixture = attempted_prefix();

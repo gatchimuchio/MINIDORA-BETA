@@ -1496,6 +1496,40 @@ impl Store {
     }
 
     pub fn save_action(&self, actor: &str, action: &ActionRecord) -> Result<()> {
+        self.save_action_inner(actor, action, None)
+    }
+
+    /// Prepare and issue a local write only while its adopted case revision is
+    /// active. Each phase and the head check share one write transaction.
+    pub(crate) fn save_live_file_phase(
+        &self,
+        actor: &str,
+        action: &ActionRecord,
+        adopted_revision: u64,
+    ) -> Result<()> {
+        if action.effect_class != "LOCAL_WRITE"
+            || !matches!(
+                action.phase,
+                EffectPhase::Proposed
+                    | EffectPhase::Authorized
+                    | EffectPhase::Prepared
+                    | EffectPhase::Attempted
+            )
+        {
+            return Err(failure(
+                "INVALID_EFFECT_TRANSITION",
+                "live file preparation requires a local write at or before ATTEMPTED",
+            ));
+        }
+        self.save_action_inner(actor, action, Some(adopted_revision))
+    }
+
+    fn save_action_inner(
+        &self,
+        actor: &str,
+        action: &ActionRecord,
+        adopted_revision: Option<u64>,
+    ) -> Result<()> {
         if actor != action.actor_id {
             return Err(failure(
                 "ACCESS_DENIED",
@@ -1538,9 +1572,30 @@ impl Store {
                 "CONFIRMED requires an actual effect receipt",
             ));
         }
-        let (sha, length) = self.publish_blob(action)?;
+        let published = adopted_revision
+            .is_none()
+            .then(|| self.publish_blob(action))
+            .transpose()?;
         let transaction = self.transaction()?;
         Self::require_case(&transaction, actor, &action.case_id)?;
+        if let Some(revision) = adopted_revision {
+            let head = self.latest_case(&action.case_id)?;
+            if !head.is_some_and(|head| {
+                head.revision == revision
+                    && head.lifecycle == Lifecycle::Adopted
+                    && head.input_fingerprint.as_ref() == Some(&action.input_fingerprint)
+                    && head
+                        .result
+                        .as_ref()
+                        .and_then(|record| record.render.as_ref())
+                        .is_some_and(|render| render.actual_sha256 == action.exact_request_sha256)
+            }) {
+                return Err(failure(
+                    "EFFECT_GOAL_NOT_ACTIVE",
+                    "the adopted input revision for this local effect is no longer active",
+                ));
+            }
+        }
         let old: Option<(i64, String, String)> = sql(transaction.query_row(
             "SELECT sequence,record_sha256,event_hash FROM action_history WHERE case_id=?1 AND action_id=?2 ORDER BY sequence DESC LIMIT 1",
             params![action.case_id, action.action_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
@@ -1565,6 +1620,12 @@ impl Store {
         if let Some((number, prior_sha, _)) = &old {
             let prior: ActionRecord = self.read_blob(prior_sha)?;
             if prior == *action {
+                if adopted_revision.is_some() && action.phase == EffectPhase::Attempted {
+                    return Err(failure(
+                        "EFFECT_ALREADY_ATTEMPTED",
+                        "an existing attempt does not authorize another local write",
+                    ));
+                }
                 return Ok(());
             }
             let mut unchanged = action.clone();
@@ -1602,6 +1663,10 @@ impl Store {
         }
         self.require_artifact(&transaction, &action.case_id, &action.authorization_sha256)?;
         self.require_artifact(&transaction, &action.case_id, &action.exact_request_sha256)?;
+        let (sha, length) = match published {
+            Some(blob) => blob,
+            None => self.publish_blob(action)?,
+        };
         Self::reference(&transaction, &sha, length, "action")?;
         let parent_hash = old.as_ref().map(|(_, _, hash)| hash.clone());
         let event_hash = identity(&(

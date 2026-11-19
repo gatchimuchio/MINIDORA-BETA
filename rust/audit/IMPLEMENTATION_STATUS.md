@@ -974,3 +974,23 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `07332f6
 | `cargo check -p minidora-engine --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
 
 確認範囲は連続計算と許可済みローカルファイル。W14〜W16全幅とE1出口は未成立。実際の旧版DB移行、E2合同ゲート、体系QC・独立QAは `NOT_RUN`。次はW17の停止・取消・既発生作用の照合を、同じ元Goalと実作用の境界から確認する。復旧2世代は `2a97d74` と `a8aeb3b`。資産計5件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中3件（Core、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B101 — D3-C E1-W17 ローカルファイル作用の取消と発行境界
+
+着工点は `f95f3b196ea53e477372620d90b7b037dc543c73`。D2仕様・D2工程・D3-C指示の採用SHAを照合。Coreが元Goalの取消を保存すると、同じ入力が所有するローカルファイル作用の `PROPOSED`・`AUTHORIZED`・`PREPARED` を同一作用IDの `CANCELLED` に閉じる。停止後の明示取消と、取消保存後に中断した場合の再起動照合も同じ閉鎖を使う。試行記録がある作用は、元権限・同一作用IDの実物照合へ引き継ぐ。
+
+Coreが通常のファイル作用を進めるとき、Storeは採用済みのケース版、元入力、描画SHAを作用記録と同じSQLite書込トランザクションで照合する。元版を失効させた後の発行と、同じ試行の二重取得は拒否する。保存形式・依存関係の変更なし。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `b4eedd6bbc818cebf386625e03c84e97034f5248626dc7e33f551075bec05e88`。以下は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib recovery::tests::<filter> --locked` の5フィルタ `cancel`、`authorized_cancel`、`sequence_cancel`、`local_file_attempt`、`calculation_sequence_reconciles` | 8 PASS。試行前3段階の取消、停止からの取消、再起動照合、旧版発行・二重発行の拒否を確認。試行前に実バイトが一致していてもreceiptは付かず、既に試行した作用は元IDで照合される。 |
+| `cargo test -p minidora-engine --test core_construction_observation_06 --locked` | 1 PASS。権限、予算、取消、結果不明による停止の既存境界。 |
+| `cargo test -p minidora-cli --test normal_route calculation_sequence_route --locked` | 5 PASS。通常CLIの連続計算と一度だけのファイル確定を含む。 |
+| `cargo check -p minidora-engine --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+検査対象はローカルファイルで、journalの中断点を再現した隔離fixtureと別Store接続を使用。描画後から実書込までの時間予算の再検査が残るため、W17とE1は `PARTIAL`、E12は `UNVERIFIED`。E2合同ゲート・体系QC・独立QAは `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `f95f3b1` と `2a97d74`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、Store、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
