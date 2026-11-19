@@ -75,26 +75,28 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
             "UNMET_GOAL_NODES: reconciliation retained unresolved required artifacts",
         );
     }
-    result.execution_graph_ref =
-        Some(
-            if state.bundle.as_ref().is_some_and(|bundle| {
-                matches!(bundle.meaning.intent, Intent::CalculateSequence { .. })
-            }) {
-                store_execution_graph(store, actor, case, &graph)?
-            } else {
-                store.put_artifact(
-                    actor,
-                    case,
-                    &(
-                        graph.nodes(),
-                        graph.observed(),
-                        graph.consumed_by("content"),
-                        graph.consumed_by("render"),
-                        graph.consumed_by("file"),
-                    ),
-                )?
-            },
-        );
+    result.execution_graph_ref = Some(
+        if state.bundle.as_ref().is_some_and(|bundle| {
+            matches!(
+                bundle.meaning.intent,
+                Intent::CalculateSequence { .. } | Intent::FetchPreviousSearchCandidate { .. }
+            )
+        }) {
+            store_execution_graph(store, actor, case, &graph)?
+        } else {
+            store.put_artifact(
+                actor,
+                case,
+                &(
+                    graph.nodes(),
+                    graph.observed(),
+                    graph.consumed_by("content"),
+                    graph.consumed_by("render"),
+                    graph.consumed_by("file"),
+                ),
+            )?
+        },
+    );
     result.reason = Some(
         "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted".into(),
     );
@@ -226,6 +228,12 @@ pub(crate) fn close_cancelled_file_preparations(store: &Store, state: &CaseRevis
 }
 
 type Inspected = (ActionRecord, DeliveryReceipt, Scheduler, String);
+
+struct SearchCandidateExpectation {
+    listing_ref: Option<String>,
+    body_id: String,
+    body_ref: String,
+}
 
 struct SourceSummaryExpectation {
     source_packet_refs: Vec<(usize, String)>,
@@ -2622,16 +2630,17 @@ fn verify_result_memory_provenance(
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
-    case: &str,
     state: &CaseRevision,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
-) -> Result<Option<u32>> {
+    nodes: &[GoalNode],
+) -> Result<Option<SearchCandidateExpectation>> {
     let Intent::FetchPreviousSearchCandidate { rank } = &goal.intent else {
         return Ok(None);
     };
     let rank = *rank;
+    let case = &state.case_id;
     let bundle = state
         .bundle
         .as_ref()
@@ -2671,33 +2680,53 @@ fn verify_search_candidate_context(
                 "the selected candidate no longer appears at its original rank",
             )
         })?;
-    if result.evidence.len() != 1 {
-        return Err(failure(
+    let body_ref = result.dependencies.last().ok_or_else(|| {
+        failure(
             "RECOVERY_EVIDENCE_MISMATCH",
-            "candidate-body result must retain exactly one fetched packet",
-        ));
-    }
-    let packet = &result.evidence[0];
+            "the selected candidate body reference is missing",
+        )
+    })?;
+    let packet_bytes = store.get_bytes(actor, case, body_ref)?;
+    let packet: EvidencePacket = serde_json::from_slice(&packet_bytes)?;
     let expected_uri = crate::search::candidate_body_uri(candidate)?;
-    crate::ports::validate_successful_packet(packet, &goal.permissions)?;
-    if packet.request_uri != expected_uri || packet.raw_body.len() > goal.budget.max_evidence_bytes
+    crate::ports::validate_successful_packet(&packet, &goal.permissions)?;
+    if packet.request_uri != expected_uri
+        || packet.raw_body.len() > goal.budget.max_evidence_bytes
+        || canonical(&packet)? != packet_bytes
     {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
             "the fetched packet differs from the selected candidate or original budget",
         ));
     }
-    let packet_bytes = canonical(packet)?;
-    let body_ref = digest(&packet_bytes);
-    if store.get_bytes(actor, case, &body_ref)? != packet_bytes {
+    // The sealed graph selects the packet format. Its full topology is
+    // checked before any recovery observation.
+    let retains_listing = nodes
+        .iter()
+        .any(|node| node.id == "search-candidate-listing");
+    let mut expected_dependencies = vec![previous.id.clone(), search_ref.clone()];
+    let mut expected_evidence = if retains_listing {
+        let carried = crate::search::carry_forward_candidate_evidence(previous, &observation)?;
+        crate::search::validate_next_candidate_body_capacity(&carried)?;
+        for prior in carried.iter().filter(|p| p.packet_kind == "FETCHED_BODY") {
+            expected_dependencies.push(verified_artifact(store, actor, case, prior)?);
+        }
+        carried
+    } else {
+        Vec::new()
+    };
+    expected_dependencies.push(body_ref.clone());
+    if !expected_evidence.contains(&packet) {
+        expected_evidence.push(packet.clone());
+    }
+    if result.evidence != expected_evidence {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
-            "the original candidate body artifact is no longer present unchanged",
+            "the retained search listing or candidate body packets differ from the original result",
         ));
     }
-    let expected_dependencies = vec![previous.id.clone(), search_ref, body_ref];
     if result.dependencies != expected_dependencies
-        || plan.required_units != crate::search::candidate_body_lines(candidate, packet)
+        || plan.required_units != crate::search::candidate_body_lines(candidate, &packet)
         || result.guarantee != Guarantee::SourceReport
     {
         return Err(failure(
@@ -2705,7 +2734,11 @@ fn verify_search_candidate_context(
             "the candidate, retrieved body or displayed source report differs from the adopted result",
         ));
     }
-    Ok(Some(rank))
+    Ok(Some(SearchCandidateExpectation {
+        listing_ref: retains_listing.then_some(search_ref),
+        body_id: format!("search-candidate-body-{rank}"),
+        body_ref: body_ref.clone(),
+    }))
 }
 
 fn verify_source_summary_context(
@@ -3332,8 +3365,6 @@ fn inspect(
         verify_source_question_context(store, actor, case, state, result, plan, &goal)?;
     let previous_text_edit =
         verify_previous_text_edit_context(store, actor, case, state, result, plan, &goal)?;
-    let search_candidate_rank =
-        verify_search_candidate_context(store, actor, case, state, result, plan, &goal)?;
     let previous_csv_statistics_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         match bundle
             .meaning
@@ -4110,6 +4141,8 @@ fn inspect(
     }
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
+    let search_candidate =
+        verify_search_candidate_context(store, actor, state, result, plan, &goal, &nodes)?;
     let mut expected_nodes = Vec::new();
     let mut sources = Vec::new();
     if let Intent::Retrieve { urls, .. } = &goal.intent {
@@ -4139,13 +4172,22 @@ fn inspect(
                 requires: Vec::new(),
             });
         }
-    } else if let Some(rank) = search_candidate_rank {
-        let id = format!("search-candidate-body-{rank}");
-        sources.push(id.clone());
+    } else if let Some(candidate) = &search_candidate {
+        let mut requires = Vec::new();
+        if candidate.listing_ref.is_some() {
+            let id = "search-candidate-listing".to_string();
+            expected_nodes.push(GoalNode {
+                id: id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            requires.push(id);
+        }
+        sources.push(candidate.body_id.clone());
         expected_nodes.push(GoalNode {
-            id,
+            id: candidate.body_id.clone(),
             kind: GoalNodeKind::Evidence,
-            requires: Vec::new(),
+            requires,
         });
     } else if !result.evidence.is_empty() {
         return Err(failure(
@@ -4364,14 +4406,22 @@ fn inspect(
         }
         source_refs.clone_from(graph.observed());
     }
-    for (index, packet) in result.evidence.iter().enumerate() {
-        let reference = verified_artifact(store, actor, case, packet)?;
-        let id = search_candidate_rank.map_or_else(
-            || format!("source-{index}"),
-            |rank| format!("search-candidate-body-{rank}"),
-        );
-        graph.observe(&id, &reference, &BTreeMap::new())?;
-        source_refs.insert(id, reference);
+    if let Some(candidate) = &search_candidate {
+        let mut requires = BTreeMap::new();
+        if let Some(reference) = &candidate.listing_ref {
+            let id = "search-candidate-listing".to_string();
+            graph.observe(&id, reference, &BTreeMap::new())?;
+            requires.insert(id, reference.clone());
+        }
+        graph.observe(&candidate.body_id, &candidate.body_ref, &requires)?;
+        source_refs.insert(candidate.body_id.clone(), candidate.body_ref.clone());
+    } else {
+        for (index, packet) in result.evidence.iter().enumerate() {
+            let reference = verified_artifact(store, actor, case, packet)?;
+            let id = format!("source-{index}");
+            graph.observe(&id, &reference, &BTreeMap::new())?;
+            source_refs.insert(id, reference);
+        }
     }
     if let Some(summary) = &source_summary {
         for (index, reference) in &summary.source_packet_refs {
@@ -4689,6 +4739,9 @@ fn advance(
     next: Lifecycle,
 ) -> Result<()> {
     let mut revision = state.clone();
+    // A migrated journal keeps its older revisions. Only the new recovery
+    // revision uses the current store schema.
+    revision.schema_version = SCHEMA_VERSION.into();
     revision.parent_revision = Some(state.revision);
     revision.revision += 1;
     revision.lifecycle = next;

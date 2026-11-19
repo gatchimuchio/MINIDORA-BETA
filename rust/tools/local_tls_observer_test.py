@@ -10,6 +10,7 @@ Requires Python's standard library, openssl, and an already-built Rust binary.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -34,15 +35,15 @@ def openssl(directory: Path, *arguments: str) -> None:
     )
 
 
-def certificates(directory: Path) -> tuple[Path, Path, Path]:
+def certificates(directory: Path, host: str = HOST) -> tuple[Path, Path, Path]:
     for name in ("ca", "untrusted"):
         openssl(directory, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                 "-keyout", f"{name}.key", "-out", f"{name}.pem", "-days", "1",
                 "-subj", f"/CN=MINIDORA disposable {name}")
     openssl(directory, "req", "-new", "-newkey", "rsa:2048", "-nodes",
-            "-keyout", "server.key", "-out", "server.csr", "-subj", f"/CN={HOST}")
+            "-keyout", "server.key", "-out", "server.csr", "-subj", f"/CN={host}")
     (directory / "server.ext").write_text(
-        f"subjectAltName=DNS:{HOST}\n"
+        f"subjectAltName=DNS:{host}\n"
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature,keyEncipherment\n"
         "extendedKeyUsage=serverAuth\n"
@@ -70,7 +71,10 @@ def header_block(stream: socket.socket) -> tuple[str, dict[str, str]]:
 
 
 class Fixture:
-    def __init__(self, certificate: Path, key: Path):
+    def __init__(self, certificate: Path, key: Path, host: str = HOST,
+                 responses: dict[str, tuple[bytes, str]] | None = None):
+        self.host = host
+        self.responses = responses or {}
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(certificate, key)
         self.listener = socket.socket()
@@ -105,7 +109,7 @@ class Fixture:
             with stream:
                 stream.settimeout(5)
                 request, connect_headers = header_block(stream)
-                assert request == f"CONNECT {HOST}:443 HTTP/1.1"
+                assert request == f"CONNECT {self.host}:443 HTTP/1.1"
                 assert not {"authorization", "proxy-authorization", "cookie"} & connect_headers.keys()
                 stream.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
                 try:
@@ -118,14 +122,16 @@ class Fixture:
                     request, headers = header_block(secured)
                     method, path, protocol = request.split(" ")
                     assert method == "GET" and protocol == "HTTP/1.1"
-                    assert headers.get("host") == HOST
+                    assert headers.get("host") == self.host
                     assert headers.get("accept-encoding") == "identity"
                     assert not {"authorization", "proxy-authorization", "cookie"} & headers.keys()
                     self.events.append({"path": path, "request_header_names": sorted(headers)})
                     if path == "/drop":
                         return
                     status, body, mime, extra = "200 OK", SOURCE, "text/plain; charset=utf-8", ""
-                    if path == "/redirect":
+                    if path in self.responses:
+                        body, mime = self.responses[path]
+                    elif path == "/redirect":
                         status, body, extra = "302 Found", b"", "Location: /ok\r\n"
                     elif path == "/denied-redirect":
                         status, body, extra = "302 Found", b"", "Location: https://outside.minidora.test/forbidden\r\n"
@@ -172,6 +178,50 @@ def run_case(binary: Path, directory: Path, fixture: Fixture, ca: Path,
         assert packet["request_uri"].startswith(f"https://{HOST}/")
         assert packet["provider_id"] == "https-direct-url-v1"
     return {"name": name, "exit_code": completed.returncode, "result": result}
+
+
+def retain_attempted_prefix(state_path: Path, case: str, input_id: str, action_id: str) -> dict:
+    # Test-only crash injection in a disposable store after the real write.
+    def load(ref: str) -> dict:
+        raw = (state_path / "blobs" / ref).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == ref
+        return json.loads(raw)
+
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        snapshots = database.execute(
+            "SELECT revision,state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC",
+            (case,),
+        ).fetchall()
+        for revision, state_sha in snapshots:
+            state = load(state_sha)
+            saved = state.get("result")
+            if (state["lifecycle"] == "ADOPTED" and saved
+                    and saved["input_id"] == input_id and saved.get("render") is not None):
+                break
+        else:
+            raise AssertionError("Core did not retain the adopted result before delivery")
+        (action_ref,) = database.execute(
+            "SELECT record_sha256 FROM action_history WHERE case_id=? AND action_id=? AND sequence=3",
+            (case, action_id),
+        ).fetchone()
+        attempted = load(action_ref)
+        assert attempted["phase"] == "ATTEMPTED"
+        canonical = json.dumps(saved, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        result_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        database.executescript(
+            "PRAGMA foreign_keys=ON; DROP TRIGGER case_revision_no_delete; "
+            "DROP TRIGGER action_history_no_delete;"
+        )
+        database.execute("DELETE FROM case_revision WHERE case_id=? AND revision>?", (case, revision))
+        database.execute(
+            "DELETE FROM action_history WHERE case_id=? AND action_id=? AND sequence>3",
+            (case, action_id),
+        )
+        database.execute(
+            "UPDATE input_identity SET result_sha256=? WHERE case_id=? AND input_id=?",
+            (result_sha, case, input_id),
+        )
+        return attempted
 
 
 def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path,
@@ -232,37 +282,7 @@ def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path
     assert output_path.read_bytes() == result["text"].encode("utf-8")
     original_stat = output_path.stat()
 
-    # Test-only crash injection: roll the case journal back to the retained
-    # adopted rendering after the exact output happened, then run real recovery.
-    database = sqlite3.connect(state_path / "state.sqlite3")
-    snapshots = database.execute(
-        "SELECT revision,state_sha256 FROM case_revision ORDER BY revision"
-    ).fetchall()
-    retained = None
-    for revision_number, state_sha in snapshots:
-        state = json.loads((state_path / "blobs" / state_sha).read_text(encoding="utf-8"))
-        saved = state.get("result")
-        if (state["lifecycle"] == "ADOPTED" and saved
-                and saved.get("input_id") == "summary" and saved.get("render") is not None):
-            retained = (revision_number, saved)
-    assert retained is not None, "Core did not retain the source summary before delivery"
-    revision_number, saved_result = retained
-    canonical_result = json.dumps(
-        saved_result, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    result_sha = hashlib.sha256(canonical_result).hexdigest()
-    database.executescript(
-        "PRAGMA foreign_keys=ON; DROP TRIGGER case_revision_no_delete; "
-        "DROP TRIGGER action_history_no_delete;"
-    )
-    database.execute("DELETE FROM case_revision WHERE revision>?", (revision_number,))
-    database.execute("DELETE FROM action_history WHERE sequence>3")
-    database.execute(
-        "UPDATE input_identity SET result_sha256=? WHERE case_id=? AND input_id=?",
-        (result_sha, "success", "summary"),
-    )
-    database.commit()
-    database.close()
+    retain_attempted_prefix(state_path, "success", "summary", result["receipts"][0]["action_id"])
 
     recovered_process = subprocess.run(
         [str(binary), "reconcile", "--db", str(state_path), "--case", "success",
@@ -284,6 +304,93 @@ def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path
     )
     return {"name": "source-summary-follow-up", "exit_code": completed.returncode,
             "input_processes": 2, "recovered": recovered, "result": result}
+
+
+def run_candidate_recovery(binary: Path, directory: Path) -> dict:
+    directory.mkdir()
+    host, case = "ja.wikipedia.org", "candidate-recovery"
+    first_body = b"First observed body."
+    second_body = b"Second observed body."
+    listing = json.dumps({"pages": [
+        {"title": "First fixture", "key": "First"},
+        {"title": "Second fixture", "key": "Second"},
+    ]}).encode()
+    responses = {
+        "/w/rest.php/v1/search/page?q=candidate+replay&limit=5": (listing, "application/json"),
+        "/wiki/First?action=raw": (first_body, "text/plain"),
+        "/wiki/Second?action=raw": (second_body, "text/plain"),
+    }
+    certificate, key, ca = certificates(directory, host)
+    fixture = Fixture(certificate, key, host, responses)
+    state_path, output = directory / "state", directory / "selected-body.txt"
+    environment = os.environ.copy()
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        environment[name] = fixture.proxy
+    environment["NO_PROXY"] = environment["no_proxy"] = ""
+    environment["SSL_CERT_FILE"] = str(ca)
+
+    def cli(command: str, *arguments: str) -> dict:
+        process = subprocess.run(
+            [str(binary), command, "--db", str(state_path), "--case", case,
+             "--actor", "fixture-local", "--json", *arguments],
+            env=environment, capture_output=True, text=True, timeout=15, check=False,
+        )
+        assert process.returncode == 0, (process.returncode, process.stdout, process.stderr)
+        result = json.loads(process.stdout)
+        assert result["lifecycle"] == "COMMIT"
+        return result
+
+    read = ("--allow-read-host", host, "--deadline-ms", "5000")
+    try:
+        search = cli("run", "--input", "listing", *read, "検索 wikipedia: candidate replay")
+        first = cli("run", "--input", "first", *read, "1件目の本文を取得して")
+        selected = cli("run", "--input", "second", *read, "--output", str(output),
+                       "--allow-write", str(output), "2件目の本文を取得して")
+        packets = selected["evidence"]
+        assert [packet["packet_kind"] for packet in packets] == [
+            "SEARCH_LIST", "FETCHED_BODY", "FETCHED_BODY",
+        ]
+        assert packets[:-1] == first["evidence"]
+        assert [bytes(packet["raw_body"]) for packet in packets] == [listing, first_body, second_body]
+        assert selected["dependencies"][:-1] == [
+            first["id"], search["dependencies"][0], first["dependencies"][-1],
+        ]
+        assert output.read_bytes() == bytes(selected["render"]["bytes"])
+        before = output.stat()
+        attempted = retain_attempted_prefix(state_path, case, "second",
+                                            selected["receipts"][0]["action_id"])
+        recovered = cli("reconcile")
+        original_graph, recovered_graph = [
+            json.loads((state_path / "blobs" / result["execution_graph_ref"]).read_bytes())
+            for result in (selected, recovered)
+        ]
+        assert original_graph[0] == recovered_graph[0]
+        assert {key: ref for key, ref in original_graph[1].items() if key != "file"} == {
+            key: ref for key, ref in recovered_graph[1].items() if key != "file"
+        }
+        assert original_graph[2:] == recovered_graph[2:]
+        assert recovered_graph[5]["search-candidate-body-2"] == {
+            "search-candidate-listing": search["dependencies"][0],
+        }
+        assert recovered_graph[5]["compute"] == {
+            "search-candidate-body-2": selected["dependencies"][-1],
+        }
+        assert recovered["evidence"] == packets
+        assert recovered["dependencies"] == selected["dependencies"]
+        assert len(recovered["receipts"]) == 1
+        receipt = recovered["receipts"][0]
+        assert receipt["action_id"] == attempted["action_id"] == selected["receipts"][0]["action_id"]
+        assert receipt["phase"] == "CONFIRMED" and "NO_RESEND" in receipt["reason"]
+        assert output.read_bytes() == bytes(selected["render"]["bytes"])
+        after = output.stat()
+        assert (after.st_ino, after.st_mtime_ns, after.st_size) == (
+            before.st_ino, before.st_mtime_ns, before.st_size,
+        )
+        assert [event["path"] for event in fixture.events] == list(responses)
+        assert not fixture.errors, fixture.errors
+        return {"result": selected, "recovered": recovered, "observed_requests": fixture.events}
+    finally:
+        fixture.close()
 
 
 def main() -> None:
@@ -338,6 +445,7 @@ def main() -> None:
             "transport_observations": fixture.events,
             "cases": cases,
             "source_followup": source_followup,
+            "candidate_recovery": run_candidate_recovery(binary, directory / "candidate-recovery"),
             "scope": "Actual compiled CLI/reqwest/native-TLS transport, persisted separate-process source follow-up and fixture source bytes; not LIVE Internet or benchmark acceptance",
         }
         if arguments.evidence_output:
