@@ -1470,6 +1470,100 @@ def check_source_followup_chain(cli, fixture: Fixture, state_path: Path) -> dict
             "recovered": recovered, "final": final, "no_budget": no_budget, "stopped": stopped, "unbound": invalid}
 
 
+def check_candidate_after_source_followup(cli, fixture: Fixture, state_path: Path) -> dict:
+    host = fixture.host
+    allow = ("--allow-read-host", host)
+    listing_path = "/w/rest.php/v1/search/page?q=candidate+after+analysis&limit=5"
+    titles = ("First_analysis", "Second_analysis")
+    first_path, second_path = (f"/wiki/{title}?action=raw" for title in titles)
+    first_text, second_text = "実測値は42です。", "予備値は7です。"
+    fixture.responses[listing_path] = (json.dumps({"pages": [
+        {"title": title, "key": title} for title in titles
+    ]}).encode(), "application/json")
+    fixture.responses[first_path] = (first_text.encode(), "text/plain; charset=utf-8")
+    fixture.responses[second_path] = (second_text.encode(), "text/plain; charset=utf-8")
+    first_question = "本文では実測値について何と書かれていますか"
+    second_question = "本文では予備値について何と書かれていますか"
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    results = {}
+    for name, query, blocker in (
+        ("question", first_question, ("2", (), "READ_PERMISSION_REQUIRED")),
+        ("summary", "取得した本文を要約して", ("3", allow, "SEARCH_CANDIDATE_UNAVAILABLE")),
+        ("constrained", "取得した本文を2点以内、20字以内で要約して",
+         ("2", (*allow, "--deadline-ms", "0"), "RESOURCE_LIMIT")),
+    ):
+        case = f"candidate-after-source-{name}"
+        seen, starts = len(fixture.events), len(fixture.connects)
+        listing = cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate after analysis", case_id=case)
+        first = cli("run", "--input", "first", *allow, "1件目の本文を取得して", case_id=case)
+        analysis = cli("run", "--input", "analysis", query, case_id=case)
+        assert first_text in analysis["text"] and analysis["evidence"] == []
+
+        output = state_path.parent / f"{case}.txt"
+        write = ("--output", str(output), "--allow-write", str(output)) if name == "question" else ()
+        next_input = ("--input", "second", *allow, *write, "2件目の本文を取得して")
+        selected = cli("run", *next_input, case_id=case)
+        assert selected["guarantee"] == "SOURCE_REPORT"
+        assert selected["evidence"][:-1] == first["evidence"]
+        packet = selected["evidence"][-1]
+        assert packet["packet_kind"] == "FETCHED_BODY"
+        assert packet["final_uri"] == f"https://{host}{second_path}"
+        assert packet["extracted_text"] == second_text and load(selected["dependencies"][-1]) == packet
+        list_ref = listing["dependencies"][0]
+        assert selected["dependencies"][:-1] == [first["id"], list_ref, first["dependencies"][-1]]
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+            (reference,) = database.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1", (case,),
+            ).fetchone()
+        state = load(reference)
+        assert state["bundle"]["request"]["context_ref"] is None
+        assert state["bundle"]["request"]["permissions"]["read_hosts"] == [host]
+        assert state["bundle"]["meaning"]["context_result_ref"] == first["id"]
+        assert state["prior_results"][analysis["id"]] == analysis
+        assert cli("run", *next_input, case_id=case) == selected
+        if write:
+            before = output.stat()
+            (receipt,) = selected["receipts"]
+            retain_attempted_prefix(state_path, case, "second", receipt["action_id"])
+            recovered = cli("reconcile", case_id=case)
+            assert recovered["text"] == selected["text"] and recovered["evidence"] == selected["evidence"]
+            assert recovered["dependencies"] == selected["dependencies"]
+            (restored_receipt,) = recovered["receipts"]
+            assert restored_receipt["action_id"] == receipt["action_id"] and "NO_RESEND" in restored_receipt["reason"]
+            graph = load(recovered["execution_graph_ref"])
+            assert graph[5]["search-candidate-body-2"] == {"search-candidate-listing": list_ref}
+            assert output.read_bytes() == bytes(selected["render"]["bytes"])
+            after = output.stat()
+            assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+
+        followup = cli("run", "--input", "followup", second_question, case_id=case)
+        assert second_text in followup["text"] and first_text not in followup["text"]
+        assert followup["dependencies"][:-1] == [selected["id"], *selected["dependencies"][-2:]]
+        rank, flags, reason = blocker
+        stopped = cli("run", "--input", "blocked", *flags, f"{rank}件目の本文を取得して",
+                      case_id=case, expected_exit=2)
+        assert reason in stopped["reason"] and stopped["receipts"] == []
+        assert [event["path"] for event in fixture.events[seen:]] == [listing_path, first_path, second_path]
+        assert len(fixture.connects) == starts + 3
+        results[name] = {"selected": selected, "followup": followup, "stopped": stopped}
+
+    case = "candidate-after-direct-source"
+    seen, starts = len(fixture.events), len(fixture.connects)
+    cli("run", "--input", "direct", *allow, f"fetch https://{host}{first_path}", case_id=case)
+    cli("run", "--input", "analysis", first_question, case_id=case)
+    stopped = cli("run", "--input", "second", *allow, "2件目の本文を取得して", case_id=case, expected_exit=2)
+    assert "MISSING_SEARCH_RESULT_CONTEXT" in stopped["reason"] and stopped["evidence"] == []
+    assert [event["path"] for event in fixture.events[seen:]] == [first_path]
+    assert len(fixture.connects) == starts + 1
+    assert not fixture.errors, fixture.errors
+    return {**results, "direct_source": stopped}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1572,13 +1666,15 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         after_failure = check_candidate_after_failure(cli, fixture, state_path)
         sources_after_failure = check_sources_after_candidate_failure(cli, fixture, state_path)
         source_followup_chain = check_source_followup_chain(cli, fixture, state_path)
+        candidate_after_source = check_candidate_after_source_followup(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
                 "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
                 "versioned_summaries": versioned_summaries, "after_failure": after_failure,
                 "sources_after_failure": sources_after_failure,
-                "source_followup_chain": source_followup_chain}
+                "source_followup_chain": source_followup_chain,
+                "candidate_after_source": candidate_after_source}
     finally:
         fixture.close()
 

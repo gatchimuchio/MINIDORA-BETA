@@ -3963,11 +3963,19 @@ impl Engine {
                 | Intent::SummarizePreviousSourceConstrained { .. } => None,
                 _ => return Ok(bundle),
             };
-            let context = if prior_case.lifecycle == Lifecycle::Commit && requested_rank.is_none() {
+            let context = if prior_case.lifecycle == Lifecycle::Commit {
                 if request.budget.max_actions == 0 || request.budget.deadline_ms == 0 {
                     return Ok(bundle);
                 }
-                crate::recovery::committed_source_anchor(&self.store, prior_case)?
+                crate::recovery::committed_source_anchor(&self.store, prior_case)?.filter(
+                    |source| {
+                        requested_rank.is_none()
+                            || source
+                                .evidence
+                                .iter()
+                                .any(|packet| packet.packet_kind == "SEARCH_LIST")
+                    },
+                )
             } else {
                 search::committed_context_after_candidate_failure(
                     &self.store,
