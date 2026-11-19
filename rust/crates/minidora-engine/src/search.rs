@@ -6,8 +6,8 @@
 
 use crate::ports;
 use minidora_domain::{
-    EvidencePacket, Intent, Permissions, ResourceBudget, Result, ResultRecord, canonical, digest,
-    failure, identity,
+    CaseRevision, EvidencePacket, Intent, Lifecycle, Permissions, ResourceBudget, Result,
+    ResultRecord, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -721,6 +721,113 @@ pub(crate) fn previous_observation(
         ));
     }
     Ok(found)
+}
+
+/// A new rank can use the committed context of the immediately failed read.
+/// The failure and its dependencies prove which context that read consumed.
+pub(crate) fn committed_context_after_candidate_failure<'a>(
+    store: &crate::store::Store,
+    case: &'a CaseRevision,
+    requested_rank: u32,
+) -> Result<Option<&'a ResultRecord>> {
+    let (Some(failed), Some(saved_bundle)) = (&case.result, &case.bundle) else {
+        return Ok(None);
+    };
+    let Intent::FetchPreviousSearchCandidate { rank } = saved_bundle.meaning.intent else {
+        return Ok(None);
+    };
+    let reason_code = failed
+        .reason
+        .as_deref()
+        .and_then(|reason| reason.split_once(": "))
+        .map(|(code, _)| code);
+    if case.lifecycle != Lifecycle::Suspend
+        || failed.lifecycle != Lifecycle::Suspend
+        || rank == requested_rank
+        || !matches!(
+            reason_code,
+            Some("FETCH_OR_PARSER_FAILURE" | ports::REDIRECT_RETRY_DEFERRED)
+        )
+        || failed.content_plan.is_some()
+        || failed.render.is_some()
+        || failed.execution_graph_ref.is_some()
+        || !failed.receipts.is_empty()
+        || !failed
+            .evidence
+            .first()
+            .is_some_and(|packet| packet.packet_kind == "SEARCH_LIST")
+    {
+        return Ok(None);
+    }
+
+    let invalid = || {
+        failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The failed candidate does not match its sealed committed search context",
+        )
+    };
+    let actor = &case.actor_id;
+    let case_id = &case.case_id;
+    let (_, bundle) = store
+        .get_input_bundle(actor, case_id, &failed.input_id, failed.input_version)?
+        .ok_or_else(invalid)?;
+    if &bundle != saved_bundle
+        || identity(&bundle.request)? != failed.id
+        || case.input_fingerprint.as_deref() != Some(failed.id.as_str())
+        || case.reason != failed.reason
+    {
+        return Err(invalid());
+    }
+    let context_id = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .ok_or_else(invalid)?;
+    let context = case.prior_results.get(context_id).ok_or_else(invalid)?;
+    if context.lifecycle != Lifecycle::Commit
+        || context.id != *context_id
+        || identity(&Some(context))? != bundle.context_sha256
+    {
+        return Err(invalid());
+    }
+
+    let (listing_ref, observation) =
+        previous_observation(store, actor, case_id, context)?.ok_or_else(invalid)?;
+    let candidate = observation
+        .candidates
+        .iter()
+        .find(|candidate| candidate.rank == rank)
+        .ok_or_else(invalid)?;
+    let (packet, prefix) = failed.evidence.split_last().ok_or_else(invalid)?;
+    let carried = carry_forward_candidate_evidence(context, &observation)?;
+    if carried != prefix
+        || packet.mode != "LIVE"
+        || packet.packet_kind != "FETCH_FAILURE"
+        || packet.provider_id != "https-direct-url-v1"
+        || packet.parser_version != "strict-utf8-identity-v1"
+        || packet.failure.is_none()
+        || packet.extracted_text.is_some()
+        || packet.request_uri != candidate_body_uri(candidate)?
+        || packet.independence_group != packet.final_uri
+        || packet.raw_body.len() > bundle.request.budget.max_evidence_bytes
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || packet.id != ports::fetch_packet_identity(packet)?
+    {
+        return Err(invalid());
+    }
+    ports::validate_observed_route(packet, &bundle.request.permissions)?;
+
+    let mut expected = vec![context.id.clone(), listing_ref];
+    for body in &carried[1..] {
+        expected.push(digest(&canonical(body)?));
+    }
+    let bytes = canonical(packet)?;
+    let reference = digest(&bytes);
+    expected.push(reference.clone());
+    if failed.dependencies != expected || store.get_bytes(actor, case_id, &reference)? != bytes {
+        return Err(invalid());
+    }
+    Ok(Some(context))
 }
 
 /// Keep the validated search listing and previously fetched candidate bodies

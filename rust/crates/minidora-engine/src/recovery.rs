@@ -2753,7 +2753,10 @@ fn verify_search_candidate_context(
             "the original search result is no longer retained",
         )
     })?;
-    if previous.id != *previous_id || previous.lifecycle != Lifecycle::Commit {
+    if previous.id != *previous_id
+        || previous.lifecycle != Lifecycle::Commit
+        || identity(&Some(previous))? != bundle.context_sha256
+    {
         return Err(failure(
             "RECOVERY_SEARCH_CONTEXT_MISMATCH",
             "the referenced search result is not the same committed result",

@@ -1144,6 +1144,131 @@ def check_versioned_source_summary(cli, fixture: Fixture, state_path: Path) -> d
     return results
 
 
+def check_candidate_after_failure(cli, fixture: Fixture, state_path: Path) -> dict:
+    host = fixture.host
+    allow = ("--allow-read-host", host)
+    listing_path = "/w/rest.php/v1/search/page?q=candidate+failure&limit=5"
+    titles = ("Retained", "Failed", "Another", "Selected")
+    first_path, failed_path, another_path, selected_path = [f"/wiki/{title}?action=raw" for title in titles]
+    fixture.responses[listing_path] = (json.dumps({"pages": [
+        {"title": title, "key": title} for title in titles
+    ]}).encode(), "application/json")
+    fixture.responses[first_path] = (b"The first successful source was kept.", "text/plain")
+    fixture.responses[selected_path] = (b"The newly requested source was acquired.", "text/plain")
+    for path in (failed_path, another_path):
+        fixture.failure_responses[path] = ("404 Not Found", b"Candidate body unavailable.", "")
+
+    def rank(case: str, input_id: str, number: int, *flags: str, expected_exit: int = 0) -> dict:
+        return cli("run", "--input", input_id, *flags, f"{number}件目の本文を取得して",
+                   case_id=case, expected_exit=expected_exit)
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    seen, starts = len(fixture.events), len(fixture.connects)
+    case = "candidate-after-two-failures"
+    listing = cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate failure", case_id=case)
+    committed = rank(case, "first", 1, *allow)
+    failures = []
+    for input_id, number in (("failed", 2), ("another", 3)):
+        failure = rank(case, input_id, number, *allow, expected_exit=2)
+        assert failure["evidence"][:-1] == committed["evidence"]
+        packet = failure["evidence"][-1]
+        assert packet["packet_kind"] == "FETCH_FAILURE" and packet["http_status"] == 404
+        assert load(failure["dependencies"][-1]) == packet
+        assert failure["dependencies"][:-1] == [
+            committed["id"], listing["dependencies"][0], committed["dependencies"][-1],
+        ]
+        assert rank(case, input_id, number, *allow, expected_exit=2) == failure
+        failures.append(failure)
+
+    output = state_path.parent / "candidate-after-failure.txt"
+    selected = rank(case, "selected", 4, *allow, "--output", str(output), "--allow-write", str(output))
+    assert selected["evidence"][:-1] == committed["evidence"]
+    assert bytes(selected["evidence"][-1]["raw_body"]) == b"The newly requested source was acquired."
+    assert selected["dependencies"][:-1] == failures[-1]["dependencies"][:-1]
+    assert all(failure["dependencies"][-1] not in selected["dependencies"] for failure in failures)
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+        (reference,) = database.execute(
+            "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1",
+            (case,),
+        ).fetchone()
+    state = load(reference)
+    assert state["bundle"]["request"]["context_ref"] is None
+    assert state["bundle"]["meaning"]["context_result_ref"] == committed["id"]
+    assert all(state["prior_results"][failure["id"]] == failure for failure in failures)
+
+    before = output.stat()
+    (receipt,) = selected["receipts"]
+    retain_attempted_prefix(state_path, case, "selected", receipt["action_id"])
+    recovered = cli("reconcile", case_id=case)
+    assert recovered["dependencies"] == selected["dependencies"] and recovered["evidence"] == selected["evidence"]
+    assert recovered["receipts"][0]["action_id"] == receipt["action_id"]
+    assert "NO_RESEND" in recovered["receipts"][0]["reason"]
+    graph = load(recovered["execution_graph_ref"])
+    assert graph[5]["search-candidate-body-4"] == {"search-candidate-listing": listing["dependencies"][0]}
+    assert output.read_bytes() == bytes(selected["render"]["bytes"])
+    after = output.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert [event["path"] for event in fixture.events[seen:]] == [
+        listing_path, first_path, failed_path, another_path, selected_path,
+    ]
+    assert len(fixture.connects) == starts + 5
+
+    stops = {}
+    for name, flags, next_rank, reason in (
+        ("same-rank", allow, 2, "MISSING_SEARCH_RESULT_CONTEXT"),
+        ("no-grant", (), 4, "READ_PERMISSION_REQUIRED"),
+        ("deferred-host", allow, 4, "HTTP_RETRY_DEFERRED"),
+    ):
+        case = f"candidate-after-failure-{name}"
+        if name == "deferred-host":
+            fixture.failure_responses[failed_path] = (
+                "429 Too Many Requests", b"Candidate rate limited.", "Retry-After: 120\r\n",
+            )
+        seen, starts = len(fixture.events), len(fixture.connects)
+        cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate failure", case_id=case)
+        failure = rank(case, "failed", 2, *allow, expected_exit=2)
+        stopped = rank(case, "next", next_rank, *flags, expected_exit=2)
+        assert reason in stopped["reason"]
+        if name == "deferred-host":
+            assert failure["evidence"][-1]["id"] in stopped["reason"]
+        elif name == "no-grant":
+            # A stop before communication does not supply a failed attempt
+            # from which another implicit rank can be resolved.
+            no_context = rank(case, "after-denial", 3, *allow, expected_exit=2)
+            assert "MISSING_SEARCH_RESULT_CONTEXT" in no_context["reason"]
+        assert [event["path"] for event in fixture.events[seen:]] == [listing_path, failed_path]
+        assert len(fixture.connects) == starts + 2
+        stops[name] = stopped
+
+    case = "candidate-after-failure-unbound-artifact"
+    seen, starts = len(fixture.events), len(fixture.connects)
+    fixture.failure_responses[failed_path] = ("404 Not Found", b"Candidate body unavailable.", "")
+    cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate failure", case_id=case)
+    failure = rank(case, "failed", 2, *allow, expected_exit=2)
+    packet_ref = failure["dependencies"][-1]
+    # Keep the blob intact while removing its case binding in this disposable store.
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        removed = database.execute("DELETE FROM case_artifact WHERE case_id=? AND sha256=?", (case, packet_ref))
+        assert removed.rowcount == 1
+    try:
+        invalid = rank(case, "next", 4, *allow, expected_exit=4)
+        assert "INPUT_FAILURE" in invalid["reason"]
+        assert invalid["evidence"] == [] and invalid["receipts"] == []
+    finally:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+            database.execute("INSERT INTO case_artifact(case_id,sha256) VALUES(?,?)", (case, packet_ref))
+    cli("run", "--input", "new-calculation", "2+3", case_id=case)
+    assert [event["path"] for event in fixture.events[seen:]] == [listing_path, failed_path]
+    assert len(fixture.connects) == starts + 2
+    stops["unbound-artifact"] = invalid
+    assert not fixture.errors, fixture.errors
+    return {"failures": failures, "selected": selected, "recovered": recovered, "stops": stops}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1181,7 +1306,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         )
         assert process.returncode == expected_exit, (process.returncode, process.stdout, process.stderr)
         result = json.loads(process.stdout)
-        assert result["lifecycle"] == {0: "COMMIT", 2: "SUSPEND", 3: "REJECT", 5: "CANCEL"}[expected_exit]
+        assert result["lifecycle"] == {0: "COMMIT", 2: "SUSPEND", 3: "REJECT", 4: "FAIL", 5: "CANCEL"}[expected_exit]
         return result
 
     read = ("--allow-read-host", host, "--deadline-ms", "5000")
@@ -1243,11 +1368,12 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         cancelled_redirects = check_redirect_cancellation(cli, command_line, environment, fixture, state_path)
         versioned_summaries = check_versioned_source_summary(cli, fixture, state_path)
         deferred_redirects = check_redirect_retry_after(cli, fixture, state_path)
+        after_failure = check_candidate_after_failure(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
                 "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
-                "versioned_summaries": versioned_summaries}
+                "versioned_summaries": versioned_summaries, "after_failure": after_failure}
     finally:
         fixture.close()
 

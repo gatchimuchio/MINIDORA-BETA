@@ -3909,7 +3909,8 @@ impl Engine {
         {
             crate::recovery::close_cancelled_file_preparations(&self.store, cancelled)?;
         }
-        let previous = if let Some(ref requested) = request.context_ref {
+        let implicit_candidate_context = request.context_ref.is_none() && direct_bundle.is_none();
+        let mut previous = if let Some(ref requested) = request.context_ref {
             latest.as_ref().and_then(|s| {
                 s.result
                     .as_ref()
@@ -3951,6 +3952,21 @@ impl Engine {
         } else {
             input::seal(&request, previous)
         };
+        let sealed = sealed.and_then(|bundle| {
+            if implicit_candidate_context
+                && let Some(prior_case) = latest.as_ref()
+                && let Intent::FetchPreviousSearchCandidate { rank } = bundle.meaning.intent
+                && let Some(context) = search::committed_context_after_candidate_failure(
+                    &self.store,
+                    prior_case,
+                    rank,
+                )?
+            {
+                previous = Some(context);
+                return input::seal(&request, previous);
+            }
+            Ok(bundle)
+        });
         let bundle = match sealed {
             Ok(v) => v,
             Err(e) => {
