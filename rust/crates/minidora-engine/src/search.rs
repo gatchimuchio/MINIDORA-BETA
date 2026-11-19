@@ -241,6 +241,7 @@ pub fn search(
         &mut ports::RetrievalBudget::standalone(budget)?,
         &|| Ok(()),
     )
+    .map(|read| read.observation)
 }
 
 pub(crate) fn search_with_budget(
@@ -250,7 +251,7 @@ pub(crate) fn search_with_budget(
     budget: &ResourceBudget,
     retrieval: &mut ports::RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
-) -> Result<SearchObservation> {
+) -> Result<ports::ReadObservation<SearchObservation>> {
     if query.trim().is_empty()
         || query.chars().count() > 512
         || query.len() > budget.max_input_bytes
@@ -268,8 +269,11 @@ pub(crate) fn search_with_budget(
         ));
     }
     let uri = provider.request_uri(query)?;
-    let listing = ports::fetch_with_budget(uri.as_str(), permissions, retrieval, check_admission)?;
-    parse_listing(provider, query, listing)
+    let read = ports::fetch_with_budget(uri.as_str(), permissions, retrieval, check_admission)?;
+    Ok(ports::ReadObservation {
+        observation: parse_listing(provider, query, read.observation)?,
+        redirect_wait: read.redirect_wait,
+    })
 }
 
 fn source_uri(raw: &str) -> Result<String> {
@@ -746,7 +750,9 @@ pub(crate) fn committed_context_after_candidate_failure<'a>(
         || requested_rank == Some(rank)
         || !matches!(
             reason_code,
-            Some("FETCH_OR_PARSER_FAILURE" | ports::REDIRECT_RETRY_DEFERRED)
+            Some(
+                "FETCH_OR_PARSER_FAILURE" | ports::REDIRECT_RETRY_DEFERRED | ports::RETRY_DEFERRED
+            )
         )
         || failed.content_plan.is_some()
         || failed.render.is_some()
@@ -756,6 +762,16 @@ pub(crate) fn committed_context_after_candidate_failure<'a>(
             .evidence
             .first()
             .is_some_and(|packet| packet.packet_kind == "SEARCH_LIST")
+    {
+        return Ok(None);
+    }
+    if reason_code == Some(ports::RETRY_DEFERRED)
+        && !failed.evidence.last().is_some_and(|packet| {
+            packet.failure.as_deref() == Some(ports::RETRY_DEFERRED)
+                && matches!(packet.http_status, 301 | 302 | 303 | 307 | 308)
+                && packet.retry_after.is_none()
+                && packet.raw_body.is_empty()
+        })
     {
         return Ok(None);
     }
@@ -986,6 +1002,7 @@ pub fn fetch_candidate(
         &mut ports::RetrievalBudget::standalone(budget)?,
         &|| Ok(()),
     )
+    .map(|read| read.observation)
 }
 
 pub(crate) fn fetch_candidate_with_budget(
@@ -993,7 +1010,7 @@ pub(crate) fn fetch_candidate_with_budget(
     permissions: &Permissions,
     retrieval: &mut ports::RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
-) -> Result<EvidencePacket> {
+) -> Result<ports::ReadObservation<EvidencePacket>> {
     if candidate.rank == 0
         || candidate.provider_id != candidate.provider.provider_id()
         || candidate.search_packet_id.len() != 64

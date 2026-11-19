@@ -348,6 +348,7 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
 
 pub(crate) const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
 pub(crate) const REDIRECT_RETRY_DEFERRED: &str = "HTTP_REDIRECT_RETRY_DEFERRED";
+pub(crate) const RETRY_DEFERRED: &str = "HTTP_RETRY_DEFERRED";
 
 enum RetryAfterScope {
     Host,
@@ -540,7 +541,7 @@ impl RetrievalBudget {
             if let Some(packet_id) = &gate.retained_packet_id {
                 message.push_str(&format!(" (saved packet {packet_id})"));
             }
-            return Err(failure("HTTP_RETRY_DEFERRED", message));
+            return Err(failure(RETRY_DEFERRED, message));
         }
         self.remaining_starts = self.remaining_starts.checked_sub(1).ok_or_else(|| {
             failure(
@@ -650,6 +651,12 @@ pub fn fetch(
         &mut RetrievalBudget::standalone(budget)?,
         &|| Ok(()),
     )
+    .map(|read| read.observation)
+}
+
+pub(crate) struct ReadObservation<T> {
+    pub(crate) observation: T,
+    pub(crate) redirect_wait: Option<String>,
 }
 
 pub(crate) fn fetch_with_budget(
@@ -657,6 +664,27 @@ pub(crate) fn fetch_with_budget(
     permissions: &Permissions,
     budget: &mut RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
+) -> Result<ReadObservation<EvidencePacket>> {
+    let mut redirect_wait = None;
+    let observation = fetch_packet(
+        raw_url,
+        permissions,
+        budget,
+        check_admission,
+        &mut redirect_wait,
+    )?;
+    Ok(ReadObservation {
+        observation,
+        redirect_wait,
+    })
+}
+
+fn fetch_packet(
+    raw_url: &str,
+    permissions: &Permissions,
+    budget: &mut RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
+    redirect_wait: &mut Option<String>,
 ) -> Result<EvidencePacket> {
     let mut url = approved_url(raw_url, permissions)?;
     if budget.remaining_bytes == 0 {
@@ -671,6 +699,13 @@ pub(crate) fn fetch_with_budget(
         check_admission()?;
         let host = url.host_str().expect("approved domain");
         if let Err(error) = budget.reserve_start(host) {
+            if !redirects.is_empty()
+                && let minidora_domain::Error::Contract { code, message } = &error
+                && code == RETRY_DEFERRED
+            {
+                // Keep the gate decision separate from the observed redirect.
+                *redirect_wait = Some(message.clone());
+            }
             return retain_redirect_refusal(raw_url, &redirects, previous_status, error);
         }
         redirects.push(url.to_string());

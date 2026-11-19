@@ -1074,6 +1074,114 @@ def check_redirect_retry_after(cli, fixture: Fixture, state_path: Path) -> dict:
     return {"cases": cases, "read_denied": denied, "search": search, "candidate": body}
 
 
+def check_retained_redirect_wait(cli, fixture: Fixture, state_path: Path) -> dict:
+    origin, held = fixture.hosts
+    grants = ("--allow-read-host", origin, "--allow-read-host", held)
+    target = f"https://{held}/retained-wait-target"
+    prior_path, redirect_path, later_path = "/retained-wait-prior", "/retained-wait-redirect", "/retained-wait-later"
+    fixture.responses[prior_path] = (b"Completed before the held redirect.", "text/plain")
+    fixture.responses[later_path] = (b"Must remain unrequested.", "text/plain")
+    fixture.responses["/retained-wait-target"] = (b"Independent case body.", "text/plain")
+
+    def seed(case: str, status: str = "429 Too Many Requests") -> dict:
+        path = f"/retained-wait-{status[:3]}"
+        fixture.failure_responses[path] = (status, b"Observed hold.", "Retry-After: 120\r\n")
+        result = cli("run", "--input", "held", "--allow-read-host", held, f"fetch https://{held}{path}",
+                     case_id=case, expected_exit=2)
+        (packet,) = result["evidence"]
+        assert packet["http_status"] == int(status[:3])
+        assert packet["retry_after"]["directive"] == {"kind": "DELAY_SECONDS", "seconds": 120}
+        return packet
+
+    def load(reference: str) -> dict:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def assert_contacts(seen: int, starts: int, paths: list[tuple[str, str]]) -> None:
+        assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == paths
+        assert len(fixture.connects) == starts + len(paths)
+
+    def assert_wait(result: dict, seed_packet: dict, path: str, kind: str = "FETCH_FAILURE") -> dict:
+        assert result["reason"].startswith("HTTP_RETRY_DEFERRED: ")
+        assert held in result["reason"] and seed_packet["id"] in result["reason"]
+        assert result["content_plan"] is None and result["render"] is None and result["receipts"] == []
+        observed = result["evidence"][-1]
+        assert observed["packet_kind"] == kind and observed["http_status"] == 302
+        assert observed["failure"] == "HTTP_RETRY_DEFERRED" and observed.get("retry_after") is None
+        assert observed["request_uri"] == observed["final_uri"] == f"https://{origin}{path}"
+        assert observed["redirect_chain"] == [observed["final_uri"]]
+        assert observed["raw_body"] == [] and observed["extracted_text"] is None
+        return observed
+
+    fixture.redirects[redirect_path] = target
+    results = {}
+    for status in ("429 Too Many Requests", "503 Service Unavailable"):
+        case = f"retained-redirect-direct-{status[:3]}"
+        original = seed(case, status)
+        seen, starts = len(fixture.events), len(fixture.connects)
+        request = f"fetch https://{origin}{prior_path} https://{origin}{redirect_path} https://{origin}{later_path}"
+        output = state_path.parent / f"{case}.txt"
+        args = ("--input", "redirect", *grants, "--output", str(output), "--allow-write", str(output), request)
+        result = cli("run", *args, case_id=case, expected_exit=2)
+        blocked = assert_wait(result, original, redirect_path)
+        prefix, _ = result["evidence"]
+        assert prefix["packet_kind"] == "FETCHED_BODY"
+        assert result["dependencies"] == [prefix["id"], blocked["id"]] and not output.exists()
+        assert cli("run", *args, case_id=case, expected_exit=2) == result
+        assert_contacts(seen, starts, [(origin, prior_path), (origin, redirect_path)])
+        results[status[:3]] = result
+
+    case = "retained-redirect-missing-grant"
+    held_packet = seed(case)
+    seen, starts = len(fixture.events), len(fixture.connects)
+    denied = cli("run", "--input", "denied", "--allow-read-host", origin, f"fetch https://{origin}{redirect_path}",
+                 case_id=case, expected_exit=2)
+    assert denied["evidence"][0]["failure"] == "REDIRECT_PERMISSION_OR_TARGET_REJECTED"
+    assert held_packet["id"] not in denied["reason"] and "HTTP_RETRY_DEFERRED" not in denied["reason"]
+    cli("run", "--input", "independent", "--allow-read-host", held, f"fetch {target}", case_id="retained-redirect-other-case")
+    assert_contacts(seen, starts, [(origin, redirect_path), (held, "/retained-wait-target")])
+
+    case = "retained-redirect-search"
+    original = seed(case)
+    search_path = "/w/rest.php/v1/search/page?q=retained+redirect&limit=5"
+    fixture.redirects[search_path] = target
+    seen, starts = len(fixture.events), len(fixture.connects)
+    search = cli("run", "--input", "redirect", *grants, "検索 wikipedia -> crossref: retained redirect",
+                 case_id=case, expected_exit=2)
+    listing = assert_wait(search, original, search_path, "SEARCH_LIST")
+    (listing_ref,) = search["dependencies"]
+    assert load(listing_ref)["listing"] == listing
+    assert_contacts(seen, starts, [(origin, search_path)])
+
+    case = "retained-redirect-candidate"
+    original = seed(case)
+    list_path = "/w/rest.php/v1/search/page?q=candidate+after+retained+wait&limit=5"
+    titles = ("Held_by_redirect", "Independent_article")
+    candidate_path, next_path = [f"/wiki/{title}?action=raw" for title in titles]
+    fixture.responses[list_path] = (json.dumps({"pages": [
+        {"title": title, "key": title} for title in titles
+    ]}).encode(), "application/json")
+    fixture.redirects[candidate_path] = target
+    fixture.responses[next_path] = (b"New explicit candidate body.", "text/plain")
+    listing_result = cli("run", "--input", "listing", *grants,
+                         "検索 wikipedia: candidate after retained wait", case_id=case)
+    seen, starts = len(fixture.events), len(fixture.connects)
+    candidate = cli("run", "--input", "redirect", *grants, "1件目の本文を取得して",
+                    case_id=case, expected_exit=2)
+    blocked = assert_wait(candidate, original, candidate_path)
+    assert load(candidate["dependencies"][-1]) == blocked
+    assert candidate["evidence"][:-1] == listing_result["evidence"]
+    assert_contacts(seen, starts, [(origin, candidate_path)])
+    next_result = cli("run", "--input", "another-rank", "--allow-read-host", origin,
+                      "2件目の本文を取得して", case_id=case)
+    assert next_result["evidence"][:-1] == listing_result["evidence"]
+    assert next_result["evidence"][-1]["extracted_text"] == "New explicit candidate body."
+    assert_contacts(seen, starts, [(origin, candidate_path), (origin, next_path)])
+    assert not fixture.errors, fixture.errors
+    return {**results, "denied": denied, "search": search, "candidate": candidate, "next": next_result}
+
+
 def check_versioned_source_summary(cli, fixture: Fixture, state_path: Path) -> dict:
     host = fixture.host
     listing_path = "/w/rest.php/v1/search/page?q=candidate+replay&limit=5"
@@ -1921,6 +2029,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         cancelled_redirects = check_redirect_cancellation(cli, command_line, environment, fixture, state_path)
         versioned_summaries = check_versioned_source_summary(cli, fixture, state_path)
         deferred_redirects = check_redirect_retry_after(cli, fixture, state_path)
+        retained_redirect_wait = check_retained_redirect_wait(cli, fixture, state_path)
         after_failure = check_candidate_after_failure(cli, fixture, state_path)
         sources_after_failure = check_sources_after_candidate_failure(cli, fixture, state_path)
         source_followup_chain = check_source_followup_chain(cli, fixture, state_path)
@@ -1932,6 +2041,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
                 "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
                 "versioned_summaries": versioned_summaries, "after_failure": after_failure,
+                "retained_redirect_wait": retained_redirect_wait,
                 "sources_after_failure": sources_after_failure,
                 "source_followup_chain": source_followup_chain,
                 "candidate_after_source": candidate_after_source,

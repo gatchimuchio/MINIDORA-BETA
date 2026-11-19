@@ -5517,7 +5517,7 @@ impl Engine {
                 let mut provider = search_plan.primary;
                 let mut failed_primary = None;
                 loop {
-                    let observation = match search::search_with_budget(
+                    let read = match search::search_with_budget(
                         provider,
                         search_plan.query,
                         &goal.permissions,
@@ -5525,7 +5525,7 @@ impl Engine {
                         &mut budget,
                         &read_admission(&state)?,
                     ) {
-                        Ok(observation) => observation,
+                        Ok(read) => read,
                         Err(error) if read_case_changed(&error) => return Err(error),
                         Err(error) => {
                             state.result = Some(result);
@@ -5537,15 +5537,21 @@ impl Engine {
                             );
                         }
                     };
+                    let observation = read.observation;
                     let artifact =
                         self.store
                             .put_artifact(actor, &request.case_id, &observation)?;
                     result.dependencies.push(artifact.clone());
                     result.evidence.push(observation.listing.clone());
-                    if observation.listing.failure.as_deref()
-                        == Some(ports::REDIRECT_RETRY_DEFERRED)
+                    if read.redirect_wait.is_some()
+                        || observation.listing.failure.as_deref()
+                            == Some(ports::REDIRECT_RETRY_DEFERRED)
                     {
-                        return self.suspend_redirect_retry(&mut state, result);
+                        return self.suspend_redirect_retry(
+                            &mut state,
+                            result,
+                            read.redirect_wait.as_deref(),
+                        );
                     }
                     if let Some(error) = &observation.failure {
                         state.result = Some(result.clone());
@@ -5726,31 +5732,26 @@ impl Engine {
                     }
                     result.dependencies.push(packet_ref);
                 }
-                let packet =
-                    match retrieval_budget(1, &state, &self.store).and_then(|mut budget| {
-                        search::fetch_candidate_with_budget(
-                            candidate,
-                            &goal.permissions,
-                            &mut budget,
-                            &read_admission(&state)?,
-                        )
-                    }) {
-                        Ok(packet) => packet,
-                        Err(error) if read_case_changed(&error) => return Err(error),
-                        Err(error) => {
-                            let code = match &error {
-                                Error::Contract { code, .. } => code.as_str(),
-                                _ => "EVIDENCE_UNAVAILABLE",
-                            };
-                            state.result = Some(result);
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                code,
-                                &error.to_string(),
-                            );
-                        }
-                    };
+                let read = match retrieval_budget(1, &state, &self.store).and_then(|mut budget| {
+                    search::fetch_candidate_with_budget(
+                        candidate,
+                        &goal.permissions,
+                        &mut budget,
+                        &read_admission(&state)?,
+                    )
+                }) {
+                    Ok(read) => read,
+                    Err(error) if read_case_changed(&error) => return Err(error),
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "EVIDENCE_UNAVAILABLE",
+                        };
+                        state.result = Some(result);
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
+                let packet = read.observation;
                 if packet.raw_body.len() > request.budget.max_evidence_bytes {
                     return self.stop(
                         &mut state,
@@ -5764,8 +5765,14 @@ impl Engine {
                 if !result.evidence.iter().any(|existing| existing == &packet) {
                     result.evidence.push(packet.clone());
                 }
-                if packet.failure.as_deref() == Some(ports::REDIRECT_RETRY_DEFERRED) {
-                    return self.suspend_redirect_retry(&mut state, result);
+                if read.redirect_wait.is_some()
+                    || packet.failure.as_deref() == Some(ports::REDIRECT_RETRY_DEFERRED)
+                {
+                    return self.suspend_redirect_retry(
+                        &mut state,
+                        result,
+                        read.redirect_wait.as_deref(),
+                    );
                 }
                 if packet.failure.is_some() || packet.extracted_text.is_none() {
                     state.result = Some(result);
@@ -8725,13 +8732,13 @@ impl Engine {
                     }
                 };
                 for (source_index, uri) in urls.iter().enumerate() {
-                    let packet = match ports::fetch_with_budget(
+                    let read = match ports::fetch_with_budget(
                         uri,
                         &goal.permissions,
                         &mut retrieval,
                         &read_admission(&state)?,
                     ) {
-                        Ok(packet) => packet,
+                        Ok(read) => read,
                         Err(error) if read_case_changed(&error) => return Err(error),
                         Err(error) => {
                             state.result = Some(result);
@@ -8743,6 +8750,7 @@ impl Engine {
                             );
                         }
                     };
+                    let packet = read.observation;
                     let observed = self.store.put_artifact(actor, &request.case_id, &packet)?;
                     if packet.failure.is_none() && packet.extracted_text.is_some() {
                         graph.observe(
@@ -8752,12 +8760,16 @@ impl Engine {
                         )?;
                     }
                     let refused_dns = packet.failure.as_deref() == Some("PRIVATE_READ_TARGET");
-                    let deferred_redirect =
-                        packet.failure.as_deref() == Some(ports::REDIRECT_RETRY_DEFERRED);
+                    let deferred_redirect = read.redirect_wait.is_some()
+                        || packet.failure.as_deref() == Some(ports::REDIRECT_RETRY_DEFERRED);
                     result.dependencies.push(packet.id.clone());
                     result.evidence.push(packet);
                     if deferred_redirect {
-                        return self.suspend_redirect_retry(&mut state, result);
+                        return self.suspend_redirect_retry(
+                            &mut state,
+                            result,
+                            read.redirect_wait.as_deref(),
+                        );
                     }
                     // Keep the refusal terminal even when the port could
                     // retain evidence of an earlier redirect response.
@@ -9921,14 +9933,17 @@ impl Engine {
         &self,
         state: &mut CaseRevision,
         result: ResultRecord,
+        redirect_wait: Option<&str>,
     ) -> Result<ResultRecord> {
         state.result = Some(result);
-        self.stop(
-            state,
-            Lifecycle::Suspend,
-            ports::REDIRECT_RETRY_DEFERRED,
-            "Retry-After の待機条件を満たしたと確認できないため、転送先への接続を停止しました。",
-        )
+        let (code, message) = match redirect_wait {
+            Some(reason) => (ports::RETRY_DEFERRED, reason),
+            None => (
+                ports::REDIRECT_RETRY_DEFERRED,
+                "Retry-After の待機条件を満たしたと確認できないため、転送先への接続を停止しました。",
+            ),
+        };
+        self.stop(state, Lifecycle::Suspend, code, message)
     }
 
     fn stop(
