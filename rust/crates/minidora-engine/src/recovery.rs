@@ -2850,9 +2850,9 @@ pub(crate) fn source_context_available(
     if source.lifecycle == Lifecycle::Commit {
         return Ok(true);
     }
-    if !crate::text_summary::has_partial_retrieval_bodies(source) {
+    let Some(stop) = crate::text_summary::partial_retrieval_stop(source) else {
         return Ok(false);
-    }
+    };
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
@@ -2865,6 +2865,11 @@ pub(crate) fn source_context_available(
     let Intent::Retrieve { urls, .. } = &bundle.meaning.intent else {
         return Ok(false);
     };
+    let observed = source.evidence.len();
+    let url_count_matches = match stop {
+        crate::text_summary::PartialRetrievalStop::AfterAllUrls => observed == urls.len(),
+        crate::text_summary::PartialRetrievalStop::AtRedirect => observed <= urls.len(),
+    };
     if identity(&bundle.request)? != source.id
         || store
             .get_input_result(actor, case, &source.input_id, source.input_version)?
@@ -2875,8 +2880,8 @@ pub(crate) fn source_context_available(
         || source.render.is_some()
         || !source.receipts.is_empty()
         || source.execution_graph_ref.is_some()
-        || urls.len() != source.evidence.len()
-        || urls.len() != source.dependencies.len()
+        || !url_count_matches
+        || observed != source.dependencies.len()
     {
         return Err(invalid());
     }
@@ -3123,8 +3128,8 @@ fn verify_source_summary_context(
     );
     let mut units = Vec::new();
     let mut report_bytes = 0usize;
-    if prior.lifecycle == Lifecycle::Suspend {
-        units.push(crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+    if let Some(stop) = crate::text_summary::partial_retrieval_stop(prior) {
+        units.push(stop.notice().into());
     }
     for position in active_positions {
         let (_, packet, packet_ref) = &source_packets[position];
@@ -3402,8 +3407,8 @@ fn verify_source_question_context(
         })?;
     let (encoded, mut expected_units) =
         recompute_source_question_artifact(operation, &prior.id, query, &packets)?;
-    if prior.lifecycle == Lifecycle::Suspend {
-        expected_units.insert(0, crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+    if let Some(stop) = crate::text_summary::partial_retrieval_stop(prior) {
+        expected_units.insert(0, stop.notice().into());
     }
     if digest(&encoded) != *answer_ref || stored_answer != encoded {
         return Err(failure(

@@ -1319,27 +1319,60 @@ pub(crate) fn source_summary_bodies(
     })
 }
 
-pub(crate) fn has_partial_retrieval_bodies(result: &ResultRecord) -> bool {
-    result.lifecycle == Lifecycle::Suspend
-        && result
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.starts_with("FETCH_OR_PARSER_FAILURE: "))
-        && result.evidence.iter().all(|packet| {
-            matches!(
-                packet.packet_kind.as_str(),
-                "FETCHED_BODY" | "FETCH_FAILURE"
-            )
-        })
-        && result
-            .evidence
-            .iter()
-            .any(|packet| packet.packet_kind == "FETCH_FAILURE")
-        && source_summary_bodies(result).next().is_some()
+pub(crate) enum PartialRetrievalStop {
+    AfterAllUrls,
+    AtRedirect,
 }
 
-pub(crate) const PARTIAL_RETRIEVAL_NOTICE: &str =
-    "元の取得は一部失敗しました。照合できた取得本文を使用しています。";
+impl PartialRetrievalStop {
+    pub(crate) fn notice(self) -> &'static str {
+        match self {
+            Self::AfterAllUrls => {
+                "元の取得は一部失敗しました。照合できた取得本文を使用しています。"
+            }
+            Self::AtRedirect => {
+                "元の取得は転送時の待機条件で停止しました。照合できた取得本文を使用しています。"
+            }
+        }
+    }
+}
+
+pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRetrievalStop> {
+    if result.lifecycle != Lifecycle::Suspend {
+        return None;
+    }
+    let (code, _) = result.reason.as_deref()?.split_once(": ")?;
+    let stop = match code {
+        "FETCH_OR_PARSER_FAILURE"
+            if result
+                .evidence
+                .iter()
+                .any(|packet| packet.packet_kind == "FETCH_FAILURE") =>
+        {
+            PartialRetrievalStop::AfterAllUrls
+        }
+        crate::ports::REDIRECT_RETRY_DEFERRED | crate::ports::RETRY_DEFERRED => {
+            let last = result.evidence.last()?;
+            if last.packet_kind != "FETCH_FAILURE"
+                || last.failure.as_deref() != Some(code)
+                || !matches!(last.http_status, 301 | 302 | 303 | 307 | 308)
+                || !last.raw_body.is_empty()
+                || last.retry_after.is_some() != (code == crate::ports::REDIRECT_RETRY_DEFERRED)
+            {
+                return None;
+            }
+            PartialRetrievalStop::AtRedirect
+        }
+        _ => return None,
+    };
+    (result.evidence.iter().all(|packet| {
+        matches!(
+            packet.packet_kind.as_str(),
+            "FETCHED_BODY" | "FETCH_FAILURE"
+        )
+    }) && source_summary_bodies(result).next().is_some())
+    .then_some(stop)
+}
 
 pub(crate) fn source_summary_packet_positions(
     packets: &[(usize, &EvidencePacket, String)],

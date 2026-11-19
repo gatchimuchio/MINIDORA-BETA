@@ -7109,8 +7109,8 @@ impl Engine {
                 );
                 let mut source_reports = Vec::new();
                 let mut report_bytes = 0usize;
-                if prior.lifecycle == Lifecycle::Suspend {
-                    units.push(crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+                if let Some(stop) = crate::text_summary::partial_retrieval_stop(prior) {
+                    units.push(stop.notice().into());
                 }
                 for position in active_positions {
                     let (_, packet, packet_ref) = &source_packets[position];
@@ -7241,8 +7241,8 @@ impl Engine {
                 }
                 let answer_bytes = canonical(answer)?;
                 let mut output_units = crate::text_summary::source_question_answer_lines_v2(answer);
-                if prior.lifecycle == Lifecycle::Suspend {
-                    output_units.insert(0, crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+                if let Some(stop) = crate::text_summary::partial_retrieval_stop(prior) {
+                    output_units.insert(0, stop.notice().into());
                 }
                 let output_bytes = output_units.join("\n").len();
                 if answer_bytes.len() > request.budget.max_evidence_bytes

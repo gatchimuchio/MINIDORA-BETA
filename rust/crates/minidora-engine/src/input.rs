@@ -131,7 +131,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     let lacks_source_context = || {
         previous.is_none_or(|result| {
             result.lifecycle != Lifecycle::Commit
-                && !crate::text_summary::has_partial_retrieval_bodies(result)
+                && crate::text_summary::partial_retrieval_stop(result).is_none()
         })
     };
     if matches!(intent, Intent::AskPreviousSourceQuestion { .. }) && lacks_source_context() {
