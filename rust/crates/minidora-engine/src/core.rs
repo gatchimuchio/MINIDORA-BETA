@@ -4712,7 +4712,10 @@ impl Engine {
                 for packet in &result.evidence {
                     if !matches!(result.lifecycle, Lifecycle::Suspend | Lifecycle::Commit)
                         && !(result.lifecycle == Lifecycle::Cancel
-                            && packet.packet_kind == "SEARCH_LIST")
+                            && matches!(
+                                packet.packet_kind.as_str(),
+                                "SEARCH_LIST" | "FETCH_FAILURE"
+                            ))
                     {
                         continue;
                     }
@@ -8619,6 +8622,17 @@ impl Engine {
                     }
                 };
                 for (source_index, uri) in urls.iter().enumerate() {
+                    if source_index > 0
+                        && self
+                            .store
+                            .load_case(actor, &request.case_id)?
+                            .is_none_or(|latest| latest.revision != state.revision)
+                    {
+                        return Err(failure(
+                            "CASE_BUSY_OR_RECOVERY_REQUIRED",
+                            "The case changed before the next source could start",
+                        ));
+                    }
                     let packet =
                         match ports::fetch_with_budget(uri, &goal.permissions, &mut retrieval) {
                             Ok(p) => p,
@@ -8654,6 +8668,14 @@ impl Engine {
                             &ports::private_dns_refusal().to_string(),
                         );
                     }
+                    // Preserve the received prefix even if a later read is
+                    // interrupted or the original deadline has now elapsed.
+                    state.result = Some(result.clone());
+                    self.advance(
+                        &mut state,
+                        Lifecycle::Running,
+                        Some("RETRIEVAL_SOURCE_OBSERVED".into()),
+                    )?;
                 }
                 if result
                     .evidence
@@ -10301,6 +10323,34 @@ fn verify_retained_retry_source(
             || store.get_bytes(&state.actor_id, &state.case_id, &reference)? != bytes
         {
             return Err(invalid());
+        }
+        if result.lifecycle == Lifecycle::Cancel {
+            let (_, bundle) = store
+                .get_input_bundle(
+                    &state.actor_id,
+                    &state.case_id,
+                    &result.input_id,
+                    result.input_version,
+                )?
+                .ok_or_else(invalid)?;
+            let Intent::Retrieve { urls, .. } = &bundle.meaning.intent else {
+                return Err(invalid());
+            };
+            if identity(&bundle.request)? != result.id
+                || result.evidence.len() != result.dependencies.len()
+                || result.evidence.len() > urls.len()
+                || result
+                    .evidence
+                    .iter()
+                    .zip(&result.dependencies)
+                    .zip(urls)
+                    .any(|((observation, reference), uri)| {
+                        observation.request_uri != *uri || observation.id != *reference
+                    })
+            {
+                return Err(invalid());
+            }
+            ports::validate_observed_route(packet, &bundle.request.permissions)?;
         }
     }
     Ok(())

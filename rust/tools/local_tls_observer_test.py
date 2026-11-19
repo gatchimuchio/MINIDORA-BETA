@@ -818,6 +818,81 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
             "deferred": blocked, "cancelled_deferred": cancelled_deferred}
 
 
+def check_interrupted_retrieval(cli, command_line, environment, fixture: Fixture, state_path: Path) -> dict:
+    first, second = fixture.hosts
+    grants = ("--allow-read-host", first, "--allow-read-host", second, "--deadline-ms", "12000")
+
+    def latest(case_id: str) -> dict:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+            (reference,) = database.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1",
+                (case_id,),
+            ).fetchone()
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def wait_for_request(process, seen: int, expected: tuple[str, str]) -> None:
+        limit = time.monotonic() + 5
+        while expected not in [(event["host"], event["path"]) for event in fixture.events[seen:]]:
+            assert process.poll() is None and time.monotonic() < limit
+            time.sleep(0.01)
+
+    case = "interrupted-direct-retrieval"
+    arguments = ("--input", "fetch", *grants, f"fetch https://{first}/429 https://{second}/slow-body")
+    seen, starts = len(fixture.events), len(fixture.connects)
+    with subprocess.Popen(command_line("run", *arguments, case_id=case), env=environment,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            wait_for_request(process, seen, (second, "/slow-body"))
+            checkpoint = latest(case)
+        finally:
+            process.kill()
+            process.communicate(timeout=5)
+    assert checkpoint["lifecycle"] == "RUNNING" and checkpoint["reason"] == "RETRIEVAL_SOURCE_OBSERVED"
+    prefix = checkpoint["result"]
+    (failure,) = prefix["evidence"]
+    assert prefix["dependencies"] == [failure["id"]] and prefix["render"] is None and prefix["receipts"] == []
+    assert failure["http_status"] == 429 and failure["request_uri"] == f"https://{first}/429"
+    assert bytes(failure["raw_body"]) == b"rate limited fixture"
+    assert failure["retry_after"]["directive"] == {"kind": "DELAY_SECONDS", "seconds": 120}
+
+    replay = cli("run", *arguments, case_id=case, expected_exit=2)
+    assert "INCOMPLETE_PRIOR_ATTEMPT" in replay["reason"]
+    assert replay["evidence"] == prefix["evidence"] and replay["dependencies"] == prefix["dependencies"]
+    assert latest(case) == checkpoint
+    cli("run", "--input", "cancel", "中止", case_id=case, expected_exit=5)
+    cancelled = latest(case)["prior_results"][prefix["id"]]
+    assert cancelled["lifecycle"] == "CANCEL" and cancelled["evidence"] == prefix["evidence"]
+    read = ("--allow-read-host", first, f"fetch https://{first}/ok")
+    deferred = cli("run", "--input", "after-cancel", *read, case_id=case, expected_exit=2)
+    assert "HTTP_RETRY_DEFERRED" in deferred["reason"] and failure["id"] in deferred["reason"]
+    assert deferred["evidence"] == [] and len(fixture.connects) == starts + 2
+    assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == [(first, "/429"), (second, "/slow-body")]
+    cli("run", "--input", "independent", *read, case_id="independent-direct-retrieval")
+    assert len(fixture.connects) == starts + 3 and fixture.events[-1]["path"] == "/ok"
+
+    case = "cancel-before-next-direct-source"
+    arguments = ("--input", "fetch", *grants, f"fetch https://{first}/slow-body https://{second}/ok")
+    seen, starts = len(fixture.events), len(fixture.connects)
+    with subprocess.Popen(command_line("run", *arguments, case_id=case), env=environment,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            wait_for_request(process, seen, (first, "/slow-body"))
+            cli("run", "--input", "cancel", "中止", case_id=case, expected_exit=5)
+            _, errors = process.communicate(timeout=8)
+            assert process.returncode != 0, errors
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+    assert latest(case)["lifecycle"] == "CANCEL"
+    assert len(fixture.connects) == starts + 1
+    assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == [(first, "/slow-body")]
+    assert not fixture.errors, fixture.errors
+    return {"checkpoint": checkpoint, "replay": replay, "cancelled": cancelled, "deferred": deferred}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -842,11 +917,15 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     environment["NO_PROXY"] = environment["no_proxy"] = ""
     environment["SSL_CERT_FILE"] = str(ca)
 
+    def command_line(command: str, *arguments: str, case_id: str = case,
+                     actor_id: str = "fixture-local") -> list[str]:
+        return [str(binary), command, "--db", str(state_path), "--case", case_id,
+                "--actor", actor_id, "--json", *arguments]
+
     def cli(command: str, *arguments: str, case_id: str = case,
             actor_id: str = "fixture-local", expected_exit: int = 0) -> dict:
         process = subprocess.run(
-            [str(binary), command, "--db", str(state_path), "--case", case_id,
-             "--actor", actor_id, "--json", *arguments],
+            command_line(command, *arguments, case_id=case_id, actor_id=actor_id),
             env=environment, capture_output=True, text=True, timeout=15, check=False,
         )
         assert process.returncode == expected_exit, (process.returncode, process.stdout, process.stderr)
@@ -909,9 +988,10 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         search_goals = check_search_goals(cli, fixture, state_path, directory)
         retry_continuation = check_retry_continuation(cli, fixture, search_goals["retry_after"][0])
         search_fallback = check_ordered_search(cli, fixture, state_path, directory)
+        interrupted_retrieval = check_interrupted_retrieval(cli, command_line, environment, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
-                "search_fallback": search_fallback}
+                "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval}
     finally:
         fixture.close()
 
