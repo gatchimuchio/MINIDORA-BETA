@@ -1,7 +1,7 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
-use minidora_domain::{EvidencePacket, Intent, Result, canonical, digest, failure};
+use minidora_domain::{EvidencePacket, Intent, Result, ResultRecord, canonical, digest, failure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -692,8 +692,7 @@ pub(crate) fn answer_fetched_source_question_v2(
             "fetched-body evidence must identify its LIVE or fixed-packet mode",
         ));
     }
-    let mut source_groups = Vec::<(String, Vec<usize>)>::new();
-    for (packet_index, (_, packet, packet_ref)) in packets.iter().enumerate() {
+    for (_, packet, packet_ref) in packets {
         let extracted_text = packet.extracted_text.as_deref().unwrap_or_default();
         let packet_bytes = canonical(packet)?;
         if !sha256_id(&packet.id)
@@ -721,144 +720,12 @@ pub(crate) fn answer_fetched_source_question_v2(
                 "LIVE and fixed-packet bodies cannot be combined in one source-question result",
             ));
         }
-        if let Some((_, indices)) = source_groups
-            .iter_mut()
-            .find(|(source_uri, _)| source_uri == &packet.final_uri)
-        {
-            indices.push(packet_index);
-        } else {
-            source_groups.push((packet.final_uri.clone(), vec![packet_index]));
-        }
     }
-
-    let mut active_packet_indices = Vec::with_capacity(source_groups.len());
-    let mut source_versions = Vec::with_capacity(source_groups.len());
-    let mut superseded_version_count = 0usize;
-    for (source_final_uri, packet_indices) in &source_groups {
-        let mut versions = Vec::<SourceQuestionPacketVersion>::new();
-        for packet_index in packet_indices {
-            let (_, packet, _) = &packets[*packet_index];
-            let extracted_text = packet
-                .extracted_text
-                .as_deref()
-                .expect("validated source body has extracted text");
-            let extracted_text_sha256 = digest(extracted_text.as_bytes());
-            if let Some(version) = versions.iter_mut().find(|version| {
-                version.raw_body_sha256 == packet.raw_sha256
-                    && version.extracted_text_sha256 == extracted_text_sha256
-                    && version.parser_version == packet.parser_version
-            }) {
-                version.latest_observed_at_unix_ms = version
-                    .latest_observed_at_unix_ms
-                    .max(packet.observed_at_unix_ms);
-                version.packet_indices.push(*packet_index);
-            } else {
-                versions.push(SourceQuestionPacketVersion {
-                    raw_body_sha256: packet.raw_sha256.clone(),
-                    extracted_text_sha256,
-                    parser_version: packet.parser_version.clone(),
-                    latest_observed_at_unix_ms: packet.observed_at_unix_ms,
-                    packet_indices: vec![*packet_index],
-                });
-            }
-        }
-        let latest_observation = versions
-            .iter()
-            .map(|version| version.latest_observed_at_unix_ms)
-            .max()
-            .expect("every source group has a packet");
-        let latest_versions: Vec<_> = versions
-            .iter()
-            .enumerate()
-            .filter(|(_, version)| version.latest_observed_at_unix_ms == latest_observation)
-            .map(|(index, _)| index)
-            .collect();
-        if latest_versions.len() != 1 {
-            return Err(failure(
-                "SOURCE_VERSION_AMBIGUOUS",
-                "the same exact final URI has different body or parser versions at the latest observed time",
-            ));
-        }
-        let active_version_index = latest_versions[0];
-        let active_version = &versions[active_version_index];
-        let active_packet_index = *active_version
-            .packet_indices
-            .iter()
-            .max_by(|left, right| {
-                let (_, left_packet, left_ref) = &packets[**left];
-                let (_, right_packet, right_ref) = &packets[**right];
-                left_packet
-                    .observed_at_unix_ms
-                    .cmp(&right_packet.observed_at_unix_ms)
-                    .then_with(|| left_ref.cmp(right_ref))
-            })
-            .expect("active version has a packet");
-        let (_, active_packet, active_packet_ref) = &packets[active_packet_index];
-
-        let mut active_version_packet_refs: Vec<_> = active_version
-            .packet_indices
-            .iter()
-            .map(|index| {
-                let (_, packet, packet_ref) = &packets[*index];
-                (packet.observed_at_unix_ms, packet_ref.clone())
-            })
-            .collect();
-        active_version_packet_refs.sort();
-
-        let mut superseded_versions = Vec::new();
-        for (index, version) in versions.iter().enumerate() {
-            if index == active_version_index {
-                continue;
-            }
-            let mut packet_refs: Vec<_> = version
-                .packet_indices
-                .iter()
-                .map(|packet_index| {
-                    let (_, packet, packet_ref) = &packets[*packet_index];
-                    (packet.observed_at_unix_ms, packet_ref.clone())
-                })
-                .collect();
-            packet_refs.sort();
-            superseded_versions.push((
-                version.latest_observed_at_unix_ms,
-                SourceQuestionPriorVersion {
-                    latest_observed_at_unix_ms: version.latest_observed_at_unix_ms,
-                    raw_body_sha256: version.raw_body_sha256.clone(),
-                    extracted_text_sha256: version.extracted_text_sha256.clone(),
-                    parser_version: version.parser_version.clone(),
-                    packet_refs: packet_refs
-                        .into_iter()
-                        .map(|(_, reference)| reference)
-                        .collect(),
-                },
-            ));
-        }
-        superseded_versions.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.raw_body_sha256.cmp(&right.1.raw_body_sha256))
-        });
-        superseded_version_count =
-            superseded_version_count.saturating_add(superseded_versions.len());
-        source_versions.push(SourceQuestionSourceVersion {
-            source_final_uri: source_final_uri.clone(),
-            active_packet_id: active_packet.id.clone(),
-            active_packet_ref: active_packet_ref.clone(),
-            active_observed_at_unix_ms: active_packet.observed_at_unix_ms,
-            active_raw_body_sha256: active_packet.raw_sha256.clone(),
-            active_extracted_text_sha256: active_version.extracted_text_sha256.clone(),
-            active_parser_version: active_packet.parser_version.clone(),
-            active_version_packet_refs: active_version_packet_refs
-                .into_iter()
-                .map(|(_, reference)| reference)
-                .collect(),
-            superseded_versions: superseded_versions
-                .into_iter()
-                .map(|(_, version)| version)
-                .collect(),
-        });
-        active_packet_indices.push(active_packet_index);
-    }
+    let SourceVersionSelection {
+        active_packet_indices,
+        source_versions,
+        superseded_version_count,
+    } = select_source_versions(packets)?;
 
     let mut ordered = Vec::<(usize, usize, usize, SourceQuestionCandidate)>::new();
     let mut matched_sentence_count = 0usize;
@@ -933,7 +800,7 @@ pub(crate) fn answer_fetched_source_question_v2(
         question_topic: question_topic.into(),
         query_terms,
         source_packet_count: packets.len(),
-        active_source_count: source_groups.len(),
+        active_source_count: source_versions.len(),
         superseded_version_count,
         source_versions,
         matched_sentence_count,
@@ -1276,6 +1143,193 @@ pub fn summarize_fetched_source(
     summarize_fetched_source_with_limits(source_result_id, packet, source_packet_ref, 3, None)
 }
 
+struct SourceVersionSelection {
+    active_packet_indices: Vec<usize>,
+    source_versions: Vec<SourceQuestionSourceVersion>,
+    superseded_version_count: usize,
+}
+
+fn select_source_versions(
+    packets: &[(usize, &EvidencePacket, String)],
+) -> Result<SourceVersionSelection> {
+    let mut source_groups = Vec::<(String, Vec<usize>)>::new();
+    for (packet_index, (_, packet, _)) in packets.iter().enumerate() {
+        if let Some((_, indices)) = source_groups
+            .iter_mut()
+            .find(|(source_uri, _)| source_uri == &packet.final_uri)
+        {
+            if packets[indices[0]].1.mode != packet.mode {
+                return Err(failure(
+                    "SOURCE_VERSION_MODE_MIXED",
+                    "observations of the same URI use different evidence modes",
+                ));
+            }
+            indices.push(packet_index);
+        } else {
+            source_groups.push((packet.final_uri.clone(), vec![packet_index]));
+        }
+    }
+
+    let mut active_packet_indices = Vec::with_capacity(source_groups.len());
+    let mut source_versions = Vec::with_capacity(source_groups.len());
+    let mut superseded_version_count = 0usize;
+    for (source_final_uri, packet_indices) in &source_groups {
+        let mut versions = Vec::<SourceQuestionPacketVersion>::new();
+        for packet_index in packet_indices {
+            let (_, packet, _) = &packets[*packet_index];
+            let extracted_text = packet
+                .extracted_text
+                .as_deref()
+                .expect("validated source body has extracted text");
+            let extracted_text_sha256 = digest(extracted_text.as_bytes());
+            if let Some(version) = versions.iter_mut().find(|version| {
+                version.raw_body_sha256 == packet.raw_sha256
+                    && version.extracted_text_sha256 == extracted_text_sha256
+                    && version.parser_version == packet.parser_version
+            }) {
+                version.latest_observed_at_unix_ms = version
+                    .latest_observed_at_unix_ms
+                    .max(packet.observed_at_unix_ms);
+                version.packet_indices.push(*packet_index);
+            } else {
+                versions.push(SourceQuestionPacketVersion {
+                    raw_body_sha256: packet.raw_sha256.clone(),
+                    extracted_text_sha256,
+                    parser_version: packet.parser_version.clone(),
+                    latest_observed_at_unix_ms: packet.observed_at_unix_ms,
+                    packet_indices: vec![*packet_index],
+                });
+            }
+        }
+        let latest_observation = versions
+            .iter()
+            .map(|version| version.latest_observed_at_unix_ms)
+            .max()
+            .expect("every source group has a packet");
+        let latest_versions: Vec<_> = versions
+            .iter()
+            .enumerate()
+            .filter(|(_, version)| version.latest_observed_at_unix_ms == latest_observation)
+            .map(|(index, _)| index)
+            .collect();
+        if latest_versions.len() != 1 {
+            return Err(failure(
+                "SOURCE_VERSION_AMBIGUOUS",
+                "the same exact final URI has different body or parser versions at the latest observed time",
+            ));
+        }
+        let active_version_index = latest_versions[0];
+        let active_version = &versions[active_version_index];
+        let active_packet_index = *active_version
+            .packet_indices
+            .iter()
+            .max_by(|left, right| {
+                let (_, left_packet, left_ref) = &packets[**left];
+                let (_, right_packet, right_ref) = &packets[**right];
+                left_packet
+                    .observed_at_unix_ms
+                    .cmp(&right_packet.observed_at_unix_ms)
+                    .then_with(|| left_ref.cmp(right_ref))
+            })
+            .expect("active version has a packet");
+        let (_, active_packet, active_packet_ref) = &packets[active_packet_index];
+
+        let mut active_version_packet_refs: Vec<_> = active_version
+            .packet_indices
+            .iter()
+            .map(|index| {
+                let (_, packet, packet_ref) = &packets[*index];
+                (packet.observed_at_unix_ms, packet_ref.clone())
+            })
+            .collect();
+        active_version_packet_refs.sort();
+
+        let mut superseded_versions = Vec::new();
+        for (index, version) in versions.iter().enumerate() {
+            if index == active_version_index {
+                continue;
+            }
+            let mut packet_refs: Vec<_> = version
+                .packet_indices
+                .iter()
+                .map(|packet_index| {
+                    let (_, packet, packet_ref) = &packets[*packet_index];
+                    (packet.observed_at_unix_ms, packet_ref.clone())
+                })
+                .collect();
+            packet_refs.sort();
+            superseded_versions.push((
+                version.latest_observed_at_unix_ms,
+                SourceQuestionPriorVersion {
+                    latest_observed_at_unix_ms: version.latest_observed_at_unix_ms,
+                    raw_body_sha256: version.raw_body_sha256.clone(),
+                    extracted_text_sha256: version.extracted_text_sha256.clone(),
+                    parser_version: version.parser_version.clone(),
+                    packet_refs: packet_refs
+                        .into_iter()
+                        .map(|(_, reference)| reference)
+                        .collect(),
+                },
+            ));
+        }
+        superseded_versions.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.raw_body_sha256.cmp(&right.1.raw_body_sha256))
+        });
+        superseded_version_count =
+            superseded_version_count.saturating_add(superseded_versions.len());
+        source_versions.push(SourceQuestionSourceVersion {
+            source_final_uri: source_final_uri.clone(),
+            active_packet_id: active_packet.id.clone(),
+            active_packet_ref: active_packet_ref.clone(),
+            active_observed_at_unix_ms: active_packet.observed_at_unix_ms,
+            active_raw_body_sha256: active_packet.raw_sha256.clone(),
+            active_extracted_text_sha256: active_version.extracted_text_sha256.clone(),
+            active_parser_version: active_packet.parser_version.clone(),
+            active_version_packet_refs: active_version_packet_refs
+                .into_iter()
+                .map(|(_, reference)| reference)
+                .collect(),
+            superseded_versions: superseded_versions
+                .into_iter()
+                .map(|(_, version)| version)
+                .collect(),
+        });
+        active_packet_indices.push(active_packet_index);
+    }
+
+    Ok(SourceVersionSelection {
+        active_packet_indices,
+        source_versions,
+        superseded_version_count,
+    })
+}
+
+pub(crate) fn source_summary_bodies(
+    prior: &ResultRecord,
+) -> impl Iterator<Item = (usize, &EvidencePacket)> {
+    prior.evidence.iter().enumerate().filter(|(_, packet)| {
+        packet.packet_kind == "FETCHED_BODY"
+            && packet.failure.is_none()
+            && packet.retry_after.is_none()
+            && packet.extracted_text.is_some()
+    })
+}
+
+pub(crate) fn source_summary_packet_positions(
+    packets: &[(usize, &EvidencePacket, String)],
+    parser_version: &str,
+) -> Result<Vec<usize>> {
+    if parser_version != crate::input::SOURCE_SUMMARY_PARSER_VERSION {
+        return Ok((0..packets.len()).collect());
+    }
+    for (_, packet, reference) in packets {
+        validate_source_summary_body(packet, reference)?;
+    }
+    Ok(select_source_versions(packets)?.active_packet_indices)
+}
+
 pub(crate) fn constrained_source_summary_limits(intent: &Intent) -> Option<(usize, Option<usize>)> {
     match intent {
         Intent::SummarizePreviousSourceConstrained {
@@ -1286,6 +1340,28 @@ pub(crate) fn constrained_source_summary_limits(intent: &Intent) -> Option<(usiz
     }
 }
 
+fn validate_source_summary_body(packet: &EvidencePacket, reference: &str) -> Result<()> {
+    if !sha256_id(&packet.id)
+        || !sha256_id(reference)
+        || packet.packet_kind != "FETCHED_BODY"
+        || packet.failure.is_some()
+        || packet.retry_after.is_some()
+        || !packet.request_uri.starts_with("https://")
+        || !packet.final_uri.starts_with("https://")
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || packet
+            .extracted_text
+            .as_deref()
+            .is_none_or(|text| text.trim().is_empty())
+    {
+        return Err(failure(
+            "SOURCE_EVIDENCE_INVALID",
+            "a verified fetched-body packet with its exact source identities is required",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn summarize_fetched_source_with_limits(
     source_result_id: &str,
     packet: &EvidencePacket,
@@ -1293,23 +1369,17 @@ pub(crate) fn summarize_fetched_source_with_limits(
     max_sentences: usize,
     max_chars: Option<usize>,
 ) -> Result<SourceExtractiveSummaryCandidates> {
-    let text = packet.extracted_text.as_deref().unwrap_or_default();
-    if !sha256_id(source_result_id)
-        || !sha256_id(&packet.id)
-        || !sha256_id(source_packet_ref)
-        || packet.packet_kind != "FETCHED_BODY"
-        || packet.failure.is_some()
-        || packet.retry_after.is_some()
-        || !packet.request_uri.starts_with("https://")
-        || !packet.final_uri.starts_with("https://")
-        || packet.raw_sha256 != digest(&packet.raw_body)
-        || text.trim().is_empty()
-    {
+    if !sha256_id(source_result_id) {
         return Err(failure(
             "SOURCE_EVIDENCE_INVALID",
             "a verified fetched-body packet with its exact source identities is required",
         ));
     }
+    validate_source_summary_body(packet, source_packet_ref)?;
+    let text = packet
+        .extracted_text
+        .as_deref()
+        .expect("validated fetched body has text");
     let document = match max_chars {
         Some(max_chars) => serde_json::to_string(&serde_json::json!({
             "text": text,
@@ -1500,13 +1570,18 @@ mod tests {
             observed_source_question_packet("Photosynthesis stores chemical energy.", 100);
         let first_ref = digest(&canonical(&first).unwrap());
         let conflict_ref = digest(&canonical(&conflict).unwrap());
-        let error = answer_fetched_source_question_v2(
-            &"a".repeat(64),
-            "photosynthesis",
-            &[(0, &first, first_ref), (1, &conflict, conflict_ref)],
-        )
-        .unwrap_err();
+        let packets = [(0, &first, first_ref), (1, &conflict, conflict_ref)];
+        let error = answer_fetched_source_question_v2(&"a".repeat(64), "photosynthesis", &packets)
+            .unwrap_err();
         assert!(error.to_string().contains("SOURCE_VERSION_AMBIGUOUS"));
+        let error =
+            source_summary_packet_positions(&packets, crate::input::SOURCE_SUMMARY_PARSER_VERSION)
+                .unwrap_err();
+        assert!(error.to_string().contains("SOURCE_VERSION_AMBIGUOUS"));
+        assert_eq!(
+            source_summary_packet_positions(&packets, crate::input::PARSER_VERSION).unwrap(),
+            vec![0, 1]
+        );
 
         let mut fixture =
             observed_source_question_packet("Photosynthesis stores light energy.", 100);

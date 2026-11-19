@@ -84,7 +84,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                     | Intent::FetchPreviousSearchCandidate { .. }
                     | Intent::Search { .. }
                     | Intent::SearchWithFallback { .. }
-            )
+            ) || bundle.meaning.parser_version == crate::input::SOURCE_SUMMARY_PARSER_VERSION
         }) {
             store_execution_graph(store, actor, case, &graph)?
         } else {
@@ -2875,36 +2875,14 @@ fn verify_source_summary_context(
             "the referenced prior result is not the same committed result",
         ));
     }
-    let source_packets: Vec<_> = prior
-        .evidence
-        .iter()
-        .enumerate()
-        .filter(|(_, packet)| {
-            packet.packet_kind == "FETCHED_BODY"
-                && packet.failure.is_none()
-                && packet.retry_after.is_none()
-                && packet.extracted_text.is_some()
-        })
-        .collect();
-    if source_packets.is_empty() || !result.evidence.is_empty() {
+    if !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the prior result lacks fetched bodies or the derived result added undeclared evidence",
+            "the derived result added undeclared evidence",
         ));
     }
-    if summary_limits.is_some() && source_packets.len() != 1 {
-        return Err(failure(
-            "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
-            "the constrained source summary requires exactly one fetched body",
-        ));
-    }
-    let mut dependencies = vec![prior.id.clone()];
-    let mut packet_refs = Vec::new();
-    let mut summary_refs = Vec::new();
-    let mut source_packet_refs = Vec::new();
-    let mut units = Vec::new();
-    let mut report_bytes = 0usize;
-    for (index, packet) in source_packets {
+    let mut source_packets = Vec::new();
+    for (index, packet) in crate::text_summary::source_summary_bodies(prior) {
         let packet_bytes = canonical(packet)?;
         let packet_ref = digest(&packet_bytes);
         if store.get_bytes(actor, case, &packet_ref)? != packet_bytes {
@@ -2913,17 +2891,49 @@ fn verify_source_summary_context(
                 "the original source packet blob differs from its retained record",
             ));
         }
+        source_packets.push((index, packet, packet_ref));
+    }
+    if source_packets.is_empty() {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the prior result lacks fetched bodies",
+        ));
+    }
+    let active_positions = crate::text_summary::source_summary_packet_positions(
+        &source_packets,
+        &bundle.meaning.parser_version,
+    )?;
+    if summary_limits.is_some() && active_positions.len() != 1 {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
+            "the constrained source summary requires exactly one selected source",
+        ));
+    }
+    let source_packet_refs: Vec<_> = source_packets
+        .iter()
+        .map(|(index, _, reference)| (*index, reference.clone()))
+        .collect();
+    let mut dependencies = vec![prior.id.clone()];
+    dependencies.extend(
+        source_packet_refs
+            .iter()
+            .map(|(_, reference)| reference.clone()),
+    );
+    let mut units = Vec::new();
+    let mut report_bytes = 0usize;
+    for position in active_positions {
+        let (_, packet, packet_ref) = &source_packets[position];
         let report = match summary_limits {
             Some((max_sentences, max_chars)) => {
                 crate::text_summary::summarize_fetched_source_with_limits(
                     &prior.id,
                     packet,
-                    &packet_ref,
+                    packet_ref,
                     max_sentences,
                     max_chars,
                 )?
             }
-            None => crate::text_summary::summarize_fetched_source(&prior.id, packet, &packet_ref)?,
+            None => crate::text_summary::summarize_fetched_source(&prior.id, packet, packet_ref)?,
         };
         let encoded = canonical(&report)?;
         report_bytes = report_bytes.saturating_add(encoded.len());
@@ -2940,9 +2950,7 @@ fn verify_source_summary_context(
                 "the retained source summary artifact differs from the exact source packet",
             ));
         }
-        packet_refs.push(packet_ref.clone());
-        summary_refs.push(report_ref);
-        source_packet_refs.push((index, packet_ref));
+        dependencies.push(report_ref);
         units.push(format!(
             "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
             report.source_final_uri,
@@ -2951,8 +2959,6 @@ fn verify_source_summary_context(
             report.summary.text
         ));
     }
-    dependencies.extend(packet_refs);
-    dependencies.extend(summary_refs);
     if dependencies != result.dependencies
         || units != plan.required_units
         || result.guarantee != Guarantee::Hypothesis

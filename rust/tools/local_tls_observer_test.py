@@ -1074,6 +1074,76 @@ def check_redirect_retry_after(cli, fixture: Fixture, state_path: Path) -> dict:
     return {"cases": cases, "read_denied": denied, "search": search, "candidate": body}
 
 
+def check_versioned_source_summary(cli, fixture: Fixture, state_path: Path) -> dict:
+    host = fixture.host
+    listing_path = "/w/rest.php/v1/search/page?q=candidate+replay&limit=5"
+    article_path = "/wiki/First?action=raw"
+    old_text, current_text = "測定値は10です。", "測定値は30です。"
+    allow = ("--allow-read-host", host)
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    results = {}
+    for case, query, write_file in (
+        ("versioned-source-summary", "前回の本文を要約して", False),
+        ("versioned-constrained-source-summary", "前回の資料を2点以内、20字以内で要約して", True),
+    ):
+        seen, starts = len(fixture.events), len(fixture.connects)
+        cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate replay", case_id=case)
+        observations = []
+        for input_id, text in (("old", old_text), ("latest", current_text)):
+            if observations:
+                first_observed = observations[0]["evidence"][-1]["observed_at_unix_ms"]
+                limit = time.monotonic() + 2
+                while time.time_ns() // 1_000_000 <= first_observed:
+                    assert time.monotonic() < limit
+                    time.sleep(0.001)
+            fixture.responses[article_path] = (text.encode(), "text/plain; charset=utf-8")
+            observations.append(cli("run", "--input", input_id, *allow, "1件目の本文を取得して", case_id=case))
+        old_result, current_result = observations
+        old_packet, current_packet = current_result["evidence"][1:]
+        old_ref, current_ref = old_result["dependencies"][-1], current_result["dependencies"][-1]
+        assert old_packet["final_uri"] == current_packet["final_uri"]
+        assert old_packet["observed_at_unix_ms"] < current_packet["observed_at_unix_ms"]
+        assert load(old_ref) == old_packet and load(current_ref) == current_packet
+
+        output = state_path.parent / f"{case}.txt"
+        output_flags = ("--output", str(output), "--allow-write", str(output)) if write_file else ()
+        summary = cli("run", "--input", "summary", *output_flags, query, case_id=case)
+        assert current_text in summary["text"] and old_text not in summary["text"]
+        prior_id, original, latest, report_ref = summary["dependencies"]
+        assert (prior_id, original, latest) == (current_result["id"], old_ref, current_ref)
+        report = load(report_ref)
+        assert report["source_packet_id"] == current_packet["id"] and report["source_packet_ref"] == current_ref
+        assert report["raw_body_sha256"] == current_packet["raw_sha256"]
+        assert report["summary"]["source_text"] == current_text
+        proofs = {"followup-source-1": old_ref, "followup-source-2": current_ref}
+        assert load(summary["execution_graph_ref"])[5]["compute"] == proofs
+
+        if write_file:
+            assert report["summary"]["max_sentences"] == 2 and report["summary"]["max_chars"] == 20
+            before = output.stat()
+            (receipt,) = summary["receipts"]
+            retain_attempted_prefix(state_path, case, "summary", receipt["action_id"])
+            recovered = cli("reconcile", case_id=case)
+            assert recovered["dependencies"] == summary["dependencies"]
+            assert recovered["text"] == summary["text"]
+            assert recovered["receipts"][0]["action_id"] == receipt["action_id"]
+            assert "NO_RESEND" in recovered["receipts"][0]["reason"]
+            assert load(recovered["execution_graph_ref"])[5]["compute"] == proofs
+            assert output.read_bytes() == bytes(summary["render"]["bytes"])
+            after = output.stat()
+            assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+            results["recovered"] = recovered
+        assert [event["path"] for event in fixture.events[seen:]] == [listing_path, article_path, article_path]
+        assert len(fixture.connects) == starts + 3 and not fixture.errors
+        results[case] = summary
+    return results
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1171,11 +1241,13 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         search_fallback = check_ordered_search(cli, fixture, state_path, directory)
         interrupted_retrieval = check_interrupted_retrieval(cli, command_line, environment, fixture, state_path)
         cancelled_redirects = check_redirect_cancellation(cli, command_line, environment, fixture, state_path)
+        versioned_summaries = check_versioned_source_summary(cli, fixture, state_path)
         deferred_redirects = check_redirect_retry_after(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
-                "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects}
+                "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
+                "versioned_summaries": versioned_summaries}
     finally:
         fixture.close()
 

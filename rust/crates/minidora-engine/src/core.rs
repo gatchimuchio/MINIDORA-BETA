@@ -3982,15 +3982,7 @@ impl Engine {
             previous
                 .filter(|prior| prior.lifecycle == Lifecycle::Commit)
                 .map(|prior| {
-                    prior
-                        .evidence
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, packet)| {
-                            packet.packet_kind == "FETCHED_BODY"
-                                && packet.failure.is_none()
-                                && packet.extracted_text.is_some()
-                        })
+                    crate::text_summary::source_summary_bodies(prior)
                         .map(|(index, _)| index)
                         .collect::<Vec<_>>()
                 })
@@ -6994,26 +6986,8 @@ impl Engine {
                 }
                 let summary_limits =
                     crate::text_summary::constrained_source_summary_limits(&bundle.meaning.intent);
-                if summary_limits.is_some() && source_followup_indices.len() != 1 {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "AMBIGUOUS_SOURCE_CONTEXT",
-                        "複数の取得本文があるため、文字数・箇条書き数の制約を適用する対象を一つに決められません。",
-                    );
-                }
-                result.dependencies.push(prior.id.clone());
-                let mut source_reports = Vec::new();
-                let mut report_bytes = 0usize;
-                for source_index in &source_followup_indices {
-                    let Some(packet) = prior.evidence.get(*source_index) else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Fail,
-                            "SOURCE_EVIDENCE_INDEX_MISMATCH",
-                            "取得本文の保存位置が前回結果と一致しません。",
-                        );
-                    };
+                let mut source_packets = Vec::with_capacity(source_followup_indices.len());
+                for (source_index, packet) in crate::text_summary::source_summary_bodies(prior) {
                     let packet_bytes = canonical(packet)?;
                     let packet_ref = digest(&packet_bytes);
                     let retained = match self.store.get_bytes(actor, &request.case_id, &packet_ref)
@@ -7038,20 +7012,46 @@ impl Engine {
                     }
                     let node_id = format!("followup-source-{source_index}");
                     graph.observe(&node_id, &packet_ref, &BTreeMap::new())?;
+                    source_packets.push((source_index, packet, packet_ref));
+                }
+                let active_positions = match crate::text_summary::source_summary_packet_positions(
+                    &source_packets,
+                    &bundle.meaning.parser_version,
+                ) {
+                    Ok(positions) => positions,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                if summary_limits.is_some() && active_positions.len() != 1 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "AMBIGUOUS_SOURCE_CONTEXT",
+                        "複数の出典があるため、文字数・箇条書き数の制約を適用する対象を一つに決められません。",
+                    );
+                }
+                result.dependencies.push(prior.id.clone());
+                result.dependencies.extend(
+                    source_packets
+                        .iter()
+                        .map(|(_, _, reference)| reference.clone()),
+                );
+                let mut source_reports = Vec::new();
+                let mut report_bytes = 0usize;
+                for position in active_positions {
+                    let (_, packet, packet_ref) = &source_packets[position];
                     let summary_result = if let Some((max_sentences, max_chars)) = summary_limits {
                         crate::text_summary::summarize_fetched_source_with_limits(
                             &prior.id,
                             packet,
-                            &packet_ref,
+                            packet_ref,
                             max_sentences,
                             max_chars,
                         )
                     } else {
-                        crate::text_summary::summarize_fetched_source(
-                            &prior.id,
-                            packet,
-                            &packet_ref,
-                        )
+                        crate::text_summary::summarize_fetched_source(&prior.id, packet, packet_ref)
                     };
                     let source_report = match summary_result {
                         Ok(report) => report,
@@ -7086,7 +7086,6 @@ impl Engine {
                         source_report.summary.text
                     ));
                     source_reports.push(encoded);
-                    result.dependencies.push(packet_ref);
                 }
                 for encoded in source_reports {
                     let report_ref = self.store.put_bytes(actor, &request.case_id, &encoded)?;

@@ -20,6 +20,8 @@ pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v90-explanation-source-roles";
 const CONDITION_DEFINITION_PARSER_VERSION: &str = "declarative-ja-en-v92-condition-definition";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
+pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v94-versioned-source-summary";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -181,6 +183,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
+        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
+            SOURCE_SUMMARY_PARSER_VERSION
+        }
         _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
