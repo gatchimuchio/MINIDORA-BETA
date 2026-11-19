@@ -1490,22 +1490,34 @@ def check_candidate_after_source_followup(cli, fixture: Fixture, state_path: Pat
         assert hashlib.sha256(raw).hexdigest() == reference
         return json.loads(raw)
 
+    def fetch_first(case: str) -> tuple[dict, dict]:
+        listing = cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate after analysis", case_id=case)
+        first = cli("run", "--input", "first", *allow, "1件目の本文を取得して", case_id=case)
+        return listing, first
+
     results = {}
     for name, query, blocker in (
         ("question", first_question, ("2", (), "READ_PERMISSION_REQUIRED")),
         ("summary", "取得した本文を要約して", ("3", allow, "SEARCH_CANDIDATE_UNAVAILABLE")),
         ("constrained", "取得した本文を2点以内、20字以内で要約して",
          ("2", (*allow, "--deadline-ms", "0"), "RESOURCE_LIMIT")),
+        ("no-match", second_question, ("3", allow, "SEARCH_CANDIDATE_UNAVAILABLE")),
     ):
         case = f"candidate-after-source-{name}"
         seen, starts = len(fixture.events), len(fixture.connects)
-        listing = cli("run", "--input", "listing", *allow, "検索 wikipedia: candidate after analysis", case_id=case)
-        first = cli("run", "--input", "first", *allow, "1件目の本文を取得して", case_id=case)
-        analysis = cli("run", "--input", "analysis", query, case_id=case)
-        assert first_text in analysis["text"] and analysis["evidence"] == []
+        listing, first = fetch_first(case)
+        expected = 2 if name == "no-match" else 0
+        analysis = cli("run", "--input", "analysis", query, case_id=case, expected_exit=expected)
+        assert analysis["evidence"] == []
+        if name == "no-match":
+            assert "SOURCE_QUESTION_NO_MATCH" in analysis["reason"]
+            assert analysis["dependencies"] == [] and analysis["receipts"] == []
+            assert cli("run", "--input", "analysis", query, case_id=case, expected_exit=2) == analysis
+        else:
+            assert first_text in analysis["text"]
 
         output = state_path.parent / f"{case}.txt"
-        write = ("--output", str(output), "--allow-write", str(output)) if name == "question" else ()
+        write = ("--output", str(output), "--allow-write", str(output)) if name in ("question", "no-match") else ()
         next_input = ("--input", "second", *allow, *write, "2件目の本文を取得して")
         selected = cli("run", *next_input, case_id=case)
         assert selected["guarantee"] == "SOURCE_REPORT"
@@ -1544,6 +1556,10 @@ def check_candidate_after_source_followup(cli, fixture: Fixture, state_path: Pat
         followup = cli("run", "--input", "followup", second_question, case_id=case)
         assert second_text in followup["text"] and first_text not in followup["text"]
         assert followup["dependencies"][:-1] == [selected["id"], *selected["dependencies"][-2:]]
+        if name == "no-match":
+            no_match = cli("run", "--input", "another-question", "本文では火山について何と書かれていますか",
+                           case_id=case, expected_exit=2)
+            assert "SOURCE_QUESTION_NO_MATCH" in no_match["reason"]
         rank, flags, reason = blocker
         stopped = cli("run", "--input", "blocked", *flags, f"{rank}件目の本文を取得して",
                       case_id=case, expected_exit=2)
@@ -1556,12 +1572,41 @@ def check_candidate_after_source_followup(cli, fixture: Fixture, state_path: Pat
     seen, starts = len(fixture.events), len(fixture.connects)
     cli("run", "--input", "direct", *allow, f"fetch https://{host}{first_path}", case_id=case)
     cli("run", "--input", "analysis", first_question, case_id=case)
+    no_match = cli("run", "--input", "no-match", second_question, case_id=case, expected_exit=2)
+    assert "SOURCE_QUESTION_NO_MATCH" in no_match["reason"]
     stopped = cli("run", "--input", "second", *allow, "2件目の本文を取得して", case_id=case, expected_exit=2)
     assert "MISSING_SEARCH_RESULT_CONTEXT" in stopped["reason"] and stopped["evidence"] == []
     assert [event["path"] for event in fixture.events[seen:]] == [first_path]
     assert len(fixture.connects) == starts + 1
+    results["direct_source"] = stopped
+
+    for name, reason in (("missing-grant", "READ_PERMISSION_REQUIRED"), ("deferred", "HTTP_RETRY_DEFERRED")):
+        case = f"candidate-after-no-match-{name}"
+        seen, starts = len(fixture.events), len(fixture.connects)
+        _, first = fetch_first(case)
+        expected_paths = [listing_path, first_path]
+        flags = ()
+        if name == "deferred":
+            fixture.failure_responses[second_path] = ("429 Too Many Requests", b"Deferred body.", "Retry-After: 120\r\n")
+            failed = cli("run", "--input", "defer-body", *allow, "2件目の本文を取得して", case_id=case, expected_exit=2)
+            del fixture.failure_responses[second_path]
+            assert failed["evidence"][:-1] == first["evidence"]
+            failure = failed["evidence"][-1]
+            assert failure["http_status"] == 429
+            assert failure["retry_after"]["directive"] == {"kind": "DELAY_SECONDS", "seconds": 120}
+            expected_paths.append(second_path)
+            flags = allow
+        no_match = cli("run", "--input", "no-match", second_question, case_id=case, expected_exit=2)
+        assert "SOURCE_QUESTION_NO_MATCH" in no_match["reason"]
+        stopped = cli("run", "--input", "next", *flags, "2件目の本文を取得して", case_id=case, expected_exit=2)
+        assert reason in stopped["reason"] and stopped["receipts"] == []
+        if name == "deferred":
+            assert failure["id"] in stopped["reason"]
+        assert [event["path"] for event in fixture.events[seen:]] == expected_paths
+        assert len(fixture.connects) == starts + len(expected_paths)
+        results[name] = stopped
     assert not fixture.errors, fixture.errors
-    return {**results, "direct_source": stopped}
+    return results
 
 
 def check_source_after_question_no_match(cli, fixture: Fixture, state_path: Path) -> dict:

@@ -3964,21 +3964,14 @@ impl Engine {
                 | Intent::SummarizePreviousSourceConstrained { .. } => None,
                 _ => return Ok(bundle),
             };
-            let context = if prior_case.lifecycle == Lifecycle::Commit {
-                if !has_compute_budget {
-                    return Ok(bundle);
-                }
-                crate::recovery::source_followup_anchor(&self.store, prior_case)?.filter(|source| {
-                    requested_rank.is_none()
-                        || source
-                            .evidence
-                            .iter()
-                            .any(|packet| packet.packet_kind == "SEARCH_LIST")
-                })
-            } else if requested_rank.is_none()
-                && has_compute_budget
+            let context = if has_compute_budget
                 && let Some(source) =
                     crate::recovery::source_followup_anchor(&self.store, prior_case)?
+                && (requested_rank.is_none()
+                    || source
+                        .evidence
+                        .iter()
+                        .any(|packet| packet.packet_kind == "SEARCH_LIST"))
             {
                 Some(source)
             } else {
