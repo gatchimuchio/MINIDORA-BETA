@@ -972,6 +972,108 @@ def check_redirect_cancellation(cli, command_line, environment, fixture: Fixture
     return results
 
 
+def check_redirect_retry_after(cli, fixture: Fixture, state_path: Path) -> dict:
+    first, second = fixture.hosts
+    grants = ("--allow-read-host", first, "--allow-read-host", second)
+    target = f"https://{second}/ok"
+    stop_code = "HTTP_REDIRECT_RETRY_DEFERRED"
+
+    def redirect(path: str, status: str, directive: str) -> None:
+        fixture.failure_responses[path] = (status, b"", f"Location: {target}\r\n{directive}")
+
+    def assert_contacts(seen: int, starts: int, expected: list[tuple[str, str]]) -> None:
+        assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == expected
+        assert len(fixture.connects) == starts + len(expected)
+
+    def assert_deferred(result: dict, kind: str, status: int, path: str) -> dict:
+        assert stop_code in result["reason"] and result["render"] is None and result["receipts"] == []
+        packet = result["evidence"][-1]
+        assert packet["packet_kind"] == kind and packet["http_status"] == status
+        assert packet["failure"] == stop_code and packet["raw_body"] == [] and packet["extracted_text"] is None
+        assert packet["final_uri"] == f"https://{first}{path}"
+        return packet
+
+    cases = {}
+    for name, status, header, directive, due in (
+        ("seconds", "307 Temporary Redirect", "Retry-After: 120\r\n", {"kind": "DELAY_SECONDS", "seconds": 120}, 120_000),
+        ("date", "302 Found", f"Retry-After: {RETRY_DATE}\r\n", {"kind": "HTTP_DATE", "value": RETRY_DATE}, 4_102_444_800_000),
+        ("large", "308 Permanent Redirect", "Retry-After: 1234567890123\r\n", {"kind": "DELAY_OUT_OF_RANGE"}, None),
+        ("malformed", "301 Moved Permanently", "Retry-After: -1\r\n", {"kind": "HEADER_INVALID"}, None),
+        ("duplicate", "303 See Other", "Retry-After: 0\r\nRetry-After: 120\r\n", {"kind": "MULTIPLE_HEADERS"}, None),
+        ("zero", "302 Found", "Retry-After: 0000000000000\r\n", None, None),
+        ("elapsed", "302 Found", "Retry-After: Thu, 01 Jan 1970 00:00:00 GMT\r\n", None, None),
+    ):
+        case, path = f"redirect-retry-{name}", f"/redirect-retry-{name}"
+        redirect(path, status, header)
+        requested_path = path
+        expected = [(first, path)]
+        query = f"fetch https://{first}{path}"
+        if name == "seconds":
+            # Preserve earlier redirects and a completed source, and do not
+            # fall through to the same target as a later direct source.
+            requested_path = "/before-redirect-retry"
+            fixture.redirects[requested_path] = path
+            query = f"fetch https://{first}/ok https://{first}{requested_path} {target}"
+            expected = [(first, "/ok"), (first, requested_path), (first, path)]
+        arguments = ("--input", "original", *grants, query)
+        seen, starts = len(fixture.events), len(fixture.connects)
+        if directive is None:
+            result = cli("run", *arguments, case_id=case)
+            assert result["evidence"][0]["redirect_chain"] == [f"https://{first}{path}", target]
+            assert "retry_after" not in result["evidence"][0]
+            expected.append((second, "/ok"))
+        else:
+            result = cli("run", *arguments, case_id=case, expected_exit=2)
+            packet = assert_deferred(result, "FETCH_FAILURE", int(status[:3]), path)
+            chain = [f"https://{first}{requested_path}"]
+            if name == "seconds":
+                assert result["evidence"][0]["failure"] is None and len(result["evidence"]) == 2
+                chain.append(f"https://{first}{path}")
+            assert packet["redirect_chain"] == chain and result["dependencies"][-1] == packet["id"]
+            retry = packet["retry_after"]
+            assert retry["directive"] == directive
+            expected_due = retry["received_at_unix_ms"] + due if name == "seconds" else due
+            assert retry["not_before_unix_ms"] == expected_due
+            if name == "seconds":
+                assert cli("run", *arguments, case_id=case, expected_exit=2) == result
+        assert_contacts(seen, starts, expected)
+        cases[case] = result
+
+    seen, starts = len(fixture.events), len(fixture.connects)
+    denied = cli("run", "--input", "original", "--allow-read-host", first,
+                 f"fetch https://{first}/redirect-retry-date", case_id="redirect-retry-denied", expected_exit=2)
+    assert denied["evidence"][0]["failure"] == "REDIRECT_PERMISSION_OR_TARGET_REJECTED"
+    assert_contacts(seen, starts, [(first, "/redirect-retry-date")])
+    seen, starts = len(fixture.events), len(fixture.connects)
+    for host in (first, second):
+        cli("run", "--input", f"independent-{host}", "--allow-read-host", host, f"fetch https://{host}/ok",
+            case_id="redirect-retry-seconds")
+    assert_contacts(seen, starts, [(first, "/ok"), (second, "/ok")])
+
+    search_path = "/w/rest.php/v1/search/page?q=redirect+retry&limit=5"
+    redirect(search_path, "302 Found", "Retry-After: 120\r\n")
+    seen, starts = len(fixture.events), len(fixture.connects)
+    search = cli("run", "--input", "original", *grants, "検索 wikipedia -> crossref: redirect retry",
+                 case_id="redirect-retry-search", expected_exit=2)
+    listing = assert_deferred(search, "SEARCH_LIST", 302, search_path)
+    (source_ref,) = search["dependencies"]
+    raw = (state_path / "blobs" / source_ref).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == source_ref and json.loads(raw)["listing"] == listing
+    assert_contacts(seen, starts, [(first, search_path)])
+
+    body_case = "redirect-retry-candidate"
+    cli("run", "--input", "listing", *grants, "検索 wikipedia: candidate replay", case_id=body_case)
+    body_path = "/wiki/First?action=raw"
+    redirect(body_path, "302 Found", "Retry-After: 120\r\n")
+    seen, starts = len(fixture.events), len(fixture.connects)
+    body = cli("run", "--input", "original", *grants, "1件目の本文を取得して", case_id=body_case, expected_exit=2)
+    assert_deferred(body, "FETCH_FAILURE", 302, body_path)
+    assert body["evidence"][0]["packet_kind"] == "SEARCH_LIST"
+    assert_contacts(seen, starts, [(first, body_path)])
+    assert not fixture.errors, fixture.errors
+    return {"cases": cases, "read_denied": denied, "search": search, "candidate": body}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1069,10 +1171,11 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         search_fallback = check_ordered_search(cli, fixture, state_path, directory)
         interrupted_retrieval = check_interrupted_retrieval(cli, command_line, environment, fixture, state_path)
         cancelled_redirects = check_redirect_cancellation(cli, command_line, environment, fixture, state_path)
+        deferred_redirects = check_redirect_retry_after(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
-                "cancelled_redirects": cancelled_redirects}
+                "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects}
     finally:
         fixture.close()
 

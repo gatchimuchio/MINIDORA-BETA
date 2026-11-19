@@ -291,6 +291,15 @@ pub(crate) fn fetch_packet_identity(packet: &EvidencePacket) -> Result<String> {
     }
 }
 
+fn bind_retry_after(
+    mut packet: EvidencePacket,
+    retry_after: &RetryAfterObservation,
+) -> Result<EvidencePacket> {
+    packet.retry_after = Some(retry_after.clone());
+    packet.id = fetch_packet_identity(&packet)?;
+    Ok(packet)
+}
+
 fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
     let mut parts = content_type.split(';');
     let mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
@@ -338,6 +347,12 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
 }
 
 pub(crate) const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
+pub(crate) const REDIRECT_RETRY_DEFERRED: &str = "HTTP_REDIRECT_RETRY_DEFERRED";
+
+enum RetryAfterScope {
+    Host,
+    Redirect,
+}
 
 // IMF-fixdate emitted by current HTTP senders. Legacy date layouts take the
 // same conservative path as other unusable header values.
@@ -405,28 +420,44 @@ fn http_date_unix_ms(value: &str) -> Option<i64> {
 fn retry_after_directive(
     headers: &HeaderMap,
     received_at: u64,
+    scope: RetryAfterScope,
 ) -> (RetryAfterDirective, Option<u64>) {
     use RetryAfterDirective::*;
-    const FALLBACK_MS: Option<u64> = Some(60_000);
+    let (fallback_ms, minimum_ms) = match scope {
+        RetryAfterScope::Host => (Some(60_000), 1_000),
+        RetryAfterScope::Redirect => (None, 0),
+    };
     let all = headers.get_all(RETRY_AFTER);
     let mut values = all.iter();
     let Some(value) = values.next() else {
-        return (HeaderMissing, FALLBACK_MS);
+        return (HeaderMissing, fallback_ms);
     };
     if values.next().is_some() {
-        return (MultipleHeaders, FALLBACK_MS);
+        return (MultipleHeaders, fallback_ms);
     }
     let Ok(value) = value.to_str() else {
-        return (HeaderInvalid, FALLBACK_MS);
+        return (HeaderInvalid, fallback_ms);
     };
     let value = value.trim_matches([' ', '\t']);
     if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
-        if value.len() > 12 {
+        let digits = match scope {
+            RetryAfterScope::Host => value,
+            RetryAfterScope::Redirect => value.trim_start_matches('0'),
+        };
+        if digits.len() > 12 {
             return (DelayOutOfRange, None);
         }
-        if let Ok(seconds) = value.parse::<u64>() {
-            return (DelaySeconds { seconds }, Some(seconds.max(1) * 1_000));
-        }
+        let seconds = if digits.is_empty() {
+            0
+        } else if let Ok(seconds) = digits.parse::<u64>() {
+            seconds
+        } else {
+            return (DelayOutOfRange, None);
+        };
+        return (
+            DelaySeconds { seconds },
+            Some((seconds * 1_000).max(minimum_ms)),
+        );
     }
     if let Some(date) = http_date_unix_ms(value) {
         let delay = u64::try_from(i128::from(date) - i128::from(received_at)).unwrap_or(0);
@@ -434,10 +465,27 @@ fn retry_after_directive(
             HttpDate {
                 value: value.to_owned(),
             },
-            Some(delay.max(1_000)),
+            Some(delay.max(minimum_ms)),
         );
     }
-    (HeaderInvalid, FALLBACK_MS)
+    (HeaderInvalid, fallback_ms)
+}
+
+fn redirect_retry_after(headers: &HeaderMap) -> Result<Option<RetryAfterObservation>> {
+    if !headers.contains_key(RETRY_AFTER) {
+        return Ok(None);
+    }
+    let received_at_unix_ms = unix_ms_now()?;
+    let (directive, delay_ms) =
+        retry_after_directive(headers, received_at_unix_ms, RetryAfterScope::Redirect);
+    if delay_ms == Some(0) {
+        return Ok(None);
+    }
+    Ok(Some(RetryAfterObservation {
+        directive,
+        received_at_unix_ms,
+        not_before_unix_ms: delay_ms.and_then(|delay| received_at_unix_ms.checked_add(delay)),
+    }))
 }
 
 /// Resource envelope shared by all HTTP reads of the original Goal.
@@ -514,7 +562,8 @@ impl RetrievalBudget {
         }
         let received = Instant::now();
         let received_at_unix_ms = unix_ms_now()?;
-        let (directive, delay_ms) = retry_after_directive(headers, received_at_unix_ms);
+        let (directive, delay_ms) =
+            retry_after_directive(headers, received_at_unix_ms, RetryAfterScope::Host);
         let until = delay_ms
             .and_then(|delay| received.checked_add(Duration::from_millis(delay)))
             .unwrap_or(self.deadline)
@@ -751,6 +800,22 @@ pub(crate) fn fetch_with_budget(
                     Some("REDIRECT_CYCLE"),
                 );
             }
+            if let Some(retry_after) = redirect_retry_after(response.headers())? {
+                // The directive applies to this redirect, independent of the
+                // host cooldown for a 429 or 503 response.
+                return bind_retry_after(
+                    packet(
+                        &redirects,
+                        raw_url,
+                        url.as_str(),
+                        status,
+                        vec![],
+                        None,
+                        Some(REDIRECT_RETRY_DEFERRED),
+                    )?,
+                    &retry_after,
+                );
+            }
             url = target;
             previous_status = status;
             continue;
@@ -758,10 +823,9 @@ pub(crate) fn fetch_with_budget(
         // Record response metadata even if the bounded body read fails.
         let retry_after = budget.observe_retry_after(host, status, response.headers())?;
         let finish = |raw, text, error: Option<&str>| -> Result<EvidencePacket> {
-            let mut result = packet(&redirects, raw_url, url.as_str(), status, raw, text, error)?;
+            let result = packet(&redirects, raw_url, url.as_str(), status, raw, text, error)?;
             if let Some(retry_after) = &retry_after {
-                result.retry_after = Some(retry_after.clone());
-                result.id = fetch_packet_identity(&result)?;
+                return bind_retry_after(result, retry_after);
             }
             Ok(result)
         };
@@ -3391,7 +3455,7 @@ mod tests {
     fn retry_after_uses_valid_gmt_dates_and_bounds_unusable_headers() {
         let mut headers = HeaderMap::new();
         assert_eq!(
-            retry_after_directive(&headers, 0),
+            retry_after_directive(&headers, 0, RetryAfterScope::Host),
             (RetryAfterDirective::HeaderMissing, Some(60_000))
         );
         for (value, timestamp) in [
@@ -3408,13 +3472,13 @@ mod tests {
         ] {
             headers.insert(RETRY_AFTER, value.parse().unwrap());
             assert_eq!(
-                retry_after_directive(&headers, 0),
+                retry_after_directive(&headers, 0, RetryAfterScope::Host),
                 (RetryAfterDirective::HeaderInvalid, Some(60_000))
             );
         }
         headers.insert(RETRY_AFTER, "0".parse().unwrap());
         assert_eq!(
-            retry_after_directive(&headers, 0),
+            retry_after_directive(&headers, 0, RetryAfterScope::Host),
             (
                 RetryAfterDirective::DelaySeconds { seconds: 0 },
                 Some(1_000)
@@ -3422,12 +3486,12 @@ mod tests {
         );
         headers.append(RETRY_AFTER, "1".parse().unwrap());
         assert_eq!(
-            retry_after_directive(&headers, 0),
+            retry_after_directive(&headers, 0, RetryAfterScope::Host),
             (RetryAfterDirective::MultipleHeaders, Some(60_000))
         );
         headers.insert(RETRY_AFTER, "1234567890123".parse().unwrap());
         assert_eq!(
-            retry_after_directive(&headers, 0),
+            retry_after_directive(&headers, 0, RetryAfterScope::Host),
             (RetryAfterDirective::DelayOutOfRange, None)
         );
     }

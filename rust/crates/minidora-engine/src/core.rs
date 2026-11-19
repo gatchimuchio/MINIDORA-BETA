@@ -5487,6 +5487,11 @@ impl Engine {
                             .put_artifact(actor, &request.case_id, &observation)?;
                     result.dependencies.push(artifact.clone());
                     result.evidence.push(observation.listing.clone());
+                    if observation.listing.failure.as_deref()
+                        == Some(ports::REDIRECT_RETRY_DEFERRED)
+                    {
+                        return self.suspend_redirect_retry(&mut state, result);
+                    }
                     if let Some(error) = &observation.failure {
                         state.result = Some(result.clone());
                         if let Some(fallback) = search_plan.fallback
@@ -5703,6 +5708,9 @@ impl Engine {
                 result.dependencies.push(body_ref.clone());
                 if !result.evidence.iter().any(|existing| existing == &packet) {
                     result.evidence.push(packet.clone());
+                }
+                if packet.failure.as_deref() == Some(ports::REDIRECT_RETRY_DEFERRED) {
+                    return self.suspend_redirect_retry(&mut state, result);
                 }
                 if packet.failure.is_some() || packet.extracted_text.is_none() {
                     state.result = Some(result);
@@ -8678,8 +8686,13 @@ impl Engine {
                         )?;
                     }
                     let refused_dns = packet.failure.as_deref() == Some("PRIVATE_READ_TARGET");
+                    let deferred_redirect =
+                        packet.failure.as_deref() == Some(ports::REDIRECT_RETRY_DEFERRED);
                     result.dependencies.push(packet.id.clone());
                     result.evidence.push(packet);
+                    if deferred_redirect {
+                        return self.suspend_redirect_retry(&mut state, result);
+                    }
                     // Keep the refusal terminal even when the port could
                     // retain evidence of an earlier redirect response.
                     if refused_dns {
@@ -9838,6 +9851,20 @@ impl Engine {
             ),
         )
     }
+    fn suspend_redirect_retry(
+        &self,
+        state: &mut CaseRevision,
+        result: ResultRecord,
+    ) -> Result<ResultRecord> {
+        state.result = Some(result);
+        self.stop(
+            state,
+            Lifecycle::Suspend,
+            ports::REDIRECT_RETRY_DEFERRED,
+            "Retry-After の待機条件を満たしたと確認できないため、転送先への接続を停止しました。",
+        )
+    }
+
     fn stop(
         &self,
         state: &mut CaseRevision,
