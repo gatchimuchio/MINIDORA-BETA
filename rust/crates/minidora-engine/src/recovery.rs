@@ -14,6 +14,7 @@ use crate::{
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
+    search,
     store::Store,
 };
 use minidora_domain::*;
@@ -79,7 +80,9 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
         if state.bundle.as_ref().is_some_and(|bundle| {
             matches!(
                 bundle.meaning.intent,
-                Intent::CalculateSequence { .. } | Intent::FetchPreviousSearchCandidate { .. }
+                Intent::CalculateSequence { .. }
+                    | Intent::FetchPreviousSearchCandidate { .. }
+                    | Intent::Search { .. }
             )
         }) {
             store_execution_graph(store, actor, case, &graph)?
@@ -2627,6 +2630,43 @@ fn verify_result_memory_provenance(
     Ok(())
 }
 
+fn verify_search_listing(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<Option<String>> {
+    let Intent::Search { provider, query } = &goal.intent else {
+        return Ok(None);
+    };
+    let [reference] = result.dependencies.as_slice() else {
+        return Err(failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "the original search must retain exactly one listing observation reference",
+        ));
+    };
+    let bytes = store.get_bytes(actor, case, reference)?;
+    let observation: search::SearchObservation = serde_json::from_slice(&bytes)?;
+    if search::SearchProvider::from_name(provider) != Some(observation.provider)
+        || *query != observation.query
+        || canonical(&observation)? != bytes
+        || result.evidence.as_slice() != std::slice::from_ref(&observation.listing)
+        || observation.listing.raw_body.len() > goal.budget.max_evidence_bytes
+        || result.calculation.is_some()
+        || result.guarantee != Guarantee::SourceReport
+        || plan.required_units != search::listing_lines(&observation)
+    {
+        return Err(failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "the search listing or adopted report differs from the original search",
+        ));
+    }
+    search::validate_stored_observation(&observation, Some(&goal.permissions))?;
+    Ok(Some(reference.clone()))
+}
+
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
@@ -4141,6 +4181,12 @@ fn inspect(
     }
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
+    let search_listing = verify_search_listing(store, actor, case, result, plan, &goal)?;
+    // Older sealed search goals used a compute-only graph. They still
+    // require the original listing to reproduce the adopted content.
+    let search_requires_listing = nodes
+        .iter()
+        .any(|node| node.id == search::SEARCH_LISTING_NODE);
     let search_candidate =
         verify_search_candidate_context(store, actor, state, result, plan, &goal, &nodes)?;
     let mut expected_nodes = Vec::new();
@@ -4165,6 +4211,16 @@ fn inspect(
                 ));
             }
             let id = format!("source-{index}");
+            sources.push(id.clone());
+            expected_nodes.push(GoalNode {
+                id,
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+        }
+    } else if search_listing.is_some() {
+        if search_requires_listing {
+            let id = search::SEARCH_LISTING_NODE.to_string();
             sources.push(id.clone());
             expected_nodes.push(GoalNode {
                 id,
@@ -4406,7 +4462,12 @@ fn inspect(
         }
         source_refs.clone_from(graph.observed());
     }
-    if let Some(candidate) = &search_candidate {
+    if let Some(reference) = search_listing {
+        if search_requires_listing {
+            graph.observe(search::SEARCH_LISTING_NODE, &reference, &BTreeMap::new())?;
+            source_refs.insert(search::SEARCH_LISTING_NODE.into(), reference);
+        }
+    } else if let Some(candidate) = &search_candidate {
         let mut requires = BTreeMap::new();
         if let Some(reference) = &candidate.listing_ref {
             let id = "search-candidate-listing".to_string();

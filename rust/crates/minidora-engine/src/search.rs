@@ -15,6 +15,7 @@ use url::{Host, Url};
 
 const SEARCH_ROWS: usize = 5;
 const MAX_RETAINED_BODY_PACKETS: usize = crate::text_summary::MAX_QUESTION_SOURCE_PACKETS;
+pub(crate) const SEARCH_LISTING_NODE: &str = "search-listing";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -25,6 +26,15 @@ pub enum SearchProvider {
 }
 
 impl SearchProvider {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "wikipedia" => Some(Self::Wikipedia),
+            "crossref" => Some(Self::Crossref),
+            "europepmc" => Some(Self::EuropePmc),
+            _ => None,
+        }
+    }
+
     pub fn provider_id(self) -> &'static str {
         match self {
             Self::Wikipedia => "wikipedia-ja-rest-search-v1",
@@ -393,7 +403,27 @@ pub fn parse_listing(
     Ok(observation)
 }
 
-pub(crate) fn validate_stored_observation(observation: &SearchObservation) -> Result<()> {
+pub(crate) fn listing_lines(observation: &SearchObservation) -> Vec<String> {
+    let mut units =
+        vec!["検索一覧（本文は未取得。題名・URLは本文の事実根拠ではありません）:".into()];
+    units.extend(
+        observation
+            .candidates
+            .iter()
+            .map(|candidate| format!("{}: {}\n{}", candidate.rank, candidate.title, candidate.uri)),
+    );
+    if observation.candidates.is_empty() {
+        units.push("検索候補がありません。".into());
+    }
+    units
+}
+
+/// Permissions are supplied when replaying the original search. A later
+/// candidate request consumes the already authorized listing as case evidence.
+pub(crate) fn validate_stored_observation(
+    observation: &SearchObservation,
+    permissions: Option<&Permissions>,
+) -> Result<()> {
     let listing = &observation.listing;
     if observation.failure.is_some()
         || listing.packet_kind != "SEARCH_LIST"
@@ -443,6 +473,9 @@ pub(crate) fn validate_stored_observation(observation: &SearchObservation) -> Re
             .map_err(|_| failure("SEARCH_CONTEXT_INVALID", "The listing is not UTF-8"))?
             .into(),
     );
+    if let Some(permissions) = permissions {
+        ports::validate_successful_packet(&fetched_packet, permissions)?;
+    }
     if parse_listing(observation.provider, &observation.query, fetched_packet)? != *observation {
         return Err(failure(
             "SEARCH_CONTEXT_INVALID",
@@ -469,7 +502,7 @@ pub(crate) fn previous_observation(
         if observation.listing.packet_kind != "SEARCH_LIST" {
             continue;
         }
-        validate_stored_observation(&observation)?;
+        validate_stored_observation(&observation, None)?;
         if !previous
             .evidence
             .iter()
@@ -920,7 +953,7 @@ mod tests {
             ),
         )
         .unwrap();
-        validate_stored_observation(&observation).unwrap();
+        validate_stored_observation(&observation, None).unwrap();
         let candidate = &observation.candidates[0];
         assert_eq!(
             candidate_body_uri(candidate).unwrap(),
@@ -928,7 +961,7 @@ mod tests {
         );
         let mut changed = observation;
         changed.candidates[0].title = "unverified replacement".into();
-        assert!(validate_stored_observation(&changed).is_err());
+        assert!(validate_stored_observation(&changed, None).is_err());
     }
     #[test]
     fn crossref_uses_returned_title_doi_and_uri_not_abstract_text() {

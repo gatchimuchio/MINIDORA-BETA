@@ -1,6 +1,6 @@
 use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
 use crate::{
-    input, language, output, ports, relations,
+    input, language, output, ports, relations, search,
     store::{MemoryIndexSnapshot, Store},
 };
 use minidora_domain::*;
@@ -4409,6 +4409,15 @@ impl Engine {
                 });
             }
         }
+        if matches!(bundle.meaning.intent, Intent::Search { .. }) {
+            let id = search::SEARCH_LISTING_NODE.to_string();
+            compute_requires.push(id.clone());
+            nodes.push(GoalNode {
+                id,
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+        }
         if let Intent::FetchPreviousSearchCandidate { rank } = &bundle.meaning.intent {
             let listing_id = "search-candidate-listing".to_string();
             let id = format!("search-candidate-body-{rank}");
@@ -5346,25 +5355,40 @@ impl Engine {
                 result.guarantee = Guarantee::UserPremise;
             }
             Intent::Search { provider, query } => {
-                use crate::search::SearchProvider;
-                let selected = match provider.as_str() {
-                    "wikipedia" => SearchProvider::Wikipedia,
-                    "crossref" => SearchProvider::Crossref,
-                    "europepmc" => SearchProvider::EuropePmc,
-                    _ => {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "SEARCH_PROVIDER_UNAVAILABLE",
-                            "指定された検索接続がありません。",
-                        );
-                    }
+                let Some(selected) = search::SearchProvider::from_name(provider) else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SEARCH_PROVIDER_UNAVAILABLE",
+                        "指定された検索接続がありません。",
+                    );
                 };
-                let mut remaining = request.budget.clone();
+                if !graph
+                    .ready()
+                    .iter()
+                    .any(|id| id == search::SEARCH_LISTING_NODE)
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "UNOBSERVED_PREREQUISITE",
+                        "検索一覧を取得する実行枠がありません。",
+                    );
+                }
+                let mut remaining = goal.budget.clone();
                 remaining.deadline_ms = remaining.deadline_ms.saturating_sub(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
-                let observation = match selected.search(query, &request.permissions, &remaining) {
+                if remaining.deadline_ms == 0 {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "DEADLINE",
+                        "検索接続前に元Goalの締切へ達しました。",
+                    );
+                }
+                remaining.max_actions = graph.remaining_actions();
+                let observation = match selected.search(query, &goal.permissions, &remaining) {
                     Ok(value) => value,
                     Err(error) => {
                         return self.stop(
@@ -5378,7 +5402,7 @@ impl Engine {
                 let artifact = self
                     .store
                     .put_artifact(actor, &request.case_id, &observation)?;
-                result.dependencies.push(artifact);
+                result.dependencies.push(artifact.clone());
                 result.evidence.push(observation.listing.clone());
                 if let Some(error) = &observation.failure {
                     state.result = Some(result);
@@ -5389,19 +5413,21 @@ impl Engine {
                         error,
                     );
                 }
-                units.push(
-                    "検索一覧（本文は未取得。題名・URLは本文の事実根拠ではありません）:".into(),
-                );
-                for candidate in &observation.candidates {
-                    units.push(format!(
-                        "{}: {}\n{}",
-                        candidate.rank, candidate.title, candidate.uri
-                    ));
+                if let Err(error) =
+                    search::validate_stored_observation(&observation, Some(&goal.permissions))
+                {
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SEARCH_OBSERVATION_FAILURE",
+                        &error.to_string(),
+                    );
                 }
-                if observation.candidates.is_empty() {
-                    units.push("検索候補がありません。".into());
-                }
+                graph.observe(search::SEARCH_LISTING_NODE, &artifact, &BTreeMap::new())?;
+                units = search::listing_lines(&observation);
                 result.guarantee = Guarantee::SourceReport;
+                state.result = Some(result.clone());
             }
             Intent::FetchPreviousSearchCandidate { rank } => {
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)

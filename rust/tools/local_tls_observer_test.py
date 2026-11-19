@@ -82,6 +82,7 @@ class Fixture:
         self.listener.listen()
         self.listener.settimeout(0.2)
         self.stop = threading.Event()
+        self.connects: list[str] = []
         self.events: list[dict] = []
         self.errors: list[str] = []
         self.worker = threading.Thread(target=self.accept, daemon=True)
@@ -111,6 +112,7 @@ class Fixture:
                 request, connect_headers = header_block(stream)
                 assert request == f"CONNECT {self.host}:443 HTTP/1.1"
                 assert not {"authorization", "proxy-authorization", "cookie"} & connect_headers.keys()
+                self.connects.append(request)
                 stream.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
                 try:
                     secured = self.context.wrap_socket(stream, server_side=True)
@@ -306,6 +308,87 @@ def run_source_summary(binary: Path, directory: Path, fixture: Fixture, ca: Path
             "input_processes": 2, "recovered": recovered, "result": result}
 
 
+def check_search_goals(cli, fixture: Fixture, state_path: Path, directory: Path) -> dict:
+    query = "検索 wikipedia: candidate replay"
+    grant = ("--allow-read-host", fixture.host)
+    output = directory / "listing.txt"
+    write = ("--output", str(output), "--allow-write", str(output))
+    initial_connects = len(fixture.connects)
+    initial_gets = len(fixture.events)
+    for case, reason, flags in (
+        ("display-budget", "ACTION_BUDGET_EXHAUSTED", ("--max-actions", "3", *grant)),
+        ("file-budget", "ACTION_BUDGET_EXHAUSTED", ("--max-actions", "4", *grant, *write)),
+        ("read-grant", "READ_PERMISSION_REQUIRED", ("--max-actions", "4")),
+        ("deadline", "RESOURCE_LIMIT", ("--max-actions", "4", "--deadline-ms", "0", *grant)),
+    ):
+        stopped = cli("run", "--input", "search", *flags, query, case_id=case, expected_exit=2)
+        assert reason in stopped["reason"]
+        assert stopped["content_plan"] is None and stopped["render"] is None
+        assert stopped["evidence"] == [] and stopped["receipts"] == [] and not output.exists()
+    assert len(fixture.connects) == initial_connects and len(fixture.events) == initial_gets
+
+    def load(ref: str):
+        raw = (state_path / "blobs" / ref).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == ref
+        return json.loads(raw)
+
+    failures = {}
+    for case, bad_query, status, reason in (
+        ("malformed-list", "malformed fixture", 200, "MALFORMED_SEARCH_LIST"),
+        ("http-failure", "missing fixture", 404, "SEARCH_LIST_FETCH_FAILED"),
+    ):
+        failed = cli("run", "--input", "search", "--max-actions", "5", *grant, *write,
+                     f"検索 wikipedia: {bad_query}", case_id=case, expected_exit=2)
+        assert failed["content_plan"] is None and failed["render"] is None
+        assert failed["receipts"] == [] and not output.exists()
+        assert failed["execution_graph_ref"] is None
+        (reference,) = failed["dependencies"]
+        (listing,) = failed["evidence"]
+        observation = load(reference)
+        assert observation["failure"] == reason and observation["listing"] == listing
+        assert listing["packet_kind"] == "SEARCH_LIST" and listing["http_status"] == status
+        assert listing["extracted_text"] is None
+        assert hashlib.sha256(bytes(listing["raw_body"])).hexdigest() == listing["raw_sha256"]
+        failures[case] = failed
+
+    display = cli("run", "--input", "search", "--max-actions", "4", *grant, query,
+                  case_id="listing-display")
+    original = cli("run", "--input", "search", "--max-actions", "5", *grant, *write, query,
+                   case_id="listing-file")
+    for result in (display, original):
+        (reference,) = result["dependencies"]
+        (listing,) = result["evidence"]
+        assert result["guarantee"] == "SOURCE_REPORT" and listing["packet_kind"] == "SEARCH_LIST"
+        assert listing["extracted_text"] is None
+        observation = load(reference)
+        assert observation["listing"] == listing and observation["failure"] is None
+        assert [candidate["rank"] for candidate in observation["candidates"]] == [1, 2]
+        graph = load(result["execution_graph_ref"])
+        assert graph[0][0] == {"id": "search-listing", "kind": "EVIDENCE", "requires": []}
+        assert graph[1]["search-listing"] == reference
+        assert graph[5]["compute"] == {"search-listing": reference}
+    before = output.stat()
+    attempted = retain_attempted_prefix(state_path, "listing-file", "search",
+                                        original["receipts"][0]["action_id"])
+    recovered = cli("reconcile", case_id="listing-file")
+    assert recovered["dependencies"] == original["dependencies"]
+    assert recovered["evidence"] == original["evidence"]
+    assert recovered["content_plan"] == original["content_plan"]
+    (receipt,) = recovered["receipts"]
+    assert receipt["action_id"] == attempted["action_id"]
+    assert receipt["phase"] == "CONFIRMED" and "NO_RESEND" in receipt["reason"]
+    graph = load(recovered["execution_graph_ref"])
+    assert graph[5]["compute"] == {"search-listing": original["dependencies"][0]}
+    assert load(graph[1]["file"]) == receipt
+    assert output.read_bytes() == bytes(original["render"]["bytes"])
+    after = output.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert len(fixture.connects) == initial_connects + 4
+    assert len(fixture.events) == initial_gets + 4
+    assert not fixture.errors, fixture.errors
+    return {"display": display, "file": original, "recovered": recovered, "failures": failures}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -329,15 +412,15 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     environment["NO_PROXY"] = environment["no_proxy"] = ""
     environment["SSL_CERT_FILE"] = str(ca)
 
-    def cli(command: str, *arguments: str) -> dict:
+    def cli(command: str, *arguments: str, case_id: str = case, expected_exit: int = 0) -> dict:
         process = subprocess.run(
-            [str(binary), command, "--db", str(state_path), "--case", case,
+            [str(binary), command, "--db", str(state_path), "--case", case_id,
              "--actor", "fixture-local", "--json", *arguments],
             env=environment, capture_output=True, text=True, timeout=15, check=False,
         )
-        assert process.returncode == 0, (process.returncode, process.stdout, process.stderr)
+        assert process.returncode == expected_exit, (process.returncode, process.stdout, process.stderr)
         result = json.loads(process.stdout)
-        assert result["lifecycle"] == "COMMIT"
+        assert result["lifecycle"] == ("COMMIT" if expected_exit == 0 else "SUSPEND")
         return result
 
     read = ("--allow-read-host", host, "--deadline-ms", "5000")
@@ -388,7 +471,13 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         )
         assert [event["path"] for event in fixture.events] == list(responses)
         assert not fixture.errors, fixture.errors
-        return {"result": selected, "recovered": recovered, "observed_requests": fixture.events}
+        candidate_events = list(fixture.events)
+        fixture.responses["/w/rest.php/v1/search/page?q=malformed+fixture&limit=5"] = (
+            b'{"pages":"not an array"}', "application/json",
+        )
+        search_goals = check_search_goals(cli, fixture, state_path, directory)
+        return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
+                "search_goals": search_goals}
     finally:
         fixture.close()
 
