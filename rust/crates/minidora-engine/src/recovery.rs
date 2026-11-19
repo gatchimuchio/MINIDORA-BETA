@@ -2872,7 +2872,10 @@ fn verify_source_summary_context(
             "the exact prior source result is not retained",
         )
     })?;
-    if prior.id != *prior_id || prior.lifecycle != Lifecycle::Commit {
+    if prior.id != *prior_id
+        || prior.lifecycle != Lifecycle::Commit
+        || identity(&Some(prior))? != bundle.context_sha256
+    {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_MISMATCH",
             "the referenced prior result is not the same committed result",
@@ -3129,7 +3132,10 @@ fn verify_source_question_context(
             "the exact prior source result is not retained",
         )
     })?;
-    if prior.id != *prior_id || prior.lifecycle != Lifecycle::Commit {
+    if prior.id != *prior_id
+        || prior.lifecycle != Lifecycle::Commit
+        || identity(&Some(prior))? != bundle.context_sha256
+    {
         return Err(failure(
             "RECOVERY_SOURCE_QUESTION_MISMATCH",
             "the referenced prior source result is not the same committed result",
@@ -5584,6 +5590,31 @@ mod tests {
                 .unwrap();
         assert_eq!(verified.source_packet_refs, vec![(0, packet_ref)]);
         assert_eq!(verified.answer_ref, answer_ref);
+
+        let mut changed_context = state.clone();
+        changed_context
+            .prior_results
+            .values_mut()
+            .next()
+            .unwrap()
+            .text
+            .push_str(" altered after sealing");
+        let error = verify_source_question_context(
+            &store,
+            "alice",
+            "case",
+            &changed_context,
+            &result,
+            &plan,
+            &goal,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_SOURCE_QUESTION_MISMATCH")
+        );
 
         let mut changed_plan = plan;
         changed_plan.required_units.push("extra sentence".into());

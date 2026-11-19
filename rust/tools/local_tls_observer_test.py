@@ -1269,6 +1269,108 @@ def check_candidate_after_failure(cli, fixture: Fixture, state_path: Path) -> di
     return {"failures": failures, "selected": selected, "recovered": recovered, "stops": stops}
 
 
+def check_sources_after_candidate_failure(cli, fixture: Fixture, state_path: Path) -> dict:
+    host = fixture.host
+    allow = ("--allow-read-host", host)
+    listing_path = "/w/rest.php/v1/search/page?q=retained+source&limit=5"
+    obtained_path, failed_path = "/wiki/Obtained?action=raw", "/wiki/Unavailable?action=raw"
+    observed_text = "実測値は42です。"
+    rejected_text = "実測値は999です。秘匿値は88です。"
+    fixture.responses[listing_path] = (json.dumps({"pages": [
+        {"title": title, "key": title} for title in ("Obtained", "Unavailable")
+    ]}).encode(), "application/json")
+    fixture.responses[obtained_path] = (observed_text.encode(), "text/plain; charset=utf-8")
+    fixture.failure_responses[failed_path] = ("404 Not Found", rejected_text.encode(), "")
+
+    def load(reference: str) -> dict:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def prepare(case: str, acquire_body: bool = True) -> tuple[dict | None, dict]:
+        cli("run", "--input", "listing", *allow, "検索 wikipedia: retained source", case_id=case)
+        source = (cli("run", "--input", "obtained", *allow, "1件目の本文を取得して", case_id=case)
+                  if acquire_body else None)
+        failed = cli("run", "--input", "unavailable", *allow, "2件目の本文を取得して", case_id=case, expected_exit=2)
+        failure = failed["evidence"][-1]
+        assert failure["http_status"] == 404 and bytes(failure["raw_body"]) == rejected_text.encode()
+        return source, failed
+
+    outcomes = {}
+    for route, query, write_file in (
+        ("question", "本文では実測値について何と書かれていますか", True),
+        ("summary", "取得した本文を要約して", False),
+        ("constrained", "取得した本文を2点以内、20字以内で要約して", True),
+    ):
+        case = f"source-{route}-after-failure"
+        seen, starts = len(fixture.events), len(fixture.connects)
+        source, failed = prepare(case)
+        assert failed["evidence"][:-1] == source["evidence"]
+        source_packet = source["evidence"][-1]
+        source_ref = source["dependencies"][-1]
+        assert load(source_ref) == source_packet
+
+        output = state_path.parent / f"{case}.txt"
+        output_flags = ("--output", str(output), "--allow-write", str(output)) if write_file else ()
+        result = cli("run", "--input", "followup", *output_flags, query, case_id=case)
+        assert result["guarantee"] == "HYPOTHESIS" and result["evidence"] == []
+        assert observed_text in result["text"] and source_packet["final_uri"] in result["text"]
+        assert "実測値は999です。" not in result["text"] and "秘匿値" not in result["text"]
+        prior_id, packet_ref, report_ref = result["dependencies"]
+        assert (prior_id, packet_ref) == (source["id"], source_ref)
+        report = load(report_ref)
+        assert report["source_result_id"] == source["id"]
+        if route == "question":
+            (quote,) = report["candidates"]
+            assert quote["source_packet_ref"] == source_ref and quote["text"] == observed_text
+        else:
+            assert report["source_packet_ref"] == source_ref
+            assert report["summary"]["source_text"] == observed_text
+            if route == "constrained":
+                assert report["summary"]["max_chars"] == 20 and report["summary"]["max_sentences"] == 2
+
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+            (reference,) = database.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1",
+                (case,),
+            ).fetchone()
+        state = load(reference)
+        assert state["bundle"]["request"]["permissions"]["read_hosts"] == []
+        assert state["bundle"]["meaning"]["context_result_ref"] == source["id"]
+        assert state["prior_results"][failed["id"]] == failed
+
+        if write_file:
+            before = output.stat()
+            (receipt,) = result["receipts"]
+            retain_attempted_prefix(state_path, case, "followup", receipt["action_id"])
+            recovered = cli("reconcile", case_id=case)
+            assert recovered["dependencies"] == result["dependencies"] and recovered["text"] == result["text"]
+            assert recovered["receipts"][0]["action_id"] == receipt["action_id"]
+            assert "NO_RESEND" in recovered["receipts"][0]["reason"]
+            assert output.read_bytes() == bytes(result["render"]["bytes"])
+            after = output.stat()
+            assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+        assert [event["path"] for event in fixture.events[seen:]] == [listing_path, obtained_path, failed_path]
+        assert len(fixture.connects) == starts + 3
+        outcomes[route] = result
+
+    for case, acquire_body, reason in (
+        ("failed-body-only", False, "MISSING_ACTUAL_RESULT"),
+        ("failed-body-has-only-match", True, "SOURCE_QUESTION_NO_MATCH"),
+    ):
+        seen, starts = len(fixture.events), len(fixture.connects)
+        prepare(case, acquire_body)
+        stopped = cli("run", "--input", "followup", "本文では秘匿値について何と書かれていますか",
+                      case_id=case, expected_exit=2)
+        assert reason in stopped["reason"] and stopped["evidence"] == [] and stopped["dependencies"] == []
+        expected = [listing_path, obtained_path, failed_path] if acquire_body else [listing_path, failed_path]
+        assert [event["path"] for event in fixture.events[seen:]] == expected
+        assert len(fixture.connects) == starts + len(expected)
+        outcomes[case] = stopped
+    assert not fixture.errors, fixture.errors
+    return outcomes
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1369,11 +1471,13 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         versioned_summaries = check_versioned_source_summary(cli, fixture, state_path)
         deferred_redirects = check_redirect_retry_after(cli, fixture, state_path)
         after_failure = check_candidate_after_failure(cli, fixture, state_path)
+        sources_after_failure = check_sources_after_candidate_failure(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
                 "cancelled_redirects": cancelled_redirects, "deferred_redirects": deferred_redirects,
-                "versioned_summaries": versioned_summaries, "after_failure": after_failure}
+                "versioned_summaries": versioned_summaries, "after_failure": after_failure,
+                "sources_after_failure": sources_after_failure}
     finally:
         fixture.close()
 

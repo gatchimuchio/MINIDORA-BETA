@@ -723,12 +723,12 @@ pub(crate) fn previous_observation(
     Ok(found)
 }
 
-/// A new rank can use the committed context of the immediately failed read.
-/// The failure and its dependencies prove which context that read consumed.
+/// Resolve the committed context used by the immediately failed candidate read.
+/// With no requested rank, the context must contain a previously fetched body.
 pub(crate) fn committed_context_after_candidate_failure<'a>(
     store: &crate::store::Store,
     case: &'a CaseRevision,
-    requested_rank: u32,
+    requested_rank: Option<u32>,
 ) -> Result<Option<&'a ResultRecord>> {
     let (Some(failed), Some(saved_bundle)) = (&case.result, &case.bundle) else {
         return Ok(None);
@@ -743,7 +743,7 @@ pub(crate) fn committed_context_after_candidate_failure<'a>(
         .map(|(code, _)| code);
     if case.lifecycle != Lifecycle::Suspend
         || failed.lifecycle != Lifecycle::Suspend
-        || rank == requested_rank
+        || requested_rank == Some(rank)
         || !matches!(
             reason_code,
             Some("FETCH_OR_PARSER_FAILURE" | ports::REDIRECT_RETRY_DEFERRED)
@@ -827,7 +827,7 @@ pub(crate) fn committed_context_after_candidate_failure<'a>(
     if failed.dependencies != expected || store.get_bytes(actor, case_id, &reference)? != bytes {
         return Err(invalid());
     }
-    Ok(Some(context))
+    Ok((requested_rank.is_some() || carried.len() > 1).then_some(context))
 }
 
 /// Keep the validated search listing and previously fetched candidate bodies
