@@ -3350,47 +3350,62 @@ fn inspect(
     } else {
         None
     };
+    let mut generated_compute_ref = None;
     if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = &goal.intent {
         // A case in another client may have invalidated a premise while this
         // output was pending. Revalidate the same proof lineage; never adopt a
         // newly different answer during mere effect reconciliation. Use a
         // current revision-matched Goal projection when available; cold/stale
         // indexes retain the authenticated full-snapshot path.
-        let answer = match crate::core::indexed_relation_query_from_store(
+        let (memory, answer) = match crate::core::indexed_relation_query_from_store(
             store,
             actor,
             proposition,
             goal.budget.max_actions,
         )? {
-            Some((_projected_memory, answer)) => answer?,
+            Some((projected_memory, answer)) => (projected_memory, answer?),
             None => {
                 let memory = store.load_memory(actor)?;
-                crate::relations::query(&memory, proposition, goal.budget.max_actions)?
+                let answer =
+                    crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+                (memory, answer)
             }
         };
-        let current_proof_contract = matches!(
-            bundle.meaning.parser_version.as_str(),
-            "declarative-ja-en-v46-proof-lineage-guarantee"
-                | "declarative-ja-en-v47-premise-inspection"
-                | "declarative-ja-en-v48-related-context-explanation"
-                | "declarative-ja-en-v49-why-proof-query"
-                | "declarative-ja-en-v50-code-context-explanation"
-                | "declarative-ja-en-v51-generated-code-verification"
-                | "declarative-ja-en-v52-search-candidate-body"
-                | "declarative-ja-en-v53-group-mean-query"
-                | "declarative-ja-en-v54-source-question-followup"
-                | "declarative-ja-en-v55-natural-premise-question"
-                | "declarative-ja-en-v56-natural-premise-correction"
-                | "declarative-ja-en-v57-contextual-premise-correction"
-                | "declarative-ja-en-v58-prior-result-pronoun-query"
-                | "declarative-ja-en-v59-conjunctive-relation-question"
-                | "declarative-ja-en-v60-conjunctive-relation-rule"
-                | "declarative-ja-en-v61-three-clause-relation-question"
-                | "declarative-ja-en-v62-constrained-source-summary"
-                | "declarative-ja-en-v63-previous-output-edit"
-                | "declarative-ja-en-v68-previous-result-summary"
-                | "declarative-ja-en-v70-generic-transitive-verbs"
-        );
+        if matches!(goal.intent, Intent::AskWhy { .. }) {
+            generated_compute_ref = crate::core::verify_generated_why_computation(
+                store,
+                (actor, case),
+                result,
+                plan,
+                proposition,
+                (&memory, &answer),
+                &goal.budget,
+            )?;
+        }
+        let current_proof_contract = generated_compute_ref.is_some()
+            || matches!(
+                bundle.meaning.parser_version.as_str(),
+                "declarative-ja-en-v46-proof-lineage-guarantee"
+                    | "declarative-ja-en-v47-premise-inspection"
+                    | "declarative-ja-en-v48-related-context-explanation"
+                    | "declarative-ja-en-v49-why-proof-query"
+                    | "declarative-ja-en-v50-code-context-explanation"
+                    | "declarative-ja-en-v51-generated-code-verification"
+                    | "declarative-ja-en-v52-search-candidate-body"
+                    | "declarative-ja-en-v53-group-mean-query"
+                    | "declarative-ja-en-v54-source-question-followup"
+                    | "declarative-ja-en-v55-natural-premise-question"
+                    | "declarative-ja-en-v56-natural-premise-correction"
+                    | "declarative-ja-en-v57-contextual-premise-correction"
+                    | "declarative-ja-en-v58-prior-result-pronoun-query"
+                    | "declarative-ja-en-v59-conjunctive-relation-question"
+                    | "declarative-ja-en-v60-conjunctive-relation-rule"
+                    | "declarative-ja-en-v61-three-clause-relation-question"
+                    | "declarative-ja-en-v62-constrained-source-summary"
+                    | "declarative-ja-en-v63-previous-output-edit"
+                    | "declarative-ja-en-v68-previous-result-summary"
+                    | "declarative-ja-en-v70-generic-transitive-verbs"
+            );
         let dependencies = if current_proof_contract {
             crate::relations::answer_dependencies(&answer)
         } else {
@@ -3864,19 +3879,20 @@ fn inspect(
             ));
         }
     }
-    let model_bytes = store.get_bytes(actor, case, &plan.model_artifact_ref)?;
-    let model: language::SequenceModel = serde_json::from_slice(&model_bytes)?;
-    model.validate()?;
-    let emission_bytes = store.get_bytes(actor, case, &plan.model_observation_ref)?;
-    let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes)?;
-    let authorized_surfaces = match &emission.authorized_surfaces {
-        Some(surfaces) => {
-            let expected_surfaces = match (&goal.intent, result.calculation.as_ref()) {
-                (Intent::ExplainPrevious, Some(calculation)) => {
-                    Some(language::calculation_explanation_surfaces(calculation))
-                }
-                (Intent::AskWhy { proposition }, None) => {
-                    let memory = match result.actor_memory_revision {
+    if generated_compute_ref.is_none() {
+        let model_bytes = store.get_bytes(actor, case, &plan.model_artifact_ref)?;
+        let model: language::SequenceModel = serde_json::from_slice(&model_bytes)?;
+        model.validate()?;
+        let emission_bytes = store.get_bytes(actor, case, &plan.model_observation_ref)?;
+        let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes)?;
+        let authorized_surfaces = match &emission.authorized_surfaces {
+            Some(surfaces) => {
+                let expected_surfaces = match (&goal.intent, result.calculation.as_ref()) {
+                    (Intent::ExplainPrevious, Some(calculation)) => {
+                        Some(language::calculation_explanation_surfaces(calculation))
+                    }
+                    (Intent::AskWhy { proposition }, None) => {
+                        let memory = match result.actor_memory_revision {
                         Some(revision) => store.load_memory_revision(actor, revision)?.ok_or_else(
                             || {
                                 failure(
@@ -3887,82 +3903,83 @@ fn inspect(
                         )?,
                         None => store.load_memory(actor)?,
                     };
-                    let answer =
-                        crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
-                    let explanation_units = crate::core::relation_why_explanation_units(
-                        &memory,
-                        proposition,
-                        &answer,
-                    )
-                    .map_err(|_| {
-                        failure(
-                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                            "the current relation proof has no matching explanation surfaces",
+                        let answer =
+                            crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+                        let explanation_units = crate::core::relation_why_explanation_units(
+                            &memory,
+                            proposition,
+                            &answer,
                         )
-                    })?;
-                    if crate::relations::answer_dependencies(&answer) != result.dependencies
-                        || crate::relations::answer_guarantee(&answer) != result.guarantee
-                        || explanation_units != plan.required_units
-                    {
-                        return Err(failure(
-                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                            "the current proof lineage differs from the adopted explanation",
-                        ));
+                        .map_err(|_| {
+                            failure(
+                                "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                                "the current relation proof has no matching explanation surfaces",
+                            )
+                        })?;
+                        if crate::relations::answer_dependencies(&answer) != result.dependencies
+                            || crate::relations::answer_guarantee(&answer) != result.guarantee
+                            || explanation_units != plan.required_units
+                        {
+                            return Err(failure(
+                                "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                                "the current proof lineage differs from the adopted explanation",
+                            ));
+                        }
+                        Some(language::relation_explanation_surfaces(&explanation_units))
                     }
-                    Some(language::relation_explanation_surfaces(&explanation_units))
-                }
-                (Intent::DraftRelationProfile { subject }, None) => {
-                    let memory = match result_memory_snapshot(store, actor, result)? {
-                        Some(memory) => memory,
-                        None => store.load_memory(actor)?,
-                    };
-                    let answer = crate::core::relation_profile_answer(
-                        &memory,
-                        subject,
-                        goal.budget.max_actions,
-                        goal.budget.max_evidence_bytes,
-                    )
-                    .map_err(|_| {
-                        failure(
-                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                            "the retained actor-scoped relation inventory is unavailable",
+                    (Intent::DraftRelationProfile { subject }, None) => {
+                        let memory = match result_memory_snapshot(store, actor, result)? {
+                            Some(memory) => memory,
+                            None => store.load_memory(actor)?,
+                        };
+                        let answer = crate::core::relation_profile_answer(
+                            &memory,
+                            subject,
+                            goal.budget.max_actions,
+                            goal.budget.max_evidence_bytes,
                         )
-                    })?;
-                    if answer.dependencies != result.dependencies
-                        || answer.guarantee != result.guarantee
-                        || answer.units != plan.required_units
-                    {
-                        return Err(failure(
-                            "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                            "the retained relation inventory differs from the adopted profile draft",
-                        ));
+                        .map_err(|_| {
+                            failure(
+                                "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                                "the retained actor-scoped relation inventory is unavailable",
+                            )
+                        })?;
+                        if answer.dependencies != result.dependencies
+                            || answer.guarantee != result.guarantee
+                            || answer.units != plan.required_units
+                        {
+                            return Err(failure(
+                                "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                                "the retained relation inventory differs from the adopted profile draft",
+                            ));
+                        }
+                        Some(language::relation_profile_surfaces(&answer.units))
                     }
-                    Some(language::relation_profile_surfaces(&answer.units))
+                    _ => None,
+                };
+                if expected_surfaces.as_ref() != Some(surfaces) || !surfaces.contains(&plan.text) {
+                    return Err(failure(
+                        "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                        "retained multi-surface output differs from the Core-approved current explanation",
+                    ));
                 }
-                _ => None,
-            };
-            if expected_surfaces.as_ref() != Some(surfaces) || !surfaces.contains(&plan.text) {
-                return Err(failure(
-                    "RECOVERY_MODEL_CANDIDATE_MISMATCH",
-                    "retained multi-surface output differs from the Core-approved current explanation",
-                ));
+                surfaces.clone()
             }
-            surfaces.clone()
+            // Legacy alpha 8 records contain no candidate list and can only prove
+            // the exact singleton surface they already retained.
+            None => vec![plan.text.clone()],
+        };
+        let verified_emission =
+            model.realize_supported(&authorized_surfaces, request.budget.max_evidence_bytes)?;
+        if canonical(&verified_emission)? != emission_bytes
+            || emission.text != plan.text
+            || emission.model_revision != plan.model_revision
+        {
+            return Err(failure(
+                "RECOVERY_MODEL_MISMATCH",
+                "retained native model observation does not reproduce its adopted surface",
+            ));
         }
-        // Legacy alpha 8 records contain no candidate list and can only prove
-        // the exact singleton surface they already retained.
-        None => vec![plan.text.clone()],
-    };
-    let verified_emission =
-        model.realize_supported(&authorized_surfaces, request.budget.max_evidence_bytes)?;
-    if canonical(&verified_emission)? != emission_bytes
-        || emission.text != plan.text
-        || emission.model_revision != plan.model_revision
-    {
-        return Err(failure(
-            "RECOVERY_MODEL_MISMATCH",
-            "retained native model observation does not reproduce its adopted surface",
-        ));
     }
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
@@ -4318,13 +4335,20 @@ fn inspect(
         )?;
         source_refs.insert(edit_id, edit.edit_ref.clone());
     }
-    let compute = (
-        &result.calculation,
-        &plan.required_units,
-        &result.evidence,
-        &result.dependencies,
-    );
-    let compute_ref = verified_artifact(store, actor, case, &compute)?;
+    let compute_ref = match generated_compute_ref {
+        Some(reference) => reference,
+        None => verified_artifact(
+            store,
+            actor,
+            case,
+            &(
+                &result.calculation,
+                &plan.required_units,
+                &result.evidence,
+                &result.dependencies,
+            ),
+        )?,
+    };
     let mut dependencies = result.dependencies.clone();
     dependencies.push(compute_ref.clone());
     if plan.dependencies != dependencies {
@@ -4927,6 +4951,16 @@ mod tests {
                 Lifecycle::Commit
             );
         }
+        let token = retain_attempted_prefix(&state);
+        Fixture {
+            directory,
+            state,
+            target,
+            token,
+        }
+    }
+
+    fn retain_attempted_prefix(state: &Path) -> String {
         // Test-only crash injection: retain an actual production journal prefix
         // immediately before effect confirmation, while keeping the physical
         // output that already occurred. This models rollback of the later
@@ -4954,7 +4988,8 @@ mod tests {
         }
         let (number, revision) =
             retained.expect("normal Core persisted actual rendering before file effect");
-        let result_sha = digest(&canonical(revision.result.as_ref().unwrap()).unwrap());
+        let result = revision.result.as_ref().unwrap();
+        let result_sha = digest(&canonical(result).unwrap());
         let token: String = database
             .query_row("SELECT idempotency_key FROM action_identity", [], |r| {
                 r.get(0)
@@ -4969,17 +5004,17 @@ mod tests {
             .unwrap();
         database
             .execute(
-                "UPDATE input_identity SET result_sha256=?1",
-                params![result_sha],
+                "UPDATE input_identity SET result_sha256=?1
+                 WHERE case_id=?2 AND input_id=?3 AND input_version=?4",
+                params![
+                    result_sha,
+                    revision.case_id,
+                    result.input_id,
+                    i64::try_from(result.input_version).unwrap()
+                ],
             )
             .unwrap();
-        drop(database);
-        Fixture {
-            directory,
-            state,
-            target,
-            token,
-        }
+        token
     }
 
     fn attempted_statistics_explanation_prefix() -> Fixture {
@@ -5487,6 +5522,134 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].phase, EffectPhase::Confirmed);
         assert_eq!(actions[0].idempotency_key, fixture.token);
+    }
+
+    #[test]
+    fn ordinary_why_generates_from_a_saved_composed_proof_and_replays_it() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let question = "なぜ[scope=lab]シロは温血動物ですか";
+        let execute = |engine: &mut Engine, id: &str, text: &str| {
+            engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap()
+        };
+        let fact = execute(&mut engine, "premise", "[scope=lab]シロは鳥です");
+        assert_eq!(fact.lifecycle, Lifecycle::Commit, "{fact:?}");
+        let before = execute(&mut engine, "before-learning", question);
+        assert_eq!(before.lifecycle, Lifecycle::Suspend, "{before:?}");
+        assert!(before.content_plan.is_none());
+
+        let parent_a = execute(
+            &mut engine,
+            "first-rule",
+            "もし[scope=lab]Xは鳥なら[scope=lab]Xは動物",
+        );
+        let parent_b = execute(
+            &mut engine,
+            "second-rule",
+            "もし[scope=lab]Xは動物なら[scope=lab]Xは温血動物",
+        );
+        assert_eq!(parent_a.lifecycle, Lifecycle::Commit, "{parent_a:?}");
+        assert_eq!(parent_b.lifecycle, Lifecycle::Commit, "{parent_b:?}");
+        let memory = engine.store.load_memory("alice").unwrap();
+        let shortcut = memory
+            .rules
+            .iter()
+            .find(|rule| rule.source_input == "derived:proof-composition-v1")
+            .expect("Core formed a persisted composed rule");
+        let mut request = RequestEnvelope::new("case", "generated-why", "alice", question);
+        request.budget.max_actions = 128;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.guarantee, Guarantee::Derived);
+        for id in [
+            &fact.dependencies[0],
+            &parent_a.dependencies[0],
+            &parent_b.dependencies[0],
+            &shortcut.id,
+        ] {
+            assert!(result.dependencies.contains(id), "{id}");
+        }
+        let plan = result.content_plan.as_ref().unwrap();
+        let compute: serde_json::Value = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", plan.dependencies.last().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            compute["kind"],
+            "minidora.core-computation.relation-meaning.v5"
+        );
+        assert_eq!(compute["relation_meaning_plan"]["asked"]["subject"], "シロ");
+        assert_eq!(compute["relation_meaning_plan"]["asked"]["scope"], "lab");
+        let emission: language::ModelEmission = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", &plan.model_observation_ref)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(emission.authorized_surfaces.is_none());
+        assert_eq!(emission.text, result.text);
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(original_bytes, result.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.text, result.text);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let retained = engine.latest("alice", "case").unwrap().unwrap();
+        let followup = execute(&mut engine, "followup", "詳しく説明して");
+        assert_eq!(followup.lifecycle, Lifecycle::Commit, "{followup:?}");
+        assert_eq!(followup.dependencies.first(), Some(&result.id));
+        let unrelated = execute(&mut engine, "new-other-scope", "[scope=other]ハナは鳥です");
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+        assert_ne!(
+            result.actor_memory_revision,
+            Some(engine.store.load_memory("alice").unwrap().revision)
+        );
+        assert!(inspect(&engine.store, "alice", &retained, &result).is_ok());
+        let out_of_scope = execute(
+            &mut engine,
+            "out-of-scope",
+            "なぜ[scope=other]ハナは温血動物ですか",
+        );
+        assert_eq!(out_of_scope.lifecycle, Lifecycle::Suspend);
+        assert!(out_of_scope.content_plan.is_none());
+
+        let invalidation = execute(
+            &mut engine,
+            "invalidate-parent",
+            &format!("{}を無効化して", parent_a.dependencies[0]),
+        );
+        assert_eq!(
+            invalidation.lifecycle,
+            Lifecycle::Commit,
+            "{invalidation:?}"
+        );
+        let error = inspect(&engine.store, "alice", &retained, &result).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_PROOF_INVALIDATED"),
+            "{error:?}"
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
     }
 
     #[test]

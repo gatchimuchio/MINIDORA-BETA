@@ -920,3 +920,23 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1、対象ソース差分SHA-256 `c14bf7d
 算術Goalの局所結線を確認。W03全幅とE1出口は未成立。E2合同ゲート、体系QC、独立QA、過去バージョンの実DB移行は `NOT_RUN`。W10の追加Recovery枝はD3-Cに従い後工程に保持する。次のE1接続候補は、通常の `AskWhy` が選んだ証明を意味計画とL6生成へ渡すW07〜W09の経路。W13の永続モデル適応も未接続。
 
 復旧2世代は `5794396` と `e0e40cc`。資産は計5件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中3件（Core、Recoveryと付属テスト、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。ファイル作用検査は一時fixture内で実施。
+
+
+## 2026-11-19 JST B98 — D3-C E1-W07〜W09 合成証明から通常の説明を生成
+
+着工点は `43df4b19bbfaffd1daa20b7801071ec39161e457`。D2仕様・D2工程・D3-C指示の採用SHAを照合。唯一のEngine/Coreは、通常の `AskWhy` で選んだ証明が保存済み合成規則を使った場合に、その証明から文を含まない型付き意味計画を作る。既存の非ニューラル文法生成へ渡し、K7が結論、条件評価、保証、証明ID、文面と出力記録を再照合して採用する。V5計算成果物を保存し、描画と必要なファイルの実観測を元Goalに帰還させる。復旧は封印された質問・予算、生成時の記憶版、現在の証明を照合し、認証済みV5のモデルと出力系列を再生して同じ作用を確定する。従来形式の復旧は既存の照合を使う。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、検査対象差分SHA-256 `f9f77a48e646ff73b5c1f17c1082118e5c553f63ac233a404afdd435e016896c`。`rust/` での最終検査はすべてexit 0。
+
+| 検査 | 結果 |
+|---|---|
+| `cargo test -p minidora-engine --lib recovery::tests::ordinary_why_generates_from_a_saved_composed_proof_and_replays_it --locked -- --exact --nocapture` | 1 PASS。規則形成前は保留。形成後は通常の日本語入力からV5生成・ファイル描画。中断journalで再起動後の同一作用ID確定と書込時刻の保持を確認。追問が元結果を消費し、別スコープの追加後も元版と現在版で同じ意味を復旧。範囲外で保留し、親規則失効後は復旧を拒否。 |
+| `cargo test -p minidora-engine --test core_proof_composition_learning_49 --test core_atomic_explanation_50 --locked` | 2 PASS。既存の規則合成と直結型付き生成。 |
+| `cargo test -p minidora-engine --lib interrupted_actual_write_reconciles_same_identity_without_resending --locked` | 1 PASS。算術の中断復旧。 |
+| `cargo test -p minidora-cli --test normal_route why_question --locked` | 2 PASS。既存の説明と省略追問。 |
+| `cargo test -p minidora-cli --test normal_route conjunctive_rule_joins_two_new_subject_premises_and_explains_both --locked` | 1 PASS。両前提、結論、二親規則が型付き計画と実文面に残ることをCLIで確認。失効の既存検査を継続。 |
+| `cargo fmt --all -- --check`、`cargo check -p minidora-engine --all-targets --locked`、`git diff --check` | PASS。 |
+
+中断検査の再利用時にfixtureのSQLite入力版が `u64` で結合できず、`i64` への検査付き変換で是正した。CLIの初回検査では旧文面の固定文字列が不一致だったため、置換された文面とV5を検査し、同じ前提・結論・親規則・失効の成立を再確認した。
+
+保存された規則の適応が後続のK2とK4へ届く範囲を観測した。現在の文法生成は要求内モデルを使用し、W13の永続モデル適応とE1出口は未成立。一般の長大な証明と過去版実DBの移行、E2合同ゲート、体系QC・独立QAは `NOT_RUN`。復旧2世代は `43df4b1` と `5794396`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、Recovery、CLI回帰、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。テストの一時状態とファイルはfixtureが処理。

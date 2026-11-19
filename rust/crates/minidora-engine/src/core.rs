@@ -7395,7 +7395,14 @@ impl Engine {
                 result.dependencies = answer_dependencies.clone();
                 result.guarantee = answer_guarantee.clone();
                 state.result = Some(result.clone());
-                if direct_input.is_some() {
+                // Use the typed generator when the ordinary question actually
+                // consumes a proof composed from the actor's saved rules.
+                let uses_composed_rule = bundle.meaning.source_kind == "USER_REQUEST"
+                    && memory.rules.iter().any(|rule| {
+                        rule.source_input == "derived:proof-composition-v1"
+                            && answer.used_rules.contains(&rule.id)
+                    });
+                if direct_input.is_some() || uses_composed_rule {
                     let Some(explained) = relation_explanation_target(proposition, &answer) else {
                         return self.stop(
                             &mut state,
@@ -7514,6 +7521,8 @@ impl Engine {
                         .iter()
                         .map(|unit| unit.text.clone())
                         .collect();
+                    adopted_relation_meaning = Some(explained);
+                    relation_proof_dependencies = Some(answer_dependencies);
                     approved_surfaces = Some(vec![generated.emission.text.clone()]);
                     relation_meaning_plan = Some(meaning_plan);
                     content_generation = Some(generation_report);
@@ -7525,19 +7534,6 @@ impl Engine {
                     approved_surfaces =
                         Some(language::relation_explanation_surfaces(&explanation_units));
                     units.extend(explanation_units);
-                }
-                if direct_input.is_some() {
-                    let Some(adopted_meaning) = relation_explanation_target(proposition, &answer)
-                    else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "MISSING_PREMISES",
-                            "根拠付き説明を型付き意味として確定できません。",
-                        );
-                    };
-                    adopted_relation_meaning = Some(adopted_meaning);
-                    relation_proof_dependencies = Some(result.dependencies.clone());
                 }
             }
             Intent::InspectPremises { subject } => {
@@ -9472,6 +9468,210 @@ fn previous_contextual_assertion_fact(
     }))
 }
 
+fn verify_generated_relation_replay(
+    store: &Store,
+    (actor, case): (&str, &str),
+    previous: &ResultRecord,
+    plan: &ContentPlan,
+    compute_ref: &str,
+    artifact: &CoreComputationArtifactGeneratedContent,
+) -> Result<()> {
+    let generation_report = &artifact.content_generation;
+    let request = relation_meaning_plan_to_generation_request(
+        &artifact.relation_meaning_plan,
+        generation_report.max_output_bytes,
+    )?;
+    if request.max_tokens != generation_report.max_tokens {
+        return Err(failure(
+            "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
+            "the retained grammar budget differs from its generation report",
+        ));
+    }
+    let mut replay = language::generate_semantic_meaning(&request).map_err(|_| {
+        failure(
+            "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
+            "the retained Core meaning grammar cannot be replayed",
+        )
+    })?;
+    replay.report.model_artifact_ref = generation_report.model_artifact_ref.clone();
+    validate_relation_meaning_generation(
+        &artifact.relation_meaning_plan,
+        &request,
+        &replay.report,
+    )?;
+    let Some(model_artifact_ref) = generation_report.model_artifact_ref.as_deref() else {
+        return Err(failure(
+            "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
+            "the retained semantic generation has no persisted model artifact reference",
+        ));
+    };
+    let Some(stored_model) = store.get_bytes_if_present(actor, case, model_artifact_ref)? else {
+        return Err(failure(
+            "PRIOR_COMPUTATION_ARTIFACT_UNAVAILABLE",
+            "the persisted semantic generation model is unavailable",
+        ));
+    };
+    let replayed_model = canonical(&replay.model)?;
+    let Some(stored_emission) =
+        store.get_bytes_if_present(actor, case, &plan.model_observation_ref)?
+    else {
+        return Err(failure(
+            "PRIOR_COMPUTATION_ARTIFACT_UNAVAILABLE",
+            "the persisted semantic generation observation is unavailable",
+        ));
+    };
+    let replayed_emission = canonical(&replay.emission)?;
+    let replayed_units = replay
+        .report
+        .units
+        .iter()
+        .map(|unit| unit.text.clone())
+        .collect::<Vec<_>>();
+    let content_plan_matches = validate_relation_content_plan_adoption(
+        previous,
+        generation_report,
+        &replay.emission,
+        compute_ref,
+        &plan.locale,
+        plan,
+    )
+    .is_ok();
+    let meaning_plan_matches = artifact.relation_meaning_plan.conclusion
+        == artifact.relation_meaning
+        && relation_meaning_status_matches(
+            &artifact.relation_meaning_plan.asked,
+            &artifact.relation_meaning_plan.conclusion,
+            &artifact.relation_meaning_plan.answer_status,
+        )
+        && artifact.relation_meaning_plan.guarantee == previous.guarantee
+        && artifact.relation_meaning_plan.dependencies == artifact.relation_proof_dependencies
+        && artifact.relation_meaning_plan.dependencies == previous.dependencies
+        && artifact
+            .relation_meaning_plan
+            .required_units
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            == replay
+                .report
+                .required_unit_ids
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+        && relation_meaning_plan_to_generation_request(
+            &artifact.relation_meaning_plan,
+            generation_report.max_output_bytes,
+        )
+        .is_ok_and(|expected| expected == request);
+    if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND_V5
+        || artifact.calculation != previous.calculation
+        || artifact.units != plan.required_units
+        || artifact.units != replayed_units
+        || artifact.evidence != previous.evidence
+        || artifact.dependencies != previous.dependencies
+        || artifact.relation_proof_dependencies != previous.dependencies
+        || !meaning_plan_matches
+        || !content_plan_matches
+        || replay.report != *generation_report
+        || replay.report.text != previous.text
+        || plan.text != replay.report.text
+        || plan.required_units != artifact.units
+        || plan.guarantee != previous.guarantee
+        || plan.model_revision != replay.report.model_revision
+        || plan.model_artifact_ref != model_artifact_ref
+        || digest(&stored_model) != model_artifact_ref
+        || stored_model != replayed_model
+        || digest(&stored_emission) != plan.model_observation_ref
+        || stored_emission != replayed_emission
+    {
+        return Err(failure(
+            "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
+            "the retained generated meaning, model, proof IDs and rendered sequence do not match their committed artifacts",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_generated_why_computation(
+    store: &Store,
+    (actor, case): (&str, &str),
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    proposition: &Proposition,
+    (current_memory, current_answer): (&MemoryState, &relations::QueryOutcome),
+    budget: &ResourceBudget,
+) -> Result<Option<String>> {
+    let Some(compute_ref) = plan.dependencies.last() else {
+        return Ok(None);
+    };
+    let bytes = store.get_bytes(actor, case, compute_ref)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    if value.get("kind").and_then(serde_json::Value::as_str)
+        != Some(CORE_COMPUTATION_ARTIFACT_KIND_V5)
+    {
+        return Ok(None);
+    }
+    let artifact: CoreComputationArtifactGeneratedContent = serde_json::from_value(value)?;
+    let revision = result.actor_memory_revision.ok_or_else(|| {
+        failure(
+            "RECOVERY_MEMORY_REVISION_MISSING",
+            "the generated explanation does not bind its original actor-memory revision",
+        )
+    })?;
+    let matches_proof = |memory: &MemoryState, answer: &relations::QueryOutcome| -> Result<bool> {
+        let Some(conclusion) = relation_explanation_target(proposition, answer) else {
+            return Ok(false);
+        };
+        let dependencies = relations::answer_dependencies(answer);
+        if dependencies != result.dependencies
+            || relations::answer_guarantee(answer) != result.guarantee
+        {
+            return Ok(false);
+        }
+        Ok(
+            relation_atomic_meaning_plan(memory, proposition, &conclusion, answer, &dependencies)?
+                == artifact.relation_meaning_plan,
+        )
+    };
+    if !matches_proof(current_memory, current_answer)? {
+        return Err(failure(
+            "RECOVERY_PROOF_INVALIDATED",
+            "current relation evidence no longer reproduces the adopted meaning plan",
+        ));
+    }
+    if current_memory.revision != revision {
+        let original = store
+            .load_memory_revision(actor, revision)?
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_MEMORY_REVISION_MISSING",
+                    "the original actor-memory snapshot for the generated explanation is missing",
+                )
+            })?;
+        let original_answer = relations::query(&original, proposition, budget.max_actions)?;
+        if !matches_proof(&original, &original_answer)? {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the original snapshot does not reproduce the adopted meaning plan",
+            ));
+        }
+    }
+    let expected_request = relation_meaning_plan_to_generation_request(
+        &artifact.relation_meaning_plan,
+        budget.max_evidence_bytes,
+    )?;
+    if expected_request.max_output_bytes != artifact.content_generation.max_output_bytes
+        || expected_request.max_tokens != artifact.content_generation.max_tokens
+    {
+        return Err(failure(
+            "RECOVERY_GOAL_MISMATCH",
+            "the generated meaning does not use the original goal's output budget",
+        ));
+    }
+    verify_generated_relation_replay(store, (actor, case), result, plan, compute_ref, &artifact)?;
+    Ok(Some(compute_ref.clone()))
+}
+
 pub(crate) fn previous_relation_meaning(
     store: &Store,
     actor: &str,
@@ -9526,127 +9726,14 @@ pub(crate) fn previous_relation_meaning(
         }
         if artifact_kind.as_deref() == Some(CORE_COMPUTATION_ARTIFACT_KIND_V5) {
             let artifact: CoreComputationArtifactGeneratedContent = serde_json::from_value(value)?;
-            let generation_report = &artifact.content_generation;
-            let request = relation_meaning_plan_to_generation_request(
-                &artifact.relation_meaning_plan,
-                generation_report.max_output_bytes,
-            )?;
-            if request.max_tokens != generation_report.max_tokens {
-                return Err(failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
-                    "the retained grammar budget differs from its generation report",
-                ));
-            }
-            let mut replay = language::generate_semantic_meaning(&request).map_err(|_| {
-                failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
-                    "the retained Core meaning grammar cannot be replayed",
-                )
-            })?;
-            replay.report.model_artifact_ref = generation_report.model_artifact_ref.clone();
-            validate_relation_meaning_generation(
-                &artifact.relation_meaning_plan,
-                &request,
-                &replay.report,
-            )?;
-            let Some(model_artifact_ref) = generation_report.model_artifact_ref.as_deref() else {
-                return Err(failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
-                    "the retained semantic generation has no persisted model artifact reference",
-                ));
-            };
-            let Some(stored_model) = store.get_bytes_if_present(actor, case, model_artifact_ref)?
-            else {
-                return Err(failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_UNAVAILABLE",
-                    "the persisted semantic generation model is unavailable",
-                ));
-            };
-            let replayed_model = canonical(&replay.model)?;
-            let Some(previous_plan) = previous.content_plan.as_ref() else {
-                return Err(failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
-                    "the retained generated result has no adopted ContentPlan",
-                ));
-            };
-            let Some(stored_emission) =
-                store.get_bytes_if_present(actor, case, &previous_plan.model_observation_ref)?
-            else {
-                return Err(failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_UNAVAILABLE",
-                    "the persisted semantic generation observation is unavailable",
-                ));
-            };
-            let replayed_emission = canonical(&replay.emission)?;
-            let replayed_units = replay
-                .report
-                .units
-                .iter()
-                .map(|unit| unit.text.clone())
-                .collect::<Vec<_>>();
-            let content_plan_matches = validate_relation_content_plan_adoption(
+            verify_generated_relation_replay(
+                store,
+                (actor, case),
                 previous,
-                generation_report,
-                &replay.emission,
+                plan,
                 compute_ref,
-                &previous_plan.locale,
-                previous_plan,
-            )
-            .is_ok();
-            let meaning_plan_matches = artifact.relation_meaning_plan.conclusion
-                == artifact.relation_meaning
-                && relation_meaning_status_matches(
-                    &artifact.relation_meaning_plan.asked,
-                    &artifact.relation_meaning_plan.conclusion,
-                    &artifact.relation_meaning_plan.answer_status,
-                )
-                && artifact.relation_meaning_plan.guarantee == previous.guarantee
-                && artifact.relation_meaning_plan.dependencies
-                    == artifact.relation_proof_dependencies
-                && artifact.relation_meaning_plan.dependencies == previous.dependencies
-                && artifact
-                    .relation_meaning_plan
-                    .required_units
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-                    == replay
-                        .report
-                        .required_unit_ids
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>()
-                && relation_meaning_plan_to_generation_request(
-                    &artifact.relation_meaning_plan,
-                    generation_report.max_output_bytes,
-                )
-                .is_ok_and(|expected| expected == request);
-            if artifact.kind != CORE_COMPUTATION_ARTIFACT_KIND_V5
-                || artifact.calculation != previous.calculation
-                || artifact.units != plan.required_units
-                || artifact.units != replayed_units
-                || artifact.evidence != previous.evidence
-                || artifact.dependencies != previous.dependencies
-                || artifact.relation_proof_dependencies != previous.dependencies
-                || !meaning_plan_matches
-                || !content_plan_matches
-                || replay.report != *generation_report
-                || replay.report.text != previous.text
-                || previous_plan.text != replay.report.text
-                || previous_plan.required_units != artifact.units
-                || previous_plan.guarantee != previous.guarantee
-                || previous_plan.model_revision != replay.report.model_revision
-                || previous_plan.model_artifact_ref != model_artifact_ref
-                || digest(&stored_model) != model_artifact_ref
-                || stored_model != replayed_model
-                || digest(&stored_emission) != previous_plan.model_observation_ref
-                || stored_emission != replayed_emission
-            {
-                return Err(failure(
-                    "PRIOR_COMPUTATION_ARTIFACT_MISMATCH",
-                    "the retained generated meaning, model, proof IDs and rendered sequence do not match their committed artifacts",
-                ));
-            }
+                &artifact,
+            )?;
             return Ok(Some(PriorRelationMeaning::AdoptedConclusion {
                 proposition: artifact.relation_meaning,
                 proof_dependencies: artifact.relation_proof_dependencies,
@@ -10852,7 +10939,7 @@ fn validate_relation_meaning_generation(
     Ok(())
 }
 
-/// K7 adoption boundary for the bounded direct typed AskWhy route. Rebuild the
+/// K7 adoption boundary for generated AskWhy content. Rebuild the
 /// plan from the same live proof state, then bind its exact conclusion,
 /// guarantee, conditions and dependencies to the generated trace and K3 result.
 struct RelationMeaningAdoptionInput<'a> {

@@ -2688,10 +2688,70 @@ fn conjunctive_rule_joins_two_new_subject_premises_and_explains_both() {
         ],
     ));
     let animal_explanation = animal_why["text"].as_str().unwrap();
-    assert!(animal_explanation.contains("Miraはbirdである"));
-    assert!(animal_explanation.contains("Miraはfeatheredである"));
-    assert!(animal_explanation.contains("ならば $v0はanimalである"));
     assert_eq!(animal_why["dependencies"], animal_answer["dependencies"]);
+    assert_eq!(animal_why["guarantee"], "DERIVED");
+    for (object, fact) in [("bird", &bird), ("feathered", &feathered)] {
+        let fact_id = fact["dependencies"][0].as_str().unwrap();
+        assert!(animal_explanation.lines().any(|line| {
+            line.contains("「Mira」")
+                && line.contains(&format!("「{object}」"))
+                && line.contains(fact_id)
+        }));
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let compute_ref = animal_why["content_plan"]["dependencies"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let compute: Value = serde_json::from_slice(
+        &store
+            .get_bytes("owner", "new-subject", compute_ref)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        compute["kind"],
+        "minidora.core-computation.relation-meaning.v5"
+    );
+    let meaning_plan = &compute["relation_meaning_plan"];
+    assert_eq!(meaning_plan["conclusion"]["subject"], "Mira");
+    assert_eq!(meaning_plan["conclusion"]["object"], "animal");
+    assert_eq!(meaning_plan["conclusion"]["scope"], "biology");
+    assert!(animal_explanation.contains("「animal」"));
+    let composed_rule = meaning_plan["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|unit| &unit["meaning"])
+        .find(|meaning| meaning["kind"] == "RULE" && meaning["composed"] == true)
+        .unwrap();
+    assert_eq!(composed_rule["conclusion"]["object"], "animal");
+    let premise_objects: std::collections::BTreeSet<_> = composed_rule["premises"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|premise| premise["object"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        premise_objects,
+        std::collections::BTreeSet::from(["bird", "feathered"])
+    );
+    let rule_line = animal_explanation
+        .lines()
+        .find(|line| line.contains(composed_rule["record_id"].as_str().unwrap()))
+        .unwrap();
+    for id in [rule_id, followup_rule["dependencies"][0].as_str().unwrap()] {
+        assert!(
+            composed_rule["record_dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from(id))
+        );
+        assert!(rule_line.contains(id));
+    }
 
     record(&execute_in_case(
         &scratch.0,
