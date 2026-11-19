@@ -3043,44 +3043,34 @@ pub(crate) fn next_direct_retrieval<'a>(
                 Err(invalid())
             };
         }
-        let legacy_stop = matches!(stop, Some(DirectPreconnectionStop::LegacyNoPending));
-        if legacy_stop
-            && (sealed.meaning.parser_version
-                != crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION
-                || sealed.meaning.context_result_ref.is_none())
-        {
-            return if only_legacy_stops {
+        let without_legacy_lineage = || {
+            if only_legacy_stops {
                 Ok(None)
             } else {
                 Err(invalid())
+            }
+        };
+        let legacy_version = if matches!(stop, Some(DirectPreconnectionStop::LegacyNoPending)) {
+            let Some(version) = LegacyNoPendingVersion::from_bundle(&sealed)
+                .filter(|_| sealed.meaning.context_result_ref.is_some())
+            else {
+                return without_legacy_lineage();
             };
-        }
+            Some(version)
+        } else {
+            None
+        };
         let parent = sealed
             .meaning
             .context_result_ref
             .as_ref()
             .and_then(|id| prior_results.get(id))
             .ok_or_else(invalid)?;
-        if legacy_stop
-            && ((parent.lifecycle != Lifecycle::Commit
-                && !matches!(
-                    direct_preconnection_stop(parent),
-                    Some(DirectPreconnectionStop::LegacyNoPending)
-                ))
-                || store
-                    .get_input_bundle(actor, case, &parent.input_id, parent.input_version)?
-                    .is_none_or(|(_, prior)| {
-                        prior.meaning.intent != Intent::FetchNextUnobservedSource
-                            || prior.meaning.parser_version
-                                != crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION
-                    }))
+        if let Some(version) = legacy_version
+            && !version.matches_parent(store, actor, case, parent)?
         {
-            // V1 also wrote this stop when there was no continuable lineage.
-            return if only_legacy_stops {
-                Ok(None)
-            } else {
-                Err(invalid())
-            };
+            // These producers also wrote this reason for ordinary terminal histories.
+            return without_legacy_lineage();
         }
         if identity(&sealed.request)? != root.id || !binds_direct_predecessor(&sealed, parent)? {
             return Err(invalid());
@@ -3093,8 +3083,8 @@ pub(crate) fn next_direct_retrieval<'a>(
         {
             return Err(invalid());
         }
-        only_legacy_stops &= legacy_stop;
-        steps.push((parent, root, sealed, stop));
+        only_legacy_stops &= legacy_version.is_some();
+        steps.push((parent, root, sealed, stop, legacy_version));
         root = parent;
     }
     let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
@@ -3123,17 +3113,13 @@ pub(crate) fn next_direct_retrieval<'a>(
         .flat_map(|packet| &packet.redirect_chain)
         .cloned()
         .collect();
-    let mut legacy_stops_allowed = false;
-    for (parent, result, sealed, stop) in steps.into_iter().rev() {
+    let mut legacy_v1_stops = None;
+    for (parent, result, sealed, stop, legacy_version) in steps.into_iter().rev() {
         let request = &sealed.request;
         if let Some(stop) = stop {
             let uri = urls.peek().map(String::as_str);
-            if matches!(stop, DirectPreconnectionStop::LegacyNoPending) {
-                if !legacy_stops_allowed {
-                    return Err(invalid());
-                }
-            } else {
-                legacy_stops_allowed = false;
+            if legacy_version.is_none() {
+                legacy_v1_stops = None;
                 if uri.is_none_or(|uri| {
                     url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str()))
                 }) {
@@ -3141,6 +3127,16 @@ pub(crate) fn next_direct_retrieval<'a>(
                 }
             }
             verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
+            if let Some(version) = legacy_version {
+                let count = legacy_v1_stops.as_mut().ok_or_else(invalid)?;
+                if matches!(version, LegacyNoPendingVersion::V1) {
+                    *count += 1;
+                } else if *count < 2 {
+                    // V6 could already resolve one V1 stop. A V6 stop after just
+                    // one is outside the historical repeated-stop gap.
+                    return Ok(None);
+                }
+            }
             // This request observed no URL, so the pending slot has not moved.
             continue;
         }
@@ -3167,9 +3163,10 @@ pub(crate) fn next_direct_retrieval<'a>(
         }
         observed_routes.extend(packet.redirect_chain.iter().cloned());
         // B138 could commit one continuation directly from the original retrieval.
-        legacy_stops_allowed = parent.id == root.id
+        legacy_v1_stops = (parent.id == root.id
             && sealed.meaning.parser_version
-                == crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION;
+                == crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION)
+            .then_some(0usize);
     }
     let Some(uri) = urls.next() else {
         return Ok(None);
@@ -3191,6 +3188,53 @@ fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Re
         bundle.meaning.context_result_ref.as_ref() == Some(&previous.id)
             && bundle.context_sha256 == identity(&Some(previous))?,
     )
+}
+
+#[derive(Clone, Copy)]
+enum LegacyNoPendingVersion {
+    V1,
+    V6,
+    V7,
+}
+
+impl LegacyNoPendingVersion {
+    fn from_bundle(bundle: &InputBundle) -> Option<Self> {
+        if bundle.meaning.intent != Intent::FetchNextUnobservedSource {
+            return None;
+        }
+        match bundle.meaning.parser_version.as_str() {
+            crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION => Some(Self::V1),
+            "direct-source-continuation-v6" => Some(Self::V6),
+            "direct-source-continuation-v7" => Some(Self::V7),
+            _ => None,
+        }
+    }
+
+    fn matches_parent(
+        self,
+        store: &Store,
+        actor: &str,
+        case: &str,
+        parent: &ResultRecord,
+    ) -> Result<bool> {
+        let parent_is_stop = matches!(
+            direct_preconnection_stop(parent),
+            Some(DirectPreconnectionStop::LegacyNoPending)
+        );
+        if !(parent_is_stop || (matches!(self, Self::V1) && parent.lifecycle == Lifecycle::Commit))
+        {
+            return Ok(false);
+        }
+        let parent_version = store
+            .get_input_bundle(actor, case, &parent.input_id, parent.input_version)?
+            .and_then(|(_, bundle)| Self::from_bundle(&bundle));
+        Ok(matches!(
+            (self, parent_version),
+            (Self::V1, Some(Self::V1))
+                | (Self::V6, Some(Self::V1 | Self::V6))
+                | (Self::V7, Some(Self::V6 | Self::V7))
+        ))
+    }
 }
 
 enum DirectPreconnectionStop<'a> {
