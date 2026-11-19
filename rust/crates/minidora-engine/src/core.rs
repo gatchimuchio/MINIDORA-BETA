@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 
 pub(crate) const NO_COMPUTE_BUDGET: &str = "計算予算がありません。";
 pub(crate) const ACTION_BUDGET_RESIDUALS: &str = "必須成果の残件:";
+pub(crate) const NO_PENDING_DIRECT_URL: &str = "NO_PENDING_DIRECT_URL";
+pub(crate) const NO_PENDING_DIRECT_URL_MESSAGE: &str =
+    "前回の直接取得に、照合できる次の未接続URLがありません。";
 
 #[derive(serde::Serialize)]
 struct CalculationSequenceStepArtifact {
@@ -4060,8 +4063,8 @@ impl Engine {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
-                            "NO_PENDING_DIRECT_URL",
-                            "前回の直接取得に、照合できる次の未接続URLがありません。",
+                            NO_PENDING_DIRECT_URL,
+                            NO_PENDING_DIRECT_URL_MESSAGE,
                         );
                     }
                     Err(error) => {

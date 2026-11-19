@@ -3038,12 +3038,43 @@ pub(crate) fn next_direct_retrieval<'a>(
                 Err(invalid())
             };
         }
+        let legacy_stop = matches!(
+            direct_preconnection_stop(root),
+            Some(DirectPreconnectionStop::LegacySingleContinuation)
+        );
+        if legacy_stop
+            && (sealed.meaning.parser_version
+                != crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION
+                || sealed.meaning.context_result_ref.is_none())
+        {
+            return if steps.is_empty() {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
+        }
         let parent = sealed
             .meaning
             .context_result_ref
             .as_ref()
             .and_then(|id| prior_results.get(id))
             .ok_or_else(invalid)?;
+        if legacy_stop
+            && (parent.lifecycle != Lifecycle::Commit
+                || store
+                    .get_input_bundle(actor, case, &parent.input_id, parent.input_version)?
+                    .is_none_or(|(_, prior)| {
+                        prior.meaning.intent != Intent::FetchNextUnobservedSource
+                            || prior.meaning.parser_version
+                                != crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION
+                    }))
+        {
+            return if steps.is_empty() {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
+        }
         if identity(&sealed.request)? != root.id || !binds_direct_predecessor(&sealed, parent)? {
             return Err(invalid());
         }
@@ -3084,11 +3115,18 @@ pub(crate) fn next_direct_retrieval<'a>(
         .flat_map(|packet| &packet.redirect_chain)
         .cloned()
         .collect();
-    for (parent, result, sealed) in steps.into_iter().rev() {
+    for (index, (parent, result, sealed)) in steps.into_iter().rev().enumerate() {
         let request = &sealed.request;
         if let Some(stop) = direct_preconnection_stop(result) {
-            let uri = urls.peek().ok_or_else(invalid)?;
-            if url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str())) {
+            let uri = urls.peek().map(String::as_str);
+            if matches!(stop, DirectPreconnectionStop::LegacySingleContinuation) {
+                // B138 could commit exactly one continuation of the original retrieval.
+                if index != 1 {
+                    return Err(invalid());
+                }
+            } else if uri.is_none_or(|uri| {
+                url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str()))
+            }) {
                 return Err(invalid());
             }
             verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
@@ -3146,11 +3184,15 @@ enum DirectPreconnectionStop<'a> {
     NoComputeBudget,
     InsufficientActions,
     NoEvidenceBytes,
+    LegacySingleContinuation,
 }
 
 impl DirectPreconnectionStop<'_> {
     fn has_predecessor_artifact(&self) -> bool {
-        !matches!(self, Self::NoComputeBudget | Self::InsufficientActions)
+        !matches!(
+            self,
+            Self::NoComputeBudget | Self::InsufficientActions | Self::LegacySingleContinuation
+        )
     }
 }
 
@@ -3160,6 +3202,9 @@ fn direct_preconnection_stop(result: &ResultRecord) -> Option<DirectPreconnectio
     }
     let (code, detail) = result.reason.as_deref()?.split_once(": ")?;
     match (code, detail) {
+        (crate::core::NO_PENDING_DIRECT_URL, crate::core::NO_PENDING_DIRECT_URL_MESSAGE) => {
+            return Some(DirectPreconnectionStop::LegacySingleContinuation);
+        }
         ("RESOURCE_LIMIT", crate::core::NO_COMPUTE_BUDGET) => {
             return Some(DirectPreconnectionStop::NoComputeBudget);
         }
@@ -3189,7 +3234,7 @@ fn verify_direct_preconnection_stop(
     bundle: &InputBundle,
     result: &ResultRecord,
     parent: &ResultRecord,
-    uri: &str,
+    uri: Option<&str>,
     stop: DirectPreconnectionStop<'_>,
 ) -> Result<()> {
     let invalid = || {
@@ -3226,6 +3271,19 @@ fn verify_direct_preconnection_stop(
     {
         return Err(invalid());
     }
+    if matches!(stop, DirectPreconnectionStop::LegacySingleContinuation) {
+        // The old resolver suspended after sealing, before constructing a Goal.
+        if stopped.goal_sha256.is_none()
+            && result.text == crate::core::NO_PENDING_DIRECT_URL_MESSAGE
+            && request.budget.max_actions > 0
+            && request.budget.deadline_ms > 0
+            && store.input_start_predecessor(&stopped)?.as_ref() == Some(parent)
+        {
+            return Ok(());
+        }
+        return Err(invalid());
+    }
+    let uri = uri.ok_or_else(invalid)?;
     let goal_ref = stopped.goal_sha256.as_deref().ok_or_else(invalid)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
     if goal.input_fingerprint != result.id
@@ -3280,6 +3338,7 @@ fn verify_direct_preconnection_stop(
                 && sufficient_actions
                 && first_hop_wait_matches(store, &stopped, &request.permissions, uri, detail)?
         }
+        DirectPreconnectionStop::LegacySingleContinuation => unreachable!("checked above"),
     };
     if !matches_original_stop {
         return Err(invalid());
