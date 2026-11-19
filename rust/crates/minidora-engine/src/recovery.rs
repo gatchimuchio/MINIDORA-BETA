@@ -3113,13 +3113,13 @@ pub(crate) fn next_direct_retrieval<'a>(
         .flat_map(|packet| &packet.redirect_chain)
         .cloned()
         .collect();
-    let mut legacy_v1_stops = None;
+    let mut legacy_prefix: Option<LegacyNoPendingPrefix> = None;
     for (parent, result, sealed, stop, legacy_version) in steps.into_iter().rev() {
         let request = &sealed.request;
         if let Some(stop) = stop {
             let uri = urls.peek().map(String::as_str);
             if legacy_version.is_none() {
-                legacy_v1_stops = None;
+                legacy_prefix = None;
                 if uri.is_none_or(|uri| {
                     url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str()))
                 }) {
@@ -3128,12 +3128,9 @@ pub(crate) fn next_direct_retrieval<'a>(
             }
             verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
             if let Some(version) = legacy_version {
-                let count = legacy_v1_stops.as_mut().ok_or_else(invalid)?;
-                if matches!(version, LegacyNoPendingVersion::V1) {
-                    *count += 1;
-                } else if *count < 2 {
-                    // V6 could already resolve one V1 stop. A V6 stop after just
-                    // one is outside the historical repeated-stop gap.
+                let prefix = legacy_prefix.ok_or_else(invalid)?;
+                legacy_prefix = prefix.extended_by(version);
+                if legacy_prefix.is_none() {
                     return Ok(None);
                 }
             }
@@ -3163,10 +3160,10 @@ pub(crate) fn next_direct_retrieval<'a>(
         }
         observed_routes.extend(packet.redirect_chain.iter().cloned());
         // B138 could commit one continuation directly from the original retrieval.
-        legacy_v1_stops = (parent.id == root.id
+        legacy_prefix = (parent.id == root.id
             && sealed.meaning.parser_version
                 == crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION)
-            .then_some(0usize);
+            .then_some(LegacyNoPendingPrefix::FirstCommit);
     }
     let Some(uri) = urls.next() else {
         return Ok(None);
@@ -3193,8 +3190,10 @@ fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Re
 #[derive(Clone, Copy)]
 enum LegacyNoPendingVersion {
     V1,
+    V5,
     V6,
     V7,
+    V8,
 }
 
 impl LegacyNoPendingVersion {
@@ -3204,8 +3203,10 @@ impl LegacyNoPendingVersion {
         }
         match bundle.meaning.parser_version.as_str() {
             crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION => Some(Self::V1),
+            "direct-source-continuation-v5" => Some(Self::V5),
             "direct-source-continuation-v6" => Some(Self::V6),
             "direct-source-continuation-v7" => Some(Self::V7),
+            "direct-source-continuation-v8" => Some(Self::V8),
             _ => None,
         }
     }
@@ -3231,9 +3232,38 @@ impl LegacyNoPendingVersion {
         Ok(matches!(
             (self, parent_version),
             (Self::V1, Some(Self::V1))
-                | (Self::V6, Some(Self::V1 | Self::V6))
-                | (Self::V7, Some(Self::V6 | Self::V7))
+                | (Self::V5, Some(Self::V1 | Self::V5))
+                | (Self::V6, Some(Self::V1 | Self::V5 | Self::V6))
+                | (Self::V7, Some(Self::V5 | Self::V6 | Self::V7))
+                | (Self::V8, Some(Self::V5 | Self::V6 | Self::V7 | Self::V8))
         ))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LegacyNoPendingPrefix {
+    FirstCommit,
+    OneV1Stop,
+    MultipleV1Stops,
+    WithV5Stop,
+}
+
+impl LegacyNoPendingPrefix {
+    fn extended_by(self, version: LegacyNoPendingVersion) -> Option<Self> {
+        use LegacyNoPendingVersion::{V1, V5, V6, V7, V8};
+
+        // Parent versions have already been checked. Among NO_PENDING stops,
+        // V5 could not resolve any V1 stop, V6 could resolve one, and V8 could
+        // resolve the V6/V7 chain unless it led back to V5.
+        match (self, version) {
+            (Self::FirstCommit, V1) => Some(Self::OneV1Stop),
+            (Self::OneV1Stop | Self::MultipleV1Stops, V1) => Some(Self::MultipleV1Stops),
+            (Self::OneV1Stop | Self::MultipleV1Stops | Self::WithV5Stop, V5) => {
+                Some(Self::WithV5Stop)
+            }
+            (Self::MultipleV1Stops, V6 | V7) | (Self::WithV5Stop, V6 | V7 | V8) => Some(self),
+            _ => None,
+        }
     }
 }
 
