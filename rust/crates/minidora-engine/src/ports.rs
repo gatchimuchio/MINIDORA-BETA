@@ -19,6 +19,10 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::{Host, Url};
 
+pub(crate) const READ_PERMISSION_REQUIRED: &str = "READ_PERMISSION_REQUIRED";
+pub(crate) const READ_PERMISSION_REQUIRED_MESSAGE: &str =
+    "The exact destination hostname is not in the authorized read scope";
+
 pub(crate) fn approved_url(raw: &str, permissions: &Permissions) -> Result<Url> {
     let url = Url::parse(raw)
         .map_err(|_| failure("INVALID_READ_URL", "A valid absolute HTTPS URL is required"))?;
@@ -69,8 +73,8 @@ pub(crate) fn approved_url(raw: &str, permissions: &Permissions) -> Result<Url> 
     }
     if !permissions.read_hosts.contains(host) {
         return Err(failure(
-            "READ_PERMISSION_REQUIRED",
-            "The exact destination hostname is not in the authorized read scope",
+            READ_PERMISSION_REQUIRED,
+            READ_PERMISSION_REQUIRED_MESSAGE,
         ));
     }
     Ok(url)

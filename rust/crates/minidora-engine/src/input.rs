@@ -187,7 +187,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
-        Intent::FetchNextUnobservedSource => "direct-source-continuation-v2",
+        Intent::FetchNextUnobservedSource => "direct-source-continuation-v3",
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

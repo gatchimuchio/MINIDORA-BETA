@@ -3024,15 +3024,19 @@ pub(crate) fn next_direct_retrieval<'a>(
     let mut root = source;
     let mut visited = BTreeSet::new();
     let mut steps = Vec::new();
-    while root.lifecycle == Lifecycle::Commit {
+    while root.lifecycle == Lifecycle::Commit || direct_read_permission_stop(root) {
         if !visited.insert(&root.id) {
             return Err(invalid());
         }
         let (_, sealed) = store
             .get_input_bundle(actor, case, &root.input_id, root.input_version)?
             .ok_or_else(invalid)?;
-        if !matches!(sealed.meaning.intent, Intent::FetchNextUnobservedSource) && steps.is_empty() {
-            return Ok(None);
+        if !matches!(sealed.meaning.intent, Intent::FetchNextUnobservedSource) {
+            return if steps.is_empty() {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
         }
         let parent = sealed
             .meaning
@@ -3040,17 +3044,31 @@ pub(crate) fn next_direct_retrieval<'a>(
             .as_ref()
             .and_then(|id| prior_results.get(id))
             .ok_or_else(invalid)?;
-        if !matches!(sealed.meaning.intent, Intent::FetchNextUnobservedSource)
-            || identity(&sealed.request)? != root.id
-            || !binds_direct_predecessor(&sealed, parent)?
-            || store
+        if identity(&sealed.request)? != root.id || !binds_direct_predecessor(&sealed, parent)? {
+            return Err(invalid());
+        }
+        let denied_goal = if root.lifecycle == Lifecycle::Suspend {
+            let stopped = store
+                .load_suspended_result_revision(actor, case, root)?
+                .ok_or_else(invalid)?;
+            if stopped.bundle.as_ref() != Some(&sealed)
+                || stopped.input_fingerprint.as_ref() != Some(&root.id)
+                || stopped.reason != root.reason
+            {
+                return Err(invalid());
+            }
+            Some(stopped.goal_sha256.ok_or_else(invalid)?)
+        } else {
+            if store
                 .get_input_result(actor, case, &root.input_id, root.input_version)?
                 .as_ref()
                 != Some(root)
-        {
-            return Err(invalid());
-        }
-        steps.push((parent, root, sealed.request));
+            {
+                return Err(invalid());
+            }
+            None
+        };
+        steps.push((parent, root, sealed.request, denied_goal));
         root = parent;
     }
     let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
@@ -3072,18 +3090,27 @@ pub(crate) fn next_direct_retrieval<'a>(
     let Intent::Retrieve { urls, .. } = original.meaning.intent else {
         return Err(invalid());
     };
-    let mut urls = urls.into_iter().skip(root.evidence.len());
+    let mut urls = urls.into_iter().skip(root.evidence.len()).peekable();
     let mut observed_routes: BTreeSet<_> = root
         .evidence
         .iter()
         .flat_map(|packet| &packet.redirect_chain)
         .cloned()
         .collect();
-    for (parent, result, request) in steps.into_iter().rev() {
+    for (parent, result, request, denied_goal) in steps.into_iter().rev() {
+        let parent_ref = verified_artifact(store, actor, case, parent)?;
+        if let Some(goal_ref) = denied_goal {
+            let uri = urls.peek().ok_or_else(invalid)?;
+            if url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str())) {
+                return Err(invalid());
+            }
+            verify_direct_read_permission_stop(store, &request, result, parent, uri, &goal_ref)?;
+            // The port refused the request before it could observe this URL.
+            continue;
+        }
         let uri = urls.next().ok_or_else(invalid)?;
         let packet =
             verify_direct_continuation_body(parent, result, &request, &uri, &observed_routes)?;
-        let parent_ref = verified_artifact(store, actor, case, parent)?;
         let packet_ref = verified_artifact(store, actor, case, packet)?;
         let graph_ref = result.execution_graph_ref.as_ref().ok_or_else(invalid)?;
         let graph: serde_json::Value =
@@ -3123,6 +3150,80 @@ fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Re
         bundle.meaning.context_result_ref.as_ref() == Some(&previous.id)
             && bundle.context_sha256 == identity(&Some(previous))?,
     )
+}
+
+fn direct_read_permission_stop(result: &ResultRecord) -> bool {
+    result.lifecycle == Lifecycle::Suspend
+        && result
+            .reason
+            .as_deref()
+            .and_then(|reason| reason.strip_prefix("EVIDENCE_UNAVAILABLE: "))
+            .and_then(|reason| reason.split_once(": "))
+            == Some((
+                crate::ports::READ_PERMISSION_REQUIRED,
+                crate::ports::READ_PERMISSION_REQUIRED_MESSAGE,
+            ))
+}
+
+fn verify_direct_read_permission_stop(
+    store: &Store,
+    request: &RequestEnvelope,
+    result: &ResultRecord,
+    parent: &ResultRecord,
+    uri: &str,
+    goal_ref: &str,
+) -> Result<()> {
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "The direct continuation was not a verified pre-connection permission stop",
+        )
+    };
+    if !result.evidence.is_empty()
+        || result.dependencies.as_slice() != [parent.id.as_str()]
+        || result.guarantee != Guarantee::Unknown
+        || result.content_plan.is_some()
+        || result.calculation.is_some()
+        || result.render.is_some()
+        || !result.receipts.is_empty()
+        || result.execution_graph_ref.is_some()
+        || !matches!(
+            crate::ports::approved_url(uri, &request.permissions),
+            Err(Error::Contract { code, message })
+                if code == crate::ports::READ_PERMISSION_REQUIRED
+                    && message == crate::ports::READ_PERMISSION_REQUIRED_MESSAGE
+        )
+    {
+        return Err(invalid());
+    }
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
+    if goal.input_fingerprint != result.id
+        || goal.intent != Intent::FetchNextUnobservedSource
+        || goal.permissions != request.permissions
+        || goal.output_path != request.output_path
+        || goal.budget != request.budget
+    {
+        return Err(invalid());
+    }
+    let nodes: Vec<GoalNode> =
+        serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
+    if (goal.budget.max_actions as usize) < nodes.len()
+        || !nodes.iter().any(|node| {
+            node.id == PREVIOUS_DIRECT_RETRIEVAL_NODE
+                && node.kind == GoalNodeKind::Evidence
+                && node.requires.is_empty()
+        })
+        || !nodes.iter().any(|node| {
+            node.id == "source-0"
+                && node.kind == GoalNodeKind::Evidence
+                && node.requires == [PREVIOUS_DIRECT_RETRIEVAL_NODE]
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn verify_direct_continuation_body<'a>(
