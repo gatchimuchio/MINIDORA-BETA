@@ -3211,8 +3211,7 @@ fn inspect(
     let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
-    let requires_generated_why =
-        bundle.meaning.parser_version == crate::input::RELATION_EXPLANATION_PARSER_VERSION;
+    let requires_generated_why = crate::input::uses_generated_relation_explanation(&bundle.meaning);
     if goal.required_predicates != goal_predicates(&bundle.meaning, true)
         && (requires_generated_comparison
             || requires_generated_calculation

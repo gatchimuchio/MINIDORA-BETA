@@ -345,7 +345,7 @@ struct ConditionEvaluationBudget<'a> {
     steps: &'a mut u32,
 }
 
-fn valid_utc_instant(value: &str) -> bool {
+pub(crate) fn valid_utc_instant(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 20
         || bytes[4] != b'-'
@@ -437,7 +437,7 @@ fn expression_condition_refs(
     Ok(())
 }
 
-fn validate_condition_id(value: &str) -> Result<()> {
+pub(crate) fn validate_condition_id(value: &str) -> Result<()> {
     if value.trim().is_empty()
         || value.len() > 512
         || value.chars().any(char::is_control)

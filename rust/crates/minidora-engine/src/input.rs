@@ -7,31 +7,55 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v84-quoted-relation-boundary";
-pub(crate) const COMPARISON_PARSER_VERSION: &str =
+pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary";
+const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
-const FORMATTED_COMPARISON_PARSER_VERSION: &str =
+const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v87-formatted-relation-comparison";
+pub(crate) const COMPARISON_PARSER_VERSION: &str = "declarative-ja-en-v91-comparison-source-roles";
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
-pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
+const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
+pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v90-explanation-source-roles";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
-const QUOTATION_OPENERS: [char; 6] = ['「', '『', '"', '\'', '“', '‘'];
+const QUOTATION_OPENERS: [char; 15] = [
+    '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
+];
+
+fn starts_quoted_source(text: &str) -> bool {
+    text.starts_with(QUOTATION_OPENERS)
+        || text.starts_with(['>', '＞'])
+        || ["引用:", "引用：", "資料本文:", "資料本文："]
+            .iter()
+            .any(|prefix| text.starts_with(prefix))
+}
 
 pub(crate) fn uses_generated_comparison(meaning: &MeaningIR) -> bool {
     matches!(
         (&meaning.intent, meaning.parser_version.as_str()),
         (
             Intent::CompareRelationInventories { format: None, .. },
-            COMPARISON_PARSER_VERSION
+            LEGACY_COMPARISON_PARSER_VERSION
         ) | (
             Intent::CompareRelationInventories {
                 format: Some(_),
                 ..
             },
-            FORMATTED_COMPARISON_PARSER_VERSION
+            LEGACY_FORMATTED_COMPARISON_PARSER_VERSION
+        ) | (
+            Intent::CompareRelationInventories { .. },
+            COMPARISON_PARSER_VERSION
         )
     )
+}
+
+pub(crate) fn uses_generated_relation_explanation(meaning: &MeaningIR) -> bool {
+    matches!(&meaning.intent, Intent::AskWhy { .. })
+        && matches!(
+            meaning.parser_version.as_str(),
+            LEGACY_RELATION_EXPLANATION_PARSER_VERSION | RELATION_EXPLANATION_PARSER_VERSION
+        )
 }
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -141,7 +165,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         unresolved.push("no actual committed calculation is available to correct".into());
     }
     let context_sha256 = identity(&previous)?;
-    let mut source_roles = match source_role_spans(&request.text, &intent) {
+    let source_roles = match source_role_spans(&request.text, &intent) {
         Ok(source_roles) => source_roles,
         Err(Error::Contract { code, message }) if code == "SOURCE_SPAN_INDEX_LIMIT" => {
             unresolved.push(format!("source role indexing stopped: {message}"));
@@ -149,35 +173,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Err(error) => return Err(error),
     };
-    if let Intent::CompareRelationInventories {
-        format: Some(format),
-        ..
-    } = &intent
-    {
-        let value = match format {
-            MeaningCompositionFormat::Paragraph => "段落",
-            MeaningCompositionFormat::Bullets => "箇条書き",
-        };
-        let marker = format!("関係を{value}で");
-        let span = request
-            .text
-            .rfind(&marker)
-            .and_then(|offset| {
-                let start = offset + "関係を".len();
-                source_span_at(&request.text, start, start + value.len())
-            })
-            .ok_or_else(|| {
-                failure(
-                    "FORMAT_SOURCE_SPAN",
-                    "the requested comparison format has no matching source bytes",
-                )
-            })?;
-        source_roles.insert("/CompareRelationInventories/format".into(), vec![span]);
-    }
     let parser_version = match &intent {
-        Intent::CompareRelationInventories {
-            format: Some(_), ..
-        } => FORMATTED_COMPARISON_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
@@ -427,27 +423,20 @@ fn japanese_assertion_source_roles_with_root(
     let trimmed = text.trim();
     let source_offset = text.len() - text.trim_start().len();
     let statement = terminal_trim(trimmed);
-    let (body, body_offset, scope_span) =
-        if let Some(scoped) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(statement) {
-            let scope_capture = scoped.get(1).expect("scope capture group exists");
-            let body_capture = scoped.get(2).expect("statement capture group exists");
-            let Some(scope_span) = captured_source_span(text, source_offset, scope_capture) else {
-                return Ok(None);
-            };
-            if scope_span.text != proposition.scope {
-                return Ok(None);
-            }
-            (
-                body_capture.as_str(),
-                source_offset + body_capture.start(),
-                Some(scope_span),
-            )
-        } else {
-            if proposition.scope != "default" {
-                return Ok(None);
-            }
-            (statement, source_offset, None)
-        };
+    let Some((body, qualifiers)) = relation_qualifiers(statement) else {
+        return Ok(None);
+    };
+    if qualifiers.scope.map_or("default", |(scope, _)| scope) != proposition.scope
+        || qualifiers.time.map(|(time, _)| time) != proposition.temporal_scope.as_deref()
+        || !qualifiers
+            .condition
+            .map(|(condition, _)| condition)
+            .into_iter()
+            .eq(proposition.condition_refs.iter().map(String::as_str))
+    {
+        return Ok(None);
+    }
+    let body_offset = source_offset + statement.len() - body.len();
 
     let Some(relation) = regex(r"^([^はが]+?)(は|が)(.+)$")?.captures(body) else {
         return Ok(None);
@@ -524,8 +513,17 @@ fn japanese_assertion_source_roles_with_root(
         (format!("{role_root}/predicate"), vec![predicate_span]),
         (format!("{role_root}/object"), vec![object_span]),
     ]);
-    if let Some(scope_span) = scope_span {
-        roles.insert(format!("{role_root}/scope"), vec![scope_span]);
+    for (role, qualifier) in [
+        ("scope", qualifiers.scope),
+        ("temporal_scope", qualifiers.time),
+        ("condition_refs/0", qualifiers.condition),
+    ] {
+        if let Some((value, offset)) = qualifier {
+            let start = source_offset + offset;
+            let span = source_span_at(text, start, start + value.len())
+                .expect("qualifier is an exact slice of the original statement");
+            roles.insert(format!("{role_root}/{role}"), vec![span]);
+        }
     }
     if let Some(negation_span) = negation_span {
         roles.insert(format!("{role_root}/negation"), vec![negation_span]);
@@ -546,7 +544,8 @@ fn english_assertion_source_roles_with_root(
     role_root: &str,
 ) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
     if proposition.predicate != "is"
-        || parse_proposition(text, false)?.as_ref() != Some(proposition)
+        || proposition.temporal_scope.is_some()
+        || !proposition.condition_refs.is_empty()
     {
         return Ok(None);
     }
@@ -814,6 +813,7 @@ struct PremiseCorrectionSourceContract<'a> {
     superseded_object: &'a str,
     replacement_object: &'a str,
     scope: &'a str,
+    explicit_scope: Option<bool>,
 }
 
 fn premise_correction_source_contract(
@@ -823,14 +823,25 @@ fn premise_correction_source_contract(
         Intent::CorrectPremise {
             superseded,
             replacement,
-        } => Some(PremiseCorrectionSourceContract {
-            role_root: "/CorrectPremise",
-            subject: Some(&superseded.subject),
-            predicate: &superseded.predicate,
-            superseded_object: &superseded.object,
-            replacement_object: &replacement.object,
-            scope: &superseded.scope,
-        }),
+        } if superseded.subject == replacement.subject
+            && superseded.predicate == replacement.predicate
+            && superseded.scope == replacement.scope
+            && !superseded.negative
+            && !replacement.negative
+            && [&superseded, &replacement].iter().all(|proposition| {
+                proposition.temporal_scope.is_none() && proposition.condition_refs.is_empty()
+            }) =>
+        {
+            Some(PremiseCorrectionSourceContract {
+                role_root: "/CorrectPremise",
+                subject: Some(&superseded.subject),
+                predicate: &superseded.predicate,
+                superseded_object: &superseded.object,
+                replacement_object: &replacement.object,
+                scope: &superseded.scope,
+                explicit_scope: None,
+            })
+        }
         Intent::CorrectPreviousPremise {
             predicate,
             superseded_object,
@@ -843,6 +854,7 @@ fn premise_correction_source_contract(
             superseded_object,
             replacement_object,
             scope: scope.as_deref().unwrap_or("default"),
+            explicit_scope: Some(scope.is_some()),
         }),
         _ => None,
     }
@@ -916,7 +928,12 @@ fn japanese_premise_correction_source_roles(
     let Some(particle_span) = captured_source_span(text, body_offset, particle_capture) else {
         return Ok(None);
     };
-    let Some(superseded_span) = captured_source_span(text, body_offset, superseded_capture) else {
+    let Some((superseded_article, superseded_span)) = english_correction_object_source_spans(
+        text,
+        body_offset,
+        superseded_capture,
+        contract.superseded_object,
+    ) else {
         return Ok(None);
     };
     let Some(marker_span) = captured_source_span(text, body_offset, marker_capture) else {
@@ -934,22 +951,21 @@ fn japanese_premise_correction_source_roles(
         return Ok(None);
     }
     let replacement_start = body_offset + replacement_capture.start() + replacement_leading;
-    let Some(replacement_span) = source_span_at(
+    let Some((replacement_article, replacement_span)) = correction_object_source_spans(
         text,
         replacement_start,
-        replacement_start + replacement_value.len(),
+        replacement_value,
+        contract.replacement_object,
     ) else {
         return Ok(None);
     };
 
     if !matches!(particle_span.text.as_str(), "は" | "が")
         || !correction_source_subject_matches(&subject_span.text, contract.subject)
-        || superseded_span.text.nfkc().collect::<String>()
-            != contract.superseded_object.nfkc().collect::<String>()
-        || replacement_span.text.nfkc().collect::<String>()
-            != contract.replacement_object.nfkc().collect::<String>()
         || marker_span.text != "ではなく"
-        || premise_correction_intent(text)?.as_ref() != Some(expected)
+        || contract
+            .explicit_scope
+            .is_some_and(|explicit| explicit != scope_span.is_some())
     {
         return Ok(None);
     }
@@ -976,6 +992,14 @@ fn japanese_premise_correction_source_roles(
             vec![replacement_span],
         ),
     ]);
+    for (role, article) in [
+        ("superseded_article", superseded_article),
+        ("replacement_article", replacement_article),
+    ] {
+        if let Some(span) = article {
+            roles.insert(format!("{}/{role}", contract.role_root), vec![span]);
+        }
+    }
     if let Some(scope_span) = scope_span {
         roles.insert(format!("{}/scope", contract.role_root), vec![scope_span]);
     }
@@ -992,7 +1016,20 @@ fn english_correction_object_source_spans(
     let leading = captured.len() - captured.trim_start().len();
     let value = captured.trim();
     let start = source_offset + capture.start() + leading;
+    correction_object_source_spans(text, start, value, expected)
+}
+
+fn correction_object_source_spans(
+    text: &str,
+    start: usize,
+    value: &str,
+    expected: &str,
+) -> Option<(Option<SourceSpan>, SourceSpan)> {
     let end = start + value.len();
+    let normalized = |value: &str| value.nfkc().collect::<String>();
+    if normalized(value) == normalized(expected) {
+        return Some((None, source_span_at(text, start, end)?));
+    }
     let (article, object_start) = ["a", "an", "the"]
         .iter()
         .find_map(|article| {
@@ -1014,7 +1051,6 @@ fn english_correction_object_source_spans(
         return None;
     }
     let object_span = source_span_at(text, object_start, end)?;
-    let normalized = |value: &str| value.nfkc().collect::<String>();
     (normalized(&object_span.text) == normalized(expected)).then_some((article, object_span))
 }
 
@@ -1098,7 +1134,9 @@ fn english_premise_correction_source_roles(
     if !matches!(copula_span.text.to_ascii_lowercase().as_str(), "is" | "are")
         || !marker_span.text.eq_ignore_ascii_case("not")
         || !correction_source_subject_matches(&subject_span.text, contract.subject)
-        || premise_correction_intent(text)?.as_ref() != Some(expected)
+        || contract
+            .explicit_scope
+            .is_some_and(|explicit| explicit != scope_span.is_some())
     {
         return Ok(None);
     }
@@ -1241,6 +1279,25 @@ pub(crate) fn assertion_source_evidence(
     }
 
     let roles = &bundle.meaning.source_roles;
+    if proposition.temporal_scope.is_some() || !proposition.condition_refs.is_empty() {
+        let Some(source_roles) = japanese_assertion_source_roles_with_root(
+            &bundle.request.text,
+            proposition,
+            role_root,
+        )?
+        .filter(|expected| roles == expected) else {
+            return Ok(None);
+        };
+        return Ok(Some(SealedSourceEvidence {
+            evidence_version: SOURCE_EVIDENCE_VERSION.into(),
+            input_fingerprint: identity(&bundle.request)?,
+            bundle_fingerprint: bundle.fingerprint.clone(),
+            raw_sha256: bundle.raw_sha256.clone(),
+            parser_version: bundle.meaning.parser_version.clone(),
+            semantic_signature: bundle.semantic_signature.clone(),
+            source_roles,
+        }));
+    }
     let subject_role = format!("{role_root}/subject");
     let predicate_role = format!("{role_root}/predicate");
     let object_role = format!("{role_root}/object");
@@ -1375,6 +1432,63 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    if matches!(intent, Intent::CompareRelationInventories { .. }) {
+        let source_offset = text.len() - text.trim_start().len();
+        let Some(source) = relation_inventory_comparison_captures(terminal_trim(text))? else {
+            return Err(failure(
+                "COMPARISON_SOURCE_SPAN",
+                "comparison source is misaligned",
+            ));
+        };
+        let mut roles = BTreeMap::new();
+        for (role, capture, offset) in [
+            ("scope", source.scope, source_offset),
+            (
+                "subject_a",
+                source.relation.get(1),
+                source_offset + source.body_offset,
+            ),
+            (
+                "subject_b",
+                source.relation.get(2),
+                source_offset + source.body_offset,
+            ),
+            (
+                "format",
+                source.relation.get(3),
+                source_offset + source.body_offset,
+            ),
+        ] {
+            if let Some(span) = capture.and_then(|value| captured_source_span(text, offset, value))
+            {
+                roles.insert(format!("/CompareRelationInventories/{role}"), vec![span]);
+            }
+        }
+        return Ok(roles);
+    }
+    if let Intent::Ask { proposition } | Intent::AskWhy { proposition } = intent {
+        let start = text.len() - text.trim_start().len();
+        let body = terminal_trim(text);
+        let (statement, offset, root) = if matches!(intent, Intent::AskWhy { .. }) {
+            let (statement, leading) = why_question_statement(body)?.expect("sealed why question");
+            (statement, start + leading, "/AskWhy/proposition")
+        } else {
+            (relation_question_statement(body), start, "/Ask/proposition")
+        };
+        let roles = match japanese_assertion_source_roles_with_root(statement, proposition, root)? {
+            Some(roles) => Some(roles),
+            None => {
+                japanese_transitive_assertion_source_roles_with_root(statement, proposition, root)?
+            }
+        };
+        if let Some(mut roles) = roles {
+            for span in roles.values_mut().flatten() {
+                span.start += offset;
+                span.end += offset;
+            }
+            return Ok(roles);
+        }
+    }
     let intent_value = serde_json::to_value(intent)?;
     let Some(intent_object) = intent_value.as_object() else {
         return Ok(BTreeMap::new());
@@ -2406,24 +2520,13 @@ fn premise_correction_intent(text: &str) -> Result<Option<Intent>> {
             reason: "premise correction needs one supported replacement relation".into(),
         }));
     };
-    let lower_subject = superseded.subject.to_ascii_lowercase();
     let previous_subject = singular_previous_subject(&superseded.subject);
-    let unresolved_pronoun = matches!(
-        lower_subject.as_str(),
-        "these" | "those" | "they" | "he" | "she"
-    ) || matches!(superseded.subject.as_str(), "これら" | "それら");
     if previous_subject {
         return Ok(Some(Intent::CorrectPreviousPremise {
             predicate: superseded.predicate,
             superseded_object: superseded.object,
             replacement_object: replacement.object,
             scope: explicit_scope.map(|(scope, _)| scope),
-        }));
-    }
-    if unresolved_pronoun {
-        return Ok(Some(Intent::Unknown {
-            reason: "premise correction needs one explicit named subject; pronouns are unresolved"
-                .into(),
         }));
     }
     if superseded.negative
@@ -2456,6 +2559,9 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
             if !subject.is_empty()
                 && subject.len() <= 512
                 && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；'])
+                && !starts_quoted_source(subject)
+                && !singular_previous_subject(subject)
+                && !unresolved_relation_subject(subject)
             {
                 return Ok(Some(Intent::InspectPremises {
                     subject: subject.to_string(),
@@ -2480,22 +2586,18 @@ fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     for pattern in natural_patterns {
         if let Some(capture) = regex(pattern)?.captures(text) {
             let subject = capture[1].trim();
-            let lower = subject.to_ascii_lowercase();
             let only_numeric_expression_chars = subject
                 .chars()
                 .all(|ch| ch.is_ascii_digit() || ". +-*/%^()=".contains(ch));
-            let unresolved_pronoun =
-                matches!(
-                    lower.as_str(),
-                    "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
-                ) || matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら");
             if subject.is_empty()
                 || subject.len() > 512
                 || subject.contains([
                     '\n', '\r', '、', '，', ',', ';', '；', '+', '*', '/', '^', '%', '=',
                 ])
                 || only_numeric_expression_chars
-                || unresolved_pronoun
+                || starts_quoted_source(subject)
+                || singular_previous_subject(subject)
+                || unresolved_relation_subject(subject)
             {
                 return Ok(None);
             }
@@ -2518,21 +2620,18 @@ fn relation_profile_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(None);
     };
     let subject = captures[1].trim();
-    let lower = subject.to_ascii_lowercase();
     let only_numeric_expression_chars = subject
         .chars()
         .all(|ch| ch.is_ascii_digit() || ". +-*/%^()=".contains(ch));
-    let unresolved_pronoun = matches!(
-        lower.as_str(),
-        "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
-    ) || matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら");
     if subject.is_empty()
         || subject.len() > 512
         || subject.contains([
             '\n', '\r', '、', '，', ',', ';', '；', '+', '*', '/', '^', '%', '=',
         ])
         || only_numeric_expression_chars
-        || unresolved_pronoun
+        || starts_quoted_source(subject)
+        || singular_previous_subject(subject)
+        || unresolved_relation_subject(subject)
     {
         return Ok(Some(Intent::Unknown {
             reason: "relation profile drafting needs one explicit nonnumeric subject".into(),
@@ -2560,18 +2659,8 @@ fn common_relations_question_intent(text: &str) -> Result<Option<Intent>> {
     };
     let subject_a = captures[1].trim();
     let subject_b = captures[2].trim();
-    let valid_subject = |subject: &str| {
-        !subject.is_empty()
-            && subject.len() <= 512
-            && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
-            && !matches!(
-                subject.to_ascii_lowercase().as_str(),
-                "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
-            )
-            && !matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら")
-    };
-    if !valid_subject(subject_a)
-        || !valid_subject(subject_b)
+    if !valid_relation_subject(subject_a)
+        || !valid_relation_subject(subject_b)
         || subject_a == subject_b
         || scope.is_empty()
     {
@@ -2586,12 +2675,16 @@ fn common_relations_question_intent(text: &str) -> Result<Option<Intent>> {
     }))
 }
 
-fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
+struct RelationComparisonCaptures<'a> {
+    scope: Option<regex::Match<'a>>,
+    body_offset: usize,
+    relation: regex::Captures<'a>,
+}
+
+fn relation_inventory_comparison_captures(
+    text: &str,
+) -> Result<Option<RelationComparisonCaptures<'_>>> {
     let scoped = regex(r"^\[scope=([^\]]*)\]\s*(.+)$")?.captures(text);
-    let scope = scoped
-        .as_ref()
-        .map(|capture| capture[1].trim().to_string())
-        .unwrap_or_else(|| "default".into());
     let body = scoped.as_ref().map_or(text, |capture| {
         capture.get(2).expect("matched body").as_str()
     });
@@ -2599,10 +2692,24 @@ fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
         r"^(.+?)と(.+?)の(?:保存済みの)?関係を(?:(段落|箇条書き)で)?(?:比較して|比較してください|比べて|比べてください)$",
     )?;
     let english = regex(r"(?i)^compare (?:the )?(?:saved )?relations for (.+?) and (.+?)$")?;
-    let captures = japanese.captures(body).or_else(|| english.captures(body));
-    let Some(captures) = captures else {
+    Ok(japanese
+        .captures(body)
+        .or_else(|| english.captures(body))
+        .map(|relation| RelationComparisonCaptures {
+            scope: scoped.as_ref().and_then(|captures| captures.get(1)),
+            body_offset: text.len() - body.len(),
+            relation,
+        }))
+}
+
+fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
+    let Some(source) = relation_inventory_comparison_captures(text)? else {
         return Ok(None);
     };
+    let scope = source
+        .scope
+        .map_or("default", |value| value.as_str().trim());
+    let captures = source.relation;
     let subject_a = captures[1].trim();
     let subject_b = captures[2].trim();
     if !valid_relation_subject(subject_a)
@@ -2617,7 +2724,7 @@ fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
     Ok(Some(Intent::CompareRelationInventories {
         subject_a: subject_a.into(),
         subject_b: subject_b.into(),
-        scope,
+        scope: scope.into(),
         format: captures.get(3).map(|value| match value.as_str() {
             "段落" => MeaningCompositionFormat::Paragraph,
             "箇条書き" => MeaningCompositionFormat::Bullets,
@@ -2629,12 +2736,10 @@ fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
 fn valid_relation_subject(subject: &str) -> bool {
     !subject.is_empty()
         && subject.len() <= 512
-        && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
-        && !matches!(
-            subject.to_ascii_lowercase().as_str(),
-            "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
-        )
-        && !matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら")
+        && !subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と', '[', ']'])
+        && !starts_quoted_source(subject)
+        && !singular_previous_subject(subject)
+        && !unresolved_relation_subject(subject)
 }
 
 fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
@@ -2686,21 +2791,24 @@ fn previous_source_question_intent(text: &str) -> Result<Option<Intent>> {
     Ok(captured.map(|query| Intent::AskPreviousSourceQuestion { query }))
 }
 
-fn why_question_intent(text: &str) -> Result<Option<Intent>> {
-    let statement = if let Some(value) = text.strip_prefix("なぜ") {
-        Some(value)
-    } else if let Some(value) = text.strip_prefix("どうして") {
-        Some(value)
+fn why_question_statement(text: &str) -> Result<Option<(&str, usize)>> {
+    let statement = if let Some(value) = text
+        .strip_prefix("なぜ")
+        .or_else(|| text.strip_prefix("どうして"))
+    {
+        Some((value, text.len() - value.len()))
     } else if text.eq_ignore_ascii_case("why") {
-        Some("")
+        Some(("", text.len()))
     } else {
         regex(r"(?i)^why\s+(.+)$")?
             .captures(text)
-            .map(|capture| capture.get(1).expect("matched group").as_str())
+            .and_then(|capture| capture.get(1))
+            .map(|capture| (capture.as_str(), capture.start()))
     };
-    let Some(mut statement) = statement.map(str::trim) else {
+    let Some((raw, leading)) = statement else {
         return Ok(None);
     };
+    let mut statement = raw.trim();
     for suffix in [
         "なのですか",
         "なのか",
@@ -2715,10 +2823,20 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
             break;
         }
     }
+    Ok(Some((
+        statement,
+        leading + raw.len() - raw.trim_start().len(),
+    )))
+}
+
+fn why_question_intent(text: &str) -> Result<Option<Intent>> {
+    let Some((statement, _)) = why_question_statement(text)? else {
+        return Ok(None);
+    };
     if statement.is_empty() {
         return Ok(Some(Intent::ExplainPrevious));
     }
-    if let Some(proposition) = parse_proposition(statement, false)? {
+    if let Some(proposition) = ordinary_relation_proposition(statement)? {
         if singular_previous_subject(&proposition.subject) {
             return Ok(Some(Intent::AskPreviousRelation {
                 proposition,
@@ -2735,6 +2853,27 @@ fn why_question_intent(text: &str) -> Result<Option<Intent>> {
     }
 }
 
+fn unresolved_relation_subject(subject: &str) -> bool {
+    matches!(
+        subject.to_ascii_lowercase().as_str(),
+        "i" | "we" | "you" | "these" | "those" | "they" | "he" | "she"
+    ) || matches!(
+        subject,
+        "これら"
+            | "それら"
+            | "あれら"
+            | "私"
+            | "わたし"
+            | "僕"
+            | "ぼく"
+            | "俺"
+            | "あなた"
+            | "君"
+            | "彼"
+            | "彼女"
+    )
+}
+
 pub(crate) fn singular_previous_subject(subject: &str) -> bool {
     matches!(
         subject.to_ascii_lowercase().as_str(),
@@ -2746,6 +2885,13 @@ fn explicit_scope_prefix(text: &str) -> Result<Option<String>> {
     Ok(regex(r"^\[scope=([^\]]+)\]")?
         .captures(text)
         .map(|capture| capture[1].trim().to_string()))
+}
+
+fn relation_question_statement(text: &str) -> &str {
+    text.strip_suffix("ですか")
+        .or_else(|| text.strip_suffix("なのか"))
+        .or_else(|| text.strip_suffix('か'))
+        .unwrap_or(text)
 }
 
 fn unsupported_conjunctive_relation_question() -> Intent {
@@ -2818,28 +2964,7 @@ fn conjunctive_relation_question_intent(text: &str) -> Result<Option<Intent>> {
     let Some(first) = parse_proposition(&with_scope(clauses[0]), false)? else {
         return Ok(Some(unsupported_conjunctive_relation_question()));
     };
-    let referential_subject = matches!(
-        first.subject.to_ascii_lowercase().as_str(),
-        "i" | "it" | "this" | "that" | "these" | "those" | "we" | "they" | "you" | "he" | "she"
-    ) || matches!(
-        first.subject.as_str(),
-        "これ"
-            | "それ"
-            | "あれ"
-            | "これら"
-            | "それら"
-            | "あれら"
-            | "私"
-            | "わたし"
-            | "僕"
-            | "ぼく"
-            | "俺"
-            | "あなた"
-            | "君"
-            | "彼"
-            | "彼女"
-    );
-    if referential_subject {
+    if singular_previous_subject(&first.subject) {
         return Ok(Some(unsupported_conjunctive_relation_question()));
     }
     let mut propositions = vec![first.clone()];
@@ -2952,6 +3077,15 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(intent);
     }
     let body = terminal_trim(text);
+    // An explicitly requested operation may consume quoted data, but bare
+    // quoted material cannot initiate an ordinary relation or effect.
+    if starts_quoted_source(body) {
+        return Ok(Intent::Unknown {
+            reason:
+                "quoted content requires an explicit supported operation; its instructions are data"
+                    .into(),
+        });
+    }
     if let Some(capture) = regex(
         r"(?i)^(?:検索結果の)?([1-5])件目の本文を(?:取得して|取得してください|読んで|読んでください)$",
     )?
@@ -3022,15 +3156,6 @@ fn interpret(text: &str) -> Result<Intent> {
             ));
         }
         return Ok(Intent::JsonPointer { document, pointer });
-    }
-    // Quoted documents are data. The supported declarative language does not
-    // grant imperative authority to text inside a quote or a retrieved body.
-    if body.starts_with(QUOTATION_OPENERS) {
-        return Ok(Intent::Unknown {
-            reason:
-                "quoted content requires an explicit supported operation; its instructions are data"
-                    .into(),
-        });
     }
     if let Some(intent) = why_question_intent(body)? {
         return Ok(intent);
@@ -3218,11 +3343,7 @@ fn interpret(text: &str) -> Result<Intent> {
         || body.ends_with("なのか")
         || body.ends_with('か')
         || regex(r"(?i)^is\s+")?.is_match(body);
-    let query_body = body
-        .strip_suffix("ですか")
-        .or_else(|| body.strip_suffix("なのか"))
-        .or_else(|| body.strip_suffix('か'))
-        .unwrap_or(body);
+    let query_body = relation_question_statement(body);
     if let Some(intent) =
         transitive_object_question_intent(body, text.trim_end().ends_with(['?', '？']))?
     {
@@ -3231,7 +3352,7 @@ fn interpret(text: &str) -> Result<Intent> {
     if question && let Some(intent) = conjunctive_relation_question_intent(query_body)? {
         return Ok(intent);
     }
-    if let Some(proposition) = parse_proposition(query_body, false)? {
+    if let Some(proposition) = ordinary_relation_proposition(query_body)? {
         return Ok(if singular_previous_subject(&proposition.subject) {
             if question {
                 Intent::AskPreviousRelation {
@@ -4015,17 +4136,7 @@ fn transitive_object_question_intent(text: &str, question_mark: bool) -> Result<
         return Ok(None);
     };
     let subject = captures[1].trim();
-    let lower = subject.to_ascii_lowercase();
-    if subject.is_empty()
-        || subject.len() > 512
-        || subject.starts_with(QUOTATION_OPENERS)
-        || subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
-        || matches!(
-            lower.as_str(),
-            "it" | "this" | "that" | "these" | "those" | "they" | "he" | "she"
-        )
-        || matches!(subject, "これ" | "それ" | "あれ" | "これら" | "それら")
-    {
+    if !valid_relation_subject(subject) {
         return Ok(None);
     }
     Ok(Some(Intent::AskRelationObjects {
@@ -4072,12 +4183,12 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         scope = capture[1].trim().to_string();
         body = capture[2].trim().to_string();
     }
-    if body.starts_with(QUOTATION_OPENERS) {
+    if starts_quoted_source(&body) {
         return Ok(None);
     }
     // These qualifiers cannot be represented by the single-premise copular
     // contract. Preserve them as unresolved input instead of opaque atoms.
-    if regex(r"(?:すべて|全て|任意|一部|少なくとも|たいてい|通常|常に|必ず|かもしれ|とは限ら|じゃなく|ではなく|でなく|だけ|のみ|以外|かつ|且つ|および|及び|または|あるいは|もしくは|ただし|しかし|もし|なら|場合|時点|以前|以後|以降|現在|過去|将来|昨日|今日|明日|まで|から|[0-9]+[年月日])|(?i:\b(?:all|every|any|some|might|may|and|or|but|unless|if|then|when|before|after|currently|yesterday|today|tomorrow|never|always|only|except|please|also)\b)")?.is_match(&body) {
+    if regex(r"(?:すべて|全て|任意|一部|少なくとも|たいてい|通常|常に|必ず|かもしれ|とは限ら|じゃなく|ではなく|でなく|だけ|のみ|以外|かつ|且つ|および|及び|または|あるいは|もしくは|ただし|しかし|もし|なら|場合|時点|以前|以後|以降|現在|過去|将来|昨日|今日|明日|今朝|今夜|昨夜|今週|先週|来週|先月|今月|来月|さっき|まで|から|[0-9]+[年月日])|(?i:\b(?:all|every|any|some|might|may|and|or|but|unless|if|then|when|before|after|currently|yesterday|today|tomorrow|never|always|only|except|please|also)\b)")?.is_match(&body) {
         return Ok(None);
     }
     let parsed = if let Some(parsed) = japanese_transitive_proposition(&body)? {
@@ -4146,8 +4257,15 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
     }
     if subject.is_empty()
         || object.is_empty()
-        || subject.starts_with(QUOTATION_OPENERS)
-        || object.starts_with(QUOTATION_OPENERS)
+        || starts_quoted_source(&subject)
+        || starts_quoted_source(&object)
+        || [&subject, &object].iter().any(|term| {
+            term.contains([
+                '[', ']', '］', '［', '」', '』', '〉', '》', '”', '’', '＂', '〟', '｣', '»',
+            ])
+        })
+        || unresolved_relation_subject(&subject)
+        || (variables && singular_previous_subject(&subject))
         || subject.len() > 512
         || object.len() > 512
         || scope.is_empty()
@@ -4170,6 +4288,68 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         temporal_scope: None,
         condition_refs: Default::default(),
     }))
+}
+
+#[derive(Default)]
+struct RelationQualifiers<'a> {
+    scope: Option<(&'a str, usize)>,
+    time: Option<(&'a str, usize)>,
+    condition: Option<(&'a str, usize)>,
+}
+
+fn relation_qualifiers(text: &str) -> Option<(&str, RelationQualifiers<'_>)> {
+    let mut qualifiers = RelationQualifiers::default();
+    let mut body = text;
+    while let Some(opened) = body.strip_prefix('[') {
+        let (tag, rest) = opened.split_once(']')?;
+        let (key, raw_value) = tag.split_once('=')?;
+        let value = raw_value.trim();
+        if value.is_empty() || value.contains('[') || value.chars().any(char::is_control) {
+            return None;
+        }
+        let start = text.len() - opened.len() + key.len() + 1 + raw_value.len()
+            - raw_value.trim_start().len();
+        let target = match key {
+            "scope" => &mut qualifiers.scope,
+            "time" if crate::relations::valid_utc_instant(value) => &mut qualifiers.time,
+            "condition" if crate::relations::validate_condition_id(value).is_ok() => {
+                &mut qualifiers.condition
+            }
+            _ => return None,
+        };
+        if target.replace((value, start)).is_some() {
+            return None;
+        }
+        body = rest.trim_start();
+    }
+    Some((body, qualifiers))
+}
+
+fn ordinary_relation_proposition(text: &str) -> Result<Option<Proposition>> {
+    let Some((body, qualifiers)) = relation_qualifiers(terminal_trim(text)) else {
+        return Ok(None);
+    };
+    if qualifiers.time.is_none() && qualifiers.condition.is_none() {
+        return parse_proposition(text, false);
+    }
+    // The initial qualified grammar is one explicitly named Japanese copular
+    // clause. Contextual, rule and multi-clause requests have distinct paths.
+    let Some(mut proposition) = parse_proposition(body, false)? else {
+        return Ok(None);
+    };
+    if let Some((scope, _)) = qualifiers.scope {
+        proposition.scope = scope.into();
+    }
+    proposition.temporal_scope = qualifiers.time.map(|(time, _)| time.into());
+    proposition
+        .condition_refs
+        .extend(qualifiers.condition.map(|(id, _)| id.into()));
+    if singular_previous_subject(&proposition.subject)
+        || japanese_assertion_source_roles(text, &proposition)?.is_none()
+    {
+        return Ok(None);
+    }
+    Ok(Some(proposition))
 }
 
 #[cfg(test)]
@@ -4449,7 +4629,7 @@ mod tests {
         ));
         assert!(matches!(
             interpret("それらは動物ですか").unwrap(),
-            Intent::Ask { proposition } if proposition.subject == "それら"
+            Intent::Unknown { .. }
         ));
     }
 
@@ -4483,7 +4663,7 @@ mod tests {
         ));
         assert!(matches!(
             interpret("それらは温血動物です").unwrap(),
-            Intent::Assert { proposition } if proposition.subject == "それら"
+            Intent::Unknown { .. }
         ));
     }
 

@@ -1553,6 +1553,73 @@ fn another_actor_cannot_inspect_known_case_identity() {
 }
 
 #[test]
+fn input_quote_and_unresolved_subject_boundaries_prevent_premises_and_effects() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let output = scratch.0.join("quoted-source.txt");
+    let target = output.to_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let before = store.load_memory(actor).unwrap();
+    for (id, text) in [
+        ("angle", "〈ネラは測定器〉"),
+        ("scoped", "[scope=lab]《ネラは測定器》"),
+        (
+            "timed",
+            "[scope=lab][time=2026-11-19T08:00:00Z]「ネラは測定器」",
+        ),
+        ("fullwidth", "＂Nera is a sensor＂"),
+        ("label", "引用: 「ネラは測定器」"),
+        ("markdown", "> ネラは測定器"),
+        ("embedded-label", "[scope=lab]引用：中止"),
+        ("plural", "これらは測定器"),
+        ("they", "They are sensors"),
+        ("common-pronoun", "[scope=lab]私と乙の共通点は何ですか"),
+        ("object-quote", "[scope=lab]〈ネラ〉は何を使いますか"),
+        ("unresolved-time", "今朝ネラは測定器"),
+        ("invalid-time", "[time=2026-02-30T08:00:00Z]ネラは測定器"),
+        ("unknown-tag", "[scope=lab][unknown=x]ネラは測定器"),
+        (
+            "qualified-correction",
+            "訂正: [time=2026-11-19T08:00:00Z]それは測定器ではなく装置です",
+        ),
+    ] {
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                actor,
+                &[
+                    "--input",
+                    id,
+                    "--output",
+                    target,
+                    "--allow-write",
+                    target,
+                    text,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        let state = inspect_normal_case(&scratch.0, actor);
+        let bundle = &state["bundle"];
+        assert_eq!(bundle["request"]["text"], text);
+        assert_eq!(
+            bundle["raw_sha256"],
+            minidora_domain::digest(text.as_bytes())
+        );
+        assert_eq!(bundle["meaning"]["intent"]["kind"], "UNKNOWN");
+        let diagnostic = bundle["meaning"]["unresolved"][0].as_str().unwrap();
+        assert!(result["reason"].as_str().unwrap().contains(diagnostic));
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert!(result["content_plan"].is_null());
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!output.exists());
+    }
+    assert_eq!(store.load_memory(actor).unwrap(), before);
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn requested_file_needs_separate_exact_permission_and_real_receipt() {
     let scratch = Scratch::new();
     let output_path = scratch.0.join("answer.txt");
@@ -4290,6 +4357,64 @@ fn natural_relation_profile_explanation_replays_the_prior_result_in_the_cli() {
 }
 
 #[test]
+fn input_correction_binds_mixed_article_values_to_the_original_bytes() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let original = record(&execute(
+        &scratch.0,
+        actor,
+        &[
+            "--input",
+            "before-correction",
+            "[scope=lab]Nera is a sensor",
+        ],
+    ));
+    let text = "[scope=lab]Neraはa sensorではなくan operatorです";
+    let corrected = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "correction", text],
+    ));
+    assert_eq!(corrected["lifecycle"], "COMMIT");
+    let case = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(
+        case["prior_results"][original["id"].as_str().unwrap()],
+        original
+    );
+    let bundle = &case["bundle"];
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let memory = store.load_memory(actor).unwrap();
+    let previous = memory
+        .facts
+        .iter()
+        .find(|fact| fact.id == original["dependencies"][0])
+        .unwrap();
+    assert!(!previous.valid);
+    let replacement = memory
+        .facts
+        .iter()
+        .find(|fact| fact.valid && fact.proposition.object == "operator")
+        .unwrap();
+    let evidence = replacement.source_evidence.as_ref().unwrap();
+    assert_eq!(evidence.semantic_signature, bundle["semantic_signature"]);
+    assert_eq!(
+        evidence.raw_sha256,
+        minidora_domain::digest(text.as_bytes())
+    );
+    for (role, value) in [
+        ("superseded_article", "a"),
+        ("superseded_object", "sensor"),
+        ("replacement_article", "an"),
+        ("replacement_object", "operator"),
+    ] {
+        let spans = &evidence.source_roles[&format!("/CorrectPremise/{role}")];
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, value);
+        assert_eq!(text.get(spans[0].start..spans[0].end), Some(value));
+    }
+}
+
+#[test]
 fn natural_premise_correction_invalidates_only_exact_scope_and_dependents() {
     let scratch = Scratch::new();
     let mammal = record(&execute(
@@ -4987,7 +5112,7 @@ fn natural_why_question_explains_only_current_relation_proofs() {
     let saved = inspect_normal_case(&scratch.0, "owner");
     assert_eq!(
         saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v88-generated-relation-explanation"
+        "declarative-ja-en-v90-explanation-source-roles"
     );
     let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
     let goal = sequence_artifact(&store, &saved["goal_sha256"]);
@@ -6215,10 +6340,10 @@ fn relation_comparison_generates_every_axis_beyond_short_explanation_size() {
 fn requested_comparison_layout_changes_generation_and_keeps_the_same_proofs() {
     let scratch = Scratch::new();
     for (input_id, request) in [
-        ("left-common", "[scope=bench]甲は観測器"),
-        ("right-common", "[scope=bench]乙は観測器"),
-        ("left-only", "[scope=bench]甲は無線式"),
-        ("right-only", "[scope=bench]乙は有線式"),
+        ("left-common", "[scope=甲]甲は観測器"),
+        ("right-common", "[scope=甲]乙は観測器"),
+        ("left-only", "[scope=甲]甲は無線式"),
+        ("right-only", "[scope=甲]乙は有線式"),
     ] {
         let premise = record(&execute(
             &scratch.0,
@@ -6233,7 +6358,7 @@ fn requested_comparison_layout_changes_generation_and_keeps_the_same_proofs() {
         ("list", "箇条書き", "BULLETS"),
         ("paragraph", "段落", "PARAGRAPH"),
     ] {
-        let request = format!("[scope=bench]甲と乙の保存済みの関係を{phrase}で比較して");
+        let request = format!("　[scope=甲]甲と乙の保存済みの関係を{phrase}で比較して。　");
         let path = scratch.0.join(format!("{input_id}.txt"));
         let target = path.to_str().unwrap();
         let result = record(&execute(
@@ -6259,7 +6384,7 @@ fn requested_comparison_layout_changes_generation_and_keeps_the_same_proofs() {
         assert_eq!(saved["bundle"]["request"]["text"], request);
         assert_eq!(
             meaning["parser_version"],
-            "declarative-ja-en-v87-formatted-relation-comparison"
+            "declarative-ja-en-v91-comparison-source-roles"
         );
         assert_eq!(meaning["intent"]["format"], format);
         let source = &meaning["source_roles"]["/CompareRelationInventories/format"][0];
@@ -6267,7 +6392,19 @@ fn requested_comparison_layout_changes_generation_and_keeps_the_same_proofs() {
         let span_end = source["end"].as_u64().unwrap() as usize;
         let source_text = request.get(span_start..span_end).unwrap();
         assert_eq!(source["text"], source_text);
-        assert_eq!(source_text.trim_end_matches('で'), phrase);
+        assert_eq!(source_text, phrase);
+        for (role, start) in [
+            ("scope", request.find('甲').unwrap()),
+            ("subject_a", request.rfind('甲').unwrap()),
+        ] {
+            let occurrences = meaning["source_roles"]
+                [format!("/CompareRelationInventories/{role}")]
+            .as_array()
+            .unwrap();
+            assert_eq!(occurrences.len(), 1);
+            assert_eq!(occurrences[0]["start"], start);
+            assert_eq!(occurrences[0]["text"], "甲");
+        }
         let goal = sequence_artifact(&store, &saved["goal_sha256"]);
         assert_eq!(goal["intent"], meaning["intent"]);
 

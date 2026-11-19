@@ -256,9 +256,7 @@ pub(crate) fn goal_predicates(meaning: &MeaningIR, requires_file: bool) -> Vec<S
         }
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
-        Intent::AskWhy { .. }
-            if meaning.parser_version == input::RELATION_EXPLANATION_PARSER_VERSION =>
-        {
+        Intent::AskWhy { .. } if input::uses_generated_relation_explanation(meaning) => {
             predicates.push(GENERATED_RELATION_EXPLANATION_PREDICATE.into());
         }
         Intent::AskWhy { .. } => predicates.push(RELATION_EXPLANATION_PREDICATE.into()),
@@ -7055,6 +7053,17 @@ impl Engine {
                 replacement,
             } => {
                 let _ = direct_typed_relation_correction_input(&bundle, superseded, replacement)?;
+                let source_evidence = input::assertion_source_evidence(&bundle)?;
+                if bundle.meaning.parser_version == input::PARSER_VERSION
+                    && source_evidence.is_none()
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "CORRECTION_SOURCE_UNRESOLVED",
+                        "訂正前後の値を原文に対応づけられないため、記憶の変更を保留しました。",
+                    );
+                }
                 let mut memory = self.store.load_memory(actor)?;
                 let targets = active_direct_premise_ids(&memory, superseded);
                 if targets.is_empty() {
@@ -7073,7 +7082,7 @@ impl Engine {
                     &targets,
                     (superseded, replacement),
                     &fingerprint,
-                    input::assertion_source_evidence(&bundle)?,
+                    source_evidence,
                 )?;
                 let negative_superseded = Proposition {
                     negative: true,
@@ -9076,12 +9085,12 @@ impl Engine {
                 result.dependencies.push(condition.id);
                 result.guarantee = Guarantee::UserPremise;
             }
-            Intent::Unknown { .. } => {
+            Intent::Unknown { reason } => {
                 return self.stop(
                     &mut state,
                     Lifecycle::Suspend,
                     "CAPABILITY_UNAVAILABLE",
-                    "この版では入力の意味を確定できず、処理と回答を保留しました。正確な要件を保持していますが、実行や外部作用は行っていません。",
+                    &format!("入力を確定できないため保留しました。{reason}"),
                 );
             }
             Intent::Cancel => unreachable!("handled before computation"),
@@ -11872,7 +11881,7 @@ fn relation_meaning_plan_to_composition_request(
 }
 
 fn relation_explanation_output_budget(meaning: &MeaningIR, budget: usize) -> usize {
-    if meaning.parser_version == input::RELATION_EXPLANATION_PARSER_VERSION {
+    if input::uses_generated_relation_explanation(meaning) {
         budget
     } else {
         budget.min(LEGACY_RELATION_GENERATION_BYTES)

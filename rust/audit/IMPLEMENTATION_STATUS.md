@@ -1223,3 +1223,28 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品版 `0.7.0-alpha.11`。最終�
 D3-CのE2出口を `CORE_GATES_PASSED` と判定した。次工程はE3の最小Input。今回の書式検査は日本語の保存関係比較の二書式。大きな履歴や並行更新下での固定版検査とインデックスの予算差は体系QCの範囲に残る。R2要求の受入列は `UNVERIFIED`。E3、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `1ae9099` と `b31fad2`。資産は計9件。保持2件（実装台帳と要求トレース）、稼働中7件（Core、Input、Language、Recovery、関係投影、CLI検査、既存共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。
+
+## 2026-11-19 JST B112 — D3-C E3 最小Inputの封印と実接続
+
+着工点 `9b95adb13c93325e62bcd0d0a9251b97b8208351` と同版のE2出口を確認した。現行正本のSHA-256はD2仕様 `de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0`、D2工程 `d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a`、D3-C指示 `fa4bfbb6d4c897df943fcebe64e2eb1e766834fabcf7187d9e78598d7e7445e3`。採用記録 `270b6482dff22cef7559363776f52806a0074fb0fd7fd0081b7772e62c2b9ef5` と第4節のE3出口を照合した。通常入力の原本・意味・許可を封印し、唯一Coreの採否へ接続する施工。
+
+着工時CLIでは `〈ネラは測定器〉`、範囲指定後の `《…》`、全角引用符、引用ラベル、Markdown引用が前提として保存され、許可対象への実ファイルを作成した。「これら」と `They` も名前として保存した。比較・説明では範囲と主体または目的語が同じ場合、文字列から検索した位置が両方の役割に入った。`[time=…]` と `[condition=…]` が関係の主体の一部として解釈される経路も確認した。
+
+新規入力は `declarative-ja-en-v89-sealed-relation-boundary`、関係説明は `declarative-ja-en-v90-explanation-source-roles`、関係比較は `declarative-ja-en-v91-comparison-source-roles` で封印する。比較の対象・範囲・書式と、日本語の原子質問・説明の命題・修飾は構文上の位置を原文のUTF-8バイト範囲に結び付ける。原文、原文SHA-256、actor、同一ケースの先行結果、要求した出力先と権限を保持する。日英混在の訂正では冠詞と対象語を分け、原文と対応しない訂正は記憶変更前に停止する。算術の全角入力から正規化した式と元バイト範囲を確認した。
+
+対象を明記した単一の日本語コピュラ関係に `[scope=…]`、`[time=YYYY-MM-DDThh:mm:ssZ]`、`[condition=…]` を保持できる。時点は既存のUTC検証を使う。明示条件IDは既存Coreの条件定義と証拠に渡す。Inputは定義の生成も成立判定も行わない。定義・有効期間内の証拠・否定前提をCoreが実消費した説明は、型付き `CONTRADICTED`、実描画、正確な時点と根拠依存で確定した。期間外は `CONDITION_FALSE / REJECT`、定義不明は `CONDITION_UNKNOWN / SUSPEND`。どちらも計画・描画前に停止した。未対応の修飾付き訂正と不正日時も封印された未解決状態で停止した。
+
+引用・資料内の命令と未解決の複数照応は通常の関係や実行命令に昇格せず、原文と診断を残して `UNKNOWN / SUSPEND`。許可済みファイルを要求しても、該当15入力の前提・計画・作用履歴・ファイルは0件。単数照応と「なぜですか」は同一ケースの確定済み先行回答を実消費。別ケースでは照応の根拠がなく停止し、別actorのケース参照は拒否した。明示書式の段落と箇条書きは同じ根拠で実出力し、未許可の出力先ではファイルを作成しなかった。
+
+旧封印の出典は当時の型と原文範囲で検証する。着工点の実バイナリで保存したv84の前提と訂正を保持した状態で、新規の通常前提を採用できた。旧v88説明とv87段落比較は着工点のCLIで実ファイルを作成し、保存履歴の `ATTEMPTED` までを取り出して新版CLIで復旧した。採用計画、作用ID、ファイル内容・inode・更新時刻が一致した。最初の条件付き説明テストは固定表現による文面比較でexit 101。実際の否定命題と生成系列を成果物で確認する検査へ直し、合格述語を実データで照合した。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。検査対象6ファイルの `git diff --binary` のSHA-256は `09438b9b61a175dbb0bd72484fc29c7fba5c6d3b15c150ec213a34fe4551776c`。隔離SQLite、各fixtureのactorとローカルファイル許可を使った。最終版のRustテストは計131件PASS。
+
+- `cargo test -p minidora-engine --locked --no-fail-fast` の `input_machine_observation_01`〜`05` と `core_actor_context_boundary_48` で7件PASS。生の日本語、原文範囲、原文ハッシュ、正規化された厳密値、同版再起動、条件の期間と未定義、別actorを確認した。
+- `cargo test -p minidora-engine --locked --lib` の `input::tests` と `recovery::tests::` で103件PASS。旧保存形式、引用、原文の保持、計算・証明・モデル・復旧の近接回帰を確認した。
+- `cargo test -p minidora-cli --locked --test normal_route` の関連フィルタで21件PASS。初見説明、比較、訂正、引用、照応、前回答詳説・編集、実ファイル許可、同じ証拠を使う関係質問・紹介文を検査した。
+- `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo build -p minidora-cli --locked`、`git diff --check` がPASS。着工点と新版の二つの実CLIを使う旧封印復旧もexit 0。
+
+原文保全・型・未解決状態を同Coreが実消費するD3-CのE3出口は `PASS`。時点と条件の新規修飾は対象を明示した日本語の単一関係に適用する。修飾付き訂正は停止を確認し、一般の日時・照応表現は未検証。次工程はE4最小Output。体系QC、独立QA、公開・配布は `NOT_RUN`。R2受入列は `UNVERIFIED`。
+
+復旧2世代のローカル参照・GitHubタグは `9b95adb` と `1ae9099`。終了時資産は計9件。保持2件（実装台帳と要求トレース）、稼働中7件（Input、Core、Recovery、関係型検証、CLI検査、入力観測検査、既存共有Cargoキャッシュ）。保管済み・ゴミ箱移動・保留は各0件。隔離した旧版の複製と検査用状態は終了済み。Windows保管と容量回収は非該当。
