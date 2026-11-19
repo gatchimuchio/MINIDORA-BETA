@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::{Host, Url};
 
-fn approved_url(raw: &str, permissions: &Permissions) -> Result<Url> {
+pub(crate) fn approved_url(raw: &str, permissions: &Permissions) -> Result<Url> {
     let url = Url::parse(raw)
         .map_err(|_| failure("INVALID_READ_URL", "A valid absolute HTTPS URL is required"))?;
     let authority = raw
@@ -350,6 +350,14 @@ pub(crate) const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
 pub(crate) const REDIRECT_RETRY_DEFERRED: &str = "HTTP_REDIRECT_RETRY_DEFERRED";
 pub(crate) const RETRY_DEFERRED: &str = "HTTP_RETRY_DEFERRED";
 
+pub(crate) fn retry_deferred_message(host: &str, packet_id: Option<&str>) -> String {
+    let mut message = format!("The retained Retry-After for {host} has not elapsed");
+    if let Some(packet_id) = packet_id {
+        message.push_str(&format!(" (saved packet {packet_id})"));
+    }
+    message
+}
+
 enum RetryAfterScope {
     Host,
     Redirect,
@@ -537,11 +545,10 @@ impl RetrievalBudget {
         if let Some(gate) = self.retry_not_before.get(host)
             && Instant::now() < gate.until
         {
-            let mut message = format!("The retained Retry-After for {host} has not elapsed");
-            if let Some(packet_id) = &gate.retained_packet_id {
-                message.push_str(&format!(" (saved packet {packet_id})"));
-            }
-            return Err(failure(RETRY_DEFERRED, message));
+            return Err(failure(
+                RETRY_DEFERRED,
+                retry_deferred_message(host, gate.retained_packet_id.as_deref()),
+            ));
         }
         self.remaining_starts = self.remaining_starts.checked_sub(1).ok_or_else(|| {
             failure(

@@ -10388,7 +10388,7 @@ fn read_case_changed(error: &Error) -> bool {
     matches!(error, Error::Contract { code, .. } if code == READ_CASE_CHANGED)
 }
 
-fn verify_retained_retry_source(
+pub(crate) fn verify_retained_retry_source(
     store: &Store,
     state: &CaseRevision,
     result: &ResultRecord,

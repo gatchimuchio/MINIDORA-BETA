@@ -1319,12 +1319,13 @@ pub(crate) fn source_summary_bodies(
     })
 }
 
-pub(crate) enum PartialRetrievalStop {
+pub(crate) enum PartialRetrievalStop<'a> {
     AfterAllUrls,
     AtRedirect,
+    BeforeFirstHop(&'a str),
 }
 
-impl PartialRetrievalStop {
+impl PartialRetrievalStop<'_> {
     pub(crate) fn notice(self) -> &'static str {
         match self {
             Self::AfterAllUrls => {
@@ -1333,15 +1334,18 @@ impl PartialRetrievalStop {
             Self::AtRedirect => {
                 "元の取得は転送時の待機条件で停止しました。照合できた取得本文を使用しています。"
             }
+            Self::BeforeFirstHop(_) => {
+                "元の取得は次のURLの接続前に待機条件で停止しました。照合できた取得本文を使用しています。"
+            }
         }
     }
 }
 
-pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRetrievalStop> {
+pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRetrievalStop<'_>> {
     if result.lifecycle != Lifecycle::Suspend {
         return None;
     }
-    let (code, _) = result.reason.as_deref()?.split_once(": ")?;
+    let (code, message) = result.reason.as_deref()?.split_once(": ")?;
     let stop = match code {
         "FETCH_OR_PARSER_FAILURE"
             if result
@@ -1362,6 +1366,13 @@ pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRet
                 return None;
             }
             PartialRetrievalStop::AtRedirect
+        }
+        "EVIDENCE_UNAVAILABLE" => {
+            let (cause, detail) = message.split_once(": ")?;
+            if cause != crate::ports::RETRY_DEFERRED {
+                return None;
+            }
+            PartialRetrievalStop::BeforeFirstHop(detail)
         }
         _ => return None,
     };

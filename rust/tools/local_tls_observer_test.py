@@ -2013,11 +2013,12 @@ def check_source_after_redirect_wait(cli, fixture: Fixture, state_path: Path) ->
         assert_contacts(seen, starts, [kept, path])
         results[name] = recovered
 
-    case = "source-after-first-hop-wait"
+    case = "source-after-first-hop-denial"
     seed(case, "429 Too Many Requests")
     seen, starts = len(fixture.events), len(fixture.connects)
-    stopped, _ = fetch(case, target)
-    assert "EVIDENCE_UNAVAILABLE: HTTP_RETRY_DEFERRED" in stopped["reason"] and len(stopped["evidence"]) == 1
+    stopped = cli("run", "--input", "original", "--allow-read-host", origin,
+                  f"fetch https://{origin}{kept} {target}", case_id=case, expected_exit=2)
+    assert "EVIDENCE_UNAVAILABLE: READ_PERMISSION_REQUIRED" in stopped["reason"] and len(stopped["evidence"]) == 1
     unavailable = cli("run", "--input", "followup", question, case_id=case, expected_exit=2)
     assert "MISSING_ACTUAL_RESULT" in unavailable["reason"]
     assert_contacts(seen, starts, [kept])
@@ -2048,7 +2049,108 @@ def check_source_after_redirect_wait(cli, fixture: Fixture, state_path: Path) ->
             database.execute("INSERT INTO case_artifact(case_id,sha256) VALUES(?,?)", (case, reference))
     assert_contacts(seen, starts, [kept, own])
     assert not fixture.errors, fixture.errors
-    return {**results, "first_hop": unavailable, "empty": empty, "unbound": invalid}
+    return {**results, "read_denied": unavailable, "empty": empty, "unbound": invalid}
+
+
+def check_source_after_first_hop_wait(cli, fixture: Fixture, state_path: Path) -> dict:
+    origin, held = fixture.hosts
+    grant = ("--allow-read-host", origin, "--allow-read-host", held)
+    kept, rate, target, later = [f"/first-hop-{name}" for name in ("kept", "rate", "target", "later")]
+    search_path = "/works?query=first+hop+wait&rows=5"
+    held_uri = f"https://{held}{target}"
+    kept_text = "実測値は42です。予備値は7です。"
+    fixture.responses[kept] = (kept_text.encode(), "text/plain; charset=utf-8")
+    fixture.responses[later] = ("未取得の値は999です。".encode(), "text/plain; charset=utf-8")
+    fixture.failure_responses[rate] = ("503 Service Unavailable", b"Wait response.", "Retry-After: 120\r\n")
+    fixture.failure_responses[search_path] = ("429 Too Many Requests", b"Search wait.", "Retry-After: 120\r\n")
+    question = "本文では実測値について何と書かれていますか"
+
+    def seed(case: str, search: bool = False) -> dict:
+        text = "検索 crossref: first hop wait" if search else f"fetch https://{held}{rate}"
+        result = cli("run", "--input", "prior-wait", "--allow-read-host", held, text, case_id=case, expected_exit=2)
+        (packet,) = result["evidence"]
+        assert packet["packet_kind"] == ("SEARCH_LIST" if search else "FETCH_FAILURE")
+        return packet
+
+    def fetch(case: str, same_goal: bool, *flags: str) -> tuple[dict, tuple[str, ...]]:
+        urls = [f"https://{origin}{kept}"]
+        if same_goal:
+            urls.append(f"https://{held}{rate}")
+        urls.extend((held_uri, f"https://{origin}{later}"))
+        args = ("--input", "original", *grant, *flags, f"fetch {' '.join(urls)}")
+        result = cli("run", *args, case_id=case, expected_exit=2)
+        assert result["reason"].startswith(f"EVIDENCE_UNAVAILABLE: HTTP_RETRY_DEFERRED: The retained Retry-After for {held}")
+        assert result["content_plan"] is None and result["render"] is None and result["receipts"] == []
+        assert len(result["evidence"]) == (2 if same_goal else 1)
+        assert result["evidence"][0]["extracted_text"] == kept_text
+        assert result["dependencies"] == [packet["id"] for packet in result["evidence"]]
+        return result, args
+
+    results = {}
+    for name, query in (
+        ("saved-fetch", question),
+        ("same-goal", "取得した本文を要約して"),
+        ("saved-search", "取得した本文を2点以内、20字以内で要約して"),
+    ):
+        case = f"source-after-first-hop-{name}"
+        same_goal = name == "same-goal"
+        wait = None if same_goal else seed(case, search=name == "saved-search")
+        seen, starts = len(fixture.events), len(fixture.connects)
+        original_file = state_path.parent / f"{case}-original.txt"
+        stopped, args = fetch(case, same_goal, "--output", str(original_file), "--allow-write", str(original_file))
+        if wait:
+            assert f"(saved packet {wait['id']})" in stopped["reason"]
+        else:
+            assert "(saved packet " not in stopped["reason"]
+            wait = stopped["evidence"][1]
+            assert wait["http_status"] == 503 and wait["retry_after"] is not None
+        expected = [(origin, kept), (held, rate)] if same_goal else [(origin, kept)]
+
+        output = state_path.parent / f"{case}.txt"
+        answer = cli("run", "--input", "followup", "--output", str(output), "--allow-write", str(output), query, case_id=case)
+        source_id, body_ref, _ = answer["dependencies"]
+        raw = (state_path / "blobs" / body_ref).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == body_ref and json.loads(raw) == stopped["evidence"][0]
+        assert source_id == stopped["id"] and "元の取得は次のURLの接続前に待機条件で停止しました。" in answer["text"]
+        assert "実測値は42です。" in answer["text"] and "999" not in answer["text"] and answer["evidence"] == []
+        before = output.stat()
+        (receipt,) = answer["receipts"]
+        retain_attempted_prefix(state_path, case, "followup", receipt["action_id"])
+        recovered = cli("reconcile", case_id=case)
+        (restored,) = recovered["receipts"]
+        assert restored["action_id"] == receipt["action_id"] and "NO_RESEND" in restored["reason"]
+        assert recovered["dependencies"] == answer["dependencies"] and recovered["text"] == answer["text"]
+        assert output.read_bytes() == bytes(answer["render"]["bytes"])
+        after = output.stat()
+        assert (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns)
+        assert not original_file.exists()
+        assert cli("run", *args, case_id=case, expected_exit=2) == stopped
+        blocked = cli("run", "--input", "still-held", "--allow-read-host", held, f"fetch {held_uri}",
+                      case_id=case, expected_exit=2)
+        assert f"(saved packet {wait['id']})" in blocked["reason"] and blocked["evidence"] == []
+        assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == expected
+        assert len(fixture.connects) == starts + len(expected)
+        results[name] = recovered
+
+    case = "source-after-first-hop-unbound-wait"
+    wait = seed(case)
+    seen, starts = len(fixture.events), len(fixture.connects)
+    fetch(case, False)
+    packet_bytes = json.dumps(wait, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    wait_ref = hashlib.sha256(packet_bytes).hexdigest()
+    assert (state_path / "blobs" / wait_ref).read_bytes() == packet_bytes
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        removed = database.execute("DELETE FROM case_artifact WHERE case_id=? AND sha256=?", (case, wait_ref))
+        assert removed.rowcount == 1
+    try:
+        invalid = cli("run", "--input", "followup", question, case_id=case, expected_exit=4)
+        assert "SOURCE_CONTEXT_INVALID" in invalid["reason"] and invalid["receipts"] == []
+    finally:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+            database.execute("INSERT INTO case_artifact(case_id,sha256) VALUES(?,?)", (case, wait_ref))
+    assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == [(origin, kept)]
+    assert len(fixture.connects) == starts + 1 and not fixture.errors, fixture.errors
+    return {**results, "unbound": invalid}
 
 
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
@@ -2159,6 +2261,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         partial_direct_source = check_partial_direct_source(cli, fixture, state_path)
         wait_state = directory / "wait-source-state"
         source_after_wait = check_source_after_redirect_wait(partial(cli, db_path=wait_state), fixture, wait_state)
+        first_hop_state = directory / "first-hop-source-state"
+        source_after_first_hop = check_source_after_first_hop_wait(partial(cli, db_path=first_hop_state), fixture, first_hop_state)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -2169,7 +2273,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "source_followup_chain": source_followup_chain,
                 "candidate_after_source": candidate_after_source,
                 "source_after_no_match": source_after_no_match,
-                "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait}
+                "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait,
+                "source_after_first_hop": source_after_first_hop}
     finally:
         fixture.close()
 

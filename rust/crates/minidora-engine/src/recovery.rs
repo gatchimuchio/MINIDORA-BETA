@@ -2866,15 +2866,12 @@ pub(crate) fn source_context_available(
         return Ok(false);
     };
     let observed = source.evidence.len();
-    let url_count_matches = match stop {
+    let url_count_matches = match &stop {
         crate::text_summary::PartialRetrievalStop::AfterAllUrls => observed == urls.len(),
         crate::text_summary::PartialRetrievalStop::AtRedirect => observed <= urls.len(),
+        crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_) => observed < urls.len(),
     };
     if identity(&bundle.request)? != source.id
-        || store
-            .get_input_result(actor, case, &source.input_id, source.input_version)?
-            .as_ref()
-            != Some(source)
         || source.guarantee != Guarantee::Unknown
         || source.content_plan.is_some()
         || source.render.is_some()
@@ -2882,6 +2879,32 @@ pub(crate) fn source_context_available(
         || source.execution_graph_ref.is_some()
         || !url_count_matches
         || observed != source.dependencies.len()
+    {
+        return Err(invalid());
+    }
+
+    if let crate::text_summary::PartialRetrievalStop::BeforeFirstHop(detail) = stop {
+        let original = store
+            .load_suspended_result_revision(actor, case, source)?
+            .ok_or_else(invalid)?;
+        if original.bundle.as_ref() != Some(&bundle)
+            || original.input_fingerprint.as_ref() != Some(&source.id)
+            || original.reason != source.reason
+            || original.goal_sha256.is_none()
+            || !first_hop_wait_matches(
+                store,
+                &original,
+                &bundle.request.permissions,
+                &urls[observed],
+                detail,
+            )?
+        {
+            return Err(invalid());
+        }
+    } else if store
+        .get_input_result(actor, case, &source.input_id, source.input_version)?
+        .as_ref()
+        != Some(source)
     {
         return Err(invalid());
     }
@@ -2916,6 +2939,77 @@ pub(crate) fn source_context_available(
         }
     }
     Ok(true)
+}
+
+fn first_hop_wait_matches(
+    store: &Store,
+    original: &CaseRevision,
+    permissions: &Permissions,
+    next_uri: &str,
+    detail: &str,
+) -> Result<bool> {
+    let url = crate::ports::approved_url(next_uri, permissions)?;
+    let host = url.host_str().expect("approved domain");
+    let message = crate::ports::retry_deferred_message(host, None);
+    let wait_on_host = |packet: &EvidencePacket| {
+        packet.mode == "LIVE"
+            && matches!(packet.packet_kind.as_str(), "FETCH_FAILURE" | "SEARCH_LIST")
+            && matches!(packet.http_status, 429 | 503)
+            && packet.failure.is_some()
+            && packet.extracted_text.is_none()
+            && packet.retry_after.is_some()
+            && crate::ports::approved_url(&packet.final_uri, permissions)
+                .is_ok_and(|uri| uri.host_str() == Some(host))
+    };
+
+    let Some(suffix) = detail.strip_prefix(&message) else {
+        return Ok(false);
+    };
+    if suffix.is_empty() {
+        // A wait observed in this input is recorded in its own packet prefix.
+        // An indefinite wait may have been bounded by the original deadline.
+        return Ok(original.result.as_ref().is_some_and(|result| {
+            result
+                .evidence
+                .iter()
+                .rev()
+                .find(|packet| wait_on_host(packet))
+                .is_some_and(|packet| {
+                    packet.retry_after.as_ref().is_some_and(|retry| {
+                        retry
+                            .not_before_unix_ms
+                            .is_none_or(|due| due > retry.received_at_unix_ms)
+                    })
+                })
+        }));
+    }
+    let Some(packet_id) = suffix
+        .strip_prefix(" (saved packet ")
+        .and_then(|value| value.strip_suffix(')'))
+    else {
+        return Ok(false);
+    };
+    // Use the original stop's history. A later observation cannot supply its wait.
+    for result in original.prior_results.values().filter(|result| {
+        matches!(
+            result.lifecycle,
+            Lifecycle::Suspend | Lifecycle::Commit | Lifecycle::Cancel
+        )
+    }) {
+        if let Some(packet) = result.evidence.iter().find(|packet| {
+            packet.id == packet_id
+                && wait_on_host(packet)
+                && packet.retry_after.as_ref().is_some_and(|retry| {
+                    retry
+                        .not_before_unix_ms
+                        .is_some_and(|due| due > retry.received_at_unix_ms)
+                })
+        }) {
+            crate::core::verify_retained_retry_source(store, original, result, packet)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Authenticate the original source of a committed follow-up or a no-match question.

@@ -1479,6 +1479,35 @@ impl Store {
         sha.map(|sha| self.read_blob(&sha)).transpose()
     }
 
+    /// Recover the context at the original stop, before any later inputs.
+    pub(crate) fn load_suspended_result_revision(
+        &self,
+        actor: &str,
+        case: &str,
+        result: &ResultRecord,
+    ) -> Result<Option<CaseRevision>> {
+        if result.lifecycle != Lifecycle::Suspend
+            || self
+                .get_input_result(actor, case, &result.input_id, result.input_version)?
+                .as_ref()
+                != Some(result)
+        {
+            return Ok(None);
+        }
+        let mut statement = sql(self.connection.prepare(
+            "SELECT state_sha256 FROM case_revision WHERE case_id=?1 AND lifecycle='SUSPEND' ORDER BY revision",
+        ))?;
+        let rows = sql(statement.query_map([case], |row| row.get::<_, String>(0)))?;
+        for row in rows {
+            let revision: CaseRevision = self.read_blob(&sql(row)?)?;
+            if revision.lifecycle == Lifecycle::Suspend && revision.result.as_ref() == Some(result)
+            {
+                return Ok(Some(revision));
+            }
+        }
+        Ok(None)
+    }
+
     /// Load the exact immutable sealed input for one retained case input.
     /// Actor/case/input identity and content-derived bundle fields are
     /// rechecked before a consumer can use the original interpretation.
