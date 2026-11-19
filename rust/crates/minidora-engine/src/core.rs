@@ -246,9 +246,7 @@ pub(crate) const RELATION_COMPARISON_PREDICATE: &str = "GENERATED_RELATION_COMPA
 pub(crate) fn goal_predicates(meaning: &MeaningIR, requires_file: bool) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
-        Intent::CompareRelationInventories { .. }
-            if meaning.parser_version == input::COMPARISON_PARSER_VERSION =>
-        {
+        Intent::CompareRelationInventories { .. } if input::uses_generated_comparison(meaning) => {
             predicates.push(RELATION_COMPARISON_PREDICATE.into());
         }
         Intent::Calculate { .. } if meaning.parser_version == input::CALCULATION_PARSER_VERSION => {
@@ -772,6 +770,7 @@ const RELATION_COMPARISON_CONTENT_KIND: &str = "minidora.relation-comparison-con
 const RELATION_COMPARISON_CONTENT_KIND_V3: &str = "minidora.relation-comparison-content.v3";
 const RELATION_COMPARISON_CONTENT_KIND_V4: &str = "minidora.relation-comparison-content.v4";
 const RELATION_COMPARISON_CONTENT_KIND_V5: &str = "minidora.relation-comparison-content.v5";
+const RELATION_COMPARISON_CONTENT_KIND_V6: &str = "minidora.relation-comparison-content.v6";
 const RELATION_COMPARISON_GENERATED_HEADING: &str = "保存済みの関係を左右で比較します。";
 const RELATION_COMPARISON_REPORT_HEADER: &str = "保存済みの根拠を比較した記録です。片側のみの表示はその側の保存記録で支持され、他方では同じ関係の支持を確認できなかった意味です。保存記録の網羅性と現実世界の真偽は確認していません。";
 const RELATION_COMPARISON_CONTENT_HEADER: &str = "左右の保存関係根拠を照合した比較です。";
@@ -2508,6 +2507,8 @@ struct RelationComparisonMeaningPlan {
     subject_a: String,
     subject_b: String,
     scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<MeaningCompositionFormat>,
     rows: Vec<RelationComparisonMeaningRow>,
     proof_ids: Vec<String>,
 }
@@ -5925,6 +5926,7 @@ impl Engine {
                                 | RELATION_COMPARISON_CONTENT_KIND_V3
                                 | RELATION_COMPARISON_CONTENT_KIND_V4
                                 | RELATION_COMPARISON_CONTENT_KIND_V5
+                                | RELATION_COMPARISON_CONTENT_KIND_V6
                         )
                         || matches!(
                             artifact.kind.as_str(),
@@ -6047,13 +6049,24 @@ impl Engine {
                                 "前回比較の封印入力を取得できません。",
                             );
                         };
-                        let expected_intent = Intent::CompareRelationInventories {
-                            subject_a: artifact.subject_a.clone(),
-                            subject_b: artifact.subject_b.clone(),
-                            scope: artifact.scope.clone(),
+                        let Intent::CompareRelationInventories {
+                            subject_a,
+                            subject_b,
+                            scope,
+                            format,
+                        } = &prior_bundle.meaning.intent
+                        else {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RELATION_COMPARISON_ARTIFACT_INVALID",
+                                "前回比較の封印済みの目的を照合できません。",
+                            );
                         };
-                        if prior_bundle.meaning.parser_version != input::COMPARISON_PARSER_VERSION
-                            || prior_bundle.meaning.intent != expected_intent
+                        if !input::uses_generated_comparison(&prior_bundle.meaning)
+                            || subject_a != &artifact.subject_a
+                            || subject_b != &artifact.subject_b
+                            || scope != &artifact.scope
                             || identity(&prior_bundle.request)? != prior.id
                         {
                             return self.stop(
@@ -6067,6 +6080,7 @@ impl Engine {
                             subject_a: &artifact.subject_a,
                             subject_b: &artifact.subject_b,
                             scope: &artifact.scope,
+                            format: *format,
                             max_actions: request.budget.max_actions,
                             max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
                             generated: true,
@@ -6210,7 +6224,7 @@ impl Engine {
                             "前回比較の依存記録が左右の再検証済みinventoryと一致しません。",
                         );
                     }
-                    let explanation = relation_comparison_explanation_units(&prior);
+                    let explanation = relation_comparison_explanation_units(&prior, prior_plan);
                     if explanation.join("\n").len() > request.budget.max_evidence_bytes {
                         return self.stop(
                             &mut state,
@@ -7559,6 +7573,7 @@ impl Engine {
                 subject_a,
                 subject_b,
                 scope,
+                format,
             } => {
                 let per_subject_actions = request.budget.max_actions / 2;
                 if per_subject_actions == 0 {
@@ -7637,6 +7652,7 @@ impl Engine {
                         subject_a,
                         subject_b,
                         scope,
+                        *format,
                         &inventory_a,
                         &inventory_b,
                     );
@@ -7668,11 +7684,9 @@ impl Engine {
                             );
                         }
                     };
-                    if let Err(error) = validate_meaning_generation(
-                        &grammar,
-                        &meaning_plan.proof_ids,
-                        &generation.report,
-                    ) {
+                    if let Err(error) =
+                        validate_comparison_generation(&meaning_plan, &grammar, &generation.report)
+                    {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
@@ -7690,7 +7704,7 @@ impl Engine {
                     let model_ref = digest(&canonical(&generation.model)?);
                     generation.report.model_artifact_ref = Some(model_ref);
                     let artifact_bytes = canonical(&RelationComparisonGeneratedArtifact {
-                        kind: RELATION_COMPARISON_CONTENT_KIND_V5.into(),
+                        kind: relation_comparison_generated_kind(*format).into(),
                         result_id: result.id.clone(),
                         report_sha256: digest(report.as_bytes()),
                         subject_a: subject_a.clone(),
@@ -9940,6 +9954,7 @@ fn direct_relation_comparison_bundle(
             subject_a: input.subject_a.clone(),
             subject_b: input.subject_b.clone(),
             scope: input.scope.clone(),
+            format: None,
         },
         spans: vec![source_span.clone()],
         source_roles: BTreeMap::from([("relation-comparison".into(), vec![source_span])]),
@@ -12907,6 +12922,7 @@ fn relation_comparison_meaning_plan(
     subject_a: &str,
     subject_b: &str,
     scope: &str,
+    format: Option<MeaningCompositionFormat>,
     inventory_a: &relations::RelationInventory,
     inventory_b: &relations::RelationInventory,
 ) -> RelationComparisonMeaningPlan {
@@ -12942,6 +12958,7 @@ fn relation_comparison_meaning_plan(
         subject_a: subject_a.into(),
         subject_b: subject_b.into(),
         scope: scope.into(),
+        format,
         rows,
         proof_ids: relation_comparison_proof_ids(inventory_a, inventory_b)
             .into_iter()
@@ -13155,12 +13172,60 @@ fn comparison_generation_request(
     let max_output_bytes = max_output_bytes.min(language::MAX_COMPARISON_GENERATION_BYTES);
     Ok(language::MeaningGenerationRequest {
         purpose: MeaningCompositionPurpose::Compare,
-        format: MeaningCompositionFormat::Bullets,
+        format: plan.format.unwrap_or(MeaningCompositionFormat::Bullets),
         style: MeaningCompositionStyle::Neutral,
         units,
         max_output_bytes,
         max_tokens: max_output_bytes,
     })
+}
+
+fn relation_comparison_generated_kind(format: Option<MeaningCompositionFormat>) -> &'static str {
+    if format.is_some() {
+        RELATION_COMPARISON_CONTENT_KIND_V6
+    } else {
+        RELATION_COMPARISON_CONTENT_KIND_V5
+    }
+}
+
+fn validate_comparison_generation(
+    plan: &RelationComparisonMeaningPlan,
+    request: &language::MeaningGenerationRequest,
+    report: &language::MeaningGenerationReport,
+) -> Result<()> {
+    validate_meaning_generation(request, &plan.proof_ids, report)?;
+    let Some(format) = plan.format else {
+        return Ok(());
+    };
+    let line_breaks = ['\r', '\n', '\u{0085}', '\u{2028}', '\u{2029}'];
+    let layout_matches = match format {
+        MeaningCompositionFormat::Paragraph => {
+            !report.text.contains(line_breaks)
+                && report
+                    .units
+                    .first()
+                    .is_some_and(|unit| unit.text == RELATION_COMPARISON_GENERATED_HEADING)
+        }
+        MeaningCompositionFormat::Bullets => {
+            report.units.iter().enumerate().all(|(index, unit)| {
+                let prefix = if index == 0 { "・" } else { "\n・" };
+                unit.text.strip_prefix(prefix).is_some_and(|text| {
+                    if index == 0 {
+                        text == RELATION_COMPARISON_GENERATED_HEADING
+                    } else {
+                        !text.contains(line_breaks)
+                    }
+                })
+            })
+        }
+    };
+    if request.format != format || !layout_matches {
+        return Err(failure(
+            "COMPARISON_FORMAT_MISMATCH",
+            "the generated comparison does not have the sealed layout",
+        ));
+    }
+    Ok(())
 }
 
 fn relation_comparison_content_request_v2(
@@ -13667,7 +13732,10 @@ fn decode_relation_comparison_artifact(bytes: &[u8]) -> Result<RelationCompariso
             generated: None,
         });
     }
-    if kind == RELATION_COMPARISON_CONTENT_KIND_V5 {
+    if matches!(
+        kind,
+        RELATION_COMPARISON_CONTENT_KIND_V5 | RELATION_COMPARISON_CONTENT_KIND_V6
+    ) {
         let artifact: RelationComparisonGeneratedArtifact = serde_json::from_value(value)?;
         return Ok(RelationComparisonArtifactView {
             canonical_bytes: canonical(&artifact)?,
@@ -13694,6 +13762,7 @@ pub(crate) struct RelationComparisonReplay<'a> {
     pub subject_a: &'a str,
     pub subject_b: &'a str,
     pub scope: &'a str,
+    pub format: Option<MeaningCompositionFormat>,
     pub max_actions: u32,
     pub max_evidence_bytes: usize,
     pub generated: bool,
@@ -13930,6 +13999,7 @@ fn verify_generated_comparison(
         replay.subject_a,
         replay.subject_b,
         replay.scope,
+        replay.format,
         inventory_a,
         inventory_b,
     );
@@ -13939,10 +14009,13 @@ fn verify_generated_comparison(
             "the generated comparison artifact is missing",
         ));
     };
-    if result.actor_memory_revision.is_none() || meaning_plan != &expected_plan {
+    if result.actor_memory_revision.is_none()
+        || meaning_plan != &expected_plan
+        || artifact.kind != relation_comparison_generated_kind(replay.format)
+    {
         return Err(failure(
             "CONTENT_PLAN_INVALID",
-            "the retained comparison requires a pinned memory revision and the verified operands",
+            "the retained comparison requires its pinned memory, verified operands and sealed format",
         ));
     }
     let grammar = comparison_generation_request(
@@ -13953,7 +14026,7 @@ fn verify_generated_comparison(
     )?;
     let mut generation = language::generate_semantic_meaning(&grammar)?;
     generation.report.model_artifact_ref = Some(digest(&canonical(&generation.model)?));
-    validate_meaning_generation(&grammar, &expected_plan.proof_ids, &generation.report)?;
+    validate_comparison_generation(&expected_plan, &grammar, &generation.report)?;
     if generation.report != *report {
         return Err(failure(
             "CONTENT_PLAN_INVALID",
@@ -13994,13 +14067,22 @@ pub(crate) fn verify_generated_model_artifacts(
     Ok(())
 }
 
-pub(crate) fn relation_comparison_explanation_units(previous: &ResultRecord) -> Vec<String> {
+pub(crate) fn relation_comparison_explanation_units(
+    previous: &ResultRecord,
+    prior_plan: &ContentPlan,
+) -> Vec<String> {
     let mut explanation = vec![format!(
         "前回の保存関係比較を詳しく説明します（比較結果ID: {}）。同じactorの現在有効な記憶から左右のscope別inventoryを再計算し、前回と一致することを確認しました。",
         previous.id
     )];
-    explanation.extend(previous.text.lines().skip(1).map(str::to_string));
     if is_generated_comparison_text(&previous.text) {
+        explanation.extend(
+            prior_plan
+                .required_units
+                .iter()
+                .skip(1)
+                .map(|unit| unit.strip_prefix('\n').unwrap_or(unit).to_owned()),
+        );
         explanation.extend(
             previous
                 .dependencies
@@ -14008,6 +14090,8 @@ pub(crate) fn relation_comparison_explanation_units(previous: &ResultRecord) -> 
                 .skip(1)
                 .map(|proof_id| format!("照合した根拠ID: {proof_id}")),
         );
+    } else {
+        explanation.extend(previous.text.lines().skip(1).map(str::to_string));
     }
     explanation.push(
         "比較分類は保存済みの前提・規則の範囲に限られます。片側で支持を確認できないことは、関係が偽または存在しない証明ではありません。記録の網羅性と現実世界の真偽は確認していません。".into(),
@@ -14017,7 +14101,8 @@ pub(crate) fn relation_comparison_explanation_units(previous: &ResultRecord) -> 
 
 fn is_generated_comparison_text(text: &str) -> bool {
     text.strip_prefix('・')
-        .is_some_and(|body| body.starts_with(RELATION_COMPARISON_GENERATED_HEADING))
+        .unwrap_or(text)
+        .starts_with(RELATION_COMPARISON_GENERATED_HEADING)
 }
 
 pub(crate) fn is_saved_relation_comparison_result(result: &ResultRecord) -> bool {

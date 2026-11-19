@@ -134,6 +134,7 @@ fn typed_atomic_relation_comparison_reaches_k7_and_preserves_stops() {
             subject_a: "Aster".into(),
             subject_b: "Beryl".into(),
             scope: scope.into(),
+            format: None,
         }
     );
     let direct_input: Value =

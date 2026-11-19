@@ -5708,6 +5708,7 @@ fn natural_relation_comparison_consumes_saved_proofs_and_flows_into_previous_sum
         );
     }
     let meaning_plan = &artifact["meaning_plan"];
+    assert!(meaning_plan.get("format").is_none());
     assert_eq!(meaning_plan["subject_a"], "ココ");
     assert_eq!(meaning_plan["subject_b"], "ミケ");
     assert_eq!(meaning_plan["scope"], "biology");
@@ -5991,6 +5992,232 @@ fn relation_comparison_generates_every_axis_beyond_short_explanation_size() {
         text.len() > 384 && text.matches(&long_object).count() == 2
     }));
     assert_eq!(generation["text"], comparison["text"]);
+}
+
+#[test]
+fn requested_comparison_layout_changes_generation_and_keeps_the_same_proofs() {
+    let scratch = Scratch::new();
+    for (input_id, request) in [
+        ("left-common", "[scope=bench]甲は観測器"),
+        ("right-common", "[scope=bench]乙は観測器"),
+        ("left-only", "[scope=bench]甲は無線式"),
+        ("right-only", "[scope=bench]乙は有線式"),
+    ] {
+        let premise = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", input_id, request],
+        ));
+        assert_eq!(premise["lifecycle"], "COMMIT");
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let mut observations = Vec::new();
+    for (input_id, phrase, format) in [
+        ("list", "箇条書き", "BULLETS"),
+        ("paragraph", "段落", "PARAGRAPH"),
+    ] {
+        let request = format!("[scope=bench]甲と乙の保存済みの関係を{phrase}で比較して");
+        let path = scratch.0.join(format!("{input_id}.txt"));
+        let target = path.to_str().unwrap();
+        let result = record(&execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                input_id,
+                "--max-actions",
+                "128",
+                "--output",
+                target,
+                "--allow-write",
+                target,
+                &request,
+            ],
+        ));
+        assert_eq!(result["lifecycle"], "COMMIT");
+        assert_eq!(result["guarantee"], "HYPOTHESIS");
+
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        let meaning = &saved["bundle"]["meaning"];
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(
+            meaning["parser_version"],
+            "declarative-ja-en-v87-formatted-relation-comparison"
+        );
+        assert_eq!(meaning["intent"]["format"], format);
+        let source = &meaning["source_roles"]["/CompareRelationInventories/format"][0];
+        let span_start = source["start"].as_u64().unwrap() as usize;
+        let span_end = source["end"].as_u64().unwrap() as usize;
+        let source_text = request.get(span_start..span_end).unwrap();
+        assert_eq!(source["text"], source_text);
+        assert_eq!(source_text.trim_end_matches('で'), phrase);
+        let goal = sequence_artifact(&store, &saved["goal_sha256"]);
+        assert_eq!(goal["intent"], meaning["intent"]);
+
+        let artifact = sequence_artifact(&store, &result["dependencies"][0]);
+        assert_eq!(artifact["kind"], "minidora.relation-comparison-content.v6");
+        assert_eq!(artifact["meaning_plan"]["format"], format);
+        let generation = &artifact["content_generation"];
+        let text = result["text"].as_str().unwrap();
+        assert_eq!(generation["schema"], "core-meaning-generation-v1");
+        assert_eq!(generation["stop_reason"], "EOS");
+        assert_eq!(generation["text"], text);
+        assert_eq!(
+            generation["model_revision"],
+            result["content_plan"]["model_revision"]
+        );
+        assert_eq!(
+            generation["model_artifact_ref"],
+            result["content_plan"]["model_artifact_ref"]
+        );
+        let required_units = generation["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|unit| unit["text"].clone())
+            .collect();
+        assert_eq!(
+            result["content_plan"]["required_units"],
+            Value::Array(required_units)
+        );
+        assert_eq!(result["render"]["status"], "RENDERED");
+        assert_eq!(
+            result["render"]["bytes"],
+            serde_json::json!(text.as_bytes())
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), text.as_bytes());
+        assert_eq!(result["receipts"][0]["phase"], "CONFIRMED");
+        if format == "BULLETS" {
+            assert!(text.lines().count() > 1);
+            assert!(text.lines().all(|line| line.starts_with('・')));
+        } else {
+            assert!(!text.starts_with('・'));
+            assert_eq!(text.lines().count(), 1);
+        }
+        observations.push((result, artifact));
+    }
+    let [(bullet_result, bullets), (paragraph_result, paragraph)] = observations.as_slice() else {
+        unreachable!("both requested comparison formats were exercised");
+    };
+    assert_eq!(
+        bullet_result["actor_memory_revision"],
+        paragraph_result["actor_memory_revision"]
+    );
+    for side in ["inventory_a", "inventory_b"] {
+        assert_eq!(bullets[side], paragraph[side]);
+    }
+    for field in ["subject_a", "subject_b", "scope", "rows", "proof_ids"] {
+        assert_eq!(
+            bullets["meaning_plan"][field],
+            paragraph["meaning_plan"][field]
+        );
+    }
+    assert_eq!(
+        paragraph["meaning_plan"]["rows"].as_array().unwrap().len(),
+        3
+    );
+    assert_eq!(
+        bullets["content_generation"]["evidence_ids"],
+        paragraph["content_generation"]["evidence_ids"]
+    );
+    for field in ["context_state_sha256", "model_revision", "text"] {
+        assert_ne!(
+            bullets["content_generation"][field],
+            paragraph["content_generation"][field]
+        );
+    }
+
+    let explanation = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "explain-paragraph",
+            "--max-actions",
+            "128",
+            "詳しく説明して",
+        ],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    assert_eq!(explanation["dependencies"][0], paragraph_result["id"]);
+    let details = explanation["text"].as_str().unwrap();
+    for content in ["「甲」", "「乙」", "「無線式」", "「有線式」", "「観測器」"]
+    {
+        assert!(details.contains(content), "lost {content}: {details}");
+    }
+
+    let refused = scratch.0.join("refused.txt");
+    let target = refused.to_str().unwrap();
+    for (input_id, text) in [
+        (
+            "table",
+            "[scope=bench]甲と乙の保存済みの関係を表形式で比較して",
+        ),
+        (
+            "compound",
+            "[scope=bench]甲と乙の保存済みの関係を箇条書きで比較して送信して",
+        ),
+    ] {
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    input_id,
+                    "--output",
+                    target,
+                    "--allow-write",
+                    target,
+                    text,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert!(result["content_plan"].is_null());
+        assert!(result["receipts"].as_array().unwrap().is_empty());
+        assert!(!refused.exists());
+    }
+
+    // A saved operand can contain a Unicode line separator. Keep its
+    // exact bytes and refuse adoption if those bytes break the layout.
+    let premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "layout-break", "[scope=layout]丙は前\u{2028}後"],
+    ));
+    assert_eq!(premise["lifecycle"], "COMMIT");
+    for (input_id, layout) in [("broken-paragraph", "段落"), ("broken-bullets", "箇条書き")] {
+        let text = format!("[scope=layout]丙と丁の関係を{layout}で比較して");
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    input_id,
+                    "--output",
+                    target,
+                    "--allow-write",
+                    target,
+                    &text,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .contains("COMPARISON_FORMAT_MISMATCH")
+        );
+        assert!(result["content_plan"].is_null());
+        assert!(result["receipts"].as_array().unwrap().is_empty());
+        assert!(!refused.exists());
+    }
 }
 
 #[test]

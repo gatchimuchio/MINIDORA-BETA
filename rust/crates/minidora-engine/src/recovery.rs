@@ -1723,6 +1723,7 @@ fn verify_relation_comparison_memory_result(
         subject_a,
         subject_b,
         scope,
+        format,
     } = &goal.intent
     else {
         return Ok(());
@@ -1743,6 +1744,7 @@ fn verify_relation_comparison_memory_result(
             subject_a,
             subject_b,
             scope,
+            format: *format,
             max_actions: goal.budget.max_actions,
             max_evidence_bytes: goal.budget.max_evidence_bytes,
             generated: goal
@@ -1765,6 +1767,7 @@ fn verify_relation_comparison_memory_result_with_index(
         subject_a,
         subject_b,
         scope,
+        format,
     } = &goal.intent
     else {
         return Ok(Some(()));
@@ -1786,6 +1789,7 @@ fn verify_relation_comparison_memory_result_with_index(
             subject_a,
             subject_b,
             scope,
+            format: *format,
             max_actions: goal.budget.max_actions,
             max_evidence_bytes: goal.budget.max_evidence_bytes,
             generated: goal
@@ -2085,6 +2089,7 @@ fn verify_explain_previous_relation_comparison_memory_result(
         subject_a,
         subject_b,
         scope,
+        format,
     } = &prior_bundle.meaning.intent
     else {
         return Err(failure(
@@ -2142,9 +2147,10 @@ fn verify_explain_previous_relation_comparison_memory_result(
         subject_a,
         subject_b,
         scope,
+        format: *format,
         max_actions: prior_bundle.request.budget.max_actions,
         max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
-        generated: prior_bundle.meaning.parser_version == crate::input::COMPARISON_PARSER_VERSION,
+        generated: crate::input::uses_generated_comparison(&prior_bundle.meaning),
     };
     if previous.actor_memory_revision.is_some() {
         let original_memory = result_memory_snapshot(store, &state.actor_id, previous)?
@@ -2205,7 +2211,7 @@ fn verify_explain_previous_relation_comparison_memory_result(
     let expected_dependencies = std::iter::once(previous.id.clone())
         .chain(previous.dependencies.iter().cloned())
         .collect::<Vec<_>>();
-    let expected_units = crate::core::relation_comparison_explanation_units(previous);
+    let expected_units = crate::core::relation_comparison_explanation_units(previous, prior_plan);
     if expected_dependencies != result.dependencies
         || expected_units != plan.required_units
         || report_bytes.len() > goal.budget.max_evidence_bytes
@@ -3202,8 +3208,7 @@ fn inspect(
         ));
     }
     let legacy_predicates = ["SUPPORTED_CONTENT", "EXACT_RENDER", "CONFIRMED_FILE"];
-    let requires_generated_comparison =
-        bundle.meaning.parser_version == crate::input::COMPARISON_PARSER_VERSION;
+    let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
     if goal.required_predicates != goal_predicates(&bundle.meaning, true)
@@ -9779,7 +9784,7 @@ mod tests {
             "case",
             "relation-comparison",
             "alice",
-            "ココとミケの保存済みの関係を比較して",
+            "ココとミケの保存済みの関係を段落で比較して",
         );
         request.budget.max_actions = 32;
         request.output_path = Some(fixture.target.clone());
@@ -9790,6 +9795,12 @@ mod tests {
         let comparison = engine.execute("alice", request).unwrap();
         assert_eq!(comparison.lifecycle, Lifecycle::Commit, "{comparison:?}");
         assert_eq!(comparison.guarantee, Guarantee::Hypothesis);
+        assert!(
+            comparison
+                .text
+                .starts_with("保存済みの関係を左右で比較します。")
+        );
+        assert_eq!(comparison.text.lines().count(), 1);
         assert!(comparison.dependencies.contains(&coco_id));
         assert!(comparison.dependencies.contains(&mike_id));
         let memory_revision = comparison
@@ -9808,6 +9819,52 @@ mod tests {
         assert_eq!(retained_result.actor_memory_revision, Some(memory_revision));
         inspect(&engine.store, "alice", &retained, &retained_result)
             .unwrap_or_else(|error| panic!("{error:?}"));
+        let goal_ref = retained.goal_sha256.as_ref().unwrap();
+        let goal: GoalContract =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
+                .unwrap();
+        let mut wrong_goal = goal.clone();
+        let Intent::CompareRelationInventories { format, .. } = &mut wrong_goal.intent else {
+            panic!("comparison must seal its actual goal");
+        };
+        assert_eq!(*format, Some(MeaningCompositionFormat::Paragraph));
+        *format = Some(MeaningCompositionFormat::Bullets);
+        let mut wrong_case = retained.clone();
+        wrong_case.goal_sha256 = Some(
+            engine
+                .store
+                .put_artifact("alice", "case", &wrong_goal)
+                .unwrap(),
+        );
+        let mismatch = inspect(&engine.store, "alice", &wrong_case, &retained_result).unwrap_err();
+        assert!(
+            mismatch.to_string().contains("RECOVERY_GOAL_MISMATCH"),
+            "{mismatch:?}"
+        );
+
+        let saved_report = engine
+            .store
+            .get_bytes("alice", "case", &retained_result.dependencies[0])
+            .unwrap();
+        let mut wrong_report: serde_json::Value = serde_json::from_slice(&saved_report).unwrap();
+        wrong_report["meaning_plan"]["format"] = "BULLETS".into();
+        let wrong_ref = engine
+            .store
+            .put_artifact("alice", "case", &wrong_report)
+            .unwrap();
+        let mut wrong_result = retained_result.clone();
+        wrong_result.dependencies[0] = wrong_ref.clone();
+        let wrong_plan = wrong_result.content_plan.as_mut().unwrap();
+        wrong_plan.dependencies[0] = wrong_ref;
+        wrong_plan.id.clear();
+        wrong_plan.id = identity(&*wrong_plan).unwrap();
+        wrong_result.render.as_mut().unwrap().plan_id = wrong_plan.id.clone();
+        let mismatch = inspect(&engine.store, "alice", &retained, &wrong_result).unwrap_err();
+        assert!(
+            mismatch.to_string().contains("CONTENT_PLAN_INVALID"),
+            "{mismatch:?}"
+        );
+
         let original_bytes = fs::read(&fixture.target).unwrap();
         let original_modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
 
@@ -9895,10 +9952,6 @@ mod tests {
         }
         current_memory.revision = next_revision;
         engine.store.save_memory("alice", &current_memory).unwrap();
-        let goal_ref = retained.goal_sha256.as_ref().unwrap();
-        let goal: GoalContract =
-            serde_json::from_slice(&engine.store.get_bytes("alice", "case", goal_ref).unwrap())
-                .unwrap();
         let full_snapshot_error = verify_relation_comparison_memory_result(
             &engine.store,
             "alice",

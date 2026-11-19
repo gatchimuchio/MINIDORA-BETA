@@ -245,6 +245,13 @@ pub struct MemoryState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<ConditionRecord>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MeaningCompositionFormat {
+    Paragraph,
+    Bullets,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Intent {
@@ -495,6 +502,8 @@ pub enum Intent {
         subject_a: String,
         subject_b: String,
         scope: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<MeaningCompositionFormat>,
     },
     AskPreviousRelation {
         proposition: Proposition,

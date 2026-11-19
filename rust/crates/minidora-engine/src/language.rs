@@ -968,12 +968,7 @@ pub enum MeaningRole {
     Limitation,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum MeaningCompositionFormat {
-    Paragraph,
-    Bullets,
-}
+pub use minidora_domain::MeaningCompositionFormat;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]

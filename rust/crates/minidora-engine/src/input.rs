@@ -10,9 +10,27 @@ use unicode_normalization::char::{canonical_combining_class, compose};
 pub const PARSER_VERSION: &str = "declarative-ja-en-v84-quoted-relation-boundary";
 pub(crate) const COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
+const FORMATTED_COMPARISON_PARSER_VERSION: &str =
+    "declarative-ja-en-v87-formatted-relation-comparison";
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 6] = ['「', '『', '"', '\'', '“', '‘'];
+
+pub(crate) fn uses_generated_comparison(meaning: &MeaningIR) -> bool {
+    matches!(
+        (&meaning.intent, meaning.parser_version.as_str()),
+        (
+            Intent::CompareRelationInventories { format: None, .. },
+            COMPARISON_PARSER_VERSION
+        ) | (
+            Intent::CompareRelationInventories {
+                format: Some(_),
+                ..
+            },
+            FORMATTED_COMPARISON_PARSER_VERSION
+        )
+    )
+}
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -121,7 +139,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         unresolved.push("no actual committed calculation is available to correct".into());
     }
     let context_sha256 = identity(&previous)?;
-    let source_roles = match source_role_spans(&request.text, &intent) {
+    let mut source_roles = match source_role_spans(&request.text, &intent) {
         Ok(source_roles) => source_roles,
         Err(Error::Contract { code, message }) if code == "SOURCE_SPAN_INDEX_LIMIT" => {
             unresolved.push(format!("source role indexing stopped: {message}"));
@@ -129,7 +147,35 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Err(error) => return Err(error),
     };
+    if let Intent::CompareRelationInventories {
+        format: Some(format),
+        ..
+    } = &intent
+    {
+        let value = match format {
+            MeaningCompositionFormat::Paragraph => "段落",
+            MeaningCompositionFormat::Bullets => "箇条書き",
+        };
+        let marker = format!("関係を{value}で");
+        let span = request
+            .text
+            .rfind(&marker)
+            .and_then(|offset| {
+                let start = offset + "関係を".len();
+                source_span_at(&request.text, start, start + value.len())
+            })
+            .ok_or_else(|| {
+                failure(
+                    "FORMAT_SOURCE_SPAN",
+                    "the requested comparison format has no matching source bytes",
+                )
+            })?;
+        source_roles.insert("/CompareRelationInventories/format".into(), vec![span]);
+    }
     let parser_version = match &intent {
+        Intent::CompareRelationInventories {
+            format: Some(_), ..
+        } => FORMATTED_COMPARISON_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         _ => PARSER_VERSION,
@@ -2547,7 +2593,7 @@ fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
         capture.get(2).expect("matched body").as_str()
     });
     let japanese = regex(
-        r"^(.+?)と(.+?)の(?:保存済みの)?関係を(?:比較して|比較してください|比べて|比べてください)$",
+        r"^(.+?)と(.+?)の(?:保存済みの)?関係を(?:(段落|箇条書き)で)?(?:比較して|比較してください|比べて|比べてください)$",
     )?;
     let english = regex(r"(?i)^compare (?:the )?(?:saved )?relations for (.+?) and (.+?)$")?;
     let captures = japanese.captures(body).or_else(|| english.captures(body));
@@ -2569,6 +2615,11 @@ fn relation_inventory_comparison_intent(text: &str) -> Result<Option<Intent>> {
         subject_a: subject_a.into(),
         subject_b: subject_b.into(),
         scope,
+        format: captures.get(3).map(|value| match value.as_str() {
+            "段落" => MeaningCompositionFormat::Paragraph,
+            "箇条書き" => MeaningCompositionFormat::Bullets,
+            _ => unreachable!("comparison grammar captures only two layouts"),
+        }),
     }))
 }
 
@@ -4254,6 +4305,7 @@ mod tests {
                     subject_a: parsed_a,
                     subject_b: parsed_b,
                     scope: parsed_scope,
+                    format: None,
                 } => {
                     assert_eq!(parsed_a, subject_a, "{text}");
                     assert_eq!(parsed_b, subject_b, "{text}");

@@ -1173,3 +1173,22 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象差分SHA-256は `d2fe3ab3d2e41
 通常の単一式算術のL6とK7接続は `NORMAL_PATH_PRESENT`。数値は本束の範囲で成立し、利用者指定書式が残るためG03は `PARTIAL`。E2の7ゲート合同再判定、E3、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `cafcf1c` と `5443b97`。資産は計10件。保持2件（実装台帳と要求トレース）、稼働中8件（Core、Input、Language、Recovery、CLI検査、入力観測検査、前回答編集の復旧検査、既存共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。
+
+## 2026-11-19 JST B110 — D3-C E2差戻し W07〜W09 関係比較の指定書式
+
+着工点は `b31fad20563e20af513add86c47946f4248abf7e`。現行D2仕様・D2工程・D3-C指示の採用SHAを照合した。旧CLIでは同じ二対象・範囲の比較を指定なしで採用し、「段落で」「箇条書きで」を加えた要求はexit 2で停止した。
+
+通常の日本語比較「甲と乙の保存済みの関係を段落で比較して」と同じ箇所に「箇条書きで」を指定する構文を受け付ける。封印版 `declarative-ja-en-v87-formatted-relation-comparison` は書式の原文バイト範囲と型付き `Intent.format` を保存する。元GoalのIntentとCoreの比較意味計画の両方に同じ指定を保持する。同一Actor記憶版・範囲・左右の証明から、L6は一段落または一行一項の箇条書きを生成する。K7は意味・根拠・生成モデル、指定の書式と実バイトを照合する。明示指定の保存形式は `minidora.relation-comparison-content.v6`。指定なしのv5は既存箇条書きとして再生し、v1〜v4も既存経路で復旧できる。
+
+段落からの詳説は検証済みの保存単位を消費し、左右の関係と根拠を保持する。旧CLIで未対応だった書式を両方確認し、表形式、送信を含む複合指示、実データのUnicode行区切りで指定を満たせない場合は非採用・無作用とした。復旧は元Goalの書式で系列を再生成し、Goalまたは比較成果物の書式差し替えを拒否する。許可済み段落ファイルの中断を同一作用IDで照合し、ファイルの内容・更新時刻を保持する。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。検査ソース差分SHA-256は `dc7d126b93ebd9dd08e5a5b9488b5b49d9e42af0c192f6567c6794f5d5f33ac0`。隔離SQLiteと許可した一時ファイルを使い、両書式の比較軸・左右の記録・根拠IDの一致と、L6の状態・モデル・文面の差を観測した。通常の実出力と受領済みreceiptを照合した。
+
+- `cargo test -p minidora-cli --test normal_route requested_comparison_layout --locked` で1件PASS。通常の二書式、同じ証明、出力ファイル、段落の詳説、未対応の日本語指示、Unicodeの行区切りを検査した。同ターゲットの `relation_comparison` は3件、 `scalar_arithmetic_generation` は1件がPASS。
+- `cargo test -p minidora-domain --locked` は7件、 `cargo test -p minidora-engine --lib input::tests --locked` は39件がPASS。
+- `cargo test -p minidora-engine --lib recovery::tests:: --locked -- --test-threads=5` で64件PASS。段落の元Goalと保存書式の変更、モデル差し替え、前提失効を拒否。正しい元状態では生成済み内容と同一作用IDを再照合して処理を確定した。
+- `cargo test -p minidora-engine --locked --no-fail-fast` の `core_atomic_relation_comparison_36/38/43`、 `core_temporal_scope_51`、 `core_condition_scope_53`、 `core_atomic_explanation_50` で6件PASS。旧保存形式、時間と条件、証明からの説明の回帰を確認した。 `cargo fmt --all -- --check`、 `cargo check --workspace --all-targets --locked`、 `git diff --check` がPASS。
+
+G03の指定書式は日本語の保存関係比較の二書式で `NORMAL_PATH_PRESENT`。任意書式、他用途の書式変更、英語の明示書式は検査範囲外。説明・条件・比較・数値・書式の関連経路を当該版で検査した。次はG01〜G07を同一版で合同判定する。B110のE2合同判定、E3、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `b31fad2` と `cafcf1c`。資産は計10件。保持2件（実装台帳と要求トレース）、稼働中8件（Domain、Input、Core、Language、Recovery、CLI検査、旧形式の直接比較検査、既存共有Cargoキャッシュ）、保管済み・ゴミ箱移動・保留は各0件。Windows保管と回収は非該当。
