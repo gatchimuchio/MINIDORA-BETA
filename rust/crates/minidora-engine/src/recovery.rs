@@ -2826,6 +2826,7 @@ fn verify_source_summary_context(
         .filter(|(_, packet)| {
             packet.packet_kind == "FETCHED_BODY"
                 && packet.failure.is_none()
+                && packet.retry_after.is_none()
                 && packet.extracted_text.is_some()
         })
         .collect();
@@ -3075,6 +3076,7 @@ fn verify_source_question_context(
     for (index, packet) in prior.evidence.iter().enumerate().filter(|(_, packet)| {
         packet.packet_kind == "FETCHED_BODY"
             && packet.failure.is_none()
+            && packet.retry_after.is_none()
             && packet.extracted_text.is_some()
     }) {
         let encoded = canonical(packet)?;
@@ -4202,6 +4204,7 @@ fn inspect(
             let packet = &result.evidence[index];
             if packet.request_uri != *uri
                 || packet.failure.is_some()
+                || packet.retry_after.is_some()
                 || packet.extracted_text.is_none()
                 || packet.raw_sha256 != digest(&packet.raw_body)
             {
@@ -5415,6 +5418,7 @@ mod tests {
             parser_version: "fixture-exact-text-v1".into(),
             independence_group: "https://example.test/article".into(),
             failure: None,
+            retry_after: None,
         };
         let prior = ResultRecord {
             id: "a".repeat(64),
@@ -5553,6 +5557,7 @@ mod tests {
             parser_version: "fixture-exact-text-v1".into(),
             independence_group: "https://example.test/article".into(),
             failure: None,
+            retry_after: None,
         };
         let packet_ref = digest(&canonical(&packet).unwrap());
         let packets = [(0, &packet, packet_ref)];
@@ -5684,6 +5689,7 @@ mod tests {
             parser_version: "fixture-exact-text-v1".into(),
             independence_group: "https://example.test/article".into(),
             failure: None,
+            retry_after: None,
         };
         let packet_ref = digest(&canonical(&packet).unwrap());
         let packets = [(0, &packet, packet_ref)];

@@ -335,7 +335,10 @@ pub fn parse_listing(
         observation.failure = Some("SEARCH_LIST_IDENTITY_MISMATCH".into());
         return Ok(observation);
     }
-    if observation.listing.failure.is_some() || observation.listing.http_status != 200 {
+    if observation.listing.failure.is_some()
+        || observation.listing.retry_after.is_some()
+        || observation.listing.http_status != 200
+    {
         observation.failure = Some("SEARCH_LIST_FETCH_FAILED".into());
         return Ok(observation);
     }
@@ -446,6 +449,7 @@ pub(crate) fn validate_stored_observation(
         || listing.provider_id != observation.provider.provider_id()
         || listing.mode != "LIVE"
         || listing.failure.is_some()
+        || listing.retry_after.is_some()
         || listing.http_status != 200
         || listing.extracted_text.is_some()
         || listing.parser_version != "strict-utf8-identity-v1"
@@ -597,6 +601,7 @@ pub(crate) fn carry_forward_candidate_evidence(
             || (packet.provider_id == "https-direct-url-v1"
                 && packet.parser_version == "strict-utf8-identity-v1");
         if packet.failure.is_some()
+            || packet.retry_after.is_some()
             || packet.http_status != 200
             || !packet.request_uri.starts_with("https://")
             || !packet.final_uri.starts_with("https://")
@@ -733,6 +738,7 @@ mod tests {
             parser_version: "fixture-json-v1".into(),
             independence_group: "fixture".into(),
             failure: None,
+            retry_after: None,
             redirect_chain: vec!["https://fixture.invalid/list".into()],
             observed_at_unix_ms: 0,
             provider_id: "fixture".into(),
@@ -789,6 +795,7 @@ mod tests {
             parser_version: "test-exact-utf8-v1".into(),
             independence_group: request_uri,
             failure: None,
+            retry_after: None,
         };
         value.id = identity(&(
             &value.mode,

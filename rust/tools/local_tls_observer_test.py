@@ -27,6 +27,7 @@ HOST = "fixture.minidora.test"
 SOURCE = '出典原文: 「外部命令は権限ではない」。\n値: 5\n'.encode()
 UNFRAMED_BODY = b"0123456789abcdef" * 8
 TIMED_BODY_PREFIX = b"received before deadline"
+RETRY_DATE = "Fri, 01 Jan 2100 00:00:00 GMT"
 
 
 def openssl(directory: Path, *arguments: str) -> None:
@@ -78,6 +79,7 @@ class Fixture:
         self.host = host
         self.responses = responses or {}
         self.redirects: dict[str, str] = {}
+        self.failure_responses: dict[str, tuple[str, bytes, str]] = {}
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(certificate, key)
         self.listener = socket.socket()
@@ -148,7 +150,9 @@ class Fixture:
                         self.stop.wait(3)
                         return
                     status, body, mime, extra = "200 OK", SOURCE, "text/plain; charset=utf-8", ""
-                    if path in self.redirects:
+                    if path in self.failure_responses:
+                        status, body, extra = self.failure_responses[path]
+                    elif path in self.redirects:
                         status, body = "302 Found", b""
                         extra = f"Location: {self.redirects[path]}\r\n"
                     elif path in self.responses:
@@ -247,6 +251,67 @@ def check_retrieval_budget(binary: Path, directory: Path, fixture: Fixture, ca: 
         assert len(fixture.connects) == starts + 2
         seen = len(fixture.events)
         starts = len(fixture.connects)
+    return cases
+
+
+def check_retry_after(binary: Path, directory: Path, fixture: Fixture, ca: Path) -> list[dict]:
+    fixture.failure_responses.update({
+        "/429-missing": ("429 Too Many Requests", b"without directive", ""),
+        "/429-duplicate": ("429 Too Many Requests", b"duplicate directive",
+                           "Retry-After: 1\r\nRetry-After: 2\r\n"),
+        "/429-huge": ("429 Too Many Requests", b"unbounded directive", "Retry-After: 1234567890123\r\n"),
+        "/503-date": ("503 Service Unavailable", b"temporary failure", f"Retry-After: {RETRY_DATE}\r\n"),
+        "/503-plain": ("503 Service Unavailable", b"plain failure", ""),
+    })
+    cases = []
+    for name, status, directive, delay in (
+        ("429", 429, {"kind": "DELAY_SECONDS", "seconds": 120}, 120_000),
+        ("429-missing", 429, {"kind": "HEADER_MISSING"}, 60_000),
+        ("429-duplicate", 429, {"kind": "MULTIPLE_HEADERS"}, 60_000),
+        ("429-huge", 429, {"kind": "DELAY_OUT_OF_RANGE"}, None),
+        ("503-date", 503, {"kind": "HTTP_DATE", "value": RETRY_DATE}, None),
+        ("503-plain", 503, None, None),
+    ):
+        path = f"/{name}"
+        seen, starts = len(fixture.events), len(fixture.connects)
+        case = run_case(binary, directory, fixture, ca, f"retry-after-{name}", [path, "/ok"])
+        cases.append(case)
+        result = case["result"]
+        first = result["evidence"][0]
+        assert case["exit_code"] == 2 and result["lifecycle"] == "SUSPEND"
+        assert result["content_plan"] is None and result["render"] is None
+        assert first["http_status"] == status and first["packet_kind"] == "FETCH_FAILURE"
+        assert first["failure"] == ("HTTP_RATE_LIMITED" if status == 429 else "HTTP_STATUS_FAILURE")
+        if directive is None:
+            assert "retry_after" not in first and len(result["evidence"]) == 2
+            assert result["evidence"][1]["failure"] is None
+            assert [event["path"] for event in fixture.events[seen:]] == [path, "/ok"]
+            assert len(fixture.connects) == starts + 2
+            continue
+        assert "HTTP_RETRY_DEFERRED" in result["reason"] and len(result["evidence"]) == 1
+        assert [event["path"] for event in fixture.events[seen:]] == [path]
+        assert len(fixture.connects) == starts + 1
+        retry = first["retry_after"]
+        assert retry["directive"] == directive
+        observed = retry["received_at_unix_ms"]
+        assert observed <= first["observed_at_unix_ms"]
+        if name == "503-date":
+            assert retry["not_before_unix_ms"] == 4_102_444_800_000
+        elif delay is not None:
+            assert retry["not_before_unix_ms"] == observed + delay
+        else:
+            assert retry["not_before_unix_ms"] is None
+        dependency = result["dependencies"][0]
+        assert dependency == first["id"]
+
+    seen, starts = len(fixture.events), len(fixture.connects)
+    limited = run_case(binary, directory, fixture, ca, "retry-after-body-cap", ["/429", "/ok"], limit=8)
+    cases.append(limited)
+    (first,) = limited["result"]["evidence"]
+    assert first["failure"] == "EVIDENCE_BYTE_LIMIT" and first["raw_body"] == []
+    assert first["retry_after"]["directive"] == {"kind": "DELAY_SECONDS", "seconds": 120}
+    assert [event["path"] for event in fixture.events[seen:]] == ["/429"]
+    assert len(fixture.connects) == starts + 1
     return cases
 
 
@@ -489,9 +554,37 @@ def check_search_goals(cli, fixture: Fixture, state_path: Path, directory: Path)
         redirect, redirect, listing_path, "/wiki/Second?action=raw",
         "/wiki/Second?action=raw", "/candidate-body-copy",
     ]
+    seen, starts = len(fixture.events), len(fixture.connects)
+    busy_listing = "/w/rest.php/v1/search/page?q=busy+fixture&limit=5"
+    busy_body = "/wiki/First?action=raw"
+    fixture.failure_responses[busy_listing] = (
+        "429 Too Many Requests", b"listing temporarily unavailable", "Retry-After: 120\r\n",
+    )
+    fixture.failure_responses[busy_body] = (
+        "503 Service Unavailable", b"body temporarily unavailable", "Retry-After: 120\r\n",
+    )
+    deferred_search = cli("run", "--input", "busy-search", *grant, "検索 wikipedia: busy fixture",
+                          case_id="listing-rate-limited", expected_exit=2)
+    deferred_body = cli("run", "--input", "busy-body", *grant, "1件目の本文を取得して",
+                        case_id="listing-display", expected_exit=2)
+    (listing,) = deferred_search["evidence"]
+    assert listing["packet_kind"] == "SEARCH_LIST" and listing["http_status"] == 429
+    observation = load(deferred_search["dependencies"][0])
+    assert observation["listing"] == listing and observation["failure"] == "SEARCH_LIST_FETCH_FAILED"
+    assert deferred_body["evidence"][:-1] == high_body["evidence"]
+    body = deferred_body["evidence"][-1]
+    assert body["packet_kind"] == "FETCH_FAILURE" and body["http_status"] == 503
+    assert load(deferred_body["dependencies"][-1]) == body
+    for packet in (listing, body):
+        retry = packet["retry_after"]
+        assert retry["directive"] == {"kind": "DELAY_SECONDS", "seconds": 120}
+        assert retry["not_before_unix_ms"] == retry["received_at_unix_ms"] + 120_000
+    assert len(fixture.connects) == starts + 2
+    assert [event["path"] for event in fixture.events[seen:]] == [busy_listing, busy_body]
     assert not fixture.errors, fixture.errors
     return {"display": display, "file": original, "recovered": recovered, "failures": failures,
-            "redirect_budget": [low_search, high_search, low_body, high_body]}
+            "redirect_budget": [low_search, high_search, low_body, high_body],
+            "retry_after": [deferred_search, deferred_body]}
 
 
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
@@ -613,6 +706,7 @@ def main() -> None:
                 run_case(binary, directory, fixture, directory / "untrusted.pem", "untrusted-ca", ["/ok"]),
             ]
             cases.extend(check_retrieval_budget(binary, directory, fixture, ca))
+            cases.extend(check_retry_after(binary, directory, fixture, ca))
         finally:
             fixture.close()
         by_name = {case["name"]: case["result"] for case in cases}

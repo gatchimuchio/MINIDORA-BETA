@@ -714,6 +714,23 @@ pub struct ActionRecord {
     pub receipt: Option<DeliveryReceipt>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RetryAfterDirective {
+    DelaySeconds { seconds: u64 },
+    HttpDate { value: String },
+    HeaderMissing,
+    HeaderInvalid,
+    MultipleHeaders,
+    DelayOutOfRange,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryAfterObservation {
+    pub directive: RetryAfterDirective,
+    pub received_at_unix_ms: u64,
+    /// None when the directive does not permit a bounded resumption time.
+    pub not_before_unix_ms: Option<u64>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidencePacket {
     pub id: String,
     pub mode: String,
@@ -730,6 +747,8 @@ pub struct EvidencePacket {
     pub parser_version: String,
     pub independence_group: String,
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<RetryAfterObservation>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Calculation {

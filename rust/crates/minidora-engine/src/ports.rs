@@ -3,9 +3,11 @@
 //! instruction or effect authority. HTML/PDF interpretation is not implemented.
 
 use minidora_domain::{
-    EvidencePacket, Permissions, ResourceBudget, Result, digest, failure, identity,
+    EvidencePacket, Permissions, ResourceBudget, Result, RetryAfterDirective,
+    RetryAfterObservation, digest, failure, identity,
 };
 use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, RETRY_AFTER};
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -216,6 +218,21 @@ fn client(url: &Url, budget: &RetrievalBudget) -> Result<Client> {
     })
 }
 
+fn unix_ms_now() -> Result<u64> {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| failure("CLOCK_UNAVAILABLE", "Observation time precedes the epoch"))?
+            .as_millis(),
+    )
+    .map_err(|_| {
+        failure(
+            "CLOCK_UNAVAILABLE",
+            "Observation time exceeds its representation",
+        )
+    })
+}
+
 fn packet(
     redirect_chain: &[String],
     request: &str,
@@ -230,18 +247,7 @@ fn packet(
         id: String::new(),
         mode: "LIVE".into(),
         redirect_chain: redirect_chain.to_vec(),
-        observed_at_unix_ms: u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| failure("CLOCK_UNAVAILABLE", "Observation time precedes the epoch"))?
-                .as_millis(),
-        )
-        .map_err(|_| {
-            failure(
-                "CLOCK_UNAVAILABLE",
-                "Observation time exceeds its representation",
-            )
-        })?,
+        observed_at_unix_ms: unix_ms_now()?,
         provider_id: "https-direct-url-v1".into(),
         packet_kind: if error.is_some() {
             "FETCH_FAILURE"
@@ -258,6 +264,7 @@ fn packet(
         parser_version: "strict-utf8-identity-v1".into(),
         independence_group: final_uri.into(),
         failure: error.map(str::to_owned),
+        retry_after: None,
     };
     packet.id = identity(&(
         &packet.mode,
@@ -323,11 +330,113 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
 
 const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
 
+// IMF-fixdate emitted by current HTTP senders. Legacy date layouts take the
+// same conservative path as other unusable header values.
+fn http_date_unix_ms(value: &str) -> Option<i64> {
+    if value.len() != 29 || !value.is_ascii() {
+        return None;
+    }
+    let (weekday, fields) = value.split_once(", ")?;
+    let mut fields = fields.split(' ');
+    let (day, month, year, time, zone) = (
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+        fields.next()?,
+    );
+    if fields.next().is_some() || zone != "GMT" {
+        return None;
+    }
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|name| *name == month)?;
+    let number = |value: &str, width| {
+        if value.len() != width || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        value.parse::<i64>().ok()
+    };
+    let year = number(year, 4)?;
+    let day = number(day, 2)?;
+    let (hour, time) = time.split_once(':')?;
+    let (minute, second) = time.split_once(':')?;
+    let (hour, minute, second) = (number(hour, 2)?, number(minute, 2)?, number(second, 2)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if year == 0 || day == 0 || day > month_days[month] || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let leap_years = |year: i64| year / 4 - year / 100 + year / 400;
+    let days = (year - 1970) * 365 + leap_years(year - 1) - leap_years(1969)
+        + month_days[..month].iter().sum::<i64>()
+        + day
+        - 1;
+    let actual_weekday =
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][(days + 4).rem_euclid(7) as usize];
+    (weekday == actual_weekday)
+        .then_some((days * 86_400 + hour * 3_600 + minute * 60 + second) * 1_000)
+}
+
+fn retry_after_directive(
+    headers: &HeaderMap,
+    received_at: u64,
+) -> (RetryAfterDirective, Option<u64>) {
+    use RetryAfterDirective::*;
+    const FALLBACK_MS: Option<u64> = Some(60_000);
+    let all = headers.get_all(RETRY_AFTER);
+    let mut values = all.iter();
+    let Some(value) = values.next() else {
+        return (HeaderMissing, FALLBACK_MS);
+    };
+    if values.next().is_some() {
+        return (MultipleHeaders, FALLBACK_MS);
+    }
+    let Ok(value) = value.to_str() else {
+        return (HeaderInvalid, FALLBACK_MS);
+    };
+    let value = value.trim_matches([' ', '\t']);
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        if value.len() > 12 {
+            return (DelayOutOfRange, None);
+        }
+        if let Ok(seconds) = value.parse::<u64>() {
+            return (DelaySeconds { seconds }, Some(seconds.max(1) * 1_000));
+        }
+    }
+    if let Some(date) = http_date_unix_ms(value) {
+        let delay = u64::try_from(i128::from(date) - i128::from(received_at)).unwrap_or(0);
+        return (
+            HttpDate {
+                value: value.to_owned(),
+            },
+            Some(delay.max(1_000)),
+        );
+    }
+    (HeaderInvalid, FALLBACK_MS)
+}
+
 /// Resource envelope shared by all HTTP reads of the original Goal.
 pub(crate) struct RetrievalBudget {
     deadline: Instant,
     remaining_starts: u32,
     remaining_bytes: usize,
+    retry_not_before: BTreeMap<String, Instant>,
 }
 
 impl RetrievalBudget {
@@ -339,6 +448,7 @@ impl RetrievalBudget {
             deadline,
             remaining_starts: max_starts,
             remaining_bytes: budget.max_evidence_bytes,
+            retry_not_before: BTreeMap::new(),
         })
     }
 
@@ -359,8 +469,18 @@ impl RetrievalBudget {
             .ok_or_else(|| failure("HTTP_DEADLINE_EXCEEDED", "The retrieval deadline elapsed"))
     }
 
-    fn reserve_start(&mut self) -> Result<()> {
+    fn reserve_start(&mut self, host: &str) -> Result<()> {
         self.time_remaining()?;
+        if self
+            .retry_not_before
+            .get(host)
+            .is_some_and(|until| Instant::now() < *until)
+        {
+            return Err(failure(
+                "HTTP_RETRY_DEFERRED",
+                format!("The retained Retry-After for {host} has not elapsed"),
+            ));
+        }
         self.remaining_starts = self.remaining_starts.checked_sub(1).ok_or_else(|| {
             failure(
                 "HTTP_START_BUDGET_EXHAUSTED",
@@ -368,6 +488,30 @@ impl RetrievalBudget {
             )
         })?;
         Ok(())
+    }
+
+    fn observe_retry_after(
+        &mut self,
+        host: &str,
+        status: u16,
+        headers: &HeaderMap,
+    ) -> Result<Option<RetryAfterObservation>> {
+        if status != 429 && !(status == 503 && headers.contains_key(RETRY_AFTER)) {
+            return Ok(None);
+        }
+        let received = Instant::now();
+        let received_at_unix_ms = unix_ms_now()?;
+        let (directive, delay_ms) = retry_after_directive(headers, received_at_unix_ms);
+        let until = delay_ms
+            .and_then(|delay| received.checked_add(Duration::from_millis(delay)))
+            .unwrap_or(self.deadline)
+            .min(self.deadline);
+        self.retry_not_before.insert(host.to_owned(), until);
+        Ok(Some(RetryAfterObservation {
+            directive,
+            received_at_unix_ms,
+            not_before_unix_ms: delay_ms.and_then(|delay| received_at_unix_ms.checked_add(delay)),
+        }))
     }
 }
 
@@ -398,7 +542,8 @@ pub(crate) fn fetch_with_budget(
     let mut redirects: Vec<String> = Vec::new();
     let mut previous_status = 0;
     loop {
-        if let Err(error) = budget.reserve_start() {
+        let host = url.host_str().expect("approved domain");
+        if let Err(error) = budget.reserve_start(host) {
             let (Some(last), minidora_domain::Error::Contract { code, .. }) =
                 (redirects.last(), &error)
             else {
@@ -535,19 +680,21 @@ pub(crate) fn fetch_with_budget(
             previous_status = status;
             continue;
         }
+        // Record response metadata even if the bounded body read fails.
+        let retry_after = budget.observe_retry_after(host, status, response.headers())?;
+        let finish = |raw, text, error: Option<&str>| -> Result<EvidencePacket> {
+            let mut result = packet(&redirects, raw_url, url.as_str(), status, raw, text, error)?;
+            if let Some(retry_after) = &retry_after {
+                result.id = identity(&("fetch-failure-retry-after-v1", &result.id, retry_after))?;
+                result.retry_after = Some(retry_after.clone());
+            }
+            Ok(result)
+        };
         if response
             .content_length()
             .is_some_and(|n| n > budget.remaining_bytes as u64)
         {
-            return packet(
-                &redirects,
-                raw_url,
-                url.as_str(),
-                status,
-                vec![],
-                None,
-                Some("EVIDENCE_BYTE_LIMIT"),
-            );
+            return finish(vec![], None, Some("EVIDENCE_BYTE_LIMIT"));
         }
         let content_type = response
             .headers()
@@ -565,15 +712,7 @@ pub(crate) fn fetch_with_budget(
         let mut chunk = [0u8; 8192];
         loop {
             if Instant::now() >= budget.deadline {
-                return packet(
-                    &redirects,
-                    raw_url,
-                    url.as_str(),
-                    status,
-                    raw,
-                    None,
-                    Some("HTTP_DEADLINE_EXCEEDED"),
-                );
+                return finish(raw, None, Some("HTTP_DEADLINE_EXCEEDED"));
             }
             let count = budget.remaining_bytes.saturating_add(1).min(chunk.len());
             match response.read(&mut chunk[..count]) {
@@ -583,15 +722,7 @@ pub(crate) fn fetch_with_budget(
                     raw.extend_from_slice(&chunk[..retained]);
                     budget.remaining_bytes -= retained;
                     if retained < n {
-                        return packet(
-                            &redirects,
-                            raw_url,
-                            url.as_str(),
-                            status,
-                            raw,
-                            None,
-                            Some("EVIDENCE_BYTE_LIMIT_PARTIAL_BODY"),
-                        );
+                        return finish(raw, None, Some("EVIDENCE_BYTE_LIMIT_PARTIAL_BODY"));
                     }
                 }
                 Err(error) => {
@@ -600,11 +731,7 @@ pub(crate) fn fetch_with_budget(
                             .get_ref()
                             .and_then(|cause| cause.downcast_ref::<reqwest::Error>())
                             .is_some_and(reqwest::Error::is_timeout);
-                    return packet(
-                        &redirects,
-                        raw_url,
-                        url.as_str(),
-                        status,
+                    return finish(
                         raw,
                         None,
                         Some(if timed_out || Instant::now() >= budget.deadline {
@@ -617,22 +744,10 @@ pub(crate) fn fetch_with_budget(
             }
         }
         if Instant::now() >= budget.deadline {
-            return packet(
-                &redirects,
-                raw_url,
-                url.as_str(),
-                status,
-                raw,
-                None,
-                Some("HTTP_DEADLINE_EXCEEDED"),
-            );
+            return finish(raw, None, Some("HTTP_DEADLINE_EXCEEDED"));
         }
         if status != 200 {
-            return packet(
-                &redirects,
-                raw_url,
-                url.as_str(),
-                status,
+            return finish(
                 raw,
                 None,
                 Some(if status == 429 {
@@ -643,51 +758,13 @@ pub(crate) fn fetch_with_budget(
             );
         }
         if !encoding.eq_ignore_ascii_case("identity") {
-            return packet(
-                &redirects,
-                raw_url,
-                url.as_str(),
-                status,
-                raw,
-                None,
-                Some("UNSUPPORTED_CONTENT_ENCODING"),
-            );
+            return finish(raw, None, Some("UNSUPPORTED_CONTENT_ENCODING"));
         }
-        match decode_body(&content_type, &raw) {
-            Ok(text) => {
-                return packet(
-                    &redirects,
-                    raw_url,
-                    url.as_str(),
-                    status,
-                    raw,
-                    Some(text),
-                    None,
-                );
-            }
-            Err(minidora_domain::Error::Contract { code, .. }) => {
-                return packet(
-                    &redirects,
-                    raw_url,
-                    url.as_str(),
-                    status,
-                    raw,
-                    None,
-                    Some(&code),
-                );
-            }
-            Err(_) => {
-                return packet(
-                    &redirects,
-                    raw_url,
-                    url.as_str(),
-                    status,
-                    raw,
-                    None,
-                    Some("EVIDENCE_DECODE_FAILED"),
-                );
-            }
-        }
+        return match decode_body(&content_type, &raw) {
+            Ok(text) => finish(raw, Some(text), None),
+            Err(minidora_domain::Error::Contract { code, .. }) => finish(raw, None, Some(&code)),
+            Err(_) => finish(raw, None, Some("EVIDENCE_DECODE_FAILED")),
+        };
     }
 }
 
@@ -708,6 +785,7 @@ pub(crate) fn validate_successful_packet(
     if packet.mode != "LIVE"
         || packet.packet_kind != "FETCHED_BODY"
         || packet.failure.is_some()
+        || packet.retry_after.is_some()
         || packet.http_status != 200
         || packet.parser_version != "strict-utf8-identity-v1"
         || packet.provider_id != "https-direct-url-v1"
@@ -3181,6 +3259,75 @@ pub fn json_pointer_statistics(document: &str, pointer: &str) -> Result<JsonStat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retry_after_uses_valid_gmt_dates_and_bounds_unusable_headers() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            retry_after_directive(&headers, 0),
+            (RetryAfterDirective::HeaderMissing, Some(60_000))
+        );
+        for (value, timestamp) in [
+            ("Thu, 01 Jan 1970 00:00:00 GMT", 0),
+            ("Tue, 29 Feb 2000 12:34:56 GMT", 951_827_696_000),
+        ] {
+            assert_eq!(http_date_unix_ms(value), Some(timestamp));
+        }
+        for value in [
+            "Wed, 01 Jan 1970 00:00:00 GMT",
+            "Thu, 29 Feb 1900 00:00:00 GMT",
+            "Thu, 01 Jan 1970 00:00:00 UTC",
+            "-1",
+        ] {
+            headers.insert(RETRY_AFTER, value.parse().unwrap());
+            assert_eq!(
+                retry_after_directive(&headers, 0),
+                (RetryAfterDirective::HeaderInvalid, Some(60_000))
+            );
+        }
+        headers.insert(RETRY_AFTER, "0".parse().unwrap());
+        assert_eq!(
+            retry_after_directive(&headers, 0),
+            (
+                RetryAfterDirective::DelaySeconds { seconds: 0 },
+                Some(1_000)
+            )
+        );
+        headers.append(RETRY_AFTER, "1".parse().unwrap());
+        assert_eq!(
+            retry_after_directive(&headers, 0),
+            (RetryAfterDirective::MultipleHeaders, Some(60_000))
+        );
+        headers.insert(RETRY_AFTER, "1234567890123".parse().unwrap());
+        assert_eq!(
+            retry_after_directive(&headers, 0),
+            (RetryAfterDirective::DelayOutOfRange, None)
+        );
+    }
+
+    #[test]
+    fn retry_after_does_not_spend_starts_or_gate_other_hosts() {
+        let mut budget =
+            RetrievalBudget::new(Instant::now(), &ResourceBudget::development(), 2).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, "120".parse().unwrap());
+        budget
+            .observe_retry_after("example.com", 503, &headers)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            budget.reserve_start("example.com"),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "HTTP_RETRY_DEFERRED"
+        ));
+        assert_eq!(budget.remaining_starts, 2);
+        budget.reserve_start("example.net").unwrap();
+        assert_eq!(budget.remaining_starts, 1);
+        budget
+            .retry_not_before
+            .insert("example.com".into(), Instant::now());
+        budget.reserve_start("example.com").unwrap();
+        assert_eq!(budget.remaining_starts, 0);
+    }
+
     #[test]
     fn exact_json_numbers_and_spans_are_preserved() {
         let doc = r#"{"数":90071992547409931234567890123456789,"a/b":{"~key":[null,1.2300e+40]}}"#;

@@ -84,6 +84,7 @@ fn seed_fetched_source_case_with_sources(
             parser_version: "fixture-exact-text-v1".into(),
             independence_group: (*uri).into(),
             failure: None,
+            retry_after: None,
         };
         packet.id = identity(&(
             &packet.mode,

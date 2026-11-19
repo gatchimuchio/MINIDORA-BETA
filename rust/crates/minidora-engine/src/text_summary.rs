@@ -531,6 +531,7 @@ pub(crate) fn answer_fetched_source_question_v1(
             || digest(&packet_bytes) != *packet_ref
             || packet.packet_kind != "FETCHED_BODY"
             || packet.failure.is_some()
+            || packet.retry_after.is_some()
             || !packet.request_uri.starts_with("https://")
             || !packet.final_uri.starts_with("https://")
             || packet.raw_sha256 != digest(&packet.raw_body)
@@ -700,6 +701,7 @@ pub(crate) fn answer_fetched_source_question_v2(
             || digest(&packet_bytes) != *packet_ref
             || packet.packet_kind != "FETCHED_BODY"
             || packet.failure.is_some()
+            || packet.retry_after.is_some()
             || !packet.request_uri.starts_with("https://")
             || !packet.final_uri.starts_with("https://")
             || packet.raw_sha256 != digest(&packet.raw_body)
@@ -1297,6 +1299,7 @@ pub(crate) fn summarize_fetched_source_with_limits(
         || !sha256_id(source_packet_ref)
         || packet.packet_kind != "FETCHED_BODY"
         || packet.failure.is_some()
+        || packet.retry_after.is_some()
         || !packet.request_uri.starts_with("https://")
         || !packet.final_uri.starts_with("https://")
         || packet.raw_sha256 != digest(&packet.raw_body)
@@ -1366,6 +1369,7 @@ mod tests {
             parser_version: "strict-utf8-identity-v1".into(),
             independence_group: "https://example.test/article".into(),
             failure: None,
+            retry_after: None,
         }
     }
 
@@ -1564,6 +1568,7 @@ mod tests {
             parser_version: "strict-utf8-identity-v1".into(),
             independence_group: "https://example.test/report".into(),
             failure: None,
+            retry_after: None,
         };
         let source_ref = "c".repeat(64);
         let report = summarize_fetched_source(&"a".repeat(64), &packet, &source_ref).unwrap();
