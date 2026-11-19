@@ -3024,7 +3024,7 @@ pub(crate) fn next_direct_retrieval<'a>(
     let mut root = source;
     let mut visited = BTreeSet::new();
     let mut steps = Vec::new();
-    while root.lifecycle == Lifecycle::Commit || direct_read_permission_stop(root) {
+    while root.lifecycle == Lifecycle::Commit || direct_preconnection_stop(root).is_some() {
         if !visited.insert(&root.id) {
             return Err(invalid());
         }
@@ -3047,28 +3047,15 @@ pub(crate) fn next_direct_retrieval<'a>(
         if identity(&sealed.request)? != root.id || !binds_direct_predecessor(&sealed, parent)? {
             return Err(invalid());
         }
-        let denied_goal = if root.lifecycle == Lifecycle::Suspend {
-            let stopped = store
-                .load_suspended_result_revision(actor, case, root)?
-                .ok_or_else(invalid)?;
-            if stopped.bundle.as_ref() != Some(&sealed)
-                || stopped.input_fingerprint.as_ref() != Some(&root.id)
-                || stopped.reason != root.reason
-            {
-                return Err(invalid());
-            }
-            Some(stopped.goal_sha256.ok_or_else(invalid)?)
-        } else {
-            if store
+        if root.lifecycle == Lifecycle::Commit
+            && store
                 .get_input_result(actor, case, &root.input_id, root.input_version)?
                 .as_ref()
                 != Some(root)
-            {
-                return Err(invalid());
-            }
-            None
-        };
-        steps.push((parent, root, sealed.request, denied_goal));
+        {
+            return Err(invalid());
+        }
+        steps.push((parent, root, sealed));
         root = parent;
     }
     let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
@@ -3097,20 +3084,21 @@ pub(crate) fn next_direct_retrieval<'a>(
         .flat_map(|packet| &packet.redirect_chain)
         .cloned()
         .collect();
-    for (parent, result, request, denied_goal) in steps.into_iter().rev() {
+    for (parent, result, sealed) in steps.into_iter().rev() {
+        let request = &sealed.request;
         let parent_ref = verified_artifact(store, actor, case, parent)?;
-        if let Some(goal_ref) = denied_goal {
+        if let Some(stop) = direct_preconnection_stop(result) {
             let uri = urls.peek().ok_or_else(invalid)?;
             if url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str())) {
                 return Err(invalid());
             }
-            verify_direct_read_permission_stop(store, &request, result, parent, uri, &goal_ref)?;
-            // The port refused the request before it could observe this URL.
+            verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
+            // This request observed no URL, so the pending slot has not moved.
             continue;
         }
         let uri = urls.next().ok_or_else(invalid)?;
         let packet =
-            verify_direct_continuation_body(parent, result, &request, &uri, &observed_routes)?;
+            verify_direct_continuation_body(parent, result, request, &uri, &observed_routes)?;
         let packet_ref = verified_artifact(store, actor, case, packet)?;
         let graph_ref = result.execution_graph_ref.as_ref().ok_or_else(invalid)?;
         let graph: serde_json::Value =
@@ -3152,52 +3140,83 @@ fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Re
     )
 }
 
-fn direct_read_permission_stop(result: &ResultRecord) -> bool {
-    result.lifecycle == Lifecycle::Suspend
-        && result
-            .reason
-            .as_deref()
-            .and_then(|reason| reason.strip_prefix("EVIDENCE_UNAVAILABLE: "))
-            .and_then(|reason| reason.split_once(": "))
-            == Some((
-                crate::ports::READ_PERMISSION_REQUIRED,
-                crate::ports::READ_PERMISSION_REQUIRED_MESSAGE,
-            ))
+enum DirectPreconnectionStop<'a> {
+    Permission,
+    Wait(&'a str),
 }
 
-fn verify_direct_read_permission_stop(
+fn direct_preconnection_stop(result: &ResultRecord) -> Option<DirectPreconnectionStop<'_>> {
+    if result.lifecycle != Lifecycle::Suspend || !result.evidence.is_empty() {
+        return None;
+    }
+    match result
+        .reason
+        .as_deref()?
+        .strip_prefix("EVIDENCE_UNAVAILABLE: ")?
+        .split_once(": ")?
+    {
+        (
+            crate::ports::READ_PERMISSION_REQUIRED,
+            crate::ports::READ_PERMISSION_REQUIRED_MESSAGE,
+        ) => Some(DirectPreconnectionStop::Permission),
+        (crate::ports::RETRY_DEFERRED, detail) => Some(DirectPreconnectionStop::Wait(detail)),
+        _ => None,
+    }
+}
+
+fn verify_direct_preconnection_stop(
     store: &Store,
-    request: &RequestEnvelope,
+    bundle: &InputBundle,
     result: &ResultRecord,
     parent: &ResultRecord,
     uri: &str,
-    goal_ref: &str,
+    stop: DirectPreconnectionStop<'_>,
 ) -> Result<()> {
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
-            "The direct continuation was not a verified pre-connection permission stop",
+            "The direct continuation was not a verified pre-connection stop",
         )
     };
-    if !result.evidence.is_empty()
-        || result.dependencies.as_slice() != [parent.id.as_str()]
+    if result.dependencies.as_slice() != [parent.id.as_str()]
         || result.guarantee != Guarantee::Unknown
         || result.content_plan.is_some()
         || result.calculation.is_some()
         || result.render.is_some()
         || !result.receipts.is_empty()
         || result.execution_graph_ref.is_some()
-        || !matches!(
+    {
+        return Err(invalid());
+    }
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let stopped = store
+        .load_suspended_result_revision(actor, case, result)?
+        .ok_or_else(invalid)?;
+    if stopped.bundle.as_ref() != Some(bundle)
+        || stopped.input_fingerprint.as_ref() != Some(&result.id)
+        || stopped.reason != result.reason
+    {
+        return Err(invalid());
+    }
+    let matches_original_stop = match stop {
+        DirectPreconnectionStop::Permission => matches!(
             crate::ports::approved_url(uri, &request.permissions),
             Err(Error::Contract { code, message })
                 if code == crate::ports::READ_PERMISSION_REQUIRED
                     && message == crate::ports::READ_PERMISSION_REQUIRED_MESSAGE
-        )
-    {
+        ),
+        DirectPreconnectionStop::Wait(detail) => {
+            // The original packet proves the historical stop. The fresh
+            // retrieval budget will independently check the current host wait.
+            first_hop_wait_matches(store, &stopped, &request.permissions, uri, detail)?
+        }
+    };
+    if !matches_original_stop {
         return Err(invalid());
     }
-    let actor = &request.actor_id;
-    let case = &request.case_id;
+    let goal_ref = stopped.goal_sha256.as_deref().ok_or_else(invalid)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
     if goal.input_fingerprint != result.id
         || goal.intent != Intent::FetchNextUnobservedSource

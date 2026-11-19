@@ -2639,7 +2639,8 @@ def check_direct_url_permission_regrant(cli, fixture: Fixture, state_path: Path)
     waiting = cli("run", "--input", "waiting", *allow_target, command, case_id=case, expected_exit=2)
     assert waiting["reason"] == prior_wait["reason"] and waiting["evidence"] == []
     after_wait = cli("run", "--input", "renewed", *allow_target, command, case_id=case, expected_exit=2)
-    assert "NO_PENDING_DIRECT_URL" in after_wait["reason"] and after_wait["evidence"] == []
+    assert after_wait["reason"] == waiting["reason"] and after_wait["dependencies"] == [waiting["id"]]
+    assert after_wait["evidence"] == [] and after_wait["receipts"] == []
     expected.extend(((target, rate), *original_events))
 
     assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == expected
@@ -2647,6 +2648,139 @@ def check_direct_url_permission_regrant(cli, fixture: Fixture, state_path: Path)
     return {"denied": denied, "denied_again": denied_again, "renewed": renewed, "following": second,
             "exhausted": exhausted, "denied_after_commit": denied_after, "recovered": recovered, "answer": answer,
             "after_redirect": after_redirect, "ordinary_retrieval": ordinary, "after_wait": after_wait}
+
+
+def check_direct_url_wait_continuation(cli, fixture: Fixture, state_path: Path) -> dict:
+    origin, target = fixture.hosts
+    delay = 5
+    start, hop, kept, pending, later, rate = [
+        f"/direct-wait-{part}" for part in ("start", "hop", "kept", "pending", "later", "rate")
+    ]
+    pending_text, later_text = "追加測定は73です。", "追加資料は89です。"
+    fixture.responses.update({
+        kept: (b"Original body.", "text/plain"),
+        pending: (pending_text.encode(), "text/plain; charset=utf-8"),
+        later: (later_text.encode(), "text/plain; charset=utf-8"),
+    })
+    fixture.redirects.update({start: hop, hop: kept})
+    fixture.failure_responses[rate] = ("503 Service Unavailable", b"Wait response.", f"Retry-After: {delay}\r\n")
+    allow_origin = ("--allow-read-host", origin)
+    allow_target = ("--allow-read-host", target)
+    command = "前回の取得で未接続の次のURLを取得して"
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def uri(host: str, path: str) -> str:
+        return f"https://{host}{path}"
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def check_wait(result: dict, last: dict, reason: str) -> None:
+        assert result["reason"] == reason and result["dependencies"] == [last["id"]]
+        assert result["evidence"] == [] and result["receipts"] == [] and result["guarantee"] == "UNKNOWN"
+        assert result["content_plan"] is None and result["render"] is None and result["execution_graph_ref"] is None
+
+    def check_success(result: dict, previous: dict, path: str, text: str) -> str:
+        (packet,) = result["evidence"]
+        assert packet["request_uri"] == packet["final_uri"] == uri(target, path) and packet["extracted_text"] == text
+        assert result["dependencies"] == [previous["id"], packet["id"]] and text in result["text"]
+        graph = load(result["execution_graph_ref"])
+        anchor, packet_ref = (graph[1][node] for node in ("previous-direct-retrieval", "source-0"))
+        assert load(anchor) == previous and load(packet_ref) == packet
+        assert graph[5]["source-0"] == {"previous-direct-retrieval": anchor}
+        return packet_ref
+
+    stops, expected = {}, []
+    for name, first_host in (("before-first", target), ("after-commit", origin), ("observed-redirect", origin)):
+        case = f"direct-wait-{name}"
+        seed = cli("run", "--input", "seed", *allow_target, f"fetch {uri(target, rate)}", case_id=case, expected_exit=2)
+        (gate,) = seed["evidence"]
+        retry = gate["retry_after"]
+        assert gate["http_status"] == 503 and retry["directive"] == {"kind": "DELAY_SECONDS", "seconds": delay}
+        assert retry["not_before_unix_ms"] - retry["received_at_unix_ms"] == 1000 * delay
+        detail = f"The retained Retry-After for {target} has not elapsed (saved packet {gate['id']})"
+        reason = f"EVIDENCE_UNAVAILABLE: HTTP_RETRY_DEFERRED: {detail}"
+        urls = (uri(origin, start), uri(first_host, pending), uri(target, later))
+        base = cli("run", "--input", "original", *allow_origin, *allow_target, "--max-actions", "6",
+                   f"fetch {' '.join(urls)}", case_id=case, expected_exit=2)
+        assert [packet["request_uri"] for packet in base["evidence"]] == [urls[0]]
+        base_reason = reason if first_host == target else (
+            "EVIDENCE_UNAVAILABLE: HTTP_START_BUDGET_EXHAUSTED: The original Goal has no remaining HTTP starts"
+        )
+        assert base["reason"] == base_reason
+        expected.extend(((target, rate), (origin, start), (origin, hop), (origin, kept)))
+        wait_args = ("--input", "wait", *allow_target, command)
+        previous = base
+        if name == "after-commit":
+            previous = cli("run", "--input", "first", *allow_origin, command, case_id=case)
+            assert [packet["request_uri"] for packet in previous["evidence"]] == [urls[1]]
+            expected.append((origin, pending))
+        if name == "observed-redirect":
+            fixture.redirects[pending] = uri(target, later)
+            try:
+                stopped = cli("run", "--input", "wait", *allow_origin, *allow_target, command, case_id=case, expected_exit=2)
+            finally:
+                del fixture.redirects[pending]
+            (packet,) = stopped["evidence"]
+            assert stopped["reason"] == f"HTTP_RETRY_DEFERRED: {detail}"
+            assert packet["http_status"] == 302 and packet["redirect_chain"] == [uri(origin, pending)]
+            expected.append((origin, pending))
+        else:
+            stopped = cli("run", *wait_args, case_id=case, expected_exit=2)
+            check_wait(stopped, previous, reason)
+            assert cli("run", *wait_args, case_id=case, expected_exit=2) == stopped
+        due = retry["not_before_unix_ms"]
+        assert time.time_ns() // 1_000_000 < due
+        stops[name] = (case, due, stopped, wait_args)
+
+    until = max(stop[1] for stop in stops.values())
+    time.sleep(max(0, (until + 50 - time.time_ns() // 1_000_000) / 1000))
+    assert time.time_ns() // 1_000_000 > until
+
+    case, _, waited, wait_args = stops["before-first"]
+    assert cli("run", *wait_args, case_id=case, expected_exit=2) == waited
+    denied = cli("run", "--input", "no-grant", *allow_origin, command, case_id=case, expected_exit=2)
+    assert "READ_PERMISSION_REQUIRED" in denied["reason"] and denied["dependencies"] == [waited["id"]]
+    assert denied["evidence"] == [] and denied["receipts"] == []
+    renewed = cli("run", "--input", "renewed", *allow_target, command, case_id=case)
+    check_success(renewed, denied, pending, pending_text)
+    following = cli("run", "--input", "following", *allow_target, command, case_id=case)
+    check_success(following, renewed, later, later_text)
+    exhausted = cli("run", "--input", "exhausted", *allow_target, command, case_id=case, expected_exit=2)
+    assert "NO_PENDING_DIRECT_URL" in exhausted["reason"] and exhausted["evidence"] == []
+    expected.extend(((target, pending), (target, later)))
+
+    case, _, waited, wait_args = stops["after-commit"]
+    assert cli("run", *wait_args, case_id=case, expected_exit=2) == waited
+    output = state_path.parent / f"{case}.txt"
+    delivered = cli("run", "--input", "renewed", *allow_target, "--output", str(output), "--allow-write", str(output),
+                    command, case_id=case)
+    ref = check_success(delivered, waited, later, later_text)
+    before = output.stat()
+    (receipt,) = delivered["receipts"]
+    retain_attempted_prefix(state_path, case, "renewed", receipt["action_id"])
+    recovered = cli("reconcile", case_id=case)
+    (restored,) = recovered["receipts"]
+    assert restored["action_id"] == receipt["action_id"] and "NO_RESEND" in restored["reason"]
+    assert check_success(recovered, waited, later, later_text) == ref
+    assert recovered["text"] == delivered["text"] and output.read_bytes() == bytes(delivered["render"]["bytes"])
+    after = output.stat()
+    assert (after.st_ino, after.st_mtime_ns, after.st_size) == (before.st_ino, before.st_mtime_ns, before.st_size)
+    answer = cli("run", "--input", "question", "本文では追加資料について何と書かれていますか", case_id=case)
+    assert answer["dependencies"][:2] == [recovered["id"], ref] and later_text in answer["text"]
+    expected.append((target, later))
+
+    case = stops["observed-redirect"][0]
+    after_redirect = cli("run", "--input", "renewed", *allow_origin, *allow_target, command, case_id=case, expected_exit=2)
+    assert "NO_PENDING_DIRECT_URL" in after_redirect["reason"] and after_redirect["evidence"] == []
+    assert [(event["host"], event["path"]) for event in fixture.events[seen:]] == expected
+    assert len(fixture.connects) == starts + len(expected) and not fixture.errors, fixture.errors
+    return {"renewed": renewed, "following": following, "exhausted": exhausted, "no_grant": denied,
+            "waiting_before_first": stops["before-first"][2], "waiting_after_commit": stops["after-commit"][2],
+            "observed_redirect": stops["observed-redirect"][2], "after_redirect": after_redirect,
+            "recovered": recovered, "answer": answer}
 
 
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
@@ -2767,6 +2901,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         next_direct_url = check_next_direct_url(partial(cli, db_path=next_direct_state), fixture, next_direct_state)
         direct_regrant_state = directory / "direct-url-regrant-state"
         direct_url_regrant = check_direct_url_permission_regrant(partial(cli, db_path=direct_regrant_state), fixture, direct_regrant_state)
+        direct_wait_state = directory / "direct-url-wait-state"
+        direct_url_wait = check_direct_url_wait_continuation(partial(cli, db_path=direct_wait_state), fixture, direct_wait_state)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -2780,7 +2916,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait,
                 "source_after_first_hop": source_after_first_hop, "source_after_deadline": source_after_deadline,
                 "source_after_budget": source_after_budget, "next_direct_url": next_direct_url,
-                "direct_url_regrant": direct_url_regrant}
+                "direct_url_regrant": direct_url_regrant, "direct_url_wait": direct_url_wait}
     finally:
         fixture.close()
 
