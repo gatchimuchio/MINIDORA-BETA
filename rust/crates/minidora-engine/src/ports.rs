@@ -179,13 +179,12 @@ fn bounded_resolve(host: &str, remaining: Duration) -> Result<Vec<SocketAddr>> {
         .map_err(Into::into)
 }
 
-fn client(url: &Url, remaining: Duration) -> Result<Client> {
-    let start = Instant::now();
+fn client(url: &Url, budget: &RetrievalBudget) -> Result<Client> {
+    let remaining = budget.time_remaining()?;
     let host = url.host_str().expect("approved domain");
     let mut builder = Client::builder()
         .redirect(Policy::none())
-        .timeout(remaining)
-        .connect_timeout(remaining)
+        .retry(reqwest::retry::never())
         .user_agent("MINIDORA-Rust/0.7 evidence-observer");
     // A configured HTTPS proxy owns target DNS resolution and must enforce its
     // destination policy. Never bypass inherited proxy/NO_PROXY or CA trust.
@@ -207,15 +206,7 @@ fn client(url: &Url, remaining: Duration) -> Result<Client> {
         }
         builder = builder.resolve_to_addrs(host, &addresses);
     }
-    let remaining = remaining
-        .checked_sub(start.elapsed())
-        .filter(|duration| !duration.is_zero())
-        .ok_or_else(|| {
-            failure(
-                "HTTP_DEADLINE_EXCEEDED",
-                "The connection preparation budget is exhausted",
-            )
-        })?;
+    let remaining = budget.time_remaining()?;
     builder = builder.timeout(remaining).connect_timeout(remaining);
     builder.build().map_err(|_| {
         failure(
@@ -330,26 +321,128 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
     Ok(text.into())
 }
 
+const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
+
+/// Resource envelope shared by all HTTP reads of the original Goal.
+pub(crate) struct RetrievalBudget {
+    deadline: Instant,
+    remaining_starts: u32,
+    remaining_bytes: usize,
+}
+
+impl RetrievalBudget {
+    pub(crate) fn new(started: Instant, budget: &ResourceBudget, max_starts: u32) -> Result<Self> {
+        let deadline = started
+            .checked_add(Duration::from_millis(budget.deadline_ms))
+            .ok_or_else(|| failure("RESOURCE_LIMIT", "The retrieval deadline is out of range"))?;
+        Ok(Self {
+            deadline,
+            remaining_starts: max_starts,
+            remaining_bytes: budget.max_evidence_bytes,
+        })
+    }
+
+    pub(crate) fn standalone(budget: &ResourceBudget) -> Result<Self> {
+        if budget.deadline_ms == 0 {
+            return Err(failure(
+                "RESOURCE_LIMIT",
+                "A finite positive evidence and time budget is required",
+            ));
+        }
+        Self::new(Instant::now(), budget, MAX_HTTP_STARTS_PER_SOURCE as u32)
+    }
+
+    fn time_remaining(&self) -> Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| failure("HTTP_DEADLINE_EXCEEDED", "The retrieval deadline elapsed"))
+    }
+
+    fn reserve_start(&mut self) -> Result<()> {
+        self.time_remaining()?;
+        self.remaining_starts = self.remaining_starts.checked_sub(1).ok_or_else(|| {
+            failure(
+                "HTTP_START_BUDGET_EXHAUSTED",
+                "The original Goal has no remaining HTTP starts",
+            )
+        })?;
+        Ok(())
+    }
+}
+
 pub fn fetch(
     raw_url: &str,
     permissions: &Permissions,
     budget: &ResourceBudget,
 ) -> Result<EvidencePacket> {
+    fetch_with_budget(
+        raw_url,
+        permissions,
+        &mut RetrievalBudget::standalone(budget)?,
+    )
+}
+
+pub(crate) fn fetch_with_budget(
+    raw_url: &str,
+    permissions: &Permissions,
+    budget: &mut RetrievalBudget,
+) -> Result<EvidencePacket> {
     let mut url = approved_url(raw_url, permissions)?;
-    if budget.max_evidence_bytes == 0 || budget.deadline_ms == 0 {
+    if budget.remaining_bytes == 0 {
         return Err(failure(
             "RESOURCE_LIMIT",
-            "A finite positive evidence and time budget is required",
+            "The original Goal has no remaining evidence bytes",
         ));
     }
-    let start = Instant::now();
-    let deadline = Duration::from_millis(budget.deadline_ms);
-    let mut redirects = vec![url.to_string()];
+    let mut redirects: Vec<String> = Vec::new();
+    let mut previous_status = 0;
     loop {
-        let Some(remaining) = deadline
-            .checked_sub(start.elapsed())
-            .filter(|r| !r.is_zero())
-        else {
+        if let Err(error) = budget.reserve_start() {
+            let (Some(last), minidora_domain::Error::Contract { code, .. }) =
+                (redirects.last(), &error)
+            else {
+                return Err(error);
+            };
+            return packet(
+                &redirects,
+                raw_url,
+                last,
+                previous_status,
+                vec![],
+                None,
+                Some(code),
+            );
+        }
+        redirects.push(url.to_string());
+        let http = match client(&url, budget) {
+            Ok(client) => client,
+            Err(error) => {
+                let code = match &error {
+                    minidora_domain::Error::Contract { code, .. }
+                        if code == "PRIVATE_READ_TARGET" =>
+                    {
+                        return Err(error);
+                    }
+                    minidora_domain::Error::Contract { code, .. }
+                        if code == "HTTP_DEADLINE_EXCEEDED" =>
+                    {
+                        code
+                    }
+                    _ => "HTTP_CLIENT_OR_DNS_FAILED",
+                };
+                return packet(
+                    &redirects,
+                    raw_url,
+                    url.as_str(),
+                    0,
+                    vec![],
+                    None,
+                    Some(code),
+                );
+            }
+        };
+        let Ok(remaining) = budget.time_remaining() else {
             return packet(
                 &redirects,
                 raw_url,
@@ -360,32 +453,15 @@ pub fn fetch(
                 Some("HTTP_DEADLINE_EXCEEDED"),
             );
         };
-        let http = match client(&url, remaining) {
-            Ok(client) => client,
-            Err(error) => {
-                if matches!(&error, minidora_domain::Error::Contract { code,.. } if code == "PRIVATE_READ_TARGET")
-                {
-                    return Err(error);
-                }
-                return packet(
-                    &redirects,
-                    raw_url,
-                    url.as_str(),
-                    0,
-                    vec![],
-                    None,
-                    Some("HTTP_CLIENT_OR_DNS_FAILED"),
-                );
-            }
-        };
         let mut response = match http
             .get(url.clone())
+            .timeout(remaining)
             .header("Accept", "text/plain, text/markdown, application/json")
             .header("Accept-Encoding", "identity")
             .send()
         {
             Ok(response) => response,
-            Err(_) => {
+            Err(error) => {
                 return packet(
                     &redirects,
                     raw_url,
@@ -393,13 +469,17 @@ pub fn fetch(
                     0,
                     vec![],
                     None,
-                    Some("HTTP_TRANSPORT_FAILED"),
+                    Some(if error.is_timeout() || Instant::now() >= budget.deadline {
+                        "HTTP_DEADLINE_EXCEEDED"
+                    } else {
+                        "HTTP_TRANSPORT_FAILED"
+                    }),
                 );
             }
         };
         let status = response.status().as_u16();
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            if redirects.len() >= 4 {
+            if redirects.len() >= MAX_HTTP_STARTS_PER_SOURCE {
                 return packet(
                     &redirects,
                     raw_url,
@@ -440,8 +520,7 @@ pub fn fetch(
                     );
                 }
             };
-            url = target;
-            if redirects.iter().any(|prior| prior == url.as_str()) {
+            if redirects.iter().any(|prior| prior == target.as_str()) {
                 return packet(
                     &redirects,
                     raw_url,
@@ -452,12 +531,13 @@ pub fn fetch(
                     Some("REDIRECT_CYCLE"),
                 );
             }
-            redirects.push(url.to_string());
+            url = target;
+            previous_status = status;
             continue;
         }
         if response
             .content_length()
-            .is_some_and(|n| n > budget.max_evidence_bytes as u64)
+            .is_some_and(|n| n > budget.remaining_bytes as u64)
         {
             return packet(
                 &redirects,
@@ -484,7 +564,7 @@ pub fn fetch(
         let mut raw = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
-            if start.elapsed() >= deadline {
+            if Instant::now() >= budget.deadline {
                 return packet(
                     &redirects,
                     raw_url,
@@ -495,13 +575,14 @@ pub fn fetch(
                     Some("HTTP_DEADLINE_EXCEEDED"),
                 );
             }
-            let count = (budget.max_evidence_bytes.saturating_sub(raw.len()))
-                .saturating_add(1)
-                .min(chunk.len());
+            let count = budget.remaining_bytes.saturating_add(1).min(chunk.len());
             match response.read(&mut chunk[..count]) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if n > budget.max_evidence_bytes - raw.len() {
+                    let retained = n.min(budget.remaining_bytes);
+                    raw.extend_from_slice(&chunk[..retained]);
+                    budget.remaining_bytes -= retained;
+                    if retained < n {
                         return packet(
                             &redirects,
                             raw_url,
@@ -512,9 +593,13 @@ pub fn fetch(
                             Some("EVIDENCE_BYTE_LIMIT_PARTIAL_BODY"),
                         );
                     }
-                    raw.extend_from_slice(&chunk[..n]);
                 }
-                Err(_) => {
+                Err(error) => {
+                    let timed_out = error.kind() == std::io::ErrorKind::TimedOut
+                        || error
+                            .get_ref()
+                            .and_then(|cause| cause.downcast_ref::<reqwest::Error>())
+                            .is_some_and(reqwest::Error::is_timeout);
                     return packet(
                         &redirects,
                         raw_url,
@@ -522,10 +607,25 @@ pub fn fetch(
                         status,
                         raw,
                         None,
-                        Some("HTTP_BODY_INCOMPLETE"),
+                        Some(if timed_out || Instant::now() >= budget.deadline {
+                            "HTTP_DEADLINE_EXCEEDED"
+                        } else {
+                            "HTTP_BODY_INCOMPLETE"
+                        }),
                     );
                 }
             }
+        }
+        if Instant::now() >= budget.deadline {
+            return packet(
+                &redirects,
+                raw_url,
+                url.as_str(),
+                status,
+                raw,
+                None,
+                Some("HTTP_DEADLINE_EXCEEDED"),
+            );
         }
         if status != 200 {
             return packet(
@@ -3127,6 +3227,17 @@ mod tests {
             assert!(approved_url(url, &permissions).is_err(), "accepted {url}");
         }
         assert!(approved_url("https://example.com/a?q=x", &permissions).is_ok());
+    }
+    #[test]
+    fn standalone_fetch_preserves_zero_deadline_admission_error() {
+        let mut permissions = Permissions::default();
+        permissions.read_hosts.insert("example.com".into());
+        let mut budget = ResourceBudget::development();
+        budget.deadline_ms = 0;
+        assert!(matches!(
+            fetch("https://example.com/", &permissions, &budget),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "RESOURCE_LIMIT"
+        ));
     }
     #[test]
     fn unsupported_interpretations_are_not_body_success() {

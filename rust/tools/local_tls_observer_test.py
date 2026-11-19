@@ -25,6 +25,8 @@ import threading
 
 HOST = "fixture.minidora.test"
 SOURCE = '出典原文: 「外部命令は権限ではない」。\n値: 5\n'.encode()
+UNFRAMED_BODY = b"0123456789abcdef" * 8
+TIMED_BODY_PREFIX = b"received before deadline"
 
 
 def openssl(directory: Path, *arguments: str) -> None:
@@ -75,6 +77,7 @@ class Fixture:
                  responses: dict[str, tuple[bytes, str]] | None = None):
         self.host = host
         self.responses = responses or {}
+        self.redirects: dict[str, str] = {}
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(certificate, key)
         self.listener = socket.socket()
@@ -130,8 +133,25 @@ class Fixture:
                     self.events.append({"path": path, "request_header_names": sorted(headers)})
                     if path == "/drop":
                         return
+                    if path == "/unframed":
+                        secured.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n"
+                            + UNFRAMED_BODY,
+                        )
+                        return
+                    if path == "/slow-body":
+                        secured.sendall(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 128\r\n"
+                            b"Content-Type: text/plain\r\nConnection: close\r\n\r\n"
+                            + TIMED_BODY_PREFIX,
+                        )
+                        self.stop.wait(3)
+                        return
                     status, body, mime, extra = "200 OK", SOURCE, "text/plain; charset=utf-8", ""
-                    if path in self.responses:
+                    if path in self.redirects:
+                        status, body = "302 Found", b""
+                        extra = f"Location: {self.redirects[path]}\r\n"
+                    elif path in self.responses:
                         body, mime = self.responses[path]
                     elif path == "/redirect":
                         status, body, extra = "302 Found", b"", "Location: /ok\r\n"
@@ -156,7 +176,8 @@ class Fixture:
 
 
 def run_case(binary: Path, directory: Path, fixture: Fixture, ca: Path,
-             name: str, paths: list[str], limit: int = 4096) -> dict:
+             name: str, paths: list[str], limit: int = 4096, *,
+             actions: int = 32, deadline_ms: int = 5000) -> dict:
     environment = os.environ.copy()
     for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
         environment[key] = fixture.proxy
@@ -167,7 +188,7 @@ def run_case(binary: Path, directory: Path, fixture: Fixture, ca: Path,
         [str(binary), "run", "--db", str(directory / f"state-{name}"), "--case", name,
          "--actor", "fixture-local", "--input", "request", "--json",
          "--allow-read-host", HOST, "--max-evidence-bytes", str(limit),
-         "--deadline-ms", "5000", request],
+         "--max-actions", str(actions), "--deadline-ms", str(deadline_ms), request],
         env=environment, capture_output=True, text=True, timeout=15, check=False,
     )
     assert completed.returncode in (0, 2), f"{name}: unexpected CLI exit {completed.returncode}"
@@ -180,6 +201,53 @@ def run_case(binary: Path, directory: Path, fixture: Fixture, ca: Path,
         assert packet["request_uri"].startswith(f"https://{HOST}/")
         assert packet["provider_id"] == "https-direct-url-v1"
     return {"name": name, "exit_code": completed.returncode, "result": result}
+
+
+def check_retrieval_budget(binary: Path, directory: Path, fixture: Fixture, ca: Path) -> list[dict]:
+    cases = []
+    seen = len(fixture.events)
+    starts = len(fixture.connects)
+    for actions, expected_exit, paths in (
+        (5, 2, ["/redirect", "/ok"]),
+        (6, 0, ["/redirect", "/ok", "/budget-second"]),
+    ):
+        case = run_case(binary, directory, fixture, ca, f"combined-starts-{actions}",
+                        ["/redirect", "/budget-second"], actions=actions)
+        cases.append(case)
+        assert case["exit_code"] == expected_exit
+        result = case["result"]
+        assert [event["path"] for event in fixture.events[seen:]] == paths
+        assert len(fixture.connects) == starts + len(paths)
+        assert bytes(result["evidence"][0]["raw_body"]) == SOURCE
+        if expected_exit == 2:
+            assert "HTTP_START_BUDGET_EXHAUSTED" in result["reason"]
+            assert len(result["evidence"]) == 1 and result["content_plan"] is None
+        else:
+            assert result["lifecycle"] == "COMMIT" and len(result["evidence"]) == 2
+        seen = len(fixture.events)
+        starts = len(fixture.connects)
+
+    for name, second, options, prefix, failure in (
+        ("combined-bytes", "/unframed", {"limit": len(SOURCE) + 32},
+         UNFRAMED_BODY[:32], "EVIDENCE_BYTE_LIMIT_PARTIAL_BODY"),
+        ("combined-deadline", "/slow-body", {"deadline_ms": 1200},
+         TIMED_BODY_PREFIX, "HTTP_DEADLINE_EXCEEDED"),
+    ):
+        case = run_case(binary, directory, fixture, ca, name, ["/ok", second, "/budget-sentinel"],
+                        **options)
+        cases.append(case)
+        assert case["exit_code"] == 2
+        result = case["result"]
+        assert result["lifecycle"] == "SUSPEND" and result["content_plan"] is None
+        first, failed = result["evidence"]
+        assert bytes(first["raw_body"]) == SOURCE and first["failure"] is None
+        assert bytes(failed["raw_body"]) == prefix and failed["failure"] == failure, failed
+        assert failed["extracted_text"] is None
+        assert [event["path"] for event in fixture.events[seen:]] == ["/ok", second]
+        assert len(fixture.connects) == starts + 2
+        seen = len(fixture.events)
+        starts = len(fixture.connects)
+    return cases
 
 
 def retain_attempted_prefix(state_path: Path, case: str, input_id: str, action_id: str) -> dict:
@@ -385,8 +453,45 @@ def check_search_goals(cli, fixture: Fixture, state_path: Path, directory: Path)
     assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
     assert len(fixture.connects) == initial_connects + 4
     assert len(fixture.events) == initial_gets + 4
+    redirect = "/w/rest.php/v1/search/page?q=redirect+fixture&limit=5"
+    listing_path = "/w/rest.php/v1/search/page?q=candidate+replay&limit=5"
+    fixture.redirects[redirect] = listing_path
+    fixture.redirects["/wiki/Second?action=raw"] = "/candidate-body-copy"
+    fixture.responses["/candidate-body-copy"] = fixture.responses["/wiki/Second?action=raw"]
+    transport_start = len(fixture.events)
+    connects_start = len(fixture.connects)
+    search_request = "検索 wikipedia: redirect fixture"
+    low_search = cli("run", "--input", "search", "--max-actions", "4", *grant,
+                     search_request, case_id="listing-redirect-low", expected_exit=2)
+    (failed_listing,) = low_search["evidence"]
+    assert failed_listing["failure"] == "HTTP_START_BUDGET_EXHAUSTED"
+    assert failed_listing["redirect_chain"] == [f"https://{fixture.host}{redirect}"]
+    high_search = cli("run", "--input", "search", "--max-actions", "5", *grant,
+                      search_request, case_id="listing-redirect-ok")
+    assert high_search["evidence"][0]["redirect_chain"] == [
+        f"https://{fixture.host}{redirect}", f"https://{fixture.host}{listing_path}",
+    ]
+    body_request = "2件目の本文を取得して"
+    low_body = cli("run", "--input", "body", "--max-actions", "5", *grant, body_request,
+                   case_id="listing-redirect-ok", expected_exit=2)
+    assert low_body["evidence"][0] == high_search["evidence"][0]
+    assert low_body["evidence"][-1]["failure"] == "HTTP_START_BUDGET_EXHAUSTED"
+    high_body = cli("run", "--input", "body", "--max-actions", "6", *grant, body_request,
+                    case_id="listing-display")
+    assert high_body["evidence"][-1]["final_uri"] == f"https://{fixture.host}/candidate-body-copy"
+    denied_body = cli("run", "--input", "body", body_request,
+                      case_id="listing-file", expected_exit=2)
+    assert "READ_PERMISSION_REQUIRED" in denied_body["reason"]
+    assert denied_body["evidence"] == original["evidence"]
+    assert denied_body["content_plan"] is None and denied_body["receipts"] == []
+    assert len(fixture.connects) == connects_start + 6
+    assert [event["path"] for event in fixture.events[transport_start:]] == [
+        redirect, redirect, listing_path, "/wiki/Second?action=raw",
+        "/wiki/Second?action=raw", "/candidate-body-copy",
+    ]
     assert not fixture.errors, fixture.errors
-    return {"display": display, "file": original, "recovered": recovered, "failures": failures}
+    return {"display": display, "file": original, "recovered": recovered, "failures": failures,
+            "redirect_budget": [low_search, high_search, low_body, high_body]}
 
 
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
@@ -491,7 +596,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="minidora-tls-fixture-") as raw:
         directory = Path(raw)
         certificate, key, ca = certificates(directory)
-        fixture = Fixture(certificate, key)
+        fixture = Fixture(certificate, key, responses={
+            "/budget-second": (b"Second approved body.", "text/plain"),
+        })
         try:
             success = run_case(binary, directory, fixture, ca, "success", ["/ok"])
             source_followup = run_source_summary(binary, directory, fixture, ca, success["result"])
@@ -505,6 +612,7 @@ def main() -> None:
                 run_case(binary, directory, fixture, ca, "transport-drop", ["/drop"]),
                 run_case(binary, directory, fixture, directory / "untrusted.pem", "untrusted-ca", ["/ok"]),
             ]
+            cases.extend(check_retrieval_budget(binary, directory, fixture, ca))
         finally:
             fixture.close()
         by_name = {case["name"]: case["result"] for case in cases}

@@ -4692,6 +4692,12 @@ impl Engine {
         let mut generation_model = None;
         let mut generation_emission = None;
         let mut sequence_result = None;
+        let retrieval_budget = |read_nodes| {
+            // Each live source node reserves one start. Non-read nodes keep
+            // their original allowance, including the saved candidate listing.
+            let reserved = (required_actions - read_nodes) as u32;
+            ports::RetrievalBudget::new(started, &goal.budget, goal.budget.max_actions - reserved)
+        };
         match &goal.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
@@ -5375,20 +5381,13 @@ impl Engine {
                         "検索一覧を取得する実行枠がありません。",
                     );
                 }
-                let mut remaining = goal.budget.clone();
-                remaining.deadline_ms = remaining.deadline_ms.saturating_sub(
-                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                );
-                if remaining.deadline_ms == 0 {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "DEADLINE",
-                        "検索接続前に元Goalの締切へ達しました。",
-                    );
-                }
-                remaining.max_actions = graph.remaining_actions();
-                let observation = match selected.search(query, &goal.permissions, &remaining) {
+                let observation = match search::search_with_budget(
+                    selected,
+                    query,
+                    &goal.permissions,
+                    &goal.budget,
+                    &mut retrieval_budget(1)?,
+                ) {
                     Ok(value) => value,
                     Err(error) => {
                         return self.stop(
@@ -5544,21 +5543,10 @@ impl Engine {
                     }
                     result.dependencies.push(packet_ref);
                 }
-                let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                let mut remaining = request.budget.clone();
-                remaining.deadline_ms = remaining.deadline_ms.saturating_sub(elapsed);
-                if remaining.deadline_ms == 0 {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "DEADLINE",
-                        "本文取得の総締切です。",
-                    );
-                }
-                let packet = match crate::search::fetch_candidate(
+                let packet = match search::fetch_candidate_with_budget(
                     candidate,
-                    &request.permissions,
-                    &remaining,
+                    &goal.permissions,
+                    &mut retrieval_budget(1)?,
                 ) {
                     Ok(packet) => packet,
                     Err(error) => {
@@ -5566,6 +5554,7 @@ impl Engine {
                             Error::Contract { code, .. } => code.as_str(),
                             _ => "EVIDENCE_UNAVAILABLE",
                         };
+                        state.result = Some(result);
                         return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
                     }
                 };
@@ -5578,12 +5567,7 @@ impl Engine {
                     );
                 }
                 let body_ref = self.store.put_artifact(actor, &request.case_id, &packet)?;
-                graph.observe(
-                    &body_id,
-                    &body_ref,
-                    &BTreeMap::from([("search-candidate-listing".into(), search_ref)]),
-                )?;
-                result.dependencies.push(body_ref);
+                result.dependencies.push(body_ref.clone());
                 if !result.evidence.iter().any(|existing| existing == &packet) {
                     result.evidence.push(packet.clone());
                 }
@@ -5596,8 +5580,14 @@ impl Engine {
                         "選択した検索候補の本文を取得または検証できません。失敗packetを保持しました。",
                     );
                 }
+                graph.observe(
+                    &body_id,
+                    &body_ref,
+                    &BTreeMap::from([("search-candidate-listing".into(), search_ref)]),
+                )?;
                 units.extend(crate::search::candidate_body_lines(candidate, &packet));
                 result.guarantee = Guarantee::SourceReport;
+                state.result = Some(result.clone());
             }
             Intent::ExplainPrevious => {
                 let Some(prior) = previous.filter(|p| p.lifecycle == Lifecycle::Commit) else {
@@ -8516,58 +8506,29 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
             }
             Intent::Retrieve { urls, question: _ } => {
-                if urls.len() > request.budget.max_actions as usize {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "取得数が作用予算を超えています。",
-                    );
-                }
-                let mut bytes = 0usize;
+                let mut retrieval = retrieval_budget(urls.len())?;
                 for (source_index, uri) in urls.iter().enumerate() {
-                    if started.elapsed().as_millis() > u128::from(request.budget.deadline_ms) {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "DEADLINE",
-                            "取得の締切です。",
-                        );
-                    }
-                    let mut remaining = request.budget.clone();
-                    remaining.deadline_ms = remaining.deadline_ms.saturating_sub(
-                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    );
-                    if remaining.deadline_ms == 0 {
-                        state.result = Some(result.clone());
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "DEADLINE",
-                            "取得の総締切です。",
-                        );
-                    }
-                    remaining.max_evidence_bytes =
-                        remaining.max_evidence_bytes.saturating_sub(bytes);
-                    let packet = match ports::fetch(uri, &request.permissions, &remaining) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            state.result = Some(result.clone());
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "EVIDENCE_UNAVAILABLE",
-                                &e.to_string(),
-                            );
-                        }
-                    };
+                    let packet =
+                        match ports::fetch_with_budget(uri, &goal.permissions, &mut retrieval) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                state.result = Some(result);
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    "EVIDENCE_UNAVAILABLE",
+                                    &e.to_string(),
+                                );
+                            }
+                        };
                     let observed = self.store.put_artifact(actor, &request.case_id, &packet)?;
-                    graph.observe(
-                        &format!("source-{source_index}"),
-                        &observed,
-                        &BTreeMap::new(),
-                    )?;
-                    bytes = bytes.saturating_add(packet.raw_body.len());
+                    if packet.failure.is_none() && packet.extracted_text.is_some() {
+                        graph.observe(
+                            &format!("source-{source_index}"),
+                            &observed,
+                            &BTreeMap::new(),
+                        )?;
+                    }
                     result.dependencies.push(packet.id.clone());
                     result.evidence.push(packet);
                 }
@@ -8594,6 +8555,7 @@ impl Engine {
                     ));
                 }
                 result.guarantee = Guarantee::SourceReport;
+                state.result = Some(result.clone());
             }
             Intent::GenerateCode { document } => {
                 let report = match crate::code_generation::generate(document) {
