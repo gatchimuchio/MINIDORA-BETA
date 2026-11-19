@@ -994,3 +994,24 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `b4eedd6
 検査対象はローカルファイルで、journalの中断点を再現した隔離fixtureと別Store接続を使用。描画後から実書込までの時間予算の再検査が残るため、W17とE1は `PARTIAL`、E12は `UNVERIFIED`。E2合同ゲート・体系QC・独立QAは `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `f95f3b1` と `2a97d74`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、Store、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B102 — D3-C E1-W17 元Goalの締切をローカルファイル作用まで適用
+
+着工点は `222288d7283a1b35422404117bdcea3842f067b0`。D2仕様・D2工程・D3-C指示の採用SHAを照合。単一Coreが、元Goalの時間予算から求めた単調時計上の同じ締切を描画、作用履歴、ローカルファイルの作成直前、完了判定に使う。StoreはSQLite書込ロック取得後と作用履歴の確定直前に締切を照合する。発行前に失効した準備は同一IDで `CANCELLED` とし、発行記録後に実出力開始前の失効を観測した場合は同一IDで理由付き `FAILED` を保持する。
+
+既に始めた書込みの結果は実観測に従って記録する。確認済みのファイルと受領は元Goalの `SUSPEND/DEADLINE` でも保持する。中断時に試行結果が不明な作用は、既存の同一ID照合を使う。保存形式と依存関係の版は `0.7.0-alpha.11` のまま。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `dfd7da82a123114a4c993f7162cf672dacbfa785de8c35e3fa24d58cd6405bbb`。以下は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib local_file --locked` | 2 PASS。通常の算術要求から実描画。描画後、作用提案前、試行記録前、試行記録後の作成前、確認済み受領後の5点でテスト時計を進めた。実バイト・受領・永続journalを再起動後に照合し、同じ入力の再送で作用が増えないことを確認。二重取得の拒否も確認。 |
+| `cargo test -p minidora-engine --lib output::tests --locked` | 5 PASS。権限、パス、symlink、実バイト、別プロセス間の上書き拒否。 |
+| `cargo test -p minidora-engine --lib recovery::tests::sequence_cancel --locked`、`cargo test -p minidora-engine --lib recovery::tests::calculation_sequence_reconciles --locked` | 各1 PASS。取消と同一作用の復旧。 |
+| `cargo test -p minidora-engine --test core_construction_observation_06 --locked`、`cargo test -p minidora-cli --test normal_route calculation_sequence_route --locked` | 1 PASSと5 PASS。権限・予算・取消・未知結果の停止、通常CLIの連続計算と一度だけのファイル確定。 |
+| `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+今回の接続は通常のローカルファイル経路。OSやSQLiteの同期I/O呼出しには実行中の割込み保証がなく、実時間の上限測定は `NOT_RUN`。W17全幅とE1出口は `PARTIAL`、E04は `UNVERIFIED`。E2合同ゲート、体系QC、独立QAは `NOT_RUN`。次のE1結合点はW18で循環AとBの本番経路を照合し、K5の適応が後続別要求のK4・K6で実消費される境界を確認する。
+
+復旧2世代のローカル参照・GitHubタグは `222288d` と `f95f3b1`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（Core、Store、Output、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。

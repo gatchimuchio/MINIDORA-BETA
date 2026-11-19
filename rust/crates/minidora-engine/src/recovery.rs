@@ -10592,7 +10592,12 @@ mod tests {
             assert_eq!(engine.latest("alice", "case").unwrap(), Some(state));
             action.phase = EffectPhase::Attempted;
             let error = stale_writer
-                .save_live_file_phase("alice", &action, old.revision)
+                .save_live_file_phase(
+                    "alice",
+                    &action,
+                    old.revision,
+                    Instant::now() + Duration::from_secs(30),
+                )
                 .unwrap_err();
             assert!(
                 error.to_string().contains("EFFECT_GOAL_NOT_ACTIVE"),
@@ -10621,12 +10626,13 @@ mod tests {
         let revision = store.load_case("alice", "case").unwrap().unwrap().revision;
         let mut action = store.actions("alice", "case").unwrap().remove(0);
         action.phase = EffectPhase::Attempted;
+        let deadline = Instant::now() + Duration::from_secs(30);
         store
-            .save_live_file_phase("alice", &action, revision)
+            .save_live_file_phase("alice", &action, revision, deadline)
             .unwrap();
         let other_writer = Store::open(&fixture.state).unwrap();
         let error = other_writer
-            .save_live_file_phase("alice", &action, revision)
+            .save_live_file_phase("alice", &action, revision, deadline)
             .unwrap_err();
         assert!(
             error.to_string().contains("EFFECT_ALREADY_ATTEMPTED"),
@@ -10636,6 +10642,82 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].phase, EffectPhase::Unknown);
         assert_eq!(actions[0].action_id, fixture.token);
+    }
+
+    #[test]
+    fn local_file_deadline_stops_at_the_observed_effect_boundary() {
+        use crate::core::OutputCheckpoint;
+
+        for (checkpoint, phase, history_len) in [
+            (OutputCheckpoint::Rendered, None, 0),
+            (OutputCheckpoint::FilePhase(EffectPhase::Proposed), None, 0),
+            (
+                OutputCheckpoint::FilePhase(EffectPhase::Attempted),
+                Some(EffectPhase::Cancelled),
+                4,
+            ),
+            (OutputCheckpoint::FileDelivery, Some(EffectPhase::Failed), 5),
+            (OutputCheckpoint::Commit, Some(EffectPhase::Confirmed), 5),
+        ] {
+            let fixture = empty_fixture();
+            let mut engine = Engine::open(&fixture.state).unwrap();
+            engine.expire_output_at = Some(checkpoint);
+            let mut request = RequestEnvelope::new("case", "deadline", "alice", "7+8");
+            request.output_path = Some(fixture.target.clone());
+            request
+                .permissions
+                .write_paths
+                .insert(fixture.target.clone());
+            let result = engine.execute("alice", request.clone()).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Suspend, "{checkpoint:?}");
+            assert!(result.reason.as_deref().unwrap().starts_with("DEADLINE:"));
+            assert_eq!(result.render.as_ref().unwrap().bytes, b"7+8 = 15");
+
+            drop(engine);
+            let mut restored = Engine::open(&fixture.state).unwrap();
+            assert_eq!(
+                restored.latest("alice", "case").unwrap().unwrap().result,
+                Some(result.clone())
+            );
+            let actions = restored.store.actions("alice", "case").unwrap();
+            assert_eq!(actions.first().map(|action| action.phase), phase);
+            assert_eq!(actions.len(), usize::from(phase.is_some()));
+            let journal = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+            let events: i64 = journal
+                .query_row("SELECT COUNT(*) FROM action_history", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(events, history_len, "{checkpoint:?}");
+            match phase {
+                Some(EffectPhase::Confirmed) => {
+                    assert_eq!(fs::read(&fixture.target).unwrap(), b"7+8 = 15");
+                    assert_eq!(result.receipts[0].phase, EffectPhase::Confirmed);
+                    assert_eq!(result.receipts[0].action_id, actions[0].action_id);
+                    assert!(result.execution_graph_ref.is_some());
+                }
+                Some(EffectPhase::Failed) => {
+                    assert!(!fixture.target.exists());
+                    assert_eq!(result.receipts[0].phase, EffectPhase::Failed);
+                    assert_eq!(result.receipts[0].action_id, actions[0].action_id);
+                    assert!(result.receipts[0].observed_bytes.is_none());
+                    assert!(
+                        result.receipts[0]
+                            .reason
+                            .as_deref()
+                            .unwrap()
+                            .starts_with("DEADLINE:")
+                    );
+                    assert!(result.execution_graph_ref.is_none());
+                }
+                _ => {
+                    assert!(!fixture.target.exists());
+                    assert!(result.receipts.is_empty());
+                    assert!(actions.iter().all(|action| action.receipt.is_none()));
+                    assert!(result.execution_graph_ref.is_none());
+                }
+            }
+            assert_eq!(restored.execute("alice", request).unwrap(), result);
+            assert_eq!(restored.store.actions("alice", "case").unwrap(), actions);
+        }
     }
 
     #[test]

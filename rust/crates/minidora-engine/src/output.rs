@@ -11,6 +11,7 @@ use minidora_domain::{
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 pub fn render(plan: &ContentPlan) -> Result<RenderObservation> {
     if plan.id.is_empty() {
@@ -143,6 +144,22 @@ fn confirm_existing(action: &ActionRecord, path: &Path, bytes: &[u8]) -> Result<
 }
 
 pub fn write_file(action: &ActionRecord, bytes: &[u8]) -> Result<DeliveryReceipt> {
+    write_file_inner(action, bytes, None)
+}
+
+pub(crate) fn write_file_until(
+    action: &ActionRecord,
+    bytes: &[u8],
+    deadline: Instant,
+) -> Result<DeliveryReceipt> {
+    write_file_inner(action, bytes, Some(deadline))
+}
+
+fn write_file_inner(
+    action: &ActionRecord,
+    bytes: &[u8],
+    deadline: Option<Instant>,
+) -> Result<DeliveryReceipt> {
     if action.phase != EffectPhase::Attempted
         || action.effect_class != "LOCAL_WRITE"
         || action.action_id.is_empty()
@@ -160,10 +177,19 @@ pub fn write_file(action: &ActionRecord, bytes: &[u8]) -> Result<DeliveryReceipt
     let path = checked_target(&action.target)?;
     let parent = path.parent().expect("absolute file parent");
     let original_parent = parent.canonicalize()?;
-    match fs::symlink_metadata(&path) {
-        Ok(_) => return confirm_existing(action, &path, bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    let exists = match fs::symlink_metadata(&path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(error.into()),
+    };
+    if deadline.is_some_and(|limit| Instant::now() >= limit) {
+        return Err(failure(
+            "DEADLINE",
+            "file delivery did not start before the Goal deadline",
+        ));
+    }
+    if exists {
+        return confirm_existing(action, &path, bytes);
     }
     let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(file) => file,

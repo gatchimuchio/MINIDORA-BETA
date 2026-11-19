@@ -2250,12 +2250,35 @@ pub struct CounterfactualRelationReport {
 /// configured authenticated identity before entering this API.
 pub struct Engine {
     pub(crate) store: Store,
+    #[cfg(test)]
+    pub(crate) expire_output_at: Option<OutputCheckpoint>,
 }
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutputCheckpoint {
+    Rendered,
+    FilePhase(EffectPhase),
+    FileDelivery,
+    Commit,
+}
+
 impl Engine {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             store: Store::open(path)?,
+            #[cfg(test)]
+            expire_output_at: None,
         })
+    }
+
+    #[cfg(test)]
+    fn output_deadline_at(&self, checkpoint: OutputCheckpoint, deadline: Instant) -> Instant {
+        if self.expire_output_at == Some(checkpoint) {
+            deadline.min(Instant::now())
+        } else {
+            deadline
+        }
     }
     pub fn reconcile_cancelled_effects(
         &mut self,
@@ -8398,7 +8421,7 @@ impl Engine {
             }
             Intent::Cancel => unreachable!("handled before computation"),
         }
-        if started.elapsed().as_millis() > u128::from(request.budget.deadline_ms) {
+        if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
@@ -8503,7 +8526,7 @@ impl Engine {
             Some("ACTUAL_COMPUTATION_OBSERVED".into()),
         )?;
         let deadline = started
-            .checked_add(std::time::Duration::from_millis(request.budget.deadline_ms))
+            .checked_add(Duration::from_millis(goal.budget.deadline_ms))
             .ok_or_else(|| {
                 failure(
                     "INVALID_DEADLINE",
@@ -8652,6 +8675,14 @@ impl Engine {
         result.lifecycle = Lifecycle::Adopted;
         state.result = Some(result.clone());
         self.advance(&mut state, Lifecycle::Adopted, None)?;
+        if Instant::now() >= deadline {
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "DEADLINE",
+                "描画前に元Goalの締切へ達しました。",
+            );
+        }
         let render = output::render(&plan)?;
         if !validate_render(&plan, &render) {
             return self.stop(
@@ -8675,6 +8706,16 @@ impl Engine {
             Some("ACTUAL_RENDER_VERIFIED".into()),
         )?;
         self.advance(&mut state, Lifecycle::Adopted, None)?;
+        #[cfg(test)]
+        let deadline = self.output_deadline_at(OutputCheckpoint::Rendered, deadline);
+        if Instant::now() >= deadline {
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "DEADLINE",
+                "描画の照合後に元Goalの締切へ達しました。",
+            );
+        }
         // Required file effect is performed once under a durable, fully bound
         // identity. Physical output never independently closes the case.
         if let Some(ref path) = request.output_path {
@@ -8720,18 +8761,41 @@ impl Engine {
                 phase: EffectPhase::Proposed,
                 receipt: None,
             };
-            self.store
-                .save_live_file_phase(actor, &action, state.revision)?;
             for phase in [
+                EffectPhase::Proposed,
                 EffectPhase::Authorized,
                 EffectPhase::Prepared,
                 EffectPhase::Attempted,
             ] {
+                #[cfg(test)]
+                let deadline =
+                    self.output_deadline_at(OutputCheckpoint::FilePhase(phase), deadline);
                 action.phase = phase;
-                self.store
-                    .save_live_file_phase(actor, &action, state.revision)?;
+                match self
+                    .store
+                    .save_live_file_phase(actor, &action, state.revision, deadline)
+                {
+                    Ok(()) => {}
+                    Err(Error::Contract { code, .. }) if code == "DEADLINE" => {
+                        // The timed-out phase was not committed. Close any
+                        // preceding, unattempted phases of this same action.
+                        if phase != EffectPhase::Proposed {
+                            action.phase = EffectPhase::Cancelled;
+                            self.store.save_action(actor, &action)?;
+                        }
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "DEADLINE",
+                            "ファイル作用の発行前に元Goalの締切へ達しました。",
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             }
-            let receipt = match output::write_file(&action, &render.bytes) {
+            #[cfg(test)]
+            let deadline = self.output_deadline_at(OutputCheckpoint::FileDelivery, deadline);
+            let receipt = match output::write_file_until(&action, &render.bytes, deadline) {
                 Ok(receipt) => receipt,
                 Err(e) => DeliveryReceipt {
                     action_id: action.action_id.clone(),
@@ -8748,6 +8812,14 @@ impl Engine {
             result.receipts.push(receipt.clone());
             state.result = Some(result.clone());
             if receipt.phase != EffectPhase::Confirmed {
+                if Instant::now() >= deadline {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "DEADLINE",
+                        "締切時点のファイル作用の記録を保持しました。",
+                    );
+                }
                 return self.stop(
                     &mut state,
                     Lifecycle::Suspend,
@@ -8789,6 +8861,17 @@ impl Engine {
             &request.case_id,
             &graph,
         )?);
+        #[cfg(test)]
+        let deadline = self.output_deadline_at(OutputCheckpoint::Commit, deadline);
+        if Instant::now() >= deadline {
+            state.result = Some(result);
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "DEADLINE",
+                "元Goalの締切に達したため、得られた成果と作用記録を保持しました。",
+            );
+        }
         result.lifecycle = Lifecycle::Commit;
         state.result = Some(result.clone());
         self.advance(&mut state, Lifecycle::Commit, None)?;

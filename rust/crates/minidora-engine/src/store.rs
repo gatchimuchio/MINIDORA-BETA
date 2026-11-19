@@ -17,7 +17,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 static TEMP_SERIAL: AtomicU64 = AtomicU64::new(0);
@@ -1500,12 +1500,14 @@ impl Store {
     }
 
     /// Prepare and issue a local write only while its adopted case revision is
-    /// active. Each phase and the head check share one write transaction.
+    /// active and its deadline remains open. Each phase and the head check
+    /// share one write transaction.
     pub(crate) fn save_live_file_phase(
         &self,
         actor: &str,
         action: &ActionRecord,
         adopted_revision: u64,
+        deadline: Instant,
     ) -> Result<()> {
         if action.effect_class != "LOCAL_WRITE"
             || !matches!(
@@ -1521,14 +1523,14 @@ impl Store {
                 "live file preparation requires a local write at or before ATTEMPTED",
             ));
         }
-        self.save_action_inner(actor, action, Some(adopted_revision))
+        self.save_action_inner(actor, action, Some((adopted_revision, deadline)))
     }
 
     fn save_action_inner(
         &self,
         actor: &str,
         action: &ActionRecord,
-        adopted_revision: Option<u64>,
+        live: Option<(u64, Instant)>,
     ) -> Result<()> {
         if actor != action.actor_id {
             return Err(failure(
@@ -1572,13 +1574,13 @@ impl Store {
                 "CONFIRMED requires an actual effect receipt",
             ));
         }
-        let published = adopted_revision
+        let published = live
             .is_none()
             .then(|| self.publish_blob(action))
             .transpose()?;
         let transaction = self.transaction()?;
         Self::require_case(&transaction, actor, &action.case_id)?;
-        if let Some(revision) = adopted_revision {
+        if let Some((revision, deadline)) = live {
             let head = self.latest_case(&action.case_id)?;
             if !head.is_some_and(|head| {
                 head.revision == revision
@@ -1593,6 +1595,12 @@ impl Store {
                 return Err(failure(
                     "EFFECT_GOAL_NOT_ACTIVE",
                     "the adopted input revision for this local effect is no longer active",
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(failure(
+                    "DEADLINE",
+                    "file action phase is past the Goal deadline",
                 ));
             }
         }
@@ -1620,7 +1628,7 @@ impl Store {
         if let Some((number, prior_sha, _)) = &old {
             let prior: ActionRecord = self.read_blob(prior_sha)?;
             if prior == *action {
-                if adopted_revision.is_some() && action.phase == EffectPhase::Attempted {
+                if live.is_some() && action.phase == EffectPhase::Attempted {
                     return Err(failure(
                         "EFFECT_ALREADY_ATTEMPTED",
                         "an existing attempt does not authorize another local write",
@@ -1687,6 +1695,12 @@ impl Store {
             "INSERT INTO action_history(case_id,action_id,sequence,record_sha256,parent_hash,event_hash) VALUES(?1,?2,?3,?4,?5,?6)",
             params![action.case_id,action.action_id,sequence,sha,parent_hash,event_hash],
         ))?;
+        if live.is_some_and(|(_, deadline)| Instant::now() >= deadline) {
+            return Err(failure(
+                "DEADLINE",
+                "file action phase is past the Goal deadline",
+            ));
+        }
         sql(transaction.commit())?;
         Ok(())
     }
