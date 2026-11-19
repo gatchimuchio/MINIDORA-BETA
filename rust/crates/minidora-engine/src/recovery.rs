@@ -19,7 +19,7 @@ use crate::{
 };
 use minidora_domain::*;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::Read,
     path::{Component, Path},
@@ -2995,50 +2995,169 @@ fn verified_partial_retrieval(
 
 pub(crate) const PREVIOUS_DIRECT_RETRIEVAL_NODE: &str = "previous-direct-retrieval";
 
+pub(crate) struct DirectContinuation<'a> {
+    pub(crate) source: &'a ResultRecord,
+    pub(crate) uri: String,
+    pub(crate) observed_routes: BTreeSet<String>,
+}
+
 pub(crate) fn next_direct_retrieval<'a>(
     store: &Store,
     actor: &str,
     bundle: &InputBundle,
     previous: Option<&'a ResultRecord>,
-) -> Result<Option<(&'a ResultRecord, String)>> {
+    prior_results: &BTreeMap<String, ResultRecord>,
+) -> Result<Option<DirectContinuation<'a>>> {
     let Some(source) = previous else {
         return Ok(None);
     };
-    if bundle.meaning.context_result_ref.as_ref() != Some(&source.id)
-        || bundle.context_sha256 != identity(&Some(source))?
-    {
-        return Err(failure(
+    let invalid = || {
+        failure(
             "SOURCE_CONTEXT_INVALID",
-            "The continuation does not match its sealed prior result",
-        ));
+            "The direct continuation differs from its sealed acquisition chain",
+        )
+    };
+    if !binds_direct_predecessor(bundle, source)? {
+        return Err(invalid());
+    }
+    let case = &bundle.request.case_id;
+    let mut root = source;
+    let mut visited = BTreeSet::new();
+    let mut steps = Vec::new();
+    while root.lifecycle == Lifecycle::Commit {
+        if !visited.insert(&root.id) {
+            return Err(invalid());
+        }
+        let (_, sealed) = store
+            .get_input_bundle(actor, case, &root.input_id, root.input_version)?
+            .ok_or_else(invalid)?;
+        if !matches!(sealed.meaning.intent, Intent::FetchNextUnobservedSource) && steps.is_empty() {
+            return Ok(None);
+        }
+        let parent = sealed
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if !matches!(sealed.meaning.intent, Intent::FetchNextUnobservedSource)
+            || identity(&sealed.request)? != root.id
+            || !binds_direct_predecessor(&sealed, parent)?
+            || store
+                .get_input_result(actor, case, &root.input_id, root.input_version)?
+                .as_ref()
+                != Some(root)
+        {
+            return Err(invalid());
+        }
+        steps.push((parent, root, sealed.request));
+        root = parent;
     }
     let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
-        crate::text_summary::partial_retrieval_stop(source)
+        crate::text_summary::partial_retrieval_stop(root)
     else {
-        return Ok(None);
+        return if steps.is_empty() {
+            Ok(None)
+        } else {
+            Err(invalid())
+        };
     };
-    let Some(original) =
-        verified_partial_retrieval(store, actor, &bundle.request.case_id, source, &stop)?
-    else {
-        return Ok(None);
+    let Some(original) = verified_partial_retrieval(store, actor, case, root, &stop)? else {
+        return if steps.is_empty() {
+            Ok(None)
+        } else {
+            Err(invalid())
+        };
     };
     let Intent::Retrieve { urls, .. } = original.meaning.intent else {
-        return Ok(None);
+        return Err(invalid());
     };
-    let mut urls = urls.into_iter();
-    let uri = urls
-        .nth(source.evidence.len())
-        .expect("verified pending URL");
-    let target = crate::ports::approved_url(&uri, &original.request.permissions)?;
-    if source
+    let mut urls = urls.into_iter().skip(root.evidence.len());
+    let mut observed_routes: BTreeSet<_> = root
         .evidence
         .iter()
         .flat_map(|packet| &packet.redirect_chain)
-        .any(|observed| observed == target.as_str())
-    {
+        .cloned()
+        .collect();
+    for (parent, result, request) in steps.into_iter().rev() {
+        let uri = urls.next().ok_or_else(invalid)?;
+        let packet =
+            verify_direct_continuation_body(parent, result, &request, &uri, &observed_routes)?;
+        let parent_ref = verified_artifact(store, actor, case, parent)?;
+        let packet_ref = verified_artifact(store, actor, case, packet)?;
+        let graph_ref = result.execution_graph_ref.as_ref().ok_or_else(invalid)?;
+        let graph: serde_json::Value =
+            serde_json::from_slice(&store.get_bytes(actor, case, graph_ref)?)?;
+        let nodes = graph[0].as_array().ok_or_else(invalid)?;
+        let starts = (request.budget.max_actions as usize)
+            .checked_sub(nodes.len().saturating_sub(1))
+            .ok_or_else(invalid)?;
+        if packet.redirect_chain.len() > starts
+            || graph[1][PREVIOUS_DIRECT_RETRIEVAL_NODE].as_str() != Some(&parent_ref)
+            || graph[1]["source-0"].as_str() != Some(&packet_ref)
+            || graph[5]["source-0"]
+                != serde_json::json!({ (PREVIOUS_DIRECT_RETRIEVAL_NODE): parent_ref })
+            || graph[5]["compute"] != serde_json::json!({ "source-0": packet_ref })
+        {
+            return Err(invalid());
+        }
+        observed_routes.extend(packet.redirect_chain.iter().cloned());
+    }
+    let Some(uri) = urls.next() else {
+        return Ok(None);
+    };
+    // Match saved normalized routes without requiring the original grant on
+    // URLs the original acquisition never reached. The new port checks its grant.
+    if url::Url::parse(&uri).is_ok_and(|uri| observed_routes.contains(uri.as_str())) {
         return Ok(None);
     }
-    Ok(Some((source, uri)))
+    Ok(Some(DirectContinuation {
+        source,
+        uri,
+        observed_routes,
+    }))
+}
+
+fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Result<bool> {
+    Ok(
+        bundle.meaning.context_result_ref.as_ref() == Some(&previous.id)
+            && bundle.context_sha256 == identity(&Some(previous))?,
+    )
+}
+
+fn verify_direct_continuation_body<'a>(
+    source: &ResultRecord,
+    result: &'a ResultRecord,
+    request: &RequestEnvelope,
+    uri: &str,
+    observed_routes: &BTreeSet<String>,
+) -> Result<&'a EvidencePacket> {
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "The direct continuation packet or report differs from the pending URL",
+        )
+    };
+    let [packet] = result.evidence.as_slice() else {
+        return Err(invalid());
+    };
+    crate::ports::validate_successful_packet(packet, &request.permissions)?;
+    if packet.request_uri != uri
+        || packet.raw_body.len() > request.budget.max_evidence_bytes
+        || packet
+            .redirect_chain
+            .iter()
+            .any(|route| observed_routes.contains(route))
+        || result.dependencies != [source.id.clone(), packet.id.clone()]
+        || result.guarantee != Guarantee::SourceReport
+        || result
+            .content_plan
+            .as_ref()
+            .is_none_or(|plan| plan.required_units != [crate::core::direct_source_line(packet)])
+    {
+        return Err(invalid());
+    }
+    Ok(packet)
 }
 
 fn first_hop_wait_matches(
@@ -4694,36 +4813,29 @@ fn inspect(
             .context_result_ref
             .as_ref()
             .and_then(|id| state.prior_results.get(id));
-        let (source, uri) =
-            next_direct_retrieval(store, actor, bundle, previous)?.ok_or_else(invalid)?;
-        let [packet] = result.evidence.as_slice() else {
-            return Err(invalid());
-        };
-        crate::ports::validate_successful_packet(packet, &goal.permissions)?;
+        let continuation =
+            next_direct_retrieval(store, actor, bundle, previous, &state.prior_results)?
+                .ok_or_else(invalid)?;
+        let packet = verify_direct_continuation_body(
+            continuation.source,
+            result,
+            request,
+            &continuation.uri,
+            &continuation.observed_routes,
+        )?;
         let allowed_starts = (goal.budget.max_actions as usize)
             .checked_sub(nodes.len().saturating_sub(1))
             .ok_or_else(invalid)?;
-        if packet.request_uri != uri
-            || packet.raw_body.len() > goal.budget.max_evidence_bytes
-            || packet.redirect_chain.len() > allowed_starts
-            || source
-                .evidence
-                .iter()
-                .flat_map(|observed| &observed.redirect_chain)
-                .any(|route| packet.redirect_chain.contains(route))
-            || result.dependencies != [source.id.clone(), packet.id.clone()]
-            || result.guarantee != Guarantee::SourceReport
-            || plan.required_units != [crate::core::direct_source_line(packet)]
-        {
+        if packet.redirect_chain.len() > allowed_starts {
             return Err(invalid());
         }
-        let reference = verified_artifact(store, actor, case, source)?;
+        let reference = verified_artifact(store, actor, case, continuation.source)?;
         expected_nodes.push(GoalNode {
             id: PREVIOUS_DIRECT_RETRIEVAL_NODE.into(),
             kind: GoalNodeKind::Evidence,
             requires: Vec::new(),
         });
-        Some((uri, reference))
+        Some((continuation.uri, reference))
     } else {
         None
     };

@@ -548,12 +548,8 @@ impl RetrievalBudget {
             .ok_or_else(|| failure(DEADLINE_EXCEEDED, RETRIEVAL_DEADLINE_ELAPSED))
     }
 
-    pub(crate) fn exclude_observed_routes(&mut self, packets: &[EvidencePacket]) {
-        self.observed_routes.extend(
-            packets
-                .iter()
-                .flat_map(|packet| packet.redirect_chain.iter().cloned()),
-        );
+    pub(crate) fn exclude_observed_routes(&mut self, routes: &BTreeSet<String>) {
+        self.observed_routes.extend(routes.iter().cloned());
     }
 
     fn reserve_start(&mut self, host: &str) -> Result<()> {

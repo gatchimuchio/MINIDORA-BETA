@@ -4045,8 +4045,13 @@ impl Engine {
             {
                 let latest_result = latest.as_ref().and_then(|case| case.result.as_ref());
                 let previous = previous.filter(|source| Some(*source) == latest_result);
-                match crate::recovery::next_direct_retrieval(&self.store, actor, &bundle, previous)
-                {
+                match crate::recovery::next_direct_retrieval(
+                    &self.store,
+                    actor,
+                    &bundle,
+                    previous,
+                    &state.prior_results,
+                ) {
                     Ok(Some(continuation)) => Some(continuation),
                     Ok(None) => {
                         return self.stop(
@@ -4072,7 +4077,7 @@ impl Engine {
             Intent::Retrieve { urls, .. } => Some(urls.as_slice()),
             Intent::FetchNextUnobservedSource => direct_continuation
                 .as_ref()
-                .map(|(_, uri)| std::slice::from_ref(uri)),
+                .map(|continuation| std::slice::from_ref(&continuation.uri)),
             _ => None,
         };
         let mut nodes = Vec::new();
@@ -8783,12 +8788,14 @@ impl Engine {
                     }
                 };
                 let mut source_requires = BTreeMap::new();
-                if let Some((source, _)) = direct_continuation.as_ref() {
-                    let reference = self.store.put_artifact(actor, &request.case_id, *source)?;
+                if let Some(continuation) = direct_continuation.as_ref() {
+                    let reference =
+                        self.store
+                            .put_artifact(actor, &request.case_id, continuation.source)?;
                     graph.observe(PREVIOUS_DIRECT_RETRIEVAL_NODE, &reference, &BTreeMap::new())?;
                     source_requires.insert(PREVIOUS_DIRECT_RETRIEVAL_NODE.into(), reference);
-                    result.dependencies.push(source.id.clone());
-                    retrieval.exclude_observed_routes(&source.evidence);
+                    result.dependencies.push(continuation.source.id.clone());
+                    retrieval.exclude_observed_routes(&continuation.observed_routes);
                 }
                 for (source_index, uri) in urls.iter().enumerate() {
                     let read = match ports::fetch_with_budget(
@@ -10534,20 +10541,21 @@ pub(crate) fn verify_retained_retry_source(
                         .context_result_ref
                         .as_ref()
                         .and_then(|id| state.prior_results.get(id));
-                    let (source, uri) = crate::recovery::next_direct_retrieval(
+                    let pending = crate::recovery::next_direct_retrieval(
                         store,
                         &state.actor_id,
                         &bundle,
                         previous,
+                        &state.prior_results,
                     )?
                     .ok_or_else(invalid)?;
                     let Some((reference, dependencies)) = result.dependencies.split_first() else {
                         return Err(invalid());
                     };
-                    if reference != &source.id {
+                    if reference != &pending.source.id {
                         return Err(invalid());
                     }
-                    continuation = uri;
+                    continuation = pending.uri;
                     (std::slice::from_ref(&continuation), dependencies)
                 }
                 _ => return Err(invalid()),
