@@ -1062,3 +1062,25 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `47f4172
 観測由来の仮説を別の通常要求で保持・説明する範囲を接続。再標本での実反例照合は未実装で、経験的採用契約は未提示。W12・W18・E1出口は `PARTIAL`、CAP-D05は `UNVERIFIED`、E2合同ゲート・体系QC・独立QAは `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `4fffd49` と `aab4a86`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（domain、Input、Core、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B105 — D3-C E1-W12 再標本を保持済み仮説と照合して反例を記録
+
+着工点は `dc0e7e5158c8a87ab0c3eb51f3b49af1abd4e496`。D2仕様・D2工程・D3-C指示の採用SHAを照合。利用者が同じケースで保持したグループ平均の仮説に対し、「前回の仮説を次の標本で照合して:」と改行後のJSON表を受け付ける。Coreが元の封印入力、統計結果、仮説を再照合し、新標本の同じ列・群集合・単位を確認する。各群の厳密値と件数の組が元標本と等しい場合は、行順や数値表記の違いにかかわらず再利用として停止する。
+
+同じ群が単独首位の場合は `MATCHED_ON_SAMPLE`、同率または別の群が首位の場合は `COUNTEREXAMPLE_ON_SAMPLE` を別の版付き成果物に記録する。元仮説への参照、新標本・集計への参照、実際の平均、反例となった集計への参照を保持する。後続の「前回の仮説を説明して」は直前の照合結果と標本を再計算して表示する。独立採取は未確認で、元仮説は `HYPOTHESIS_RETAINED`、結果の保証は `HYPOTHESIS`。通常の関係推論のFact・Ruleとは分けて保持する。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `6b89de75324f3f0a4d1c3acd14548a8d69f35beb3cc3ff60b02371425bbdd140`。最終検査は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib group_mean_hypothesis --locked -- --nocapture` | 4 PASS。単独首位の一致、厳密値 `17/2` と `8.5` の同率反例、再梱包した元標本・群と列と単位の不一致・出力権限不足を確認。照合成果物の差し替えは復旧で拒否。同一作用IDで既存ファイルを読み戻し、更新時刻・元仮説・Fact/Ruleを保持。 |
+| `cargo test -p minidora-engine --lib recovery::tests::ordinary_why_ --locked` | 2 PASS。証明保存型の合成規則、生成、復旧を再確認。 |
+| `cargo test -p minidora-engine --test core_construction_observation_06 --locked`、`cargo test -p minidora-engine --lib local_file --locked` | 1 PASSと2 PASS。権限・予算・取消・未知結果の停止と、発行期限・二重取得の拒否。 |
+| `cargo test -p minidora-cli --test normal_route natural_group_mean_question --locked`、同 `agreeing_examples_do_not_promote_a_universal_empirical_rule` フィルタ | 3 PASSと1 PASS。既存の群平均比較と経験的な一般化の抑止。 |
+| `cargo build -p minidora-cli --locked`、続けて `minidora-rust --db … --case sample --actor alice --json --input …` を4プロセスで起動 | PASS。提示した標本で首位が乙から甲へ変わる反例を計算し、許可ファイルの実バイトと受領を照合。別プロセスの説明でも同じ結果を再生。 |
+| `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+W12のグループ平均経路は、観測、仮説保持、新標本による反例、再起動後の後続説明まで接続。母集団・独立採取・時点・期限・経験的採用契約は未提示。CAP-D05は `UNVERIFIED`。W18のE1出口に必要な同一版での循環A/Bと停止経路の結合判定、E2合同ゲート、体系QC、独立QAは `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `dc0e7e5` と `4fffd49`。資産計8件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中6件（domain、Input、Core、Document、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。

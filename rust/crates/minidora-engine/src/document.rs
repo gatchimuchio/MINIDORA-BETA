@@ -1556,6 +1556,16 @@ pub(crate) fn previous_json_table_highest_group_mean(
                 "the prior grouped-statistics report cannot be decoded",
             )
         })?;
+    Ok(Some((
+        source_ref,
+        report_ref,
+        json_table_highest_group_mean(&report)?,
+    )))
+}
+
+pub(crate) fn json_table_highest_group_mean(
+    report: &crate::ports::JsonTableGroupStatisticsReport,
+) -> Result<JsonGroupMeanAnswer> {
     let first = report.groups.first().ok_or_else(|| {
         failure(
             "JSON_GROUP_MEAN_CONTEXT_INVALID",
@@ -1620,16 +1630,15 @@ pub(crate) fn previous_json_table_highest_group_mean(
             }
         })
         .collect();
-    let answer = JsonGroupMeanAnswer {
-        source_sha256: report.source_sha256,
-        group_by: report.group_by,
-        value_column: report.value_column,
+    Ok(JsonGroupMeanAnswer {
+        source_sha256: report.source_sha256.clone(),
+        group_by: report.group_by.clone(),
+        value_column: report.value_column.clone(),
         comparison_unit,
         comparisons,
         winners,
         guarantee: "exact comparison of the revalidated per-group means from this supplied JSON string table; no population representativeness or external-world claim".into(),
-    };
-    Ok(Some((source_ref, report_ref, answer)))
+    })
 }
 
 pub(crate) fn json_group_mean_answer_lines(answer: &JsonGroupMeanAnswer) -> Vec<String> {

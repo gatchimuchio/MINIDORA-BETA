@@ -3248,6 +3248,7 @@ fn inspect(
                     | Intent::DraftRelationProfile { .. }
                     | Intent::RetainPreviousGroupMeanHypothesis
                     | Intent::ExplainPreviousGroupMeanHypothesis
+                    | Intent::AssessPreviousGroupMeanHypothesis { .. }
             )
             && !saved_comparison_explanation
             && !saved_relation_profile_explanation)
@@ -3272,13 +3273,13 @@ fn inspect(
         if result.guarantee != Guarantee::Hypothesis
             || result.dependencies != hypothesis.dependencies
             || plan.required_units != hypothesis.units
-            || store.get_bytes(actor, case, &digest(&hypothesis.bytes))? != hypothesis.bytes
         {
             return Err(failure(
                 "RECOVERY_GROUP_MEAN_HYPOTHESIS_CHANGED",
                 "the retained hypothesis and its observation no longer match the adopted result",
             ));
         }
+        hypothesis.verify_artifacts(store, actor, case)?;
     }
     verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?;
     let source_summary =
@@ -4810,6 +4811,214 @@ mod tests {
             engine.store.load_memory("alice").unwrap(),
             MemoryState::default()
         );
+    }
+
+    #[test]
+    fn group_mean_hypothesis_assessment_records_a_tie_and_reconciles_its_report() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let execute = |engine: &mut Engine, id: &str, text: &str| {
+            engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap()
+        };
+        let observed = execute(
+            &mut engine,
+            "sample",
+            "JSON表の「班」ごとに「値」の統計量を計算して:\n{\"columns\":[\"班\",\"値\"],\"rows\":[[\"甲\",\"1\"],[\"甲\",\"5\"],[\"乙\",\"9\"],[\"乙\",\"7\"]]}",
+        );
+        assert_eq!(observed.lifecycle, Lifecycle::Commit);
+        let retained = execute(
+            &mut engine,
+            "retain",
+            "前回のグループ別統計から仮説を保持して",
+        );
+        assert_eq!(retained.lifecycle, Lifecycle::Commit);
+        let hypothesis_ref = retained.dependencies.last().unwrap();
+        let hypothesis_bytes = engine
+            .store
+            .get_bytes("alice", "case", hypothesis_ref)
+            .unwrap();
+        let explained = execute(&mut engine, "explain-before", "前回の仮説を説明して");
+        assert_eq!(explained.lifecycle, Lifecycle::Commit);
+        drop(engine);
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let matched = execute(
+            &mut engine,
+            "matched",
+            "前回の仮説を次の標本で照合して:\n{\"columns\":[\"値\",\"班\"],\"rows\":[[\"10\",\"乙\"],[\"6\",\"甲\"]]}",
+        );
+        assert_eq!(matched.lifecycle, Lifecycle::Commit, "{matched:?}");
+        assert_eq!(matched.guarantee, Guarantee::Hypothesis);
+        assert!(matched.text.contains("MATCHED_ON_SAMPLE"));
+        let matching_record: serde_json::Value = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", matched.dependencies.last().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matching_record["counterexample_refs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let second_sample = r#"{"columns":["班","値"],"rows":[["甲","17/2"],["乙","8.5"]]}"#;
+        let mut request = RequestEnvelope::new(
+            "case",
+            "counterexample",
+            "alice",
+            &format!("前回の仮説を次の標本で照合して:\n{second_sample}"),
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let assessed = engine.execute("alice", request).unwrap();
+        assert_eq!(assessed.lifecycle, Lifecycle::Commit, "{assessed:?}");
+        assert_eq!(assessed.guarantee, Guarantee::Hypothesis);
+        assert!(assessed.text.contains("COUNTEREXAMPLE_ON_SAMPLE"));
+        assert_eq!(assessed.dependencies[0], retained.id);
+        assert_eq!(&assessed.dependencies[1..5], retained.dependencies);
+        assert_eq!(assessed.dependencies[5], digest(second_sample.as_bytes()));
+        let assessment_ref = assessed.dependencies.last().unwrap();
+        let record: serde_json::Value = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", assessment_ref)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["hypothesis_sha256"], *hypothesis_ref);
+        assert_eq!(record["adoption_state"], "HYPOTHESIS_RETAINED");
+        assert_eq!(record["outcome"], "COUNTEREXAMPLE_ON_SAMPLE");
+        assert_eq!(record["sample"]["winners"].as_array().unwrap().len(), 2);
+        assert_eq!(record["sample"]["winners"][0]["mean"], "17/2");
+        assert_eq!(
+            record["counterexample_refs"],
+            serde_json::json!([assessed.dependencies[6]])
+        );
+
+        let actual_bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(actual_bytes, assessed.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let state = engine.latest("alice", "case").unwrap().unwrap();
+        let mut altered = assessed.clone();
+        *altered.dependencies.last_mut().unwrap() = matched.dependencies.last().unwrap().clone();
+        let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_GROUP_MEAN_HYPOTHESIS_CHANGED"),
+            "{error:?}"
+        );
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(recovered.dependencies, assessed.dependencies);
+        assert_eq!(fs::read(&fixture.target).unwrap(), actual_bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let explanation = execute(&mut engine, "explain-after", "前回の仮説を説明して");
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.text, recovered.text);
+        assert_eq!(explanation.dependencies[1], assessed.id);
+        assert_eq!(
+            engine
+                .store
+                .get_bytes("alice", "case", hypothesis_ref)
+                .unwrap(),
+            hypothesis_bytes
+        );
+        assert_eq!(
+            engine.store.load_memory("alice").unwrap(),
+            MemoryState::default()
+        );
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn group_mean_hypothesis_assessment_requires_distinct_in_scope_observations_and_authority() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let observed = engine.execute(
+            "alice",
+            RequestEnvelope::new("case", "sample", "alice",
+                "JSON表の「班」ごとに「値」の統計量を計算して:\n{\"columns\":[\"班\",\"値\"],\"rows\":[[\"甲\",\"3m\"],[\"乙\",\"8m\"]]}"),
+        ).unwrap();
+        assert_eq!(observed.lifecycle, Lifecycle::Commit);
+        let retained = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "retain",
+                    "alice",
+                    "前回のグループ別統計から仮説を保持して",
+                ),
+            )
+            .unwrap();
+        assert_eq!(retained.lifecycle, Lifecycle::Commit);
+        for (id, table, code) in [
+            (
+                "alias",
+                r#"{ "columns": ["値","班"], "rows": [["8.0m","乙"],["3.00m","甲"]] }"#,
+                "GROUP_MEAN_HYPOTHESIS_SAMPLE_REUSED",
+            ),
+            (
+                "groups",
+                r#"{"columns":["班","値"],"rows":[["甲","4m"],["丙","9m"]]}"#,
+                "GROUP_MEAN_HYPOTHESIS_SCOPE_MISMATCH",
+            ),
+            (
+                "units",
+                r#"{"columns":["班","値"],"rows":[["甲","4cm"],["乙","9cm"]]}"#,
+                "GROUP_MEAN_HYPOTHESIS_SCOPE_MISMATCH",
+            ),
+            (
+                "measure",
+                r#"{"columns":["班","別の値"],"rows":[["甲","4m"],["乙","9m"]]}"#,
+                "JSON_TABLE_GROUP_STATISTICS_COLUMN",
+            ),
+            (
+                "unauthorized",
+                r#"{"columns":["班","値"],"rows":[["甲","9m"],["乙","2m"]]}"#,
+                "WRITE_PERMISSION_MISSING",
+            ),
+        ] {
+            let mut request = RequestEnvelope::new(
+                "case",
+                id,
+                "alice",
+                &format!("前回の仮説を次の標本で照合して:\n{table}"),
+            );
+            request.context_ref = Some(retained.id.clone());
+            request.output_path = Some(fixture.target.clone());
+            if id != "unauthorized" {
+                request
+                    .permissions
+                    .write_paths
+                    .insert(fixture.target.clone());
+            }
+            let result = engine.execute("alice", request).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Suspend, "{result:?}");
+            assert!(
+                result.reason.as_deref().unwrap().starts_with(code),
+                "{result:?}"
+            );
+            assert!(!fixture.target.exists());
+            assert!(engine.store.actions("alice", "case").unwrap().is_empty());
+        }
     }
 
     #[test]

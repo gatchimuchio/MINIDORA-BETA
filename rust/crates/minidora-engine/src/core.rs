@@ -6290,7 +6290,8 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
             }
             Intent::RetainPreviousGroupMeanHypothesis
-            | Intent::ExplainPreviousGroupMeanHypothesis => {
+            | Intent::ExplainPreviousGroupMeanHypothesis
+            | Intent::AssessPreviousGroupMeanHypothesis { .. } => {
                 let hypothesis = match previous_group_mean_hypothesis(&self.store, &state) {
                     Ok(Some(hypothesis)) => hypothesis,
                     Ok(None) => unreachable!("group mean hypothesis intent already matched"),
@@ -6299,9 +6300,10 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 };
-                if matches!(goal.intent, Intent::RetainPreviousGroupMeanHypothesis) {
-                    self.store
-                        .put_bytes(actor, &request.case_id, &hypothesis.bytes)?;
+                if !matches!(goal.intent, Intent::ExplainPreviousGroupMeanHypothesis) {
+                    for bytes in &hypothesis.artifacts {
+                        self.store.put_bytes(actor, &request.case_id, bytes)?;
+                    }
                 }
                 result.dependencies = hypothesis.dependencies;
                 units = hypothesis.units;
@@ -9759,9 +9761,23 @@ struct RetainedGroupMeanHypothesis<'a> {
 }
 
 pub(crate) struct GroupMeanHypothesisPlan {
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) artifacts: Vec<Vec<u8>>,
     pub(crate) dependencies: Vec<String>,
     pub(crate) units: Vec<String>,
+}
+
+impl GroupMeanHypothesisPlan {
+    pub(crate) fn verify_artifacts(&self, store: &Store, actor: &str, case: &str) -> Result<()> {
+        for bytes in &self.artifacts {
+            if store.get_bytes(actor, case, &digest(bytes))? != *bytes {
+                return Err(failure(
+                    "GROUP_MEAN_HYPOTHESIS_SOURCE_MISMATCH",
+                    "保存済みの仮説成果物が再計算した内容と一致しません。",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Resolve the sealed prior observation, or verify a prior retention against
@@ -9773,11 +9789,17 @@ pub(crate) fn previous_group_mean_hypothesis(
     let Some(bundle) = &state.bundle else {
         return Ok(None);
     };
-    let explain = match bundle.meaning.intent {
-        Intent::RetainPreviousGroupMeanHypothesis => false,
-        Intent::ExplainPreviousGroupMeanHypothesis => true,
+    let new_document = match &bundle.meaning.intent {
+        Intent::RetainPreviousGroupMeanHypothesis | Intent::ExplainPreviousGroupMeanHypothesis => {
+            None
+        }
+        Intent::AssessPreviousGroupMeanHypothesis { document } => Some(document.as_str()),
         _ => return Ok(None),
     };
+    let forming = matches!(
+        bundle.meaning.intent,
+        Intent::RetainPreviousGroupMeanHypothesis
+    );
     let actor = &state.actor_id;
     let case = &state.case_id;
     let context_error = || {
@@ -9793,6 +9815,9 @@ pub(crate) fn previous_group_mean_hypothesis(
         .and_then(|id| state.prior_results.get(id))
         .filter(|result| result.lifecycle == Lifecycle::Commit)
         .ok_or_else(context_error)?;
+    if identity(&Some(prior))? != bundle.context_sha256 {
+        return Err(context_error());
+    }
     let exact_input = |result: &ResultRecord| -> Result<Intent> {
         let (_, input) = store
             .get_input_bundle(actor, case, &result.input_id, result.input_version)?
@@ -9802,16 +9827,44 @@ pub(crate) fn previous_group_mean_hypothesis(
         }
         Ok(input.meaning.intent)
     };
-    let observation = if explain {
-        if prior.guarantee != Guarantee::Hypothesis
+    let previous_retention = || {
+        prior
+            .dependencies
+            .first()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(context_error)
+    };
+    let mut earlier_assessment_document = None;
+    let retained = if forming {
+        None
+    } else {
+        if prior.guarantee != Guarantee::Hypothesis {
+            return Err(context_error());
+        }
+        let retention = match exact_input(prior)? {
+            Intent::RetainPreviousGroupMeanHypothesis => prior,
+            Intent::AssessPreviousGroupMeanHypothesis { document } => {
+                earlier_assessment_document = Some(document);
+                previous_retention()?
+            }
+            Intent::ExplainPreviousGroupMeanHypothesis if new_document.is_some() => {
+                previous_retention()?
+            }
+            _ => return Err(context_error()),
+        };
+        if retention.lifecycle != Lifecycle::Commit
+            || retention.guarantee != Guarantee::Hypothesis
             || !matches!(
-                exact_input(prior)?,
+                exact_input(retention)?,
                 Intent::RetainPreviousGroupMeanHypothesis
             )
         {
             return Err(context_error());
         }
-        prior
+        Some(retention)
+    };
+    let observation = if let Some(retention) = retained {
+        retention
             .dependencies
             .first()
             .and_then(|id| state.prior_results.get(id))
@@ -9880,37 +9933,169 @@ pub(crate) fn previous_group_mean_hypothesis(
         "母集団・観測時点・事前の採用契約が確認できないため、採用は保留です。".into(),
         format!("元の標本 SHA-256 {source_ref}"),
     ];
-    if bytes
-        .len()
-        .saturating_add(units.iter().map(String::len).sum::<usize>())
-        > bundle.request.budget.max_evidence_bytes
-    {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "仮説と出所が要求の証拠予算を超えました。",
-        ));
-    }
-    let mut dependencies = vec![
-        observation.id.clone(),
-        source_ref,
-        statistics_ref,
-        reference.clone(),
-    ];
-    if explain {
-        if prior.dependencies != dependencies || store.get_bytes(actor, case, &reference)? != bytes
-        {
+    let mut plan = GroupMeanHypothesisPlan {
+        artifacts: vec![bytes],
+        dependencies: vec![
+            observation.id.clone(),
+            source_ref,
+            statistics_ref,
+            reference.clone(),
+        ],
+        units,
+    };
+    if let Some(retention) = retained {
+        if retention.dependencies != plan.dependencies {
             return Err(failure(
                 "GROUP_MEAN_HYPOTHESIS_SOURCE_MISMATCH",
                 "保持済み仮説が元の標本と一致しません。",
             ));
         }
-        dependencies.insert(0, prior.id.clone());
+        plan.verify_artifacts(store, actor, case)?;
+        plan.dependencies.insert(0, retention.id.clone());
+        if let Some(document) = new_document.or(earlier_assessment_document.as_deref()) {
+            let original = serde_json::from_str(&observation.text)?;
+            plan = assess_group_mean_hypothesis(
+                document,
+                &original,
+                &leader.group,
+                &retention.id,
+                &reference,
+                plan.dependencies,
+            )?;
+            if new_document.is_none() {
+                if prior.dependencies != plan.dependencies {
+                    return Err(failure(
+                        "GROUP_MEAN_HYPOTHESIS_SOURCE_MISMATCH",
+                        "保存済みの照合結果が新標本と一致しません。",
+                    ));
+                }
+                plan.verify_artifacts(store, actor, case)?;
+                plan.dependencies.insert(1, prior.id.clone());
+            }
+        }
     }
-    Ok(Some(GroupMeanHypothesisPlan {
-        bytes,
+    let bytes_used = plan
+        .artifacts
+        .iter()
+        .map(Vec::len)
+        .chain(plan.units.iter().map(String::len))
+        .sum::<usize>();
+    if bytes_used > bundle.request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "仮説と出所が要求の証拠予算を超えました。",
+        ));
+    }
+    Ok(Some(plan))
+}
+
+#[derive(serde::Serialize)]
+struct GroupMeanHypothesisAssessment<'a> {
+    kind: &'static str,
+    adoption_state: &'static str,
+    outcome: &'static str,
+    hypothesis_result_id: &'a str,
+    hypothesis_sha256: &'a str,
+    candidate_group: &'a str,
+    sample: &'a crate::document::JsonGroupMeanAnswer,
+    statistics_sha256: &'a str,
+    counterexample_refs: &'a [String],
+}
+
+fn assess_group_mean_hypothesis(
+    document: &str,
+    original: &ports::JsonTableGroupStatisticsReport,
+    candidate: &str,
+    hypothesis_result_id: &str,
+    hypothesis_ref: &str,
+    mut dependencies: Vec<String>,
+) -> Result<GroupMeanHypothesisPlan> {
+    fn group_values(report: &ports::JsonTableGroupStatisticsReport) -> BTreeMap<&str, &[String]> {
+        report
+            .groups
+            .iter()
+            .map(|group| {
+                (
+                    group.value.as_str(),
+                    group.statistics.sorted_values.as_slice(),
+                )
+            })
+            .collect()
+    }
+
+    let statistics =
+        ports::json_table_group_statistics(document, &original.group_by, &original.value_column)?;
+    let sample = crate::document::json_table_highest_group_mean(&statistics)?;
+    let original_values = group_values(original);
+    let repeat_values = group_values(&statistics);
+    if !original_values.keys().eq(repeat_values.keys())
+        || sample.comparison_unit != original.groups[0].statistics.unit
+    {
+        return Err(failure(
+            "GROUP_MEAN_HYPOTHESIS_SCOPE_MISMATCH",
+            "同じ群の集合・測定項目・単位で得た標本が必要です。",
+        ));
+    }
+    if original_values == repeat_values {
+        return Err(failure(
+            "GROUP_MEAN_HYPOTHESIS_SAMPLE_REUSED",
+            "各群の厳密値とその件数が元の標本と同じです。",
+        ));
+    }
+    let matches_prediction =
+        matches!(sample.winners.as_slice(), [winner] if winner.group == candidate);
+    let statistics_bytes = canonical(&statistics)?;
+    let statistics_ref = digest(&statistics_bytes);
+    let assessment = canonical(&GroupMeanHypothesisAssessment {
+        kind: "minidora.learning.group-mean-hypothesis-assessment.v1",
+        adoption_state: "HYPOTHESIS_RETAINED",
+        outcome: if matches_prediction {
+            "MATCHED_ON_SAMPLE"
+        } else {
+            "COUNTEREXAMPLE_ON_SAMPLE"
+        },
+        hypothesis_result_id,
+        hypothesis_sha256: hypothesis_ref,
+        candidate_group: candidate,
+        sample: &sample,
+        statistics_sha256: &statistics_ref,
+        counterexample_refs: if matches_prediction {
+            &[]
+        } else {
+            std::slice::from_ref(&statistics_ref)
+        },
+    })?;
+    let candidate_mean = &sample
+        .comparisons
+        .iter()
+        .find(|entry| entry.group == candidate)
+        .expect("the candidate is in the verified group set")
+        .mean;
+    let winners = sample
+        .winners
+        .iter()
+        .map(|winner| format!("{:?}", winner.group))
+        .collect::<Vec<_>>()
+        .join("、");
+    let units = vec![
+        if matches_prediction {
+            "今回の標本では仮説と一致し、反例は観測されませんでした（MATCHED_ON_SAMPLE）。".into()
+        } else {
+            "今回の標本では候補群が単独首位を外れ、反例が観測されました（COUNTEREXAMPLE_ON_SAMPLE）。".into()
+        },
+        format!(
+            "候補群 {candidate:?} の平均は {candidate_mean}、最大平均は {}（{winners}）です。",
+            sample.winners[0].mean
+        ),
+        "この判定の範囲は提示された標本です。独立採取は未確認で、仮説の採用は保留です。".into(),
+        format!("照合した標本 SHA-256 {}", sample.source_sha256),
+    ];
+    dependencies.extend([sample.source_sha256, statistics_ref, digest(&assessment)]);
+    Ok(GroupMeanHypothesisPlan {
+        artifacts: vec![document.as_bytes().to_vec(), statistics_bytes, assessment],
         dependencies,
         units,
-    }))
+    })
 }
 
 fn select_rule_grammar_adaptation(

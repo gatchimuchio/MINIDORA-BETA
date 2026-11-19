@@ -1650,6 +1650,19 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
     if let Some(intent) = calculation_sequence_intent(text, header)? {
         return Ok(Some(intent));
     }
+    if matches!(
+        header,
+        "前回の仮説を次の標本で照合して:" | "前回の仮説を次の標本で照合して："
+    ) {
+        return Ok(Some(match text.split_once('\n') {
+            Some((_, document)) => Intent::AssessPreviousGroupMeanHypothesis {
+                document: document.into(),
+            },
+            None => Intent::Unknown {
+                reason: "仮説の照合には改行に続くJSON標本が必要です。".into(),
+            },
+        }));
+    }
     if matches!(header, "コードを生成して:" | "コードを生成して：")
         || header.eq_ignore_ascii_case("code-generate:")
     {
