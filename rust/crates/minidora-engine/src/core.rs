@@ -8569,8 +8569,20 @@ impl Engine {
                             &BTreeMap::new(),
                         )?;
                     }
+                    let refused_dns = packet.failure.as_deref() == Some("PRIVATE_READ_TARGET");
                     result.dependencies.push(packet.id.clone());
                     result.evidence.push(packet);
+                    // Keep the refusal terminal even when the port could
+                    // retain evidence of an earlier redirect response.
+                    if refused_dns {
+                        state.result = Some(result);
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "EVIDENCE_UNAVAILABLE",
+                            &ports::private_dns_refusal().to_string(),
+                        );
+                    }
                 }
                 if result
                     .evidence

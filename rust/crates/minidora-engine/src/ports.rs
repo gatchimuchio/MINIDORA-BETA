@@ -201,10 +201,7 @@ fn client(url: &Url, budget: &RetrievalBudget) -> Result<Client> {
                 .iter()
                 .any(|address| !public_address(address.ip()))
         {
-            return Err(failure(
-                "PRIVATE_READ_TARGET",
-                "Direct DNS did not yield exclusively public addresses",
-            ));
+            return Err(private_dns_refusal());
         }
         builder = builder.resolve_to_addrs(host, &addresses);
     }
@@ -622,20 +619,7 @@ pub(crate) fn fetch_with_budget(
     loop {
         let host = url.host_str().expect("approved domain");
         if let Err(error) = budget.reserve_start(host) {
-            let (Some(last), minidora_domain::Error::Contract { code, .. }) =
-                (redirects.last(), &error)
-            else {
-                return Err(error);
-            };
-            return packet(
-                &redirects,
-                raw_url,
-                last,
-                previous_status,
-                vec![],
-                None,
-                Some(code),
-            );
+            return retain_redirect_refusal(raw_url, &redirects, previous_status, error);
         }
         redirects.push(url.to_string());
         let http = match client(&url, budget) {
@@ -645,7 +629,15 @@ pub(crate) fn fetch_with_budget(
                     minidora_domain::Error::Contract { code, .. }
                         if code == "PRIVATE_READ_TARGET" =>
                     {
-                        return Err(error);
+                        // The resolver refused the current hop before HTTP.
+                        // Only a previously observed redirect can be retained.
+                        redirects.pop();
+                        return retain_redirect_refusal(
+                            raw_url,
+                            &redirects,
+                            previous_status,
+                            error,
+                        );
                     }
                     minidora_domain::Error::Contract { code, .. }
                         if code == "HTTP_DEADLINE_EXCEEDED" =>
@@ -844,6 +836,35 @@ pub(crate) fn fetch_with_budget(
             Err(_) => finish(raw, None, Some("EVIDENCE_DECODE_FAILED")),
         };
     }
+}
+
+pub(crate) fn private_dns_refusal() -> minidora_domain::Error {
+    failure(
+        "PRIVATE_READ_TARGET",
+        "Direct DNS did not yield exclusively public addresses",
+    )
+}
+
+fn retain_redirect_refusal(
+    raw_url: &str,
+    responding_urls: &[String],
+    previous_status: u16,
+    error: minidora_domain::Error,
+) -> Result<EvidencePacket> {
+    let (Some(last), minidora_domain::Error::Contract { code, .. }) =
+        (responding_urls.last(), &error)
+    else {
+        return Err(error);
+    };
+    packet(
+        responding_urls,
+        raw_url,
+        last,
+        previous_status,
+        vec![],
+        None,
+        Some(code),
+    )
 }
 
 pub(crate) fn validate_successful_packet(
@@ -3325,6 +3346,29 @@ pub fn json_pointer_statistics(document: &str, pointer: &str) -> Result<JsonStat
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn refused_private_dns_retains_only_a_previous_http_response() {
+        let request = "https://source.example/start";
+        assert!(matches!(
+            retain_redirect_refusal(request, &[], 0, private_dns_refusal()),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "PRIVATE_READ_TARGET"
+        ));
+        let observed = vec![request.into(), "https://source.example/redirect".into()];
+        let failure =
+            retain_redirect_refusal(request, &observed, 307, private_dns_refusal()).unwrap();
+        assert_eq!(failure.packet_kind, "FETCH_FAILURE");
+        assert_eq!(failure.request_uri, request);
+        assert_eq!(failure.final_uri, observed[1]);
+        assert_eq!(failure.redirect_chain, observed);
+        assert_eq!(failure.independence_group, failure.final_uri);
+        assert_eq!(failure.http_status, 307);
+        assert_eq!(failure.failure.as_deref(), Some("PRIVATE_READ_TARGET"));
+        assert_eq!(failure.raw_sha256, digest(&[]));
+        assert!(failure.raw_body.is_empty());
+        assert!(failure.extracted_text.is_none() && failure.retry_after.is_none());
+        assert_eq!(failure.id, fetch_packet_identity(&failure).unwrap());
+    }
+
     #[test]
     fn retry_after_uses_valid_gmt_dates_and_bounds_unusable_headers() {
         let mut headers = HeaderMap::new();
