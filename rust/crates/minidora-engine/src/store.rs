@@ -1207,6 +1207,15 @@ impl Store {
     }
 
     pub fn append_case(&self, actor: &str, revision: &CaseRevision) -> Result<()> {
+        self.append_case_before(actor, revision, None)
+    }
+
+    pub(crate) fn append_case_before(
+        &self,
+        actor: &str,
+        revision: &CaseRevision,
+        deadline: Option<Instant>,
+    ) -> Result<()> {
         if actor != revision.actor_id || revision.schema_version != SCHEMA_VERSION {
             return Err(failure(
                 "ACCESS_DENIED",
@@ -1228,6 +1237,12 @@ impl Store {
             .transpose()?;
         let transaction = self.transaction()?;
         Self::require_case(&transaction, actor, &revision.case_id)?;
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            return Err(failure(
+                "DEADLINE",
+                "the Goal deadline elapsed before case persistence",
+            ));
+        }
         let registered = if let Some(fingerprint) = &revision.input_fingerprint {
             sql(transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM input_identity WHERE case_id=?1 AND fingerprint=?2)",
@@ -1371,6 +1386,12 @@ impl Store {
             params![revision.case_id, integer(revision.revision)?, revision.parent_revision.map(integer).transpose()?, sha, parent_hash, event_hash,
                 serde_json::to_value(revision.lifecycle)?.as_str().unwrap_or("INVALID"), revision.goal_sha256],
         ))?;
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            return Err(failure(
+                "DEADLINE",
+                "the Goal deadline elapsed before case persistence",
+            ));
+        }
         sql(transaction.commit())?;
         Ok(())
     }

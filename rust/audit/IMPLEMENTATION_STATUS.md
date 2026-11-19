@@ -1084,3 +1084,25 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `6b89de7
 W12のグループ平均経路は、観測、仮説保持、新標本による反例、再起動後の後続説明まで接続。母集団・独立採取・時点・期限・経験的採用契約は未提示。CAP-D05は `UNVERIFIED`。W18のE1出口に必要な同一版での循環A/Bと停止経路の結合判定、E2合同ゲート、体系QC、独立QAは `NOT_RUN`。
 
 復旧2世代のローカル参照・GitHubタグは `dc0e7e5` と `4fffd49`。資産計8件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中6件（domain、Input、Core、Document、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B106 — D3-C E1-W18 結合判定 CORE_SHAPED
+
+着工点は `75ac7b39c4e9d66fec8580438a784d81398a9d7f`。D2仕様・D2工程・D3-C指示の採用SHAを照合。Coreは関係説明の元Goalに `RELATION_PROOF_EXPLANATION_V1`、グループ平均の仮説結果に `GROUP_MEAN_HYPOTHESIS_RESULT_V1` を封印する。採用時に実際の証明・標本の計算から得た保証区分、参照、必須内容を計算成果物とContentPlanへ結び付ける。復旧では同じ証明または標本を再検証し、従来の述語列も受理する。
+
+通常実行の最終 `COMMIT` では、元Goalの単調時計の締切をSQLiteの書込トランザクション取得後と確定直前に照合する。期限到達時は `SUSPEND/DEADLINE` とし、既に確認した実ファイルと受領を保持する。同期I/O呼出し中の割込みと実時間上限の測定は後工程の対象。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。検査対象ソース差分SHA-256 `7e345287511cc5b5cf6082b8759feb8349bb520a0c24288fe552179056c90ede`。同一の差分で以下を実行し、すべてexit 0。
+
+| 結合点 | 実値の接続と検査 |
+|---|---|
+| I-A | `cargo test -p minidora-engine --test core_condition_evaluation_57 … --locked` の条件付き二前提1件と残り3件、`core_construction_observation_02` 1件。TRUEの条件と両前提が、型付き証明・意味単位・候補分布・生成文面を通り、説明Goalを封印した実ファイルの受領へ到達。別scopeと競合時は採用前に停止。 |
+| I-B | `cargo test -p minidora-engine --test core_proof_composition_learning_49 --locked` 1件と、同 `--lib` の `recovery::tests::ordinary_why_` 2件、`group_mean_hypothesis` 4件。規則形成前後で計算経路・候補分布・実作用に差があり、再起動後の別ケースで使用し、失効後の再使用を停止。観測由来の仮説は別経路で反例照合と説明を実行し、旧述語のfixtureも同一作用で照合。 |
+| I-C | 同 `--lib` の `recovery::tests::calculation_sequence_reconciles` と `recovery::tests::exact_arithmetic_goal_requires_the_sealed_value` 各1件。通常CLIの `cargo test -p minidora-cli --test normal_route calculation_sequence_route --locked` 5件、同 `why_question` 2件。途中の厳密値を後段が実消費し、指定ファイルの実バイト・受領で元Goalを確定。 |
+| I-N | `cargo test -p minidora-engine --test core_construction_observation_06 --locked` 1件と、同 `--lib` の `recovery::tests::sequence_cancel`、`local_file_deadline_stops`、`recovery::tests::local_file_attempt_cannot_be_acquired_twice` 各1件。条件検査、別actor、許可不足、結果不明、取消、二重取得、期限を照合。6つの期限到達点を再現し、最終保存前に失効しても `COMMIT` 行0、確認済み受領は保持。 |
+
+固有述語の封印、既存SQLite、Core内の二循環、実結果帰還、正停止を同版で検査した25件がPASS。同じactorと同じSQLiteを共有するCLI 11回の独立起動でも、規則形成前の保留から別ケースの説明ファイル確定、仮説への反例、連続計算の読み戻し・再送防止、無許可停止を確認した。3件の許可案件で保存された固有述語と各作用1件を照合し、保留・拒否の2件では作用0。 `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` もPASS。
+
+D3-CのE1出口を `CORE_SHAPED` と判定。同じEngineに二循環と必要な停止経路が接続した観測に基づく。E2の7合同ゲートはこの版で次に実行する。全要求の受入、同期I/Oの実時間、経験的採用契約、体系QC、独立QAは未判定。E02・E04・CAP-D05の受入列は `UNVERIFIED`。
+
+復旧2世代のローカル参照・GitHubタグは `75ac7b3` と `dc0e7e5`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（Core、Store、Recoveryと付属検査、条件の結合検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。

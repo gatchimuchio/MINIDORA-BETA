@@ -1,6 +1,6 @@
 use minidora_domain::{
-    ConditionDefinition, ConditionExpression, Lifecycle, Proposition, RequestEnvelope,
-    SCHEMA_VERSION,
+    ConditionDefinition, ConditionExpression, EffectPhase, GoalContract, Lifecycle, Proposition,
+    RequestEnvelope, SCHEMA_VERSION,
 };
 use minidora_engine::{Engine, store::Store};
 use std::collections::BTreeSet;
@@ -757,12 +757,15 @@ fn conditioned_conjunctive_proofs_intersect_scope_and_keep_condition_dependencie
     let mut nera_powered = relation(subject, "is", "powered", scope);
     nera_powered.condition_refs.insert(condition_id.into());
     let powered_fact_id = assert_relation(&mut engine, actor, case, "nera-powered", nera_powered);
+    let target_path = directory.path().join("conditioned-explanation.txt");
+    let mut output_request = request(case, "ready-with-both-conditioned-premises", actor);
+    output_request.output_path = Some(target_path.clone());
+    output_request
+        .permissions
+        .write_paths
+        .insert(target_path.clone());
     let supported = engine
-        .compose_atomic_explanation(
-            actor,
-            request(case, "ready-with-both-conditioned-premises", actor),
-            target.clone(),
-        )
+        .compose_atomic_explanation(actor, output_request, target.clone())
         .expect("the exact-scope conjunctive proof reaches Core adoption");
     assert_eq!(supported.lifecycle, Lifecycle::Commit, "{supported:?}");
     assert_eq!(supported.guarantee, Guarantee::Derived);
@@ -792,6 +795,67 @@ fn conditioned_conjunctive_proofs_intersect_scope_and_keep_condition_dependencie
     ] {
         assert!(plan.dependencies.contains(dependency));
     }
+    let state = engine.latest(actor, case).unwrap().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let goal: GoalContract = serde_json::from_slice(
+        &store
+            .get_bytes(actor, case, state.goal_sha256.as_ref().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        goal.required_predicates,
+        [
+            "RELATION_PROOF_EXPLANATION_V1",
+            "SUPPORTED_CONTENT",
+            "EXACT_RENDER",
+            "CONFIRMED_FILE"
+        ]
+    );
+    let compute_ref = plan.dependencies.last().unwrap();
+    let compute: serde_json::Value =
+        serde_json::from_slice(&store.get_bytes(actor, case, compute_ref).unwrap()).unwrap();
+    let condition_unit = compute["relation_meaning_plan"]["units"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|unit| unit["meaning"]["kind"] == "CONDITION")
+        .unwrap();
+    assert_eq!(condition_unit["meaning"]["evaluation"]["status"], "TRUE");
+    assert_eq!(
+        condition_unit["meaning"]["evaluation"]["condition_id"],
+        condition_id
+    );
+    let generation = &compute["content_generation"];
+    assert!(
+        generation["required_unit_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&condition_unit["id"])
+    );
+    assert!(
+        generation["token_steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| {
+                step["unit_id"] == condition_unit["id"]
+                    && !step["distribution"].as_array().unwrap().is_empty()
+            })
+    );
+    assert_eq!(generation["text"], plan.text);
+    let render = supported.render.as_ref().unwrap();
+    assert_eq!(fs::read(&target_path).unwrap(), render.bytes);
+    assert_eq!(supported.receipts[0].phase, EffectPhase::Confirmed);
+    assert_eq!(supported.receipts[0].content_sha256, render.actual_sha256);
+    let graph: serde_json::Value = serde_json::from_slice(
+        &store
+            .get_bytes(actor, case, supported.execution_graph_ref.as_ref().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(graph[2]["compute"], *compute_ref);
+    assert_eq!(graph[4]["render"], graph[1]["render"]);
 
     let mut negative_powered = relation(subject, "is", "powered", scope);
     negative_powered.negative = true;

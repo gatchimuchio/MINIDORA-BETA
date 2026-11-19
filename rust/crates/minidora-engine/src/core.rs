@@ -236,12 +236,20 @@ const DIRECT_TYPED_CONDITION_PARSER: &str = "core-typed-condition-definition-v1"
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
 const DIRECT_RELATION_COMPARISON_PARSER: &str = "core-typed-relation-comparison-v1";
 const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
+pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
+const GROUP_MEAN_HYPOTHESIS_PREDICATE: &str = "GROUP_MEAN_HYPOTHESIS_RESULT_V1";
 
 pub(crate) fn goal_predicates(intent: &Intent, requires_file: bool) -> Vec<String> {
     let mut predicates = Vec::new();
     match intent {
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        Intent::AskWhy { .. } => predicates.push(RELATION_EXPLANATION_PREDICATE.into()),
+        Intent::RetainPreviousGroupMeanHypothesis
+        | Intent::ExplainPreviousGroupMeanHypothesis
+        | Intent::AssessPreviousGroupMeanHypothesis { .. } => {
+            predicates.push(GROUP_MEAN_HYPOTHESIS_PREDICATE.into());
+        }
         _ => {}
     }
     predicates.extend(["SUPPORTED_CONTENT".into(), "EXACT_RENDER".into()]);
@@ -249,6 +257,48 @@ pub(crate) fn goal_predicates(intent: &Intent, requires_file: bool) -> Vec<Strin
         predicates.push("CONFIRMED_FILE".into());
     }
     predicates
+}
+
+struct ReportGoalContent {
+    predicate: &'static str,
+    guarantee: Guarantee,
+    dependencies: Vec<String>,
+    units: Vec<String>,
+}
+
+fn verify_report_goal_content(
+    goal: &GoalContract,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    compute_ref: &str,
+    observed: Option<&ReportGoalContent>,
+) -> Result<()> {
+    let Some(predicate) = goal.required_predicates.iter().find(|predicate| {
+        matches!(
+            predicate.as_str(),
+            RELATION_EXPLANATION_PREDICATE | GROUP_MEAN_HYPOTHESIS_PREDICATE
+        )
+    }) else {
+        return Ok(());
+    };
+    let matches = observed.is_some_and(|report| {
+        report.predicate == predicate
+            && result.guarantee == report.guarantee
+            && plan.guarantee == report.guarantee
+            && result.dependencies == report.dependencies
+            && plan.required_units == report.units
+            && plan
+                .dependencies
+                .split_last()
+                .is_some_and(|(last, prior)| last == compute_ref && prior == report.dependencies)
+    });
+    if !matches {
+        return Err(failure(
+            "GOAL_REPORT_MISMATCH",
+            "元Goalが要求した証明または仮説成果と採用内容が一致しません。",
+        ));
+    }
+    Ok(())
 }
 
 fn exact_calculation_unit(calculation: &Calculation) -> String {
@@ -2275,6 +2325,7 @@ pub(crate) enum OutputCheckpoint {
     FilePhase(EffectPhase),
     FileDelivery,
     Commit,
+    CommitPersistence,
 }
 
 impl Engine {
@@ -4307,6 +4358,7 @@ impl Engine {
         let mut result = base_result(&request);
         let mut units = Vec::new();
         let mut approved_surfaces = None;
+        let mut report_goal_content = None;
         let mut adopted_relation_meaning = None;
         let mut relation_proof_dependencies = None;
         let mut relation_meaning_plan = None;
@@ -6305,6 +6357,12 @@ impl Engine {
                         self.store.put_bytes(actor, &request.case_id, bytes)?;
                     }
                 }
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: GROUP_MEAN_HYPOTHESIS_PREDICATE,
+                    guarantee: Guarantee::Hypothesis,
+                    dependencies: hypothesis.dependencies.clone(),
+                    units: hypothesis.units.clone(),
+                });
                 result.dependencies = hypothesis.dependencies;
                 units = hypothesis.units;
                 result.guarantee = Guarantee::Hypothesis;
@@ -7736,7 +7794,7 @@ impl Engine {
                         .map(|unit| unit.text.clone())
                         .collect();
                     adopted_relation_meaning = Some(explained);
-                    relation_proof_dependencies = Some(answer_dependencies);
+                    relation_proof_dependencies = Some(answer_dependencies.clone());
                     approved_surfaces = Some(vec![generated.emission.text.clone()]);
                     relation_meaning_plan = Some(meaning_plan);
                     content_generation = Some(generation_report);
@@ -7750,6 +7808,12 @@ impl Engine {
                         Some(language::relation_explanation_surfaces(&explanation_units));
                     units.extend(explanation_units);
                 }
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: RELATION_EXPLANATION_PREDICATE,
+                    guarantee: answer_guarantee,
+                    dependencies: answer_dependencies,
+                    units: units.clone(),
+                });
             }
             Intent::InspectPremises { subject } => {
                 let (memory_revision, inventory) =
@@ -8691,6 +8755,15 @@ impl Engine {
                 &error.to_string(),
             );
         }
+        if let Err(Error::Contract { code, message }) = verify_report_goal_content(
+            &goal,
+            &result,
+            &plan,
+            &compute_artifact,
+            report_goal_content.as_ref(),
+        ) {
+            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+        }
         if let Some(observed) = sequence_result
             && let Err(error) = observed.verify_content(&result, &plan)
         {
@@ -8912,7 +8985,20 @@ impl Engine {
         }
         result.lifecycle = Lifecycle::Commit;
         state.result = Some(result.clone());
-        self.advance(&mut state, Lifecycle::Commit, None)?;
+        #[cfg(test)]
+        let deadline = self.output_deadline_at(OutputCheckpoint::CommitPersistence, deadline);
+        match self.advance_before(&mut state, Lifecycle::Commit, None, Some(deadline)) {
+            Ok(()) => {}
+            Err(Error::Contract { code, .. }) if code == "DEADLINE" => {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "DEADLINE",
+                    "終端を保存する前に元Goalの締切に達しました。得られた成果と作用記録を保持しました。",
+                );
+            }
+            Err(error) => return Err(error),
+        }
         Ok(result)
     }
     fn advance(
@@ -8920,6 +9006,16 @@ impl Engine {
         state: &mut CaseRevision,
         next: Lifecycle,
         reason: Option<String>,
+    ) -> Result<()> {
+        self.advance_before(state, next, reason, None)
+    }
+
+    fn advance_before(
+        &self,
+        state: &mut CaseRevision,
+        next: Lifecycle,
+        reason: Option<String>,
+        deadline: Option<Instant>,
     ) -> Result<()> {
         if !state.lifecycle.permits(next) {
             return Err(failure(
@@ -8935,7 +9031,8 @@ impl Engine {
         if let Some(ref mut result) = updated.result {
             result.lifecycle = next;
         }
-        self.store.append_case(&state.actor_id, &updated)?;
+        self.store
+            .append_case_before(&state.actor_id, &updated, deadline)?;
         *state = updated;
         Ok(())
     }

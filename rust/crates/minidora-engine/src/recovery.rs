@@ -7,8 +7,8 @@
 //! authentication and trusted ownership of ancestor directories remain required.
 use crate::{
     core::{
-        calculation_sequence_nodes, goal_predicates, run_calculation_sequence,
-        store_execution_graph, validate_render, verify_goal_content,
+        RELATION_EXPLANATION_PREDICATE, calculation_sequence_nodes, goal_predicates,
+        run_calculation_sequence, store_execution_graph, validate_render, verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -3193,6 +3193,10 @@ fn inspect(
             "unrecognized completion predicates remain unresolved",
         ));
     }
+    let requires_proof_explanation = goal
+        .required_predicates
+        .iter()
+        .any(|predicate| predicate == RELATION_EXPLANATION_PREDICATE);
     let plan = result.content_plan.as_ref().ok_or_else(|| {
         failure(
             "RECOVERY_DATA_UNAVAILABLE",
@@ -3443,7 +3447,8 @@ fn inspect(
                 &goal.budget,
             )?;
         }
-        let current_proof_contract = generated_compute_ref.is_some()
+        let current_proof_contract = requires_proof_explanation
+            || generated_compute_ref.is_some()
             || matches!(
                 bundle.meaning.parser_version.as_str(),
                 "declarative-ja-en-v46-proof-lineage-guarantee"
@@ -3946,6 +3951,12 @@ fn inspect(
         model.validate()?;
         let emission_bytes = store.get_bytes(actor, case, &plan.model_observation_ref)?;
         let emission: language::ModelEmission = serde_json::from_slice(&emission_bytes)?;
+        if requires_proof_explanation && emission.authorized_surfaces.is_none() {
+            return Err(failure(
+                "RECOVERY_MODEL_CANDIDATE_MISMATCH",
+                "the sealed explanation Goal requires the original proof's approved surfaces",
+            ));
+        }
         let authorized_surfaces = match &emission.authorized_surfaces {
             Some(surfaces) => {
                 let expected_surfaces = match (&goal.intent, result.calculation.as_ref()) {
@@ -4907,6 +4918,26 @@ mod tests {
         assert_eq!(actual_bytes, assessed.text.as_bytes());
         let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
         let state = engine.latest("alice", "case").unwrap().unwrap();
+        let mut goal: GoalContract = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", state.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            goal.required_predicates,
+            [
+                "GROUP_MEAN_HYPOTHESIS_RESULT_V1",
+                "SUPPORTED_CONTENT",
+                "EXACT_RENDER",
+                "CONFIRMED_FILE"
+            ]
+        );
+        let mut legacy = state.clone();
+        goal.required_predicates.remove(0);
+        legacy.goal_sha256 = Some(engine.store.put_artifact("alice", "case", &goal).unwrap());
+        inspect(&engine.store, "alice", &legacy, &assessed).unwrap();
         let mut altered = assessed.clone();
         *altered.dependencies.last_mut().unwrap() = matched.dependencies.last().unwrap().clone();
         let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();
@@ -11187,6 +11218,11 @@ mod tests {
             ),
             (OutputCheckpoint::FileDelivery, Some(EffectPhase::Failed), 5),
             (OutputCheckpoint::Commit, Some(EffectPhase::Confirmed), 5),
+            (
+                OutputCheckpoint::CommitPersistence,
+                Some(EffectPhase::Confirmed),
+                5,
+            ),
         ] {
             let fixture = empty_fixture();
             let mut engine = Engine::open(&fixture.state).unwrap();
@@ -11216,6 +11252,14 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM action_history", [], |row| row.get(0))
                 .unwrap();
             assert_eq!(events, history_len, "{checkpoint:?}");
+            let commits: i64 = journal
+                .query_row(
+                    "SELECT COUNT(*) FROM case_revision WHERE lifecycle='COMMIT'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(commits, 0, "{checkpoint:?}");
             match phase {
                 Some(EffectPhase::Confirmed) => {
                     assert_eq!(fs::read(&fixture.target).unwrap(), b"7+8 = 15");
