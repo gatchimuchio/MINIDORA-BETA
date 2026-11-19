@@ -2783,6 +2783,180 @@ def check_direct_url_wait_continuation(cli, fixture: Fixture, state_path: Path) 
             "recovered": recovered, "answer": answer}
 
 
+def check_direct_url_budget_continuation(cli, fixture: Fixture, state_path: Path) -> dict:
+    origin, target = fixture.hosts
+    start, hop, kept, pending, later, rate = [
+        f"/direct-budget-{part}" for part in ("start", "hop", "kept", "pending", "later", "rate")
+    ]
+    pending_text, later_text = "追加測定は73です。", "次の資料は89です。"
+    fixture.responses.update({
+        kept: (b"Original body.", "text/plain"),
+        pending: (pending_text.encode(), "text/plain; charset=utf-8"),
+        later: (later_text.encode(), "text/plain; charset=utf-8"),
+    })
+    fixture.redirects.update({start: hop, hop: kept})
+    fixture.failure_responses[rate] = ("503 Service Unavailable", b"Wait response.", "Retry-After: 60\r\n")
+    command = "前回の取得で未接続の次のURLを取得して"
+    allow = ("--allow-read-host", origin)
+    allow_target = ("--allow-read-host", target)
+    connect_origin = f"CONNECT {origin}:443 HTTP/1.1"
+
+    def uri(path: str, host: str = origin) -> str:
+        return f"https://{host}{path}"
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def open_connections() -> tuple[int, int]:
+        return len(fixture.connects), len(fixture.events)
+
+    def initial(case: str, pending_host: str = origin) -> dict:
+        starts, seen = open_connections()
+        urls = (uri(start), uri(pending, pending_host), uri(later))
+        original = cli("run", "--input", "original", *allow, *allow_target, "--max-actions", "6",
+                       f"fetch {' '.join(urls)}", case_id=case, expected_exit=2)
+        (packet,) = original["evidence"]
+        assert packet["request_uri"] == urls[0] and packet["redirect_chain"] == list(map(uri, (start, hop, kept)))
+        assert original["dependencies"] == [packet["id"]]
+        assert fixture.connects[starts:] == [connect_origin] * 3
+        assert [event["path"] for event in fixture.events[seen:]] == [start, hop, kept]
+        return original
+
+    def stopped(case: str, previous: dict, name: str, flag: str, budget: int, *,
+                with_file: bool) -> tuple[dict, tuple[str, ...]]:
+        output = state_path.parent / f"{case}-{name}.txt"
+        file_args = ("--output", str(output), "--allow-write", str(output)) if with_file else ()
+        args = ("--input", name, *allow, *allow_target, *file_args, flag, str(budget), command)
+        counts = open_connections()
+        result = cli("run", *args, case_id=case, expected_exit=2)
+        assert result["guarantee"] == "UNKNOWN" and result["evidence"] == result["receipts"] == []
+        assert result["content_plan"] is result["render"] is result["execution_graph_ref"] is None
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as connection:
+            (state_ref,) = connection.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1",
+                (case,),
+            ).fetchone()
+        snapshot = load(state_ref)
+        assert snapshot["result"] == result and snapshot["prior_results"][previous["id"]] == previous
+        bundle = snapshot["bundle"]
+        assert bundle["request"]["text"] == command
+        assert bundle["meaning"]["context_result_ref"] == previous["id"]
+        goal = load(snapshot["goal_sha256"])
+        assert goal["input_fingerprint"] == result["id"] and goal["intent"] == bundle["meaning"]["intent"]
+        assert goal["intent"]["kind"] == "FETCH_NEXT_UNOBSERVED_SOURCE"
+        assert goal["budget"] == bundle["request"]["budget"]
+        assert goal["budget"][flag.removeprefix("--").replace("-", "_")] == budget
+        assert goal["permissions"] == bundle["request"]["permissions"]
+        assert goal["output_path"] == (str(output) if with_file else None)
+        base_nodes = ["compute", "content", "render", *(["file"] if with_file else [])]
+        nodes = [node["id"] for node in load(goal["required_graph_ref"])]
+        if budget == 0 and flag in ("--max-actions", "--deadline-ms"):
+            assert result["reason"] == "RESOURCE_LIMIT: 計算予算がありません。"
+            assert result["dependencies"] == [] and nodes == base_nodes
+        else:
+            assert nodes == ["previous-direct-retrieval", "source-0", *base_nodes]
+            if flag == "--max-actions":
+                residuals = json.dumps(nodes, ensure_ascii=False)
+                assert result["reason"] == f"ACTION_BUDGET_EXHAUSTED: 必須成果の残件: {residuals}"
+                assert result["dependencies"] == [] and budget < len(nodes)
+            else:
+                assert result["reason"] == "EVIDENCE_UNAVAILABLE: RESOURCE_LIMIT: The original Goal has no remaining evidence bytes"
+                assert result["dependencies"] == [previous["id"]]
+        assert cli("run", *args, case_id=case, expected_exit=2) == result
+        assert open_connections() == counts and not output.exists()
+        return result, args
+
+    def check_success(result: dict, previous: dict, path: str, text: str) -> str:
+        (packet,) = result["evidence"]
+        assert packet["request_uri"] == packet["final_uri"] == uri(path) and packet["extracted_text"] == text
+        assert result["dependencies"] == [previous["id"], packet["id"]] and text in result["text"]
+        graph = load(result["execution_graph_ref"])
+        anchor, packet_ref = (graph[1][node] for node in ("previous-direct-retrieval", "source-0"))
+        assert load(anchor) == previous and load(packet_ref) == packet
+        assert graph[5]["source-0"] == {"previous-direct-retrieval": anchor}
+        return packet_ref
+
+    budget_modes = [
+        ("zero-actions", "--max-actions", 0, False),
+        ("zero-deadline", "--deadline-ms", 0, True),
+        ("short-display", "--max-actions", 4, False),
+        ("short-file", "--max-actions", 5, True),
+        ("zero-evidence", "--max-evidence-bytes", 0, True),
+    ]
+    results = {}
+    for name, flag, budget, with_file in budget_modes:
+        case = f"direct-budget-{name}"
+        before = initial(case)
+        stop, replay_args = stopped(case, before, name, flag, budget, with_file=with_file)
+        starts, seen = open_connections()
+        resumed = cli("run", "--input", "renewed", *allow, command, case_id=case)
+        check_success(resumed, stop, pending, pending_text)
+        assert cli("run", *replay_args, case_id=case, expected_exit=2) == stop
+        assert fixture.connects[starts:] == [connect_origin] and [event["path"] for event in fixture.events[seen:]] == [pending]
+        results[name] = {"stopped": stop, "resumed": resumed}
+
+    case = "direct-budget-mixed"
+    before = initial(case)
+    first = cli("run", "--input", "first", *allow, command, case_id=case)
+    check_success(first, before, pending, pending_text)
+    previous = first
+    stops = []
+    for name, flag, budget, with_file in budget_modes:
+        previous, replay_args = stopped(case, previous, name, flag, budget, with_file=with_file)
+        stops.append((previous, replay_args))
+    output = state_path.parent / f"{case}.txt"
+    starts, seen = open_connections()
+    delivered = cli("run", "--input", "renewed", *allow, "--output", str(output), "--allow-write", str(output),
+                    command, case_id=case)
+    packet_ref = check_success(delivered, previous, later, later_text)
+    assert output.read_bytes() == bytes(delivered["render"]["bytes"])
+    before_file = output.stat()
+    (receipt,) = delivered["receipts"]
+    retain_attempted_prefix(state_path, case, "renewed", receipt["action_id"])
+    recovered = cli("reconcile", case_id=case)
+    (restored,) = recovered["receipts"]
+    assert restored["action_id"] == receipt["action_id"] and "NO_RESEND" in restored["reason"]
+    assert check_success(recovered, previous, later, later_text) == packet_ref
+    assert recovered["text"] == delivered["text"] and output.read_bytes() == bytes(recovered["render"]["bytes"])
+    after_file = output.stat()
+    assert (after_file.st_ino, after_file.st_mtime_ns, after_file.st_size) == (
+        before_file.st_ino, before_file.st_mtime_ns, before_file.st_size)
+    for saved, args in stops:
+        assert cli("run", *args, case_id=case, expected_exit=2) == saved
+    exhausted = cli("run", "--input", "exhausted", *allow, command, case_id=case, expected_exit=2)
+    assert "NO_PENDING_DIRECT_URL" in exhausted["reason"]
+    assert fixture.connects[starts:] == [connect_origin] and [event["path"] for event in fixture.events[seen:]] == [later]
+    results["mixed"] = {"stops": [saved for saved, _ in stops], "recovered": recovered, "exhausted": exhausted}
+
+    case = "direct-budget-current-grant"
+    before = initial(case)
+    stop, _ = stopped(case, before, "stop", "--max-actions", 0, with_file=False)
+    counts = open_connections()
+    denied = cli("run", "--input", "no-grant", command, case_id=case, expected_exit=2)
+    assert "READ_PERMISSION_REQUIRED" in denied["reason"] and denied["dependencies"] == [stop["id"]]
+    assert denied["evidence"] == denied["receipts"] == [] and open_connections() == counts
+    resumed = cli("run", "--input", "renewed", *allow, command, case_id=case)
+    check_success(resumed, denied, pending, pending_text)
+    assert open_connections() == (counts[0] + 1, counts[1] + 1)
+    results["current_grant"] = {"denied": denied, "resumed": resumed}
+
+    case = "direct-budget-current-wait"
+    seed = cli("run", "--input", "wait-seed", *allow_target, f"fetch {uri(rate, target)}", case_id=case, expected_exit=2)
+    before = initial(case, pending_host=target)
+    assert "HTTP_RETRY_DEFERRED" in before["reason"] and seed["evidence"][0]["id"] in before["reason"]
+    stop, _ = stopped(case, before, "stop", "--deadline-ms", 0, with_file=False)
+    counts = open_connections()
+    waiting = cli("run", "--input", "still-waiting", *allow_target, command, case_id=case, expected_exit=2)
+    assert waiting["reason"] == before["reason"] and waiting["dependencies"] == [stop["id"]]
+    assert waiting["evidence"] == waiting["receipts"] == [] and open_connections() == counts
+    results["current_wait"] = waiting
+
+    assert not fixture.errors, fixture.errors
+    return results
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -2903,6 +3077,9 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         direct_url_regrant = check_direct_url_permission_regrant(partial(cli, db_path=direct_regrant_state), fixture, direct_regrant_state)
         direct_wait_state = directory / "direct-url-wait-state"
         direct_url_wait = check_direct_url_wait_continuation(partial(cli, db_path=direct_wait_state), fixture, direct_wait_state)
+        direct_budget_state = directory / "direct-url-budget-state"
+        direct_url_budget = check_direct_url_budget_continuation(
+            partial(cli, db_path=direct_budget_state), fixture, direct_budget_state)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -2916,7 +3093,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait,
                 "source_after_first_hop": source_after_first_hop, "source_after_deadline": source_after_deadline,
                 "source_after_budget": source_after_budget, "next_direct_url": next_direct_url,
-                "direct_url_regrant": direct_url_regrant, "direct_url_wait": direct_url_wait}
+                "direct_url_regrant": direct_url_regrant, "direct_url_wait": direct_url_wait,
+                "direct_url_budget": direct_url_budget}
     finally:
         fixture.close()
 

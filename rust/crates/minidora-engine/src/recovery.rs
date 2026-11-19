@@ -3086,7 +3086,6 @@ pub(crate) fn next_direct_retrieval<'a>(
         .collect();
     for (parent, result, sealed) in steps.into_iter().rev() {
         let request = &sealed.request;
-        let parent_ref = verified_artifact(store, actor, case, parent)?;
         if let Some(stop) = direct_preconnection_stop(result) {
             let uri = urls.peek().ok_or_else(invalid)?;
             if url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str())) {
@@ -3099,6 +3098,7 @@ pub(crate) fn next_direct_retrieval<'a>(
         let uri = urls.next().ok_or_else(invalid)?;
         let packet =
             verify_direct_continuation_body(parent, result, request, &uri, &observed_routes)?;
+        let parent_ref = verified_artifact(store, actor, case, parent)?;
         let packet_ref = verified_artifact(store, actor, case, packet)?;
         let graph_ref = result.execution_graph_ref.as_ref().ok_or_else(invalid)?;
         let graph: serde_json::Value =
@@ -3143,23 +3143,43 @@ fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Re
 enum DirectPreconnectionStop<'a> {
     Permission,
     Wait(&'a str),
+    NoComputeBudget,
+    InsufficientActions,
+    NoEvidenceBytes,
+}
+
+impl DirectPreconnectionStop<'_> {
+    fn has_predecessor_artifact(&self) -> bool {
+        !matches!(self, Self::NoComputeBudget | Self::InsufficientActions)
+    }
 }
 
 fn direct_preconnection_stop(result: &ResultRecord) -> Option<DirectPreconnectionStop<'_>> {
     if result.lifecycle != Lifecycle::Suspend || !result.evidence.is_empty() {
         return None;
     }
-    match result
-        .reason
-        .as_deref()?
-        .strip_prefix("EVIDENCE_UNAVAILABLE: ")?
-        .split_once(": ")?
-    {
+    let (code, detail) = result.reason.as_deref()?.split_once(": ")?;
+    match (code, detail) {
+        ("RESOURCE_LIMIT", crate::core::NO_COMPUTE_BUDGET) => {
+            return Some(DirectPreconnectionStop::NoComputeBudget);
+        }
+        ("ACTION_BUDGET_EXHAUSTED", detail)
+            if detail.starts_with(crate::core::ACTION_BUDGET_RESIDUALS) =>
+        {
+            return Some(DirectPreconnectionStop::InsufficientActions);
+        }
+        ("EVIDENCE_UNAVAILABLE", _) => {}
+        _ => return None,
+    }
+    match detail.split_once(": ")? {
         (
             crate::ports::READ_PERMISSION_REQUIRED,
             crate::ports::READ_PERMISSION_REQUIRED_MESSAGE,
         ) => Some(DirectPreconnectionStop::Permission),
         (crate::ports::RETRY_DEFERRED, detail) => Some(DirectPreconnectionStop::Wait(detail)),
+        ("RESOURCE_LIMIT", crate::ports::NO_REMAINING_EVIDENCE_BYTES) => {
+            Some(DirectPreconnectionStop::NoEvidenceBytes)
+        }
         _ => None,
     }
 }
@@ -3178,7 +3198,13 @@ fn verify_direct_preconnection_stop(
             "The direct continuation was not a verified pre-connection stop",
         )
     };
-    if result.dependencies.as_slice() != [parent.id.as_str()]
+    let anchored = stop.has_predecessor_artifact();
+    let dependencies_match = if anchored {
+        result.dependencies.as_slice() == [parent.id.as_str()]
+    } else {
+        result.dependencies.is_empty()
+    };
+    if !dependencies_match
         || result.guarantee != Guarantee::Unknown
         || result.content_plan.is_some()
         || result.calculation.is_some()
@@ -3200,22 +3226,6 @@ fn verify_direct_preconnection_stop(
     {
         return Err(invalid());
     }
-    let matches_original_stop = match stop {
-        DirectPreconnectionStop::Permission => matches!(
-            crate::ports::approved_url(uri, &request.permissions),
-            Err(Error::Contract { code, message })
-                if code == crate::ports::READ_PERMISSION_REQUIRED
-                    && message == crate::ports::READ_PERMISSION_REQUIRED_MESSAGE
-        ),
-        DirectPreconnectionStop::Wait(detail) => {
-            // The original packet proves the historical stop. The fresh
-            // retrieval budget will independently check the current host wait.
-            first_hop_wait_matches(store, &stopped, &request.permissions, uri, detail)?
-        }
-    };
-    if !matches_original_stop {
-        return Err(invalid());
-    }
     let goal_ref = stopped.goal_sha256.as_deref().ok_or_else(invalid)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
     if goal.input_fingerprint != result.id
@@ -3228,21 +3238,103 @@ fn verify_direct_preconnection_stop(
     }
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
-    if (goal.budget.max_actions as usize) < nodes.len()
-        || !nodes.iter().any(|node| {
-            node.id == PREVIOUS_DIRECT_RETRIEVAL_NODE
-                && node.kind == GoalNodeKind::Evidence
-                && node.requires.is_empty()
-        })
-        || !nodes.iter().any(|node| {
-            node.id == "source-0"
-                && node.kind == GoalNodeKind::Evidence
-                && node.requires == [PREVIOUS_DIRECT_RETRIEVAL_NODE]
-        })
-    {
+    let includes_retrieval = !matches!(stop, DirectPreconnectionStop::NoComputeBudget);
+    if nodes != direct_continuation_stop_nodes(includes_retrieval, goal.output_path.is_some()) {
         return Err(invalid());
     }
+    let has_compute = goal.budget.max_actions > 0 && goal.budget.deadline_ms > 0;
+    let sufficient_actions = (goal.budget.max_actions as usize) >= nodes.len();
+    let matches_original_stop = match stop {
+        DirectPreconnectionStop::NoComputeBudget => {
+            // This guard leaves before the live latest-predecessor check.
+            !has_compute && store.input_start_predecessor(&stopped)?.as_ref() == Some(parent)
+        }
+        DirectPreconnectionStop::InsufficientActions => {
+            let residuals: Vec<_> = nodes.iter().map(|node| node.id.as_str()).collect();
+            let reason = format!(
+                "ACTION_BUDGET_EXHAUSTED: {} {residuals:?}",
+                crate::core::ACTION_BUDGET_RESIDUALS
+            );
+            has_compute && !sufficient_actions && result.reason.as_deref() == Some(&reason)
+        }
+        DirectPreconnectionStop::NoEvidenceBytes => {
+            has_compute
+                && sufficient_actions
+                && goal.budget.max_evidence_bytes == 0
+                && crate::ports::approved_url(uri, &request.permissions).is_ok()
+        }
+        DirectPreconnectionStop::Permission => {
+            has_compute
+                && sufficient_actions
+                && matches!(
+                    crate::ports::approved_url(uri, &request.permissions),
+                    Err(Error::Contract { code, message })
+                        if code == crate::ports::READ_PERMISSION_REQUIRED
+                            && message == crate::ports::READ_PERMISSION_REQUIRED_MESSAGE
+                )
+        }
+        DirectPreconnectionStop::Wait(detail) => {
+            // The packet proves the historical stop. The fresh budget
+            // independently checks the current host wait.
+            has_compute
+                && sufficient_actions
+                && first_hop_wait_matches(store, &stopped, &request.permissions, uri, detail)?
+        }
+    };
+    if !matches_original_stop {
+        return Err(invalid());
+    }
+    if anchored {
+        verified_artifact(store, actor, case, parent)?;
+    }
     Ok(())
+}
+
+fn direct_continuation_stop_nodes(includes_retrieval: bool, includes_file: bool) -> Vec<GoalNode> {
+    let mut nodes = Vec::new();
+    if includes_retrieval {
+        nodes.extend([
+            GoalNode {
+                id: PREVIOUS_DIRECT_RETRIEVAL_NODE.into(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            },
+            GoalNode {
+                id: "source-0".into(),
+                kind: GoalNodeKind::Evidence,
+                requires: vec![PREVIOUS_DIRECT_RETRIEVAL_NODE.into()],
+            },
+        ]);
+    }
+    nodes.extend([
+        GoalNode {
+            id: "compute".into(),
+            kind: GoalNodeKind::CoreResult,
+            requires: if includes_retrieval {
+                vec!["source-0".into()]
+            } else {
+                Vec::new()
+            },
+        },
+        GoalNode {
+            id: "content".into(),
+            kind: GoalNodeKind::ContentPlan,
+            requires: vec!["compute".into()],
+        },
+        GoalNode {
+            id: "render".into(),
+            kind: GoalNodeKind::RenderedArtifact,
+            requires: vec!["content".into()],
+        },
+    ]);
+    if includes_file {
+        nodes.push(GoalNode {
+            id: "file".into(),
+            kind: GoalNodeKind::RequiredFile,
+            requires: vec!["render".into()],
+        });
+    }
+    nodes
 }
 
 fn verify_direct_continuation_body<'a>(

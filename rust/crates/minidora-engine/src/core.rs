@@ -10,6 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+pub(crate) const NO_COMPUTE_BUDGET: &str = "計算予算がありません。";
+pub(crate) const ACTION_BUDGET_RESIDUALS: &str = "必須成果の残件:";
+
 #[derive(serde::Serialize)]
 struct CalculationSequenceStepArtifact {
     id: String,
@@ -4800,7 +4803,7 @@ impl Engine {
                 &mut state,
                 Lifecycle::Suspend,
                 "RESOURCE_LIMIT",
-                "計算予算がありません。",
+                NO_COMPUTE_BUDGET,
             );
         }
         if (request.budget.max_actions as usize) < required_actions {
@@ -4808,7 +4811,7 @@ impl Engine {
                 &mut state,
                 Lifecycle::Suspend,
                 "ACTION_BUDGET_EXHAUSTED",
-                &format!("必須成果の残件: {:?}", graph.residuals()),
+                &format!("{ACTION_BUDGET_RESIDUALS} {:?}", graph.residuals()),
             );
         }
         let mut units = Vec::new();

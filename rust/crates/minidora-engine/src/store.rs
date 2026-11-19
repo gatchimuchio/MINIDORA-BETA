@@ -1508,6 +1508,38 @@ impl Store {
         Ok(None)
     }
 
+    /// Use a verified stopped revision to find the result that was current when
+    /// its input was received, even if it explicitly referred to an older result.
+    pub(crate) fn input_start_predecessor(
+        &self,
+        stopped: &CaseRevision,
+    ) -> Result<Option<ResultRecord>> {
+        let refs: Option<(String, Option<String>)> = sql(self
+            .connection
+            .query_row(
+                "SELECT received.state_sha256, prior.state_sha256
+             FROM case_revision AS received
+             LEFT JOIN case_revision AS prior
+               ON prior.case_id=received.case_id AND prior.revision=received.parent_revision
+             WHERE received.case_id=?1 AND received.revision<?2 AND received.lifecycle='RECEIVED'
+             ORDER BY received.revision DESC LIMIT 1",
+                params![stopped.case_id, integer(stopped.revision)?],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional())?;
+        let Some((received_ref, Some(prior_ref))) = refs else {
+            return Ok(None);
+        };
+        let received: CaseRevision = self.read_blob(&received_ref)?;
+        if received.lifecycle != Lifecycle::Received
+            || received.input_fingerprint != stopped.input_fingerprint
+        {
+            return Ok(None);
+        }
+        let previous: CaseRevision = self.read_blob(&prior_ref)?;
+        Ok(previous.result)
+    }
+
     /// Load the exact immutable sealed input for one retained case input.
     /// Actor/case/input identity and content-derived bundle fields are
     /// rechecked before a consumer can use the original interpretation.
