@@ -206,8 +206,8 @@ form.addEventListener("submit", async (event) => {
   const actor = actorField.value.trim();
   const caseId = caseField.value.trim();
   const token = tokenField.value;
-  const text = requestField.value.trim();
-  if (!actor || !caseId || !token || !text) {
+  const text = requestField.value;
+  if (!actor || !caseId || !token || !text.trim()) {
     formError.textContent = "Actor、Case、token、依頼を入力してください。";
     formError.hidden = false;
     return;

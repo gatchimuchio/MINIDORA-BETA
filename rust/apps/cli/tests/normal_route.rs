@@ -1001,6 +1001,13 @@ fn scalar_arithmetic_generation_preserves_exact_fields_and_real_render() {
             "負の分数で表される数量です。",
         ),
         (
+            "unicode-minus-quantity",
+            "0.5 m − 2 m",
+            "-3/2",
+            Some("m"),
+            "負の分数で表される数量です。",
+        ),
+        (
             "expression-whitespace",
             "2\u{000c}+3",
             "5",
@@ -2651,6 +2658,150 @@ fn conditional_premises_form_reusable_scoped_proof_across_restarts_and_retract()
         historical, first_rule,
         "invalidation must retain the original rule result"
     );
+}
+
+#[test]
+fn condition_definition_from_ordinary_input_changes_the_same_query() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let evidence = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "calibration", "[scope=ユリ]ユリは校正済み"],
+    ));
+    let premise = record(&execute(
+        &scratch.0,
+        actor,
+        &[
+            "--input",
+            "qualified-premise",
+            "[scope=ユリ][condition=ユリ]ユリは観測可能",
+        ],
+    ));
+    let question = "なぜ[scope=ユリ][condition=ユリ]ユリは観測可能ですか";
+    let before = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &["--input", "before-definition", question],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        before["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_DEFINITION_MISSING")
+    );
+    assert!(before["render"].is_null());
+
+    let definition = "　条件定義： [scope=ユリ][condition=ユリ] ユリは校正済み。　";
+    for invalid in [
+        "条件定義: [scope=ユリ][condition=ユリ] ユリは校正済みですか",
+        "条件定義: [scope=ユリ][condition=ユリ]「ユリは校正済み」",
+        "条件定義: [condition=ユリ][condition=重複] ユリは校正済み",
+        "条件定義: [condition=ユリ][time=2026-11-19T08:00:00Z] ユリは校正済み",
+    ] {
+        stopped(&execute(&scratch.0, actor, &[invalid]), 2, "SUSPEND");
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.load_memory(actor).unwrap().conditions.is_empty());
+
+    let registered = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "condition", definition],
+    ));
+    let id = registered["dependencies"][0].as_str().unwrap();
+    assert!(id.starts_with("condition-record:"));
+    let saved = inspect_normal_case(&scratch.0, actor);
+    let bundle = &saved["bundle"];
+    assert_eq!(bundle["request"]["text"], definition);
+    assert_eq!(
+        bundle["raw_sha256"],
+        minidora_domain::digest(definition.as_bytes())
+    );
+    let meaning = &bundle["meaning"];
+    assert_eq!(
+        meaning["parser_version"],
+        "declarative-ja-en-v92-condition-definition"
+    );
+    assert_eq!(meaning["intent"]["kind"], "DEFINE_CONDITION");
+    assert_eq!(meaning["intent"]["definition"]["condition_id"], "ユリ");
+    for (role, prefix) in [
+        ("scope", "scope="),
+        ("condition_id", "condition="),
+        ("subject", "] "),
+    ] {
+        let spans = meaning["source_roles"][format!("/DefineCondition/definition/{role}")]
+            .as_array()
+            .unwrap();
+        assert_eq!(spans.len(), 1);
+        let start = definition.find(prefix).unwrap() + prefix.len();
+        assert_eq!(spans[0]["start"], start);
+        assert_eq!(spans[0]["end"], start + "ユリ".len());
+        assert_eq!(spans[0]["text"], "ユリ");
+    }
+    let memory = store.load_memory(actor).unwrap();
+    assert_eq!(memory.conditions.len(), 1);
+    assert_eq!(memory.conditions[0].id, id);
+    assert_eq!(memory.conditions[0].source_input, registered["id"]);
+
+    let actual = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "with-definition", question],
+    ));
+    let artifact = assert_why_generation(&scratch.0, actor, "normal-route", &actual);
+    for dependency in [
+        &evidence["dependencies"][0],
+        &premise["dependencies"][0],
+        &registered["dependencies"][0],
+    ] {
+        assert!(
+            actual["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(dependency)
+        );
+    }
+    let proof = &artifact["relation_meaning_plan"];
+    assert!(proof["units"].as_array().unwrap().iter().any(|unit| {
+        let meaning = &unit["meaning"];
+        meaning["kind"] == "CONDITION" && meaning["evaluation"]["status"] == "TRUE"
+    }));
+    assert_eq!(
+        actual["render"]["target"],
+        serde_json::json!({"kind": "DISPLAY"})
+    );
+    assert_eq!(
+        actual["render"]["bytes"],
+        serde_json::json!(actual["text"].as_str().unwrap().as_bytes())
+    );
+
+    record(&execute(
+        &scratch.0,
+        actor,
+        &["[scope=ユリ]訂正: ユリは校正済みではなく未校正です"],
+    ));
+    let refuted = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &["--input", "after-correction", question],
+        ),
+        3,
+        "REJECT",
+    );
+    assert!(
+        refuted["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONDITION_FALSE")
+    );
+    assert!(refuted["content_plan"].is_null());
+    assert!(refuted["render"].is_null());
 }
 
 #[test]

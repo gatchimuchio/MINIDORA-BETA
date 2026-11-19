@@ -18,6 +18,7 @@ const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v90-explanation-source-roles";
+const CONDITION_DEFINITION_PARSER_VERSION: &str = "declarative-ja-en-v92-condition-definition";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -177,6 +178,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
+        Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
@@ -1432,6 +1434,9 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    if let Intent::DefineCondition { definition } = intent {
+        return condition_definition_source_roles(text, definition);
+    }
     if matches!(intent, Intent::CompareRelationInventories { .. }) {
         let source_offset = text.len() - text.trim_start().len();
         let Some(source) = relation_inventory_comparison_captures(terminal_trim(text))? else {
@@ -3086,6 +3091,9 @@ fn interpret(text: &str) -> Result<Intent> {
                     .into(),
         });
     }
+    if let Some(intent) = condition_definition_intent(text)? {
+        return Ok(intent);
+    }
     if let Some(capture) = regex(
         r"(?i)^(?:検索結果の)?([1-5])件目の本文を(?:取得して|取得してください|読んで|読んでください)$",
     )?
@@ -4005,7 +4013,7 @@ fn arithmetic_expression(text: &str) -> Result<Option<String>> {
     }
     // A complete arithmetic surface is required; never accept a numeric prefix
     // while dropping a second request or an unparsed condition.
-    if regex(r"^[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}\s*[+-]\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?\s*[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}$")?
+    if regex(r"^[-+−]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+−]?[0-9]+)?\s*[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}\s*[-+−]\s*[-+−]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+−]?[0-9]+)?\s*[A-Za-zμµΩ°%][A-Za-z0-9μµΩ°%*/^._-]{0,63}$")?
         .is_match(&candidate)
     {
         return Ok(Some(candidate));
@@ -4350,6 +4358,114 @@ fn ordinary_relation_proposition(text: &str) -> Result<Option<Proposition>> {
         return Ok(None);
     }
     Ok(Some(proposition))
+}
+
+fn condition_definition_payload(text: &str) -> Option<&str> {
+    text.strip_prefix("条件定義:")
+        .or_else(|| text.strip_prefix("条件定義："))
+        .map(str::trim_start)
+}
+
+fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
+    let Some(payload) = condition_definition_payload(terminal_trim(text)) else {
+        return Ok(None);
+    };
+    let unsupported = || Intent::Unknown {
+        reason: "条件定義には条件IDと、主体を明記した日本語の単一関係を指定してください。".into(),
+    };
+    if text.trim_end().ends_with(['?', '？'])
+        || payload.ends_with("ですか")
+        || payload.ends_with("なのか")
+    {
+        return Ok(Some(unsupported()));
+    }
+    let Some(proposition) = ordinary_relation_proposition(payload)? else {
+        return Ok(Some(unsupported()));
+    };
+    let mut condition_ids = proposition.condition_refs.into_iter();
+    let Some(condition_id) = condition_ids.next() else {
+        return Ok(Some(unsupported()));
+    };
+    if proposition.temporal_scope.is_some() {
+        return Ok(Some(unsupported()));
+    }
+    let atom = ConditionExpression::Fact {
+        predicate: proposition.predicate,
+        object: proposition.object,
+    };
+    let expression = if proposition.negative {
+        ConditionExpression::Not {
+            operand: Box::new(atom),
+        }
+    } else {
+        atom
+    };
+    Ok(Some(Intent::DefineCondition {
+        definition: ConditionDefinition {
+            condition_id,
+            subject: proposition.subject,
+            scope: proposition.scope,
+            expression,
+            valid_from: None,
+            valid_until: None,
+            dependencies: Default::default(),
+        },
+    }))
+}
+
+fn condition_definition_source_roles(
+    text: &str,
+    definition: &ConditionDefinition,
+) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    let source = terminal_trim(text);
+    let payload = condition_definition_payload(source).ok_or_else(|| {
+        failure(
+            "CONDITION_SOURCE_SPAN",
+            "condition declaration source is missing",
+        )
+    })?;
+    let (atom, negative, expression_role) = match &definition.expression {
+        ConditionExpression::Not { operand } => (operand.as_ref(), true, "expression/operand"),
+        atom => (atom, false, "expression"),
+    };
+    let ConditionExpression::Fact { predicate, object } = atom else {
+        return Err(failure(
+            "CONDITION_SOURCE_SPAN",
+            "expected a single condition atom",
+        ));
+    };
+    let proposition = Proposition {
+        subject: definition.subject.clone(),
+        predicate: predicate.clone(),
+        object: object.clone(),
+        negative,
+        scope: definition.scope.clone(),
+        temporal_scope: None,
+        condition_refs: [definition.condition_id.clone()].into(),
+    };
+    let roles =
+        japanese_assertion_source_roles_with_root(payload, &proposition, "")?.ok_or_else(|| {
+            failure(
+                "CONDITION_SOURCE_SPAN",
+                "condition roles do not match the original declaration",
+            )
+        })?;
+    let offset = text.len() - text.trim_start().len() + source.len() - payload.len();
+    Ok(roles
+        .into_iter()
+        .map(|(role, mut spans)| {
+            let role = match role.as_str() {
+                "/condition_refs/0" => "condition_id".into(),
+                "/predicate" | "/object" => format!("{expression_role}{role}"),
+                _ => role.trim_start_matches('/').to_owned(),
+            };
+            for span in &mut spans {
+                span.start += offset;
+                span.end += offset;
+            }
+            (format!("/DefineCondition/definition/{role}"), spans)
+        })
+        .collect())
 }
 
 #[cfg(test)]

@@ -1270,3 +1270,25 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。最終検�
 D3-CのE4出口は `PASS`。日本語UTF-8の採用内容の描画とローカルファイルの実観測が同Coreの元Goal判定へ帰還した。次工程はE5通常三機の合同検査。体系QC、独立QA、公開・配布は `NOT_RUN`。R2受入列は `UNVERIFIED`。
 
 復旧2世代のローカル参照・GitHubタグは `63944c4` と `9b95adb`。終了時資産は計10件。保持2件（実装台帳と要求トレース）、稼働中8件（Domain、Core、前回答編集、Output、Recovery、Store、CLI検査、既存共有Cargoキャッシュ）。保管済み・ゴミ箱移動・保留は各0件。隔離した旧版複製と検査用状態は終了済み。Windows保管と容量回収は非該当。
+
+## 2026-11-19 JST B114 — D3-C E5 通常入口の三機合同判定 3/3
+
+着工点は `219e6a91147c5ac1aa648f397a543108850c841c`。E2合同7ゲート、E3最小Input、E4最小Outputの成立記録を確認した。D2仕様 `de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0`、D2工程 `d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a`、D3-C指示 `fa4bfbb6d4c897df943fcebe64e2eb1e766834fabcf7187d9e78598d7e7445e3`、採用記録 `270b6482dff22cef7559363776f52806a0074fb0fd7fd0081b7772e62c2b9ef5` を照合した。第4節に沿い、同一Coreの通常日本語入口でT01〜T03を合同判定する施工。
+
+着工点の通常CLIで初見説明と段落比較は生成・実表示まで到達した。一方、明示条件IDの正例は `CONDITION_DEFINITION_MISSING` で実採用に届かず、条件定義は直接型付きAPIに限られていた。数学エンジンが扱うUnicodeマイナス `−` は単位付き算術のInputで停止していた。実Chromiumでは前後の全角空白を含む依頼が、送信前の `trim` により変更されていた。
+
+通常の `条件定義: [scope=lab][condition=calibrated]ユリは校正済み` を `declarative-ja-en-v92-condition-definition` で封印し、既存の `Intent::DefineCondition` と唯一Coreの条件記憶に渡す。定義の対象は明示主体の単一コピュラ関係とその否定。条件ID、範囲、主体、対象語を原文の別々のバイト範囲に保持し、Coreが条件記録ID・証拠Fact・真偽を扱う。条件の複合式と有効期間の通常文による定義はこの施工範囲外。不正な修飾、重複した条件ID欄、引用、疑問形は定義前に停止する。単位算術の字句検査は `−` を通し、既存の厳密演算と元式を消費する。ブラウザーは空入力の判定に空白除去を使い、送信する依頼文には入力欄の値をそのまま使う。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。最終検査対象3ファイルの `git diff --binary` SHA-256は `330f1dacb74100ccc48c022df280c9c885f64717cb3c56701bc143cf0583f137`。通常CLI・認証付きループバックHTTP・Chromiumは同じ実行ファイルを使い、そのSHA-256 `9f207a4261812e3f8a1a27ea1cc0dd9d5256c2d5ae79e7cc4e0431ade76feadf` が各検査の前後で一致した。隔離SQLite、明示した一時ファイルの許可、日本語入力を使用した。
+
+| ゲート | 判定 | 同版の通常入口からの実観測 |
+|---|---|---|
+| T01 | PASS | 独立CLI 15起動。葉月の規則説明は760 UTF-8バイト、葉月と楓の段落比較は843、明示した否定条件の説明は948、全角数字・`−` を含む厳密量 `-3/2 m` は79。型付き意味成果物、新しい文面の選択分布、EOS、実stdout、描画ハッシュ、元Goalの `COMMIT` を照合した。別の正例で通常定義の登録前は未定義停止、登録後は `TRUE` と証拠依存を含む実説明、同じ範囲の証拠訂正後は `CONDITION_FALSE` で描画前に停止した。Chromiumで前後の全角空白を含む依頼の原文・SHA-256・バイト範囲と、生成・描画・DOMの一致も確認した。 |
+| T02 | PASS | 独立CLI 25起動。規則なしと親規則1件では未成立、2件保存後は別ケース・未見主体セイタカシギで `DERIVED / COMMIT`。実成果物V7に合成規則と親2件、対象のFact、生成モデルの実使用を確認した。802ステップのうち23で複数候補があり、EOSへ到達。別範囲・別actor・訂正後は依存する推論だけが停止し、無関係な証明と旧結果を保持した。Chromiumの別ケースとサーバー再起動でもV7を消費した。標本由来の河口13の仮説は、別標本の干潟20を反例として記録し、後続説明がその観測を消費した。仮説は保持状態のままで、事実照会は停止した。 |
+| T03 | PASS | 独立CLI 20起動。日本語の純表示と許可済み実ファイル45バイトをそれぞれ確定し、描画・受領のハッシュ、元Goalの必要成果4件、作用1件を照合した。許可不足や既存内容の競合では `SUSPEND`。真正な `ATTEMPTED` までの履歴で、対象不明は `UNKNOWN` のまま停止し、取消は確定可能な既発生効果を再照合しても `CANCEL` を保持した。新規作用・再送0。認証付きHTTPの無許可停止と許可ファイルの実読戻し、再試行でのinodeと更新時刻の一致、Chromiumの取消も確認した。 |
+
+最終版のRustテスト計140件がexit 0。`cargo test -p minidora-cli --locked --test normal_route` の近接27件、`cargo test -p minidora-engine --locked --no-fail-fast` の `input_machine_observation_05`、`core_proof_composition_learning_49`、`core_construction_observation_06` 計4件と、同 `--lib` の `input::tests`、`recovery::tests::`、`output::tests::` 計109件。`cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo build -p minidora-cli --locked`、`git diff --check` がPASS。独立CLI検査とChromium・HTTP観測もexit 0。ローカルファイル作用は通常CLIと認証付きHTTPで検査した。ブラウザー操作は表示・学習・取消を対象とした。
+
+D3-CのE5出口は同一版の通常入口で `PASS 3/3`。次工程はE6の全体系接続と要求・元ソースの意味照合。体系QC、独立QA、公開・配布は `NOT_RUN`。R2受入列は `UNVERIFIED`。
+
+復旧2世代のローカル参照・GitHubタグは `219e6a9` と `63944c4`。終了時資産は計6件。保持2件（実装台帳と要求トレース）、稼働中4件（Input、CLI検査、ブラウザーの入力画面、既存共有Cargoキャッシュ）。保管済み・ゴミ箱移動・保留は各0件。隔離SQLite、一時検査スクリプト・出力、ブラウザープロファイルは残っていない。Windows保管と容量回収は非該当。
