@@ -17,6 +17,203 @@ struct CalculationSequenceStepArtifact {
     consumed: Vec<language::CalculationReferenceUse>,
 }
 
+pub(crate) fn calculation_sequence_nodes(steps: &[CalculationSequenceStep]) -> Vec<GoalNode> {
+    steps
+        .iter()
+        .map(|step| GoalNode {
+            id: format!("sequence-{}", step.id),
+            kind: GoalNodeKind::ComputedValue,
+            requires: step
+                .requires
+                .iter()
+                .map(|id| format!("sequence-{id}"))
+                .collect(),
+        })
+        .collect()
+}
+
+pub(crate) struct CalculationSequenceResult {
+    pub(crate) calculation: Calculation,
+    pub(crate) units: Vec<String>,
+}
+
+impl CalculationSequenceResult {
+    pub(crate) fn verify_content(&self, result: &ResultRecord, plan: &ContentPlan) -> Result<()> {
+        if result.calculation.as_ref() != Some(&self.calculation)
+            || result.guarantee != Guarantee::Computed
+            || plan.guarantee != Guarantee::Computed
+            || plan.required_units != self.units
+            || plan.text != self.units.join("\n")
+        {
+            return Err(failure(
+                "GOAL_CALCULATION_SEQUENCE_MISMATCH",
+                "adopted calculation content differs from the required observed steps",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Execute only the next ready node of the sealed Goal. The artifact callback
+/// persists live results or authenticates the same bytes during reconciliation.
+pub(crate) fn run_calculation_sequence(
+    steps: &[CalculationSequenceStep],
+    original_text: &str,
+    graph: &mut Scheduler,
+    budget: &ResourceBudget,
+    started: Instant,
+    dependencies: &mut Vec<String>,
+    mut artifact_ref: impl FnMut(&[u8]) -> Result<String>,
+) -> Result<CalculationSequenceResult> {
+    let final_step = steps.last().ok_or_else(|| {
+        failure(
+            "CALCULATION_SEQUENCE_EMPTY",
+            "実行可能な計算手順がありません。",
+        )
+    })?;
+    let by_node: BTreeMap<_, _> = steps
+        .iter()
+        .map(|step| (format!("sequence-{}", step.id), step))
+        .collect();
+    let mut completed = BTreeMap::<String, language::SequenceValue>::new();
+    let mut artifact_refs = Vec::with_capacity(steps.len());
+    let mut units = Vec::with_capacity(steps.len());
+    let mut final_calculation = None;
+    loop {
+        let node_id = graph.ready().into_iter().next().ok_or_else(|| {
+            failure(
+                "UNOBSERVED_PREREQUISITE",
+                format!("必須成果の残件を実行できません: {:?}", graph.residuals()),
+            )
+        })?;
+        if node_id == "compute" {
+            break;
+        }
+        let step = by_node.get(&node_id).ok_or_else(|| {
+            failure(
+                "SEQUENCE_DEPENDENCY_MISMATCH",
+                "ready node is not a sealed calculation step",
+            )
+        })?;
+        if started.elapsed().as_millis() >= u128::from(budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "計算手順の途中で要求全体の締切へ達しました。",
+            ));
+        }
+        let span = &step.expression;
+        if original_text.get(span.start..span.end) != Some(span.text.as_str()) {
+            return Err(failure(
+                "SEQUENCE_DEPENDENCY_MISMATCH",
+                "sealed calculation expression does not match the original input span",
+            ));
+        }
+        let inputs = step
+            .requires
+            .iter()
+            .map(|id| {
+                completed
+                    .get(id)
+                    .cloned()
+                    .map(|value| (id.clone(), value))
+                    .ok_or_else(|| {
+                        failure(
+                            "UNOBSERVED_PREREQUISITE",
+                            "sealed step requires an unobserved value",
+                        )
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let resolved = language::calculate_sequence_expression(&span.text, &inputs)?;
+        let consumed: BTreeMap<_, _> = resolved
+            .consumed
+            .iter()
+            .map(|reference| {
+                (
+                    format!("sequence-{}", reference.step_id),
+                    reference.artifact_sha256.clone(),
+                )
+            })
+            .collect();
+        if consumed.len() != inputs.len() {
+            return Err(failure(
+                "SEQUENCE_DEPENDENCY_MISMATCH",
+                "計算器が実際に消費した参照集合が封印済みの参照集合と一致しません。",
+            ));
+        }
+        let artifact = CalculationSequenceStepArtifact {
+            id: step.id.clone(),
+            source_expression: span.clone(),
+            evaluated_expression: resolved.evaluated_expression.clone(),
+            calculation: resolved.calculation.clone(),
+            consumed: resolved.consumed,
+        };
+        let reference = artifact_ref(&canonical(&artifact)?)?;
+        graph.observe(&node_id, &reference, &consumed)?;
+        dependencies.push(reference.clone());
+        units.push(format!(
+            "{}: {} = {}",
+            step.id, resolved.evaluated_expression, resolved.calculation.exact_value
+        ));
+        completed.insert(
+            step.id.clone(),
+            language::SequenceValue {
+                exact_value: resolved.calculation.exact_value.clone(),
+                artifact_sha256: reference.clone(),
+            },
+        );
+        if step.id == final_step.id {
+            final_calculation = Some(resolved.calculation);
+        }
+        artifact_refs.push((step.id.clone(), reference));
+    }
+    let calculation = final_calculation.ok_or_else(|| {
+        failure(
+            "UNOBSERVED_PREREQUISITE",
+            "the declared final calculation has not been observed",
+        )
+    })?;
+    let report = canonical(&(
+        "minidora-calculation-sequence-report-v1",
+        &artifact_refs,
+        &final_step.id,
+        &calculation.exact_value,
+        "each declared downstream reference was substituted with the exact value of its observed upstream calculation artifact",
+    ))?;
+    if report.len() > budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "計算手順のartifact参照報告が出力予算を超えています。",
+        ));
+    }
+    dependencies.push(artifact_ref(&report)?);
+    Ok(CalculationSequenceResult { calculation, units })
+}
+
+pub(crate) fn store_execution_graph(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    graph: &Scheduler,
+) -> Result<String> {
+    store.put_artifact(
+        actor,
+        case,
+        &(
+            graph.nodes(),
+            graph.observed(),
+            graph.consumed_by("content"),
+            graph.consumed_by("render"),
+            graph.consumed_by("file"),
+            graph
+                .nodes()
+                .iter()
+                .map(|node| (node.id.clone(), graph.consumed_by(&node.id).cloned()))
+                .collect::<BTreeMap<_, _>>(),
+        ),
+    )
+}
+
 const CORE_COMPUTATION_ARTIFACT_KIND_V1: &str = "minidora.core-computation.relation-meaning.v1";
 const CORE_COMPUTATION_ARTIFACT_KIND_V2: &str = "minidora.core-computation.relation-meaning.v2";
 const CORE_COMPUTATION_ARTIFACT_KIND_V3: &str = "minidora.core-computation.relation-meaning.v3";
@@ -41,8 +238,10 @@ const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
 
 pub(crate) fn goal_predicates(intent: &Intent, requires_file: bool) -> Vec<String> {
     let mut predicates = Vec::new();
-    if matches!(intent, Intent::Calculate { .. }) {
-        predicates.push(EXACT_CALCULATION_PREDICATE.into());
+    match intent {
+        Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
+        Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        _ => {}
     }
     predicates.extend(["SUPPORTED_CONTENT".into(), "EXACT_RENDER".into()]);
     if requires_file {
@@ -3956,19 +4155,9 @@ impl Engine {
             compute_requires.push(summary_id);
         }
         if let Intent::CalculateSequence { steps } = &bundle.meaning.intent {
-            for step in steps {
-                let id = format!("sequence-{}", step.id);
-                nodes.push(GoalNode {
-                    id: id.clone(),
-                    kind: GoalNodeKind::ComputedValue,
-                    requires: step
-                        .requires
-                        .iter()
-                        .map(|required| format!("sequence-{required}"))
-                        .collect(),
-                });
-                compute_requires.push(id);
-            }
+            let sequence_nodes = calculation_sequence_nodes(steps);
+            compute_requires.extend(sequence_nodes.iter().map(|node| node.id.clone()));
+            nodes.extend(sequence_nodes);
         }
         nodes.extend([
             GoalNode {
@@ -4074,7 +4263,8 @@ impl Engine {
         let mut applied_rule_adaptation = None;
         let mut generation_model = None;
         let mut generation_emission = None;
-        match &bundle.meaning.intent {
+        let mut sequence_result = None;
+        match &goal.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
                     units.push(exact_calculation_unit(&calculation));
@@ -4094,125 +4284,31 @@ impl Engine {
                 }
             },
             Intent::CalculateSequence { steps } => {
-                let mut completed = BTreeMap::<String, language::SequenceValue>::new();
-                let mut artifact_refs = Vec::with_capacity(steps.len());
-                let mut final_value = None;
-                for step in steps {
-                    if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
+                let observed = match run_calculation_sequence(
+                    steps,
+                    &request.text,
+                    &mut graph,
+                    &goal.budget,
+                    started,
+                    &mut result.dependencies,
+                    |bytes| self.store.put_bytes(actor, &request.case_id, bytes),
+                ) {
+                    Ok(observed) => observed,
+                    Err(Error::Contract { code, message }) => {
                         state.result = Some(result.clone());
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "DEADLINE",
-                            "計算手順の途中で要求全体の締切へ達しました。",
-                        );
+                        let lifecycle = if code == "SEQUENCE_DEPENDENCY_MISMATCH" {
+                            Lifecycle::Fail
+                        } else {
+                            Lifecycle::Suspend
+                        };
+                        return self.stop(&mut state, lifecycle, &code, &message);
                     }
-                    let node_id = format!("sequence-{}", step.id);
-                    if !graph.ready().iter().any(|ready| ready == &node_id) {
-                        state.result = Some(result.clone());
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "UNOBSERVED_PREREQUISITE",
-                            &format!("{} の必須入力artifactがまだ観測されていません。", step.id),
-                        );
-                    }
-                    let resolved = match language::calculate_sequence_expression(
-                        &step.expression.text,
-                        &completed,
-                    ) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            state.result = Some(result.clone());
-                            let code = match &error {
-                                minidora_domain::Error::Contract { code, .. } => code.as_str(),
-                                _ => "CALCULATION_SEQUENCE_UNSUPPORTED",
-                            };
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                code,
-                                &error.to_string(),
-                            );
-                        }
-                    };
-                    let consumed: BTreeMap<String, String> = resolved
-                        .consumed
-                        .iter()
-                        .map(|reference| {
-                            (reference.step_id.clone(), reference.artifact_sha256.clone())
-                        })
-                        .collect();
-                    let declared: std::collections::BTreeSet<_> =
-                        step.requires.iter().cloned().collect();
-                    let actual: std::collections::BTreeSet<_> = consumed.keys().cloned().collect();
-                    if declared != actual {
-                        state.result = Some(result.clone());
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Fail,
-                            "SEQUENCE_DEPENDENCY_MISMATCH",
-                            "入力で宣言された参照集合と計算器が実際に消費した参照集合が一致しません。",
-                        );
-                    }
-                    let artifact = CalculationSequenceStepArtifact {
-                        id: step.id.clone(),
-                        source_expression: step.expression.clone(),
-                        evaluated_expression: resolved.evaluated_expression.clone(),
-                        calculation: resolved.calculation.clone(),
-                        consumed: resolved.consumed,
-                    };
-                    let artifact_sha256 =
-                        self.store
-                            .put_artifact(actor, &request.case_id, &artifact)?;
-                    let graph_consumed = consumed
-                        .into_iter()
-                        .map(|(id, sha)| (format!("sequence-{id}"), sha))
-                        .collect();
-                    graph.observe(&node_id, &artifact_sha256, &graph_consumed)?;
-                    result.dependencies.push(artifact_sha256.clone());
-                    units.push(format!(
-                        "{}: {} = {}",
-                        step.id, resolved.evaluated_expression, resolved.calculation.exact_value
-                    ));
-                    completed.insert(
-                        step.id.clone(),
-                        language::SequenceValue {
-                            exact_value: resolved.calculation.exact_value.clone(),
-                            artifact_sha256: artifact_sha256.clone(),
-                        },
-                    );
-                    final_value = Some((step.id.clone(), resolved.calculation.clone()));
-                    artifact_refs.push((step.id.clone(), artifact_sha256));
-                }
-                let Some((final_step_id, final_calculation)) = final_value else {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "CALCULATION_SEQUENCE_EMPTY",
-                        "実行可能な計算手順がありません。",
-                    );
+                    Err(error) => return Err(error),
                 };
-                let report = (
-                    "minidora-calculation-sequence-report-v1",
-                    &artifact_refs,
-                    &final_step_id,
-                    &final_calculation.exact_value,
-                    "each declared downstream reference was substituted with the exact value of its observed upstream calculation artifact",
-                );
-                if serde_json::to_vec(&report)?.len() > request.budget.max_evidence_bytes {
-                    state.result = Some(result.clone());
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "RESOURCE_LIMIT",
-                        "計算手順のartifact参照報告が出力予算を超えています。",
-                    );
-                }
-                let report_sha256 = self.store.put_artifact(actor, &request.case_id, &report)?;
-                result.dependencies.push(report_sha256);
-                result.calculation = Some(final_calculation);
+                units.clone_from(&observed.units);
+                result.calculation = Some(observed.calculation.clone());
                 result.guarantee = Guarantee::Computed;
+                sequence_result = Some(observed);
             }
             Intent::CorrectCalculation {
                 operand_index,
@@ -8518,6 +8614,16 @@ impl Engine {
                 &error.to_string(),
             );
         }
+        if let Some(observed) = sequence_result
+            && let Err(error) = observed.verify_content(&result, &plan)
+        {
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "GOAL_CALCULATION_SEQUENCE_MISMATCH",
+                &error.to_string(),
+            );
+        }
         plan.id = identity(&plan)?;
         let content_artifact = self.store.put_artifact(actor, &request.case_id, &plan)?;
         graph.observe(
@@ -8659,24 +8765,12 @@ impl Engine {
                 &format!("{:?}", graph.residuals()),
             );
         }
-        result.execution_graph_ref = Some(
-            self.store.put_artifact(
-                actor,
-                &request.case_id,
-                &(
-                    graph.nodes(),
-                    graph.observed(),
-                    graph.consumed_by("content"),
-                    graph.consumed_by("render"),
-                    graph.consumed_by("file"),
-                    graph
-                        .nodes()
-                        .iter()
-                        .map(|node| (node.id.clone(), graph.consumed_by(&node.id).cloned()))
-                        .collect::<BTreeMap<_, _>>(),
-                ),
-            )?,
-        );
+        result.execution_graph_ref = Some(store_execution_graph(
+            &self.store,
+            actor,
+            &request.case_id,
+            &graph,
+        )?);
         result.lifecycle = Lifecycle::Commit;
         state.result = Some(result.clone());
         self.advance(&mut state, Lifecycle::Commit, None)?;

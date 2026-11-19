@@ -6,7 +6,10 @@
 //! receipt/revisions through the same Core-owned persistence boundary. Host
 //! authentication and trusted ownership of ancestor directories remain required.
 use crate::{
-    core::{goal_predicates, validate_render, verify_goal_content},
+    core::{
+        calculation_sequence_nodes, goal_predicates, run_calculation_sequence,
+        store_execution_graph, validate_render, verify_goal_content,
+    },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
     store::Store,
@@ -70,17 +73,26 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
             "UNMET_GOAL_NODES: reconciliation retained unresolved required artifacts",
         );
     }
-    result.execution_graph_ref = Some(store.put_artifact(
-        actor,
-        case,
-        &(
-            graph.nodes(),
-            graph.observed(),
-            graph.consumed_by("content"),
-            graph.consumed_by("render"),
-            graph.consumed_by("file"),
-        ),
-    )?);
+    result.execution_graph_ref =
+        Some(
+            if state.bundle.as_ref().is_some_and(|bundle| {
+                matches!(bundle.meaning.intent, Intent::CalculateSequence { .. })
+            }) {
+                store_execution_graph(store, actor, case, &graph)?
+            } else {
+                store.put_artifact(
+                    actor,
+                    case,
+                    &(
+                        graph.nodes(),
+                        graph.observed(),
+                        graph.consumed_by("content"),
+                        graph.consumed_by("render"),
+                        graph.consumed_by("file"),
+                    ),
+                )?
+            },
+        );
     result.reason = Some(
         "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted".into(),
     );
@@ -4173,6 +4185,11 @@ fn inspect(
         });
         sources.push(summary_id);
     }
+    if let Intent::CalculateSequence { steps } = &goal.intent {
+        let sequence_nodes = calculation_sequence_nodes(steps);
+        sources.extend(sequence_nodes.iter().map(|node| node.id.clone()));
+        expected_nodes.extend(sequence_nodes);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -4203,6 +4220,35 @@ fn inspect(
     }
     let mut graph = Scheduler::new(nodes, goal.budget.max_actions)?;
     let mut source_refs = BTreeMap::new();
+    if let Intent::CalculateSequence { steps } = &goal.intent {
+        let mut dependencies = Vec::new();
+        let observed = run_calculation_sequence(
+            steps,
+            &request.text,
+            &mut graph,
+            &goal.budget,
+            Instant::now(),
+            &mut dependencies,
+            |expected| {
+                let reference = digest(expected);
+                if store.get_bytes(actor, case, &reference)? != expected {
+                    return Err(failure(
+                        "RECOVERY_ARTIFACT_MISMATCH",
+                        "retained calculation step or report differs",
+                    ));
+                }
+                Ok(reference)
+            },
+        )?;
+        observed.verify_content(result, plan)?;
+        if dependencies != result.dependencies {
+            return Err(failure(
+                "RECOVERY_DEPENDENCY_MISMATCH",
+                "the result did not retain every required sequence step and exact report in order",
+            ));
+        }
+        source_refs.clone_from(graph.observed());
+    }
     for (index, packet) in result.evidence.iter().enumerate() {
         let reference = verified_artifact(store, actor, case, packet)?;
         let id = search_candidate_rank.map_or_else(
@@ -5023,6 +5069,91 @@ mod tests {
             "統計 [0.1,0.2,0.3]",
             "statistics-explanation.txt",
         )
+    }
+
+    #[test]
+    fn calculation_sequence_reconciles_observed_steps_without_rewriting_file() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "sequence",
+            "alice",
+            "calculation-sequence:\nbase: 2+3\nlarger: @{base}*2\nfinal: @{larger}+@{base}+@{base}",
+        );
+        request.budget.max_actions = 7;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.calculation.as_ref().unwrap().exact_value, "20");
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        let mut mismatched = state.result.as_ref().unwrap().clone();
+        mismatched.dependencies.swap(0, 1);
+        let error = inspect(&store, "alice", &state, &mismatched).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_DEPENDENCY_MISMATCH"),
+            "{error:?}"
+        );
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+
+        let mut legacy = state.clone();
+        let mut original_goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", state.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            original_goal.required_predicates[0],
+            "EXACT_CALCULATION_SEQUENCE_V1"
+        );
+        original_goal.required_predicates.remove(0);
+        legacy.goal_sha256 = Some(store.put_artifact("alice", "case", &original_goal).unwrap());
+        inspect(&store, "alice", &legacy, state.result.as_ref().unwrap()).unwrap();
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.calculation, result.calculation);
+        assert_eq!(recovered.dependencies, result.dependencies);
+        assert_eq!(recovered.receipts.len(), 1);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let graph: serde_json::Value = serde_json::from_slice(
+            &store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_ref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph[5]["sequence-final"]["sequence-base"],
+            result.dependencies[0]
+        );
+        assert_eq!(
+            graph[5]["sequence-final"]["sequence-larger"],
+            result.dependencies[1]
+        );
     }
 
     #[test]

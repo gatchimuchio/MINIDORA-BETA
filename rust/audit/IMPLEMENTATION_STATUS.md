@@ -956,3 +956,21 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `487cdaa
 | `cargo check -p minidora-engine --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
 
 W13は同一ケース内での実分布差と版再生まで `PARTIAL`。ケースを越えた適応、出力文面の差、K6の動作差、E1出口は未成立。E2合同ゲート・体系QC・独立QAは `NOT_RUN`。次は元Goalの未充足から必要計算を選び、実引数を作用と成果判定につなぐW14〜W16の境界を照合する。復旧2世代は `a8aeb3b` と `43df4b1`。資産計6件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中4件（Core、language、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B100 — D3-C E1-W14〜W16 連続計算のGoal駆動と中断復旧
+
+着工点は `2a97d7444ce7663e8fc9166b29ce793c575948b9`。D2仕様・D2工程・D3-C指示の採用SHAを照合。単一Engine/Coreは `CalculateSequence` の元Goalに `EXACT_CALCULATION_SEQUENCE_V1` を記録する。封印したグラフの未充足ノードから実行可能な次段を選び、当該段が宣言した先行段の厳密値と成果物参照を渡す。全段の実観測後に、宣言された最終段の値と全段の表示を照合して採用する。既存の権限とファイル実観測による確定を使う。
+
+中断復旧も同じ計算を通し、封印原文の範囲、参照の各出現、各段の保存バイト、v1報告、最終値、採用文面を照合する。指定先の実バイトが一致すると、同じ作用IDを再実行せず確定し、段ごとに消費した成果物参照を実行グラフに残す。従来のGoal述語列も同じ照合で受理する。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。対象ソース差分SHA-256 `07332f660b1ac55ae3f77974b4f27cc8db4a0a7cda600e804b131c39c907791c`。以下は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib recovery::tests::calculation_sequence_reconciles_observed_steps_without_rewriting_file --locked -- --exact --nocapture` | 1 PASS。3段と採用・実作用を7行動枠で実行。最終値 `20`。書込後・確定前のjournalから再起動し、復旧後も作用ID、ファイル内容、更新時刻を照合。依存順の不一致を拒否し、従来形式のGoalを再構成したfixtureを照合。 |
+| `cargo test -p minidora-cli --test normal_route calculation_sequence_route --locked` | 5 PASS。順序、容量、繰返し参照、単位、途中失敗、権限、既確定ファイルへの再実行防止。 |
+| `cargo test -p minidora-engine --lib exact_arithmetic_goal_requires_the_sealed_value --locked` | 1 PASS。B97の単式Goalと復旧。 |
+| `cargo check -p minidora-engine --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` | PASS。 |
+
+確認範囲は連続計算と許可済みローカルファイル。W14〜W16全幅とE1出口は未成立。実際の旧版DB移行、E2合同ゲート、体系QC・独立QAは `NOT_RUN`。次はW17の停止・取消・既発生作用の照合を、同じ元Goalと実作用の境界から確認する。復旧2世代は `2a97d74` と `a8aeb3b`。資産計5件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中3件（Core、Recoveryと付属検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
