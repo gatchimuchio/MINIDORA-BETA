@@ -6,7 +6,7 @@
 //! receipt/revisions through the same Core-owned persistence boundary. Host
 //! authentication and trusted ownership of ancestor directories remain required.
 use crate::{
-    core::validate_render,
+    core::{goal_predicates, validate_render, verify_goal_content},
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
     store::Store,
@@ -3138,12 +3138,10 @@ fn inspect(
             "original target lacks original matching authority",
         ));
     }
-    let expected_predicates = vec![
-        "SUPPORTED_CONTENT".to_string(),
-        "EXACT_RENDER".into(),
-        "CONFIRMED_FILE".into(),
-    ];
-    if goal.required_predicates != expected_predicates {
+    let legacy_predicates = ["SUPPORTED_CONTENT", "EXACT_RENDER", "CONFIRMED_FILE"];
+    if goal.required_predicates != legacy_predicates
+        && goal.required_predicates != goal_predicates(&goal.intent, true)
+    {
         return Err(failure(
             "UNSUPPORTED_RECOVERY_GOAL",
             "unrecognized completion predicates remain unresolved",
@@ -3221,6 +3219,7 @@ fn inspect(
             "adopted result differs from original input",
         ));
     }
+    verify_goal_content(&goal, result, plan)?;
     verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?;
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
@@ -4989,6 +4988,77 @@ mod tests {
             "統計 [0.1,0.2,0.3]",
             "statistics-explanation.txt",
         )
+    }
+
+    #[test]
+    fn exact_arithmetic_goal_requires_the_sealed_value() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request =
+            RequestEnvelope::new("display", "arithmetic", "alice", "７／２を計算して");
+        request.budget.max_actions = 3;
+        let result = engine.execute("alice", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.calculation.as_ref().unwrap().exact_value, "7/2");
+        assert_eq!(result.render.as_ref().unwrap().bytes, b"7/2 = 7/2");
+        let display = engine.latest("alice", "display").unwrap().unwrap();
+        let goal: GoalContract = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "display", display.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            goal.required_predicates,
+            ["EXACT_CALCULATION_V1", "SUPPORTED_CONTENT", "EXACT_RENDER"]
+        );
+        assert!(matches!(&goal.intent, Intent::Calculate { expression } if expression == "7/2"));
+
+        let fixture = attempted_prefix();
+        let store = Store::open(&fixture.state).unwrap();
+        let case = store.load_case("alice", "case").unwrap().unwrap();
+        let result = case.result.as_ref().unwrap();
+        let mut goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", case.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            goal.required_predicates,
+            [
+                "EXACT_CALCULATION_V1",
+                "SUPPORTED_CONTENT",
+                "EXACT_RENDER",
+                "CONFIRMED_FILE"
+            ]
+        );
+        let mut wrong_result = result.clone();
+        wrong_result.calculation.as_mut().unwrap().exact_value = "6".into();
+        let error = inspect(&store, "alice", &case, &wrong_result).unwrap_err();
+        assert!(
+            matches!(error, Error::Contract { ref code, .. } if code == "GOAL_CALCULATION_MISMATCH"),
+            "{error:?}"
+        );
+        assert_eq!(
+            store.load_case("alice", "case").unwrap(),
+            Some(case.clone())
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), b"2+3 = 5");
+
+        // The former predicate list is still valid for retained files.
+        let mut legacy_case = case.clone();
+        goal.required_predicates.remove(0);
+        legacy_case.goal_sha256 = Some(store.put_artifact("alice", "case", &goal).unwrap());
+        inspect(&store, "alice", &legacy_case, result).unwrap();
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit);
+        assert_eq!(recovered.calculation, result.calculation);
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), b"2+3 = 5");
     }
 
     fn attempted_probability_explanation_prefix() -> Fixture {

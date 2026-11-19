@@ -36,6 +36,57 @@ const DIRECT_TYPED_CONDITION_KIND: &str = "CORE_TYPED_CONDITION_DEFINITION_V1";
 const DIRECT_TYPED_CONDITION_PARSER: &str = "core-typed-condition-definition-v1";
 const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1";
 const DIRECT_RELATION_COMPARISON_PARSER: &str = "core-typed-relation-comparison-v1";
+const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
+
+pub(crate) fn goal_predicates(intent: &Intent, requires_file: bool) -> Vec<String> {
+    let mut predicates = Vec::new();
+    if matches!(intent, Intent::Calculate { .. }) {
+        predicates.push(EXACT_CALCULATION_PREDICATE.into());
+    }
+    predicates.extend(["SUPPORTED_CONTENT".into(), "EXACT_RENDER".into()]);
+    if requires_file {
+        predicates.push("CONFIRMED_FILE".into());
+    }
+    predicates
+}
+
+fn exact_calculation_unit(calculation: &Calculation) -> String {
+    format!("{} = {}", calculation.expression, calculation.exact_value)
+}
+
+pub(crate) fn verify_goal_content(
+    goal: &GoalContract,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    if !goal
+        .required_predicates
+        .iter()
+        .any(|predicate| predicate == EXACT_CALCULATION_PREDICATE)
+    {
+        return Ok(());
+    }
+    let Intent::Calculate { expression } = &goal.intent else {
+        return Err(failure(
+            "GOAL_CALCULATION_MISMATCH",
+            "厳密計算の完了条件に封印済みの式がありません。",
+        ));
+    };
+    let calculation = language::calculate(expression)?;
+    let required_unit = exact_calculation_unit(&calculation);
+    if result.calculation.as_ref() != Some(&calculation)
+        || result.guarantee != Guarantee::Computed
+        || plan.guarantee != Guarantee::Computed
+        || plan.required_units.as_slice() != std::slice::from_ref(&required_unit)
+        || plan.text != required_unit
+    {
+        return Err(failure(
+            "GOAL_CALCULATION_MISMATCH",
+            "式の厳密な計算結果と採用内容が、元の要求の完了条件を満たしません。",
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3942,15 +3993,10 @@ impl Engine {
             permissions: request.permissions.clone(),
             budget: request.budget.clone(),
             required_graph_ref,
-            required_predicates: if request.output_path.is_some() {
-                vec![
-                    "SUPPORTED_CONTENT".into(),
-                    "EXACT_RENDER".into(),
-                    "CONFIRMED_FILE".into(),
-                ]
-            } else {
-                vec!["SUPPORTED_CONTENT".into(), "EXACT_RENDER".into()]
-            },
+            required_predicates: goal_predicates(
+                &bundle.meaning.intent,
+                request.output_path.is_some(),
+            ),
         };
         state.goal_sha256 = Some(self.store.put_artifact(actor, &request.case_id, &goal)?);
         self.advance(&mut state, Lifecycle::Running, None)?;
@@ -4019,10 +4065,7 @@ impl Engine {
         match &bundle.meaning.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
-                    units.push(format!(
-                        "{} = {}",
-                        calculation.expression, calculation.exact_value
-                    ));
+                    units.push(exact_calculation_unit(&calculation));
                     result.calculation = Some(calculation);
                     result.guarantee = Guarantee::Computed;
                 }
@@ -8425,6 +8468,14 @@ impl Engine {
                 &mut state,
                 Lifecycle::Suspend,
                 "CONTENT_ADOPTION_MISMATCH",
+                &error.to_string(),
+            );
+        }
+        if let Err(error) = verify_goal_content(&goal, &result, &plan) {
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "GOAL_CALCULATION_MISMATCH",
                 &error.to_string(),
             );
         }

@@ -902,3 +902,21 @@ The first probe expected the higher-level RECOVERY_CONTEXT_PROOF_CHANGED wrapper
 B96 adds one Engine-library clone-only regression for the saved AskRelationObjects result consumed by ExplainPrevious Recovery. The ordinary Japanese Engine route commits a direct relation, a rule, a derived object-list result and its explanation; after reopening Engine, valid saved-state inspect passes and the result's pinned actor-memory revision is confirmed present. The test selects the next revision, verifies that no snapshot exists there and changes only the saved object-list result pointer in a cloned CaseRevision. Recovery refuses the clone with RECOVERY_MEMORY_REVISION_MISSING. The persisted case revision, current actor-memory state and target bytes remain unchanged.
 
 The focused test passed (1/1), the relation-object explanation filter passed (2/2), and formatting and git diff checks passed on Rust 1.99.1. No production behavior, schema or dependency changed; the malformed clone is never persisted. This synthetic check does not test persistent Store corruption, historical SQLite/schema migration or full CAP-D02 acceptance. E1-W10 remains PARTIAL, CAP-D02 remains UNVERIFIED, and no E1 exit or release is claimed. See [B96](construction/MB-BUILD-20261117-D2-LLM/BUILD_BATCH_96.md) and [machine observation](construction/MB-BUILD-20261117-D2-LLM/b96-build-observation.json).
+
+
+## 2026-11-19 JST B97 — D3-C E1-W03 算術Goalの厳密値を採用・復旧へ接続
+
+D2仕様・D2工程・D3-C指示を照合した着工点は `57943960342e14e9cdc334d52163429f01125f86`。唯一のEngine/Coreは通常の `Intent::Calculate` から式と `EXACT_CALCULATION_V1` を元Goalに封印する。封印式の厳密計算を照合し、式・値・演算過程を持つ `Calculation` と採用文面が一致する場合に、実計算artifactを消費したContentPlanを採用する。既存の描画検査と、ファイルが必要な場合の権限・実バイト・receipt検査を経てCoreが終端を決める。復旧でも新述語を検証し、保存済みの従来述語列を受理する。新しい述語値はV1とし、保存スキーマとグラフの行動数は既存形式で継続する。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、対象ソース差分SHA-256 `c14bf7d5038ce7fc151301a36b8347dd258d9aa0a74dce9921d6dfe0ec9a0ec8`。以下は `rust/` から実行し、すべてexit 0。
+
+| 検査 | 観測 |
+|---|---|
+| `cargo test -p minidora-engine --lib recovery::tests::exact_arithmetic_goal_requires_the_sealed_value --locked -- --exact --nocapture` | 1 PASS。全角の算術要求から3行動枠で厳密値 `7/2` と描画を確認。ファイルの未確定journalを用いた検査で、計算値の不一致を `GOAL_CALCULATION_MISMATCH` で停止。従来述語列の再構成fixtureを受理し、新述語の正しい記録は同一作用IDで再送せず確定。 |
+| `cargo test -p minidora-engine --lib file --locked` | 13 PASS。無許可、欠落・異なるファイル、取消、symlinkの既存境界を含む。 |
+| `cargo test -p minidora-engine --lib interrupted_actual_write_reconciles_same_identity_without_resending --locked` | 1 PASS。同一作用の復旧を確認。 |
+| `cargo fmt --all -- --check`、`cargo check -p minidora-engine --all-targets --locked`、`git diff --check` | PASS。 |
+
+算術Goalの局所結線を確認。W03全幅とE1出口は未成立。E2合同ゲート、体系QC、独立QA、過去バージョンの実DB移行は `NOT_RUN`。W10の追加Recovery枝はD3-Cに従い後工程に保持する。次のE1接続候補は、通常の `AskWhy` が選んだ証明を意味計画とL6生成へ渡すW07〜W09の経路。W13の永続モデル適応も未接続。
+
+復旧2世代は `5794396` と `e0e40cc`。資産は計5件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中3件（Core、Recoveryと付属テスト、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。ファイル作用検査は一時fixture内で実施。
