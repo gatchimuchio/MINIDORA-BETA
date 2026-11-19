@@ -82,6 +82,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                 bundle.meaning.intent,
                 Intent::CalculateSequence { .. }
                     | Intent::FetchPreviousSearchCandidate { .. }
+                    | Intent::FetchNextUnobservedSource
                     | Intent::Search { .. }
                     | Intent::SearchWithFallback { .. }
             ) || bundle.meaning.parser_version == crate::input::SOURCE_SUMMARY_PARSER_VERSION
@@ -2847,14 +2848,24 @@ pub(crate) fn source_context_available(
     case: &str,
     source: &ResultRecord,
 ) -> Result<bool> {
-    use crate::text_summary::{FirstHopStop, PartialRetrievalStop};
-
     if source.lifecycle == Lifecycle::Commit {
         return Ok(true);
     }
     let Some(stop) = crate::text_summary::partial_retrieval_stop(source) else {
         return Ok(false);
     };
+    Ok(verified_partial_retrieval(store, actor, case, source, &stop)?.is_some())
+}
+
+fn verified_partial_retrieval(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    source: &ResultRecord,
+    stop: &crate::text_summary::PartialRetrievalStop<'_>,
+) -> Result<Option<InputBundle>> {
+    use crate::text_summary::{FirstHopStop, PartialRetrievalStop};
+
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
@@ -2865,10 +2876,10 @@ pub(crate) fn source_context_available(
         .get_input_bundle(actor, case, &source.input_id, source.input_version)?
         .ok_or_else(invalid)?;
     let Intent::Retrieve { urls, .. } = &bundle.meaning.intent else {
-        return Ok(false);
+        return Ok(None);
     };
     let observed = source.evidence.len();
-    let url_count_matches = match &stop {
+    let url_count_matches = match stop {
         PartialRetrievalStop::AfterAllUrls => observed == urls.len(),
         PartialRetrievalStop::AtRedirect => observed <= urls.len(),
         PartialRetrievalStop::BeforeFirstHop(_) => observed < urls.len(),
@@ -2885,7 +2896,7 @@ pub(crate) fn source_context_available(
         return Err(invalid());
     }
 
-    if let PartialRetrievalStop::BeforeFirstHop(first_hop) = &stop {
+    if let PartialRetrievalStop::BeforeFirstHop(first_hop) = stop {
         let original = store
             .load_suspended_result_revision(actor, case, source)?
             .ok_or_else(invalid)?;
@@ -2978,8 +2989,56 @@ pub(crate) fn source_context_available(
         PartialRetrievalStop::BeforeFirstHop(FirstHopStop::HttpStarts) if bytes_left == 0 => {
             Err(invalid())
         }
-        _ => Ok(true),
+        _ => Ok(Some(bundle)),
     }
+}
+
+pub(crate) const PREVIOUS_DIRECT_RETRIEVAL_NODE: &str = "previous-direct-retrieval";
+
+pub(crate) fn next_direct_retrieval<'a>(
+    store: &Store,
+    actor: &str,
+    bundle: &InputBundle,
+    previous: Option<&'a ResultRecord>,
+) -> Result<Option<(&'a ResultRecord, String)>> {
+    let Some(source) = previous else {
+        return Ok(None);
+    };
+    if bundle.meaning.context_result_ref.as_ref() != Some(&source.id)
+        || bundle.context_sha256 != identity(&Some(source))?
+    {
+        return Err(failure(
+            "SOURCE_CONTEXT_INVALID",
+            "The continuation does not match its sealed prior result",
+        ));
+    }
+    let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
+        crate::text_summary::partial_retrieval_stop(source)
+    else {
+        return Ok(None);
+    };
+    let Some(original) =
+        verified_partial_retrieval(store, actor, &bundle.request.case_id, source, &stop)?
+    else {
+        return Ok(None);
+    };
+    let Intent::Retrieve { urls, .. } = original.meaning.intent else {
+        return Ok(None);
+    };
+    let mut urls = urls.into_iter();
+    let uri = urls
+        .nth(source.evidence.len())
+        .expect("verified pending URL");
+    let target = crate::ports::approved_url(&uri, &original.request.permissions)?;
+    if source
+        .evidence
+        .iter()
+        .flat_map(|packet| &packet.redirect_chain)
+        .any(|observed| observed == target.as_str())
+    {
+        return Ok(None);
+    }
+    Ok(Some((source, uri)))
 }
 
 fn first_hop_wait_matches(
@@ -4623,7 +4682,59 @@ fn inspect(
         verify_search_candidate_context(store, actor, state, result, plan, &goal, &nodes)?;
     let mut expected_nodes = Vec::new();
     let mut sources = Vec::new();
-    if let Intent::Retrieve { urls, .. } = &goal.intent {
+    let direct_continuation = if matches!(goal.intent, Intent::FetchNextUnobservedSource) {
+        let invalid = || {
+            failure(
+                "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+                "The continued read differs from its sealed direct retrieval",
+            )
+        };
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id));
+        let (source, uri) =
+            next_direct_retrieval(store, actor, bundle, previous)?.ok_or_else(invalid)?;
+        let [packet] = result.evidence.as_slice() else {
+            return Err(invalid());
+        };
+        crate::ports::validate_successful_packet(packet, &goal.permissions)?;
+        let allowed_starts = (goal.budget.max_actions as usize)
+            .checked_sub(nodes.len().saturating_sub(1))
+            .ok_or_else(invalid)?;
+        if packet.request_uri != uri
+            || packet.raw_body.len() > goal.budget.max_evidence_bytes
+            || packet.redirect_chain.len() > allowed_starts
+            || source
+                .evidence
+                .iter()
+                .flat_map(|observed| &observed.redirect_chain)
+                .any(|route| packet.redirect_chain.contains(route))
+            || result.dependencies != [source.id.clone(), packet.id.clone()]
+            || result.guarantee != Guarantee::SourceReport
+            || plan.required_units != [crate::core::direct_source_line(packet)]
+        {
+            return Err(invalid());
+        }
+        let reference = verified_artifact(store, actor, case, source)?;
+        expected_nodes.push(GoalNode {
+            id: PREVIOUS_DIRECT_RETRIEVAL_NODE.into(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        Some((uri, reference))
+    } else {
+        None
+    };
+    let direct_urls = match &goal.intent {
+        Intent::Retrieve { urls, .. } => Some(urls.as_slice()),
+        Intent::FetchNextUnobservedSource => direct_continuation
+            .as_ref()
+            .map(|(uri, _)| std::slice::from_ref(uri)),
+        _ => None,
+    };
+    if let Some(urls) = direct_urls {
         if urls.len() != result.evidence.len() {
             return Err(failure(
                 "RECOVERY_EVIDENCE_MISMATCH",
@@ -4648,7 +4759,11 @@ fn inspect(
             expected_nodes.push(GoalNode {
                 id,
                 kind: GoalNodeKind::Evidence,
-                requires: Vec::new(),
+                requires: direct_continuation
+                    .is_some()
+                    .then(|| PREVIOUS_DIRECT_RETRIEVAL_NODE.into())
+                    .into_iter()
+                    .collect(),
             });
         }
     } else if search_listing.is_some() {
@@ -4910,10 +5025,15 @@ fn inspect(
         graph.observe(&candidate.body_id, &candidate.body_ref, &requires)?;
         source_refs.insert(candidate.body_id.clone(), candidate.body_ref.clone());
     } else {
+        let mut source_requires = BTreeMap::new();
+        if let Some((_, reference)) = direct_continuation {
+            graph.observe(PREVIOUS_DIRECT_RETRIEVAL_NODE, &reference, &BTreeMap::new())?;
+            source_requires.insert(PREVIOUS_DIRECT_RETRIEVAL_NODE.into(), reference);
+        }
         for (index, packet) in result.evidence.iter().enumerate() {
             let reference = verified_artifact(store, actor, case, packet)?;
             let id = format!("source-{index}");
-            graph.observe(&id, &reference, &BTreeMap::new())?;
+            graph.observe(&id, &reference, &source_requires)?;
             source_refs.insert(id, reference);
         }
     }

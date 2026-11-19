@@ -1,6 +1,8 @@
 use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
 use crate::{
-    input, language, output, ports, relations, search,
+    input, language, output, ports,
+    recovery::PREVIOUS_DIRECT_RETRIEVAL_NODE,
+    relations, search,
     store::{MemoryIndexSnapshot, Store},
 };
 use minidora_domain::*;
@@ -4037,6 +4039,42 @@ impl Engine {
         } else {
             None
         };
+        let direct_continuation =
+            if matches!(bundle.meaning.intent, Intent::FetchNextUnobservedSource)
+                && has_compute_budget
+            {
+                let latest_result = latest.as_ref().and_then(|case| case.result.as_ref());
+                let previous = previous.filter(|source| Some(*source) == latest_result);
+                match crate::recovery::next_direct_retrieval(&self.store, actor, &bundle, previous)
+                {
+                    Ok(Some(continuation)) => Some(continuation),
+                    Ok(None) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "NO_PENDING_DIRECT_URL",
+                            "前回の直接取得に、照合できる次の未接続URLがありません。",
+                        );
+                    }
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Fail,
+                            "SOURCE_CONTEXT_INVALID",
+                            &error.to_string(),
+                        );
+                    }
+                }
+            } else {
+                None
+            };
+        let direct_urls = match &bundle.meaning.intent {
+            Intent::Retrieve { urls, .. } => Some(urls.as_slice()),
+            Intent::FetchNextUnobservedSource => direct_continuation
+                .as_ref()
+                .map(|(_, uri)| std::slice::from_ref(uri)),
+            _ => None,
+        };
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
         let source_followup_indices = if matches!(
@@ -4465,14 +4503,25 @@ impl Engine {
             } else {
                 None
             };
-        if let Intent::Retrieve { urls, .. } = &bundle.meaning.intent {
+        if direct_continuation.is_some() {
+            nodes.push(GoalNode {
+                id: PREVIOUS_DIRECT_RETRIEVAL_NODE.into(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+        }
+        if let Some(urls) = direct_urls {
             for (index, _) in urls.iter().enumerate() {
                 let id = format!("source-{index}");
                 compute_requires.push(id.clone());
                 nodes.push(GoalNode {
                     id,
                     kind: GoalNodeKind::Evidence,
-                    requires: Vec::new(),
+                    requires: direct_continuation
+                        .is_some()
+                        .then(|| PREVIOUS_DIRECT_RETRIEVAL_NODE.into())
+                        .into_iter()
+                        .collect(),
                 });
             }
         }
@@ -4698,6 +4747,7 @@ impl Engine {
         if matches!(
             goal.intent,
             Intent::Retrieve { .. }
+                | Intent::FetchNextUnobservedSource
                 | Intent::Search { .. }
                 | Intent::SearchWithFallback { .. }
                 | Intent::FetchPreviousSearchCandidate { .. }
@@ -8719,7 +8769,8 @@ impl Engine {
                 result.dependencies = affected;
                 result.guarantee = Guarantee::Computed;
             }
-            Intent::Retrieve { urls, question: _ } => {
+            Intent::Retrieve { .. } | Intent::FetchNextUnobservedSource => {
+                let urls = direct_urls.expect("direct retrieval URLs were bound to the Goal");
                 let mut retrieval = match retrieval_budget(urls.len(), &state, &self.store) {
                     Ok(budget) => budget,
                     Err(error) => {
@@ -8731,6 +8782,14 @@ impl Engine {
                         );
                     }
                 };
+                let mut source_requires = BTreeMap::new();
+                if let Some((source, _)) = direct_continuation.as_ref() {
+                    let reference = self.store.put_artifact(actor, &request.case_id, *source)?;
+                    graph.observe(PREVIOUS_DIRECT_RETRIEVAL_NODE, &reference, &BTreeMap::new())?;
+                    source_requires.insert(PREVIOUS_DIRECT_RETRIEVAL_NODE.into(), reference);
+                    result.dependencies.push(source.id.clone());
+                    retrieval.exclude_observed_routes(&source.evidence);
+                }
                 for (source_index, uri) in urls.iter().enumerate() {
                     let read = match ports::fetch_with_budget(
                         uri,
@@ -8756,7 +8815,7 @@ impl Engine {
                         graph.observe(
                             &format!("source-{source_index}"),
                             &observed,
-                            &BTreeMap::new(),
+                            &source_requires,
                         )?;
                     }
                     let refused_dns = packet.failure.as_deref() == Some("PRIVATE_READ_TARGET");
@@ -8807,11 +8866,7 @@ impl Engine {
                 // Exact quotations are source reports. No open-domain factual
                 // comparison or unverified summary is fabricated from a URL.
                 for packet in &result.evidence {
-                    units.push(format!(
-                        "出典: {}\n本文（出典報告）:\n{}",
-                        packet.final_uri,
-                        packet.extracted_text.as_deref().unwrap_or_default()
-                    ));
+                    units.push(direct_source_line(packet));
                 }
                 result.guarantee = Guarantee::SourceReport;
                 state.result = Some(result.clone());
@@ -10470,20 +10525,41 @@ pub(crate) fn verify_retained_retry_source(
                     result.input_version,
                 )?
                 .ok_or_else(invalid)?;
-            let Intent::Retrieve { urls, .. } = &bundle.meaning.intent else {
-                return Err(invalid());
+            let continuation;
+            let (urls, dependencies) = match &bundle.meaning.intent {
+                Intent::Retrieve { urls, .. } => (urls.as_slice(), result.dependencies.as_slice()),
+                Intent::FetchNextUnobservedSource => {
+                    let previous = bundle
+                        .meaning
+                        .context_result_ref
+                        .as_ref()
+                        .and_then(|id| state.prior_results.get(id));
+                    let (source, uri) = crate::recovery::next_direct_retrieval(
+                        store,
+                        &state.actor_id,
+                        &bundle,
+                        previous,
+                    )?
+                    .ok_or_else(invalid)?;
+                    let Some((reference, dependencies)) = result.dependencies.split_first() else {
+                        return Err(invalid());
+                    };
+                    if reference != &source.id {
+                        return Err(invalid());
+                    }
+                    continuation = uri;
+                    (std::slice::from_ref(&continuation), dependencies)
+                }
+                _ => return Err(invalid()),
             };
             if identity(&bundle.request)? != result.id
-                || result.evidence.len() != result.dependencies.len()
+                || result.evidence.len() != dependencies.len()
                 || result.evidence.len() > urls.len()
-                || result
-                    .evidence
-                    .iter()
-                    .zip(&result.dependencies)
-                    .zip(urls)
-                    .any(|((observation, reference), uri)| {
+                || result.evidence.iter().zip(dependencies).zip(urls).any(
+                    |((observation, reference), uri)| {
                         observation.request_uri != *uri || observation.id != *reference
-                    })
+                    },
+                )
             {
                 return Err(invalid());
             }
@@ -10511,6 +10587,14 @@ fn base_result(request: &RequestEnvelope) -> ResultRecord {
         actor_memory_revision: None,
         execution_graph_ref: None,
     }
+}
+
+pub(crate) fn direct_source_line(packet: &EvidencePacket) -> String {
+    format!(
+        "出典: {}\n本文（出典報告）:\n{}",
+        packet.final_uri,
+        packet.extracted_text.as_deref().unwrap_or_default()
+    )
 }
 fn rejected(request: &RequestEnvelope, code: &str, message: &str) -> ResultRecord {
     let mut r = base_result(request);

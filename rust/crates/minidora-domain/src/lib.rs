@@ -306,6 +306,7 @@ pub enum Intent {
     FetchPreviousSearchCandidate {
         rank: u32,
     },
+    FetchNextUnobservedSource,
     CsvSelect {
         document: String,
         column: String,

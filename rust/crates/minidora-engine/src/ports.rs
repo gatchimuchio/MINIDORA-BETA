@@ -509,6 +509,7 @@ pub(crate) struct RetrievalBudget {
     remaining_starts: u32,
     remaining_bytes: usize,
     retry_not_before: BTreeMap<String, RetryGate>,
+    observed_routes: BTreeSet<String>,
 }
 
 struct RetryGate {
@@ -526,6 +527,7 @@ impl RetrievalBudget {
             remaining_starts: max_starts,
             remaining_bytes: budget.max_evidence_bytes,
             retry_not_before: BTreeMap::new(),
+            observed_routes: BTreeSet::new(),
         })
     }
 
@@ -544,6 +546,14 @@ impl RetrievalBudget {
             .checked_duration_since(Instant::now())
             .filter(|duration| !duration.is_zero())
             .ok_or_else(|| failure(DEADLINE_EXCEEDED, RETRIEVAL_DEADLINE_ELAPSED))
+    }
+
+    pub(crate) fn exclude_observed_routes(&mut self, packets: &[EvidencePacket]) {
+        self.observed_routes.extend(
+            packets
+                .iter()
+                .flat_map(|packet| packet.redirect_chain.iter().cloned()),
+        );
     }
 
     fn reserve_start(&mut self, host: &str) -> Result<()> {
@@ -705,6 +715,17 @@ fn fetch_packet(
     let mut previous_status = 0;
     loop {
         check_admission()?;
+        if budget.observed_routes.contains(url.as_str()) {
+            return retain_redirect_refusal(
+                raw_url,
+                &redirects,
+                previous_status,
+                failure(
+                    "RETRIEVAL_ROUTE_ALREADY_OBSERVED",
+                    "The direct continuation reached a previously observed route",
+                ),
+            );
+        }
         let host = url.host_str().expect("approved domain");
         if let Err(error) = budget.reserve_start(host) {
             if !redirects.is_empty()

@@ -2325,6 +2325,154 @@ def check_source_after_read_budget(cli, fixture: Fixture, state_path: Path) -> d
     return outcomes
 
 
+def check_next_direct_url(cli, fixture: Fixture, state_path: Path) -> dict:
+    start, hop, kept, pending, later, missing = [
+        f"/next-direct-url-{part}" for part in ("start", "hop", "kept", "pending", "later", "missing")
+    ]
+    kept_text, pending_text = "実測値は42です。", "追加測定は73です。"
+    fixture.responses.update({
+        kept: (kept_text.encode(), "text/plain; charset=utf-8"),
+        pending: (pending_text.encode(), "text/plain; charset=utf-8"),
+        later: (b"Another pending body.", "text/plain"),
+    })
+    fixture.redirects.update({start: hop, hop: kept})
+    fixture.failure_responses[missing] = ("404 Not Found", b"Missing body.", "")
+    allow = ("--allow-read-host", fixture.host)
+    request = "前回の取得で未接続の次のURLを取得して"
+    alias = "前回の取得で未観測の最初のURLを取得して"
+    starts_stop = "EVIDENCE_UNAVAILABLE: HTTP_START_BUDGET_EXHAUSTED: The original Goal has no remaining HTTP starts"
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def uri(path: str) -> str:
+        return f"https://{fixture.host}{path}"
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def stop_before_pending(case: str) -> tuple[tuple[str, ...], dict]:
+        original = "fetch " + " ".join(map(uri, (start, pending, later)))
+        arguments = ("--input", "original", *allow, "--max-actions", "6", original)
+        result = cli("run", *arguments, case_id=case, expected_exit=2)
+        assert result["reason"] == starts_stop and result["receipts"] == []
+        (packet,) = result["evidence"]
+        assert packet["request_uri"] == uri(start) and packet["final_uri"] == uri(kept)
+        assert packet["redirect_chain"] == list(map(uri, (start, hop, kept)))
+        assert result["dependencies"] == [packet["id"]] and packet["extracted_text"] == kept_text
+        return arguments, result
+
+    case = "next-direct-url"
+    original_args, original = stop_before_pending(case)
+    output = state_path.parent / f"{case}.txt"
+    continued_args = ("--input", "continued", *allow, "--output", str(output), "--allow-write", str(output), request)
+    continued = cli("run", *continued_args, case_id=case)
+    (packet,) = continued["evidence"]
+    assert continued["guarantee"] == "SOURCE_REPORT"
+    assert continued["dependencies"] == [original["id"], packet["id"]]
+    assert packet["packet_kind"] == "FETCHED_BODY" and packet["request_uri"] == packet["final_uri"] == uri(pending)
+    assert packet["extracted_text"] == pending_text and pending_text in continued["text"]
+    assert kept_text not in continued["text"] and uri(later) not in continued["text"]
+    assert cli("run", *continued_args, case_id=case) == continued
+    graph = load(continued["execution_graph_ref"])
+    nodes = {node["id"]: node for node in graph[0]}
+    assert nodes["previous-direct-retrieval"]["requires"] == []
+    assert nodes["source-0"]["requires"] == ["previous-direct-retrieval"]
+    anchor_ref = graph[1]["previous-direct-retrieval"]
+    packet_ref = graph[1]["source-0"]
+    assert load(anchor_ref) == original and load(packet_ref) == packet
+    assert graph[5]["source-0"] == {"previous-direct-retrieval": anchor_ref}
+    assert graph[5]["compute"] == {"source-0": packet_ref}
+
+    before = output.stat()
+    (receipt,) = continued["receipts"]
+    retain_attempted_prefix(state_path, case, "continued", receipt["action_id"])
+    recovered = cli("reconcile", case_id=case)
+    (restored,) = recovered["receipts"]
+    assert restored["action_id"] == receipt["action_id"] and "NO_RESEND" in restored["reason"]
+    assert recovered["dependencies"] == continued["dependencies"] and recovered["evidence"] == [packet]
+    assert recovered["text"] == continued["text"] and output.read_bytes() == bytes(continued["render"]["bytes"])
+    after = output.stat()
+    assert (after.st_ino, after.st_mtime_ns, after.st_size) == (before.st_ino, before.st_mtime_ns, before.st_size)
+    restored_graph = load(recovered["execution_graph_ref"])
+    assert restored_graph[0] == graph[0] and restored_graph[2:] == graph[2:]
+    assert restored_graph[1]["previous-direct-retrieval"] == anchor_ref and restored_graph[1]["source-0"] == packet_ref
+    assert cli("run", *original_args, case_id=case, expected_exit=2) == original
+
+    answer = cli("run", "--input", "question", "本文では追加測定について何と書かれていますか", case_id=case)
+    assert answer["dependencies"][:2] == [recovered["id"], packet_ref] and answer["evidence"] == []
+    assert pending_text in answer["text"] and kept_text not in answer["text"]
+    expected_paths = [start, hop, kept, pending]
+
+    case = "next-direct-url-after-commit"
+    stop_before_pending(case)
+    second = cli("run", "--input", "continued", *allow, alias, case_id=case)
+    assert [packet["request_uri"] for packet in second["evidence"]] == [uri(pending)]
+    repeated = cli("run", "--input", "repeated", *allow, request, case_id=case, expected_exit=2)
+    assert "NO_PENDING_DIRECT_URL" in repeated["reason"] and repeated["evidence"] == [] and repeated["receipts"] == []
+    expected_paths.extend((start, hop, kept, pending))
+
+    stops = {}
+    for name, flags, reason in (
+        ("no-grant", (), "READ_PERMISSION_REQUIRED"),
+        ("no-time", (*allow, "--deadline-ms", "0"), "RESOURCE_LIMIT"),
+    ):
+        case = f"next-direct-url-{name}"
+        stop_before_pending(case)
+        blocked = cli("run", "--input", "continued", *flags, request, case_id=case, expected_exit=2)
+        assert reason in blocked["reason"] and blocked["evidence"] == [] and blocked["receipts"] == []
+        stops[name] = blocked
+        expected_paths.extend((start, hop, kept))
+
+    case = "next-direct-url-all-observed"
+    exhausted = cli("run", "--input", "original", *allow, f"fetch {uri(kept)} {uri(missing)}",
+                    case_id=case, expected_exit=2)
+    assert "FETCH_OR_PARSER_FAILURE" in exhausted["reason"]
+    assert [packet["request_uri"] for packet in exhausted["evidence"]] == list(map(uri, (kept, missing)))
+    blocked = cli("run", "--input", "continued", *allow, request, case_id=case, expected_exit=2)
+    assert "NO_PENDING_DIRECT_URL" in blocked["reason"] and blocked["evidence"] == [] and blocked["receipts"] == []
+    stops["all-observed"] = blocked
+    expected_paths.extend((kept, missing))
+
+    case = "next-direct-url-observed-redirect"
+    stop_before_pending(case)
+    fixture.redirects[pending] = kept
+    try:
+        redirected = cli("run", "--input", "continued", *allow, request, case_id=case, expected_exit=2)
+    finally:
+        del fixture.redirects[pending]
+    assert "FETCH_OR_PARSER_FAILURE" in redirected["reason"] and redirected["receipts"] == []
+    (refused,) = redirected["evidence"]
+    assert refused["request_uri"] == uri(pending) and refused["redirect_chain"] == [uri(pending)]
+    assert refused["http_status"] == 302 and refused["failure"] == "RETRIEVAL_ROUTE_ALREADY_OBSERVED"
+    expected_paths.extend((start, hop, kept, pending))
+
+    case = "next-direct-url-retained-wait"
+    held = fixture.hosts[1]
+    rate = "/next-direct-url-rate"
+    fixture.failure_responses[rate] = ("503 Service Unavailable", b"Wait response.", "Retry-After: 120\r\n")
+    held_grant = ("--allow-read-host", held)
+    seed = cli("run", "--input", "prior-wait", *held_grant, f"fetch https://{held}{rate}",
+               case_id=case, expected_exit=2)
+    (wait_packet,) = seed["evidence"]
+    assert wait_packet["http_status"] == 503 and wait_packet["retry_after"] is not None
+    stopped = cli("run", "--input", "original", *allow, *held_grant, f"fetch {uri(kept)} https://{held}{pending}",
+                  case_id=case, expected_exit=2)
+    wait_reason = f"EVIDENCE_UNAVAILABLE: HTTP_RETRY_DEFERRED: The retained Retry-After for {held}"
+    assert stopped["reason"].startswith(wait_reason) and f"(saved packet {wait_packet['id']})" in stopped["reason"]
+    assert [packet["request_uri"] for packet in stopped["evidence"]] == [uri(kept)]
+    blocked = cli("run", "--input", "continued", *held_grant, request, case_id=case, expected_exit=2)
+    assert blocked["reason"] == stopped["reason"] and blocked["dependencies"] == [stopped["id"]]
+    assert blocked["evidence"] == [] and blocked["receipts"] == []
+    stops["retained-wait"] = blocked
+    expected_paths.extend((rate, kept))
+    assert [(event["host"], event["path"]) for event in fixture.events[-2:]] == [(held, rate), (fixture.host, kept)]
+    assert [event["path"] for event in fixture.events[seen:]] == expected_paths
+    assert len(fixture.connects) == starts + len(expected_paths) and not fixture.errors, fixture.errors
+    return {"continued": continued, "recovered": recovered, "answer": answer, "repeated": repeated,
+            "stops": stops, "redirected": redirected}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -2439,6 +2587,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         source_after_deadline = check_source_after_deadline(partial(cli, db_path=deadline_state), fixture, deadline_state)
         budget_state = directory / "read-budget-source-state"
         source_after_budget = check_source_after_read_budget(partial(cli, db_path=budget_state), fixture, budget_state)
+        next_direct_state = directory / "next-direct-url-state"
+        next_direct_url = check_next_direct_url(partial(cli, db_path=next_direct_state), fixture, next_direct_state)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -2451,7 +2601,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "source_after_no_match": source_after_no_match,
                 "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait,
                 "source_after_first_hop": source_after_first_hop, "source_after_deadline": source_after_deadline,
-                "source_after_budget": source_after_budget}
+                "source_after_budget": source_after_budget, "next_direct_url": next_direct_url}
     finally:
         fixture.close()
 

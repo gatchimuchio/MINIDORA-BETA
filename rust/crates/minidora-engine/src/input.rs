@@ -187,6 +187,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
+        Intent::FetchNextUnobservedSource => "direct-source-continuation-v1",
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }
@@ -3116,6 +3117,14 @@ fn interpret(text: &str) -> Result<Intent> {
     }
     if let Some(intent) = condition_definition_intent(text)? {
         return Ok(intent);
+    }
+    if matches!(
+        body,
+        "前回の取得で未接続の次のURLを取得して"
+            | "前回の取得で未観測の最初のURLを取得して"
+            | "前回の取得で未接続の次のURLを取得してください"
+    ) {
+        return Ok(Intent::FetchNextUnobservedSource);
     }
     if let Some(capture) = regex(
         r"(?i)^(?:検索結果の)?([1-5])件目の本文を(?:取得して|取得してください|読んで|読んでください)$",
