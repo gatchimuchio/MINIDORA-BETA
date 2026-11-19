@@ -1717,6 +1717,111 @@ def check_source_after_question_no_match(cli, fixture: Fixture, state_path: Path
     return {**results, "unsupported": unsupported, "limited": limited, "unbound": invalid}
 
 
+def check_partial_direct_source(cli, fixture: Fixture, state_path: Path) -> dict:
+    kept, absent = "/partial-source-kept", "/partial-source-absent"
+    source_text = "実測値は42です。予備値は7です。"
+    failed_text = "実測値は999です。秘匿値は88です。"
+    fixture.responses[kept] = (source_text.encode(), "text/plain; charset=utf-8")
+    fixture.failure_responses[absent] = ("404 Not Found", failed_text.encode(), "")
+    source_uri, absent_uri = [f"https://{fixture.host}{path}" for path in (kept, absent)]
+    grant = ("--allow-read-host", fixture.host)
+    question = "本文では実測値について何と書かれていますか"
+    summary = "取得した本文を要約して"
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def fetch(case: str, *flags: str) -> dict:
+        stopped = cli("run", "--input", "original", *grant, *flags, f"fetch {source_uri} {absent_uri}",
+                      case_id=case, expected_exit=2)
+        assert "FETCH_OR_PARSER_FAILURE" in stopped["reason"] and stopped["guarantee"] == "UNKNOWN"
+        body, failed = stopped["evidence"]
+        assert body["packet_kind"] == "FETCHED_BODY" and body["extracted_text"] == source_text
+        assert failed["http_status"] == 404 and bytes(failed["raw_body"]) == failed_text.encode()
+        assert stopped["dependencies"] == [body["id"], failed["id"]]
+        assert stopped["content_plan"] is None and stopped["render"] is None and stopped["receipts"] == []
+        return stopped
+
+    def read_blob(reference: str) -> dict:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    results = {}
+    for name, query in (("question", question), ("summary", summary)):
+        case = f"partial-direct-{name}"
+        original_file = state_path.parent / f"{case}-original.txt"
+        original_flags = ("--output", str(original_file), "--allow-write", str(original_file))
+        partial = fetch(case, *original_flags)
+        assert fetch(case, *original_flags) == partial
+        assert not original_file.exists()
+
+        output = state_path.parent / f"{case}.txt"
+        flags = ("--output", str(output), "--allow-write", str(output))
+        result = cli("run", "--input", "followup", *flags, query, case_id=case)
+        prior_id, body_ref, report_ref = result["dependencies"]
+        assert prior_id == partial["id"] and read_blob(body_ref) == partial["evidence"][0]
+        assert read_blob(report_ref)["source_result_id"] == prior_id
+        assert result["guarantee"] == "HYPOTHESIS" and result["evidence"] == []
+        assert "元の取得は一部失敗しました。" in result["text"]
+        assert source_uri in result["text"] and "実測値は42です。" in result["text"]
+        assert absent_uri not in result["text"] and "999" not in result["text"] and "秘匿値" not in result["text"]
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+            (reference,) = database.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1", (case,),
+            ).fetchone()
+        state = read_blob(reference)
+        assert state["bundle"]["request"]["permissions"]["read_hosts"] == []
+        assert state["bundle"]["meaning"]["context_result_ref"] == prior_id
+        assert state["prior_results"][prior_id] == partial
+        before = output.stat()
+        (receipt,) = result["receipts"]
+        retain_attempted_prefix(state_path, case, "followup", receipt["action_id"])
+        recovered = cli("reconcile", case_id=case)
+        assert recovered["dependencies"] == result["dependencies"] and recovered["text"] == result["text"]
+        (restored_receipt,) = recovered["receipts"]
+        assert restored_receipt["action_id"] == receipt["action_id"] and "NO_RESEND" in restored_receipt["reason"]
+        assert output.read_bytes() == bytes(result["render"]["bytes"])
+        after = output.stat()
+        assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+        assert not original_file.exists()
+        results[name] = recovered
+
+        if name == "question":
+            constrained = cli("run", "--input", "constrained", "取得した本文を2点以内、20字以内で要約して",
+                              case_id=case)
+            assert constrained["dependencies"][:2] == [prior_id, body_ref]
+            assert "実測値は42です。" in constrained["text"] and "予備値は7です。" in constrained["text"]
+            no_match = cli("run", "--input", "missed", "本文では秘匿値について何と書かれていますか",
+                           case_id=case, expected_exit=2)
+            assert "SOURCE_QUESTION_NO_MATCH" in no_match["reason"] and no_match["dependencies"] == []
+            again = cli("run", "--input", "again", question, case_id=case)
+            assert again["dependencies"][:2] == [prior_id, body_ref] and again["text"] == result["text"]
+
+    case = "partial-direct-no-success"
+    cli("run", "--input", "original", *grant, f"fetch {absent_uri}", case_id=case, expected_exit=2)
+    unavailable = cli("run", "--input", "followup", question, case_id=case, expected_exit=2)
+    assert "MISSING_ACTUAL_RESULT" in unavailable["reason"] and unavailable["dependencies"] == []
+
+    case = "partial-direct-unbound-packet"
+    stopped = fetch(case)
+    failed = stopped["evidence"][-1]
+    encoded = json.dumps(failed, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    failed_ref = hashlib.sha256(encoded).hexdigest()
+    assert read_blob(failed_ref) == failed
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        removed = database.execute("DELETE FROM case_artifact WHERE case_id=? AND sha256=?", (case, failed_ref))
+        assert removed.rowcount == 1
+    try:
+        invalid = cli("run", "--input", "followup", summary, case_id=case, expected_exit=4)
+        assert "SOURCE_CONTEXT_INVALID" in invalid["reason"] and invalid["receipts"] == []
+    finally:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+            database.execute("INSERT INTO case_artifact(case_id,sha256) VALUES(?,?)", (case, failed_ref))
+    assert [event["path"] for event in fixture.events[seen:]] == [kept, absent] * 2 + [absent, kept, absent]
+    assert len(fixture.connects) == starts + 7
+    assert not fixture.errors, fixture.errors
+    return {**results, "unavailable": unavailable, "unbound": invalid}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1821,6 +1926,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         source_followup_chain = check_source_followup_chain(cli, fixture, state_path)
         candidate_after_source = check_candidate_after_source_followup(cli, fixture, state_path)
         source_after_no_match = check_source_after_question_no_match(cli, fixture, state_path)
+        partial_direct_source = check_partial_direct_source(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -1829,7 +1935,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "sources_after_failure": sources_after_failure,
                 "source_followup_chain": source_followup_chain,
                 "candidate_after_source": candidate_after_source,
-                "source_after_no_match": source_after_no_match}
+                "source_after_no_match": source_after_no_match,
+                "partial_direct_source": partial_direct_source}
     finally:
         fixture.close()
 

@@ -1,7 +1,9 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
-use minidora_domain::{EvidencePacket, Intent, Result, ResultRecord, canonical, digest, failure};
+use minidora_domain::{
+    EvidencePacket, Intent, Lifecycle, Result, ResultRecord, canonical, digest, failure,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -1316,6 +1318,28 @@ pub(crate) fn source_summary_bodies(
             && packet.extracted_text.is_some()
     })
 }
+
+pub(crate) fn has_partial_retrieval_bodies(result: &ResultRecord) -> bool {
+    result.lifecycle == Lifecycle::Suspend
+        && result
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("FETCH_OR_PARSER_FAILURE: "))
+        && result.evidence.iter().all(|packet| {
+            matches!(
+                packet.packet_kind.as_str(),
+                "FETCHED_BODY" | "FETCH_FAILURE"
+            )
+        })
+        && result
+            .evidence
+            .iter()
+            .any(|packet| packet.packet_kind == "FETCH_FAILURE")
+        && source_summary_bodies(result).next().is_some()
+}
+
+pub(crate) const PARTIAL_RETRIEVAL_NOTICE: &str =
+    "元の取得は一部失敗しました。照合できた取得本文を使用しています。";
 
 pub(crate) fn source_summary_packet_positions(
     packets: &[(usize, &EvidencePacket, String)],

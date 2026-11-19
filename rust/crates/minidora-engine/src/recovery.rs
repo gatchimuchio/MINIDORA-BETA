@@ -2840,6 +2840,79 @@ fn verify_search_candidate_context(
     }))
 }
 
+/// Confirm that a retained result can supply bodies to a source question or summary.
+pub(crate) fn source_context_available(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    source: &ResultRecord,
+) -> Result<bool> {
+    if source.lifecycle == Lifecycle::Commit {
+        return Ok(true);
+    }
+    if !crate::text_summary::has_partial_retrieval_bodies(source) {
+        return Ok(false);
+    }
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "The partial retrieval differs from its original input or retained packets",
+        )
+    };
+    let (_, bundle) = store
+        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
+        .ok_or_else(invalid)?;
+    let Intent::Retrieve { urls, .. } = &bundle.meaning.intent else {
+        return Ok(false);
+    };
+    if identity(&bundle.request)? != source.id
+        || store
+            .get_input_result(actor, case, &source.input_id, source.input_version)?
+            .as_ref()
+            != Some(source)
+        || source.guarantee != Guarantee::Unknown
+        || source.content_plan.is_some()
+        || source.render.is_some()
+        || !source.receipts.is_empty()
+        || source.execution_graph_ref.is_some()
+        || urls.len() != source.evidence.len()
+        || urls.len() != source.dependencies.len()
+    {
+        return Err(invalid());
+    }
+
+    let mut bytes_left = bundle.request.budget.max_evidence_bytes;
+    for ((packet, dependency), uri) in source.evidence.iter().zip(&source.dependencies).zip(urls) {
+        let encoded = canonical(packet)?;
+        bytes_left = bytes_left
+            .checked_sub(packet.raw_body.len())
+            .ok_or_else(invalid)?;
+        if packet.request_uri != *uri
+            || &packet.id != dependency
+            || store.get_bytes(actor, case, &digest(&encoded))? != encoded
+        {
+            return Err(invalid());
+        }
+        if packet.packet_kind == "FETCHED_BODY" {
+            crate::ports::validate_successful_packet(packet, &bundle.request.permissions)?;
+        } else {
+            crate::ports::validate_observed_route(packet, &bundle.request.permissions)?;
+            if packet.mode != "LIVE"
+                || packet.provider_id != "https-direct-url-v1"
+                || packet.parser_version != "strict-utf8-identity-v1"
+                || packet.failure.is_none()
+                || packet.extracted_text.is_some()
+                || packet.independence_group != packet.final_uri
+                || packet.raw_sha256 != digest(&packet.raw_body)
+                || packet.id != crate::ports::fetch_packet_identity(packet)?
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// Authenticate the original source of a committed follow-up or a no-match question.
 pub(crate) fn source_followup_anchor<'a>(
     store: &Store,
@@ -2900,8 +2973,8 @@ pub(crate) fn source_followup_anchor<'a>(
     let source = state.prior_results.get(source_id).ok_or_else(mismatch)?;
     if let Some(query) = no_match_query {
         if source.id != *source_id
-            || source.lifecycle != Lifecycle::Commit
             || identity(&Some(source))? != bundle.context_sha256
+            || !source_context_available(store, actor, case, source)?
             || state.goal_sha256.is_some()
             || state.reason != result.reason
             || result.guarantee != Guarantee::Unknown
@@ -2996,12 +3069,12 @@ fn verify_source_summary_context(
         )
     })?;
     if prior.id != *prior_id
-        || prior.lifecycle != Lifecycle::Commit
         || identity(&Some(prior))? != bundle.context_sha256
+        || !source_context_available(store, actor, case, prior)?
     {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the referenced prior result is not the same committed result",
+            "the referenced source result does not match the sealed context",
         ));
     }
     if !result.evidence.is_empty() {
@@ -3050,6 +3123,9 @@ fn verify_source_summary_context(
     );
     let mut units = Vec::new();
     let mut report_bytes = 0usize;
+    if prior.lifecycle == Lifecycle::Suspend {
+        units.push(crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+    }
     for position in active_positions {
         let (_, packet, packet_ref) = &source_packets[position];
         let report = match summary_limits {
@@ -3282,12 +3358,12 @@ fn verify_source_question_context(
         )
     })?;
     if prior.id != *prior_id
-        || prior.lifecycle != Lifecycle::Commit
         || identity(&Some(prior))? != bundle.context_sha256
+        || !source_context_available(store, actor, case, prior)?
     {
         return Err(failure(
             "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the referenced prior source result is not the same committed result",
+            "the referenced source result does not match the sealed context",
         ));
     }
     let packets = verified_source_question_packets(store, actor, case, prior)?;
@@ -3324,8 +3400,11 @@ fn verify_source_question_context(
                 "the retained source-question artifact has no derivation version",
             )
         })?;
-    let (encoded, expected_units) =
+    let (encoded, mut expected_units) =
         recompute_source_question_artifact(operation, &prior.id, query, &packets)?;
+    if prior.lifecycle == Lifecycle::Suspend {
+        expected_units.insert(0, crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+    }
     if digest(&encoded) != *answer_ref || stored_answer != encoded {
         return Err(failure(
             "RECOVERY_SOURCE_QUESTION_MISMATCH",

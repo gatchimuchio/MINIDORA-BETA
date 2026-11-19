@@ -4009,14 +4009,41 @@ impl Engine {
                 reason,
             );
         }
+        let previous_source = if matches!(
+            bundle.meaning.intent,
+            Intent::AskPreviousSourceQuestion { .. }
+                | Intent::SummarizePreviousSource
+                | Intent::SummarizePreviousSourceConstrained { .. }
+        ) && let Some(source) =
+            previous.filter(|source| has_compute_budget || source.lifecycle == Lifecycle::Commit)
+        {
+            match crate::recovery::source_context_available(
+                &self.store,
+                actor,
+                &request.case_id,
+                source,
+            ) {
+                Ok(true) => Some(source),
+                Ok(false) => None,
+                Err(error) => {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Fail,
+                        "SOURCE_CONTEXT_INVALID",
+                        &error.to_string(),
+                    );
+                }
+            }
+        } else {
+            None
+        };
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
         let source_followup_indices = if matches!(
             bundle.meaning.intent,
             Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
         ) {
-            previous
-                .filter(|prior| prior.lifecycle == Lifecycle::Commit)
+            previous_source
                 .map(|prior| {
                     crate::text_summary::source_summary_bodies(prior)
                         .map(|(index, _)| index)
@@ -4148,9 +4175,7 @@ impl Engine {
             };
         let previous_source_question_answer =
             if let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent {
-                match previous
-                    .filter(|prior| has_compute_budget && prior.lifecycle == Lifecycle::Commit)
-                {
+                match previous_source.filter(|_| has_compute_budget) {
                     Some(prior) => {
                         let mut source_packets = Vec::new();
                         for (index, packet) in
@@ -7005,8 +7030,7 @@ impl Engine {
                 result.guarantee = Guarantee::Hypothesis;
             }
             Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
-                let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
-                else {
+                let Some(prior) = previous_source else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -7078,6 +7102,9 @@ impl Engine {
                 );
                 let mut source_reports = Vec::new();
                 let mut report_bytes = 0usize;
+                if prior.lifecycle == Lifecycle::Suspend {
+                    units.push(crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+                }
                 for position in active_positions {
                     let (_, packet, packet_ref) = &source_packets[position];
                     let summary_result = if let Some((max_sentences, max_chars)) = summary_limits {
@@ -7180,8 +7207,7 @@ impl Engine {
                 result.guarantee = Guarantee::Hypothesis;
             }
             Intent::AskPreviousSourceQuestion { .. } => {
-                let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
-                else {
+                let Some(prior) = previous_source else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -7207,7 +7233,10 @@ impl Engine {
                     );
                 }
                 let answer_bytes = canonical(answer)?;
-                let output_units = crate::text_summary::source_question_answer_lines_v2(answer);
+                let mut output_units = crate::text_summary::source_question_answer_lines_v2(answer);
+                if prior.lifecycle == Lifecycle::Suspend {
+                    output_units.insert(0, crate::text_summary::PARTIAL_RETRIEVAL_NOTICE.into());
+                }
                 let output_bytes = output_units.join("\n").len();
                 if answer_bytes.len() > request.budget.max_evidence_bytes
                     || output_bytes > request.budget.max_evidence_bytes

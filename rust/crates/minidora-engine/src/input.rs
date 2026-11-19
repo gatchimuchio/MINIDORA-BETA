@@ -128,9 +128,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
                 .into(),
         );
     }
-    if matches!(intent, Intent::AskPreviousSourceQuestion { .. })
-        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
-    {
+    let lacks_source_context = || {
+        previous.is_none_or(|result| {
+            result.lifecycle != Lifecycle::Commit
+                && !crate::text_summary::has_partial_retrieval_bodies(result)
+        })
+    };
+    if matches!(intent, Intent::AskPreviousSourceQuestion { .. }) && lacks_source_context() {
         unresolved.push("no actual committed previous fetched-source result is available".into());
     }
     if matches!(intent, Intent::VerifyPreviousCode { .. })
@@ -149,7 +153,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     if matches!(
         intent,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
-    ) && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    ) && lacks_source_context()
     {
         unresolved.push(
             "no actual committed previous result is available for source summarization".into(),
