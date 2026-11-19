@@ -2847,6 +2847,8 @@ pub(crate) fn source_context_available(
     case: &str,
     source: &ResultRecord,
 ) -> Result<bool> {
+    use crate::text_summary::{FirstHopStop, PartialRetrievalStop};
+
     if source.lifecycle == Lifecycle::Commit {
         return Ok(true);
     }
@@ -2867,9 +2869,9 @@ pub(crate) fn source_context_available(
     };
     let observed = source.evidence.len();
     let url_count_matches = match &stop {
-        crate::text_summary::PartialRetrievalStop::AfterAllUrls => observed == urls.len(),
-        crate::text_summary::PartialRetrievalStop::AtRedirect => observed <= urls.len(),
-        crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_) => observed < urls.len(),
+        PartialRetrievalStop::AfterAllUrls => observed == urls.len(),
+        PartialRetrievalStop::AtRedirect => observed <= urls.len(),
+        PartialRetrievalStop::BeforeFirstHop(_) => observed < urls.len(),
     };
     if identity(&bundle.request)? != source.id
         || source.guarantee != Guarantee::Unknown
@@ -2883,29 +2885,53 @@ pub(crate) fn source_context_available(
         return Err(invalid());
     }
 
-    if let crate::text_summary::PartialRetrievalStop::BeforeFirstHop(first_hop) = stop {
+    if let PartialRetrievalStop::BeforeFirstHop(first_hop) = &stop {
         let original = store
             .load_suspended_result_revision(actor, case, source)?
             .ok_or_else(invalid)?;
+        let goal_ref = original.goal_sha256.as_deref().ok_or_else(invalid)?;
         if original.bundle.as_ref() != Some(&bundle)
             || original.input_fingerprint.as_ref() != Some(&source.id)
             || original.reason != source.reason
-            || original.goal_sha256.is_none()
         {
             return Err(invalid());
         }
         let permissions = &bundle.request.permissions;
         let next_uri = &urls[observed];
         match first_hop {
-            crate::text_summary::FirstHopStop::Wait(detail) => {
+            FirstHopStop::Wait(detail) => {
                 if !first_hop_wait_matches(store, &original, permissions, next_uri, detail)? {
                     return Err(invalid());
                 }
             }
-            crate::text_summary::FirstHopStop::Deadline => {
-                // URL admission precedes the deadline check. The recorded stop
-                // supplies the elapsed outcome without consulting a new clock.
+            FirstHopStop::Deadline | FirstHopStop::HttpStarts | FirstHopStop::EvidenceBytes => {
+                // The port admits the first URL before checking the read limits.
                 crate::ports::approved_url(next_uri, permissions)?;
+            }
+        }
+        if matches!(first_hop, FirstHopStop::HttpStarts) {
+            let goal: GoalContract =
+                serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
+            if goal.input_fingerprint != source.id
+                || goal.intent != bundle.meaning.intent
+                || goal.permissions != bundle.request.permissions
+                || goal.output_path != bundle.request.output_path
+                || goal.budget != bundle.request.budget
+            {
+                return Err(invalid());
+            }
+            let nodes: Vec<GoalNode> =
+                serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
+            let reserved = nodes.len().checked_sub(urls.len()).ok_or_else(invalid)?;
+            let max_actions = goal.budget.max_actions as usize;
+            // Each recorded hop used one start, including hops retained as failures.
+            let used: usize = source
+                .evidence
+                .iter()
+                .map(|packet| packet.redirect_chain.len())
+                .sum();
+            if max_actions < nodes.len() || used != max_actions - reserved {
+                return Err(invalid());
             }
         }
     } else if store
@@ -2945,7 +2971,15 @@ pub(crate) fn source_context_available(
             }
         }
     }
-    Ok(true)
+    match stop {
+        PartialRetrievalStop::BeforeFirstHop(FirstHopStop::EvidenceBytes) if bytes_left != 0 => {
+            Err(invalid())
+        }
+        PartialRetrievalStop::BeforeFirstHop(FirstHopStop::HttpStarts) if bytes_left == 0 => {
+            Err(invalid())
+        }
+        _ => Ok(true),
+    }
 }
 
 fn first_hop_wait_matches(

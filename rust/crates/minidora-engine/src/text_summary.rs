@@ -1328,6 +1328,8 @@ pub(crate) enum PartialRetrievalStop<'a> {
 pub(crate) enum FirstHopStop<'a> {
     Wait(&'a str),
     Deadline,
+    HttpStarts,
+    EvidenceBytes,
 }
 
 impl PartialRetrievalStop<'_> {
@@ -1344,6 +1346,12 @@ impl PartialRetrievalStop<'_> {
             }
             Self::BeforeFirstHop(FirstHopStop::Deadline) => {
                 "元の取得は期限に達して停止しました。照合できた取得本文を使用しています。"
+            }
+            Self::BeforeFirstHop(FirstHopStop::HttpStarts) => {
+                "元の取得は通信開始回数の上限に達して停止しました。照合できた取得本文を使用しています。"
+            }
+            Self::BeforeFirstHop(FirstHopStop::EvidenceBytes) => {
+                "元の取得は証拠バイト数の上限に達して停止しました。照合できた取得本文を使用しています。"
             }
         }
     }
@@ -1377,12 +1385,17 @@ pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRet
         }
         "EVIDENCE_UNAVAILABLE" => {
             let (cause, detail) = message.split_once(": ")?;
-            let stop = match cause {
-                crate::ports::RETRY_DEFERRED => FirstHopStop::Wait(detail),
-                crate::ports::DEADLINE_EXCEEDED
-                    if detail == crate::ports::RETRIEVAL_DEADLINE_ELAPSED =>
-                {
+            let stop = match (cause, detail) {
+                (crate::ports::RETRY_DEFERRED, detail) => FirstHopStop::Wait(detail),
+                (crate::ports::DEADLINE_EXCEEDED, crate::ports::RETRIEVAL_DEADLINE_ELAPSED) => {
                     FirstHopStop::Deadline
+                }
+                (
+                    crate::ports::HTTP_START_BUDGET_EXHAUSTED,
+                    crate::ports::NO_REMAINING_HTTP_STARTS,
+                ) => FirstHopStop::HttpStarts,
+                ("RESOURCE_LIMIT", crate::ports::NO_REMAINING_EVIDENCE_BYTES) => {
+                    FirstHopStop::EvidenceBytes
                 }
                 _ => return None,
             };

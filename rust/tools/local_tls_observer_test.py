@@ -2227,6 +2227,104 @@ def check_source_after_deadline(cli, fixture: Fixture, state_path: Path) -> dict
     return {**outcomes, "no_success": unavailable}
 
 
+def check_source_after_read_budget(cli, fixture: Fixture, state_path: Path) -> dict:
+    kept, redirect, tail, pending = [f"/read-budget-{part}" for part in ("kept", "redirect", "tail", "pending")]
+    unframed = "/unframed"
+    kept_text = "実測値は42です。予備値は7です。"
+    kept_body = kept_text.encode()
+    fixture.responses[kept] = (kept_body, "text/plain; charset=utf-8")
+    fixture.redirects.update({redirect: kept, tail: pending})
+    fixture.responses[pending] = (b"Unrequested 999.", "text/plain")
+    grant = ("--allow-read-host", fixture.host)
+    question = "本文では実測値について何と書かれていますか"
+    summary = "取得した本文を要約して"
+    constrained = "取得した本文を2点以内、20字以内で要約して"
+    starts_stop = "EVIDENCE_UNAVAILABLE: HTTP_START_BUDGET_EXHAUSTED: The original Goal has no remaining HTTP starts"
+    bytes_stop = "EVIDENCE_UNAVAILABLE: RESOURCE_LIMIT: The original Goal has no remaining evidence bytes"
+
+    def uri(path: str) -> str:
+        return f"https://{fixture.host}{path}"
+
+    def request(*paths: str) -> str:
+        return "fetch " + " ".join(map(uri, paths))
+
+    outcomes = {}
+    for name, args, prefix, events, stop, query in (
+        ("starts", ("--max-actions", "6"), (redirect,), [redirect, kept], starts_stop, question),
+        ("starts-with-redirect", ("--max-actions", "7"), (redirect, tail), [redirect, kept, tail], starts_stop, summary),
+        ("bytes", ("--max-evidence-bytes", str(len(kept_body))), (kept,), [kept], bytes_stop, constrained),
+        ("bytes-with-partial", ("--max-evidence-bytes", str(len(kept_body) + 32)),
+         (kept, unframed), [kept, unframed], bytes_stop, question),
+    ):
+        case = f"source-after-read-budget-{name}"
+        seen, starts = len(fixture.events), len(fixture.connects)
+        original = state_path.parent / f"{case}-original.txt"
+        original_args = ("--input", "original", *grant, *args, "--output", str(original),
+                         "--allow-write", str(original), request(*prefix, pending))
+        stopped = cli("run", *original_args, case_id=case, expected_exit=2)
+        assert stopped["reason"] == stop and stopped["guarantee"] == "UNKNOWN"
+        assert stopped["content_plan"] is None and stopped["render"] is None and stopped["receipts"] == []
+        assert [packet["request_uri"] for packet in stopped["evidence"]] == list(map(uri, prefix))
+        assert stopped["dependencies"] == [packet["id"] for packet in stopped["evidence"]]
+        body, *failures = stopped["evidence"]
+        assert body["final_uri"] == uri(kept) and body["extracted_text"] == kept_text
+        assert bytes(body["raw_body"]) == kept_body
+        if stop == starts_stop:
+            assert body["redirect_chain"] == [uri(redirect), uri(kept)]
+            if failures:
+                failed, = failures
+                assert failed["http_status"] == 302 and failed["failure"] == "HTTP_START_BUDGET_EXHAUSTED"
+                assert failed["redirect_chain"] == [uri(tail)] and failed["raw_body"] == []
+        elif failures:
+            failed, = failures
+            assert failed["http_status"] == 200 and failed["failure"] == "EVIDENCE_BYTE_LIMIT_PARTIAL_BODY"
+            assert bytes(failed["raw_body"]) == UNFRAMED_BODY[:32] and failed["extracted_text"] is None
+        assert not original.exists()
+
+        output = state_path.parent / f"{case}.txt"
+        answer = cli("run", "--input", "followup", "--output", str(output), "--allow-write", str(output),
+                     query, case_id=case)
+        source_id, body_ref, _ = answer["dependencies"]
+        raw = (state_path / "blobs" / body_ref).read_bytes()
+        assert source_id == stopped["id"] and hashlib.sha256(raw).hexdigest() == body_ref and json.loads(raw) == body
+        notice = "通信開始回数" if stop == starts_stop else "証拠バイト数"
+        assert f"元の取得は{notice}の上限に達して停止しました。" in answer["text"]
+        assert uri(kept) in answer["text"] and "実測値は42です。" in answer["text"] and answer["evidence"] == []
+        assert all(uri(path) not in answer["text"] for path in (tail, unframed, pending))
+        assert UNFRAMED_BODY[:32].decode() not in answer["text"]
+        before = output.stat()
+        (receipt,) = answer["receipts"]
+        retain_attempted_prefix(state_path, case, "followup", receipt["action_id"])
+        recovered = cli("reconcile", case_id=case)
+        (restored,) = recovered["receipts"]
+        assert restored["action_id"] == receipt["action_id"] and "NO_RESEND" in restored["reason"]
+        assert recovered["dependencies"] == answer["dependencies"] and recovered["text"] == answer["text"]
+        assert output.read_bytes() == bytes(answer["render"]["bytes"])
+        after = output.stat()
+        assert (before.st_ino, before.st_mtime_ns, before.st_size) == (after.st_ino, after.st_mtime_ns, after.st_size)
+        assert cli("run", *original_args, case_id=case, expected_exit=2) == stopped and not original.exists()
+        assert [event["path"] for event in fixture.events[seen:]] == events
+        assert len(fixture.connects) == starts + len(events)
+        outcomes[name] = recovered
+
+    seen, starts = len(fixture.events), len(fixture.connects)
+    for name, query, limit, reason in (
+        ("no-complete-body", request(unframed, pending), 32, bytes_stop),
+        ("permission-denied", f"fetch {uri(kept)} https://outside.minidora.test/pending",
+         len(kept_body), "EVIDENCE_UNAVAILABLE: READ_PERMISSION_REQUIRED:"),
+    ):
+        case = f"source-after-read-budget-{name}"
+        stopped = cli("run", "--input", "original", *grant, "--max-evidence-bytes", str(limit),
+                      query, case_id=case, expected_exit=2)
+        assert stopped["reason"].startswith(reason) and len(stopped["evidence"]) == 1
+        unavailable = cli("run", "--input", "followup", summary, case_id=case, expected_exit=2)
+        assert "MISSING_ACTUAL_RESULT" in unavailable["reason"] and unavailable["dependencies"] == []
+        outcomes[name] = unavailable
+    assert [event["path"] for event in fixture.events[seen:]] == [unframed, kept]
+    assert len(fixture.connects) == starts + 2 and not fixture.errors, fixture.errors
+    return outcomes
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -2339,6 +2437,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         source_after_first_hop = check_source_after_first_hop_wait(partial(cli, db_path=first_hop_state), fixture, first_hop_state)
         deadline_state = directory / "deadline-source-state"
         source_after_deadline = check_source_after_deadline(partial(cli, db_path=deadline_state), fixture, deadline_state)
+        budget_state = directory / "read-budget-source-state"
+        source_after_budget = check_source_after_read_budget(partial(cli, db_path=budget_state), fixture, budget_state)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -2350,7 +2450,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "candidate_after_source": candidate_after_source,
                 "source_after_no_match": source_after_no_match,
                 "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait,
-                "source_after_first_hop": source_after_first_hop, "source_after_deadline": source_after_deadline}
+                "source_after_first_hop": source_after_first_hop, "source_after_deadline": source_after_deadline,
+                "source_after_budget": source_after_budget}
     finally:
         fixture.close()
 

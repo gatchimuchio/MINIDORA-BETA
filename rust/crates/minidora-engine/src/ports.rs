@@ -349,6 +349,10 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
 pub(crate) const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
 pub(crate) const DEADLINE_EXCEEDED: &str = "HTTP_DEADLINE_EXCEEDED";
 pub(crate) const RETRIEVAL_DEADLINE_ELAPSED: &str = "The retrieval deadline elapsed";
+pub(crate) const HTTP_START_BUDGET_EXHAUSTED: &str = "HTTP_START_BUDGET_EXHAUSTED";
+pub(crate) const NO_REMAINING_HTTP_STARTS: &str = "The original Goal has no remaining HTTP starts";
+pub(crate) const NO_REMAINING_EVIDENCE_BYTES: &str =
+    "The original Goal has no remaining evidence bytes";
 pub(crate) const REDIRECT_RETRY_DEFERRED: &str = "HTTP_REDIRECT_RETRY_DEFERRED";
 pub(crate) const RETRY_DEFERRED: &str = "HTTP_RETRY_DEFERRED";
 
@@ -552,12 +556,10 @@ impl RetrievalBudget {
                 retry_deferred_message(host, gate.retained_packet_id.as_deref()),
             ));
         }
-        self.remaining_starts = self.remaining_starts.checked_sub(1).ok_or_else(|| {
-            failure(
-                "HTTP_START_BUDGET_EXHAUSTED",
-                "The original Goal has no remaining HTTP starts",
-            )
-        })?;
+        self.remaining_starts = self
+            .remaining_starts
+            .checked_sub(1)
+            .ok_or_else(|| failure(HTTP_START_BUDGET_EXHAUSTED, NO_REMAINING_HTTP_STARTS))?;
         Ok(())
     }
 
@@ -697,10 +699,7 @@ fn fetch_packet(
 ) -> Result<EvidencePacket> {
     let mut url = approved_url(raw_url, permissions)?;
     if budget.remaining_bytes == 0 {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "The original Goal has no remaining evidence bytes",
-        ));
+        return Err(failure("RESOURCE_LIMIT", NO_REMAINING_EVIDENCE_BYTES));
     }
     let mut redirects: Vec<String> = Vec::new();
     let mut previous_status = 0;
