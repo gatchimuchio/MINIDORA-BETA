@@ -174,7 +174,7 @@ fn bounded_resolve(host: &str, remaining: Duration) -> Result<Vec<SocketAddr>> {
         .recv_timeout(remaining)
         .map_err(|_| {
             failure(
-                "HTTP_DEADLINE_EXCEEDED",
+                DEADLINE_EXCEEDED,
                 "Direct DNS resolution did not complete within its budget",
             )
         })?
@@ -347,6 +347,8 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
 }
 
 pub(crate) const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
+pub(crate) const DEADLINE_EXCEEDED: &str = "HTTP_DEADLINE_EXCEEDED";
+pub(crate) const RETRIEVAL_DEADLINE_ELAPSED: &str = "The retrieval deadline elapsed";
 pub(crate) const REDIRECT_RETRY_DEFERRED: &str = "HTTP_REDIRECT_RETRY_DEFERRED";
 pub(crate) const RETRY_DEFERRED: &str = "HTTP_RETRY_DEFERRED";
 
@@ -537,7 +539,7 @@ impl RetrievalBudget {
         self.deadline
             .checked_duration_since(Instant::now())
             .filter(|duration| !duration.is_zero())
-            .ok_or_else(|| failure("HTTP_DEADLINE_EXCEEDED", "The retrieval deadline elapsed"))
+            .ok_or_else(|| failure(DEADLINE_EXCEEDED, RETRIEVAL_DEADLINE_ELAPSED))
     }
 
     fn reserve_start(&mut self, host: &str) -> Result<()> {
@@ -733,9 +735,7 @@ fn fetch_packet(
                             error,
                         );
                     }
-                    minidora_domain::Error::Contract { code, .. }
-                        if code == "HTTP_DEADLINE_EXCEEDED" =>
-                    {
+                    minidora_domain::Error::Contract { code, .. } if code == DEADLINE_EXCEEDED => {
                         code
                     }
                     _ => "HTTP_CLIENT_OR_DNS_FAILED",
@@ -761,7 +761,7 @@ fn fetch_packet(
                 0,
                 vec![],
                 None,
-                Some("HTTP_DEADLINE_EXCEEDED"),
+                Some(DEADLINE_EXCEEDED),
             );
         };
         let mut response = match http
@@ -781,7 +781,7 @@ fn fetch_packet(
                     vec![],
                     None,
                     Some(if error.is_timeout() || Instant::now() >= budget.deadline {
-                        "HTTP_DEADLINE_EXCEEDED"
+                        DEADLINE_EXCEEDED
                     } else {
                         "HTTP_TRANSPORT_FAILED"
                     }),
@@ -893,7 +893,7 @@ fn fetch_packet(
         let mut chunk = [0u8; 8192];
         loop {
             if Instant::now() >= budget.deadline {
-                return finish(raw, None, Some("HTTP_DEADLINE_EXCEEDED"));
+                return finish(raw, None, Some(DEADLINE_EXCEEDED));
             }
             let count = budget.remaining_bytes.saturating_add(1).min(chunk.len());
             match response.read(&mut chunk[..count]) {
@@ -916,7 +916,7 @@ fn fetch_packet(
                         raw,
                         None,
                         Some(if timed_out || Instant::now() >= budget.deadline {
-                            "HTTP_DEADLINE_EXCEEDED"
+                            DEADLINE_EXCEEDED
                         } else {
                             "HTTP_BODY_INCOMPLETE"
                         }),
@@ -925,7 +925,7 @@ fn fetch_packet(
             }
         }
         if Instant::now() >= budget.deadline {
-            return finish(raw, None, Some("HTTP_DEADLINE_EXCEEDED"));
+            return finish(raw, None, Some(DEADLINE_EXCEEDED));
         }
         if status != 200 {
             return finish(

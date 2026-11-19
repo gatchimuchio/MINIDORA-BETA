@@ -1322,7 +1322,12 @@ pub(crate) fn source_summary_bodies(
 pub(crate) enum PartialRetrievalStop<'a> {
     AfterAllUrls,
     AtRedirect,
-    BeforeFirstHop(&'a str),
+    BeforeFirstHop(FirstHopStop<'a>),
+}
+
+pub(crate) enum FirstHopStop<'a> {
+    Wait(&'a str),
+    Deadline,
 }
 
 impl PartialRetrievalStop<'_> {
@@ -1334,8 +1339,11 @@ impl PartialRetrievalStop<'_> {
             Self::AtRedirect => {
                 "元の取得は転送時の待機条件で停止しました。照合できた取得本文を使用しています。"
             }
-            Self::BeforeFirstHop(_) => {
+            Self::BeforeFirstHop(FirstHopStop::Wait(_)) => {
                 "元の取得は次のURLの接続前に待機条件で停止しました。照合できた取得本文を使用しています。"
+            }
+            Self::BeforeFirstHop(FirstHopStop::Deadline) => {
+                "元の取得は期限に達して停止しました。照合できた取得本文を使用しています。"
             }
         }
     }
@@ -1369,10 +1377,16 @@ pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRet
         }
         "EVIDENCE_UNAVAILABLE" => {
             let (cause, detail) = message.split_once(": ")?;
-            if cause != crate::ports::RETRY_DEFERRED {
-                return None;
-            }
-            PartialRetrievalStop::BeforeFirstHop(detail)
+            let stop = match cause {
+                crate::ports::RETRY_DEFERRED => FirstHopStop::Wait(detail),
+                crate::ports::DEADLINE_EXCEEDED
+                    if detail == crate::ports::RETRIEVAL_DEADLINE_ELAPSED =>
+                {
+                    FirstHopStop::Deadline
+                }
+                _ => return None,
+            };
+            PartialRetrievalStop::BeforeFirstHop(stop)
         }
         _ => return None,
     };

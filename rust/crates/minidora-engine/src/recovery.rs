@@ -2883,7 +2883,7 @@ pub(crate) fn source_context_available(
         return Err(invalid());
     }
 
-    if let crate::text_summary::PartialRetrievalStop::BeforeFirstHop(detail) = stop {
+    if let crate::text_summary::PartialRetrievalStop::BeforeFirstHop(first_hop) = stop {
         let original = store
             .load_suspended_result_revision(actor, case, source)?
             .ok_or_else(invalid)?;
@@ -2891,15 +2891,22 @@ pub(crate) fn source_context_available(
             || original.input_fingerprint.as_ref() != Some(&source.id)
             || original.reason != source.reason
             || original.goal_sha256.is_none()
-            || !first_hop_wait_matches(
-                store,
-                &original,
-                &bundle.request.permissions,
-                &urls[observed],
-                detail,
-            )?
         {
             return Err(invalid());
+        }
+        let permissions = &bundle.request.permissions;
+        let next_uri = &urls[observed];
+        match first_hop {
+            crate::text_summary::FirstHopStop::Wait(detail) => {
+                if !first_hop_wait_matches(store, &original, permissions, next_uri, detail)? {
+                    return Err(invalid());
+                }
+            }
+            crate::text_summary::FirstHopStop::Deadline => {
+                // URL admission precedes the deadline check. The recorded stop
+                // supplies the elapsed outcome without consulting a new clock.
+                crate::ports::approved_url(next_uri, permissions)?;
+            }
         }
     } else if store
         .get_input_result(actor, case, &source.input_id, source.input_version)?

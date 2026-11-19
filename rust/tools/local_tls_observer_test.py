@@ -2153,6 +2153,80 @@ def check_source_after_first_hop_wait(cli, fixture: Fixture, state_path: Path) -
     return {**results, "unbound": invalid}
 
 
+def check_source_after_deadline(cli, fixture: Fixture, state_path: Path) -> dict:
+    kept, slow, pending = "/deadline-kept", "/slow-body", "/deadline-pending"
+    kept_text = "実測値は42です。予備値は7です。"
+    fixture.responses[kept] = (kept_text.encode(), "text/plain; charset=utf-8")
+    fixture.responses[pending] = (b"Unrequested 999.", "text/plain")
+    kept_uri, slow_uri, pending_uri = [f"https://{fixture.host}{path}" for path in (kept, slow, pending)]
+    deadline_stop = "EVIDENCE_UNAVAILABLE: HTTP_DEADLINE_EXCEEDED: The retrieval deadline elapsed"
+    question = "本文では実測値について何と書かれていますか"
+    summary = "取得した本文を要約して"
+    constrained = "取得した本文を2点以内、20字以内で要約して"
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def arguments(paths: str) -> tuple[str, ...]:
+        return ("--input", "original", "--allow-read-host", fixture.host, "--deadline-ms", "1200", f"fetch {paths}")
+
+    def read_blob(reference: str) -> dict:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    outcomes = {}
+    for name, query in (("question", question), ("summary", summary), ("constrained", constrained)):
+        case = f"source-after-deadline-{name}"
+        original_file = state_path.parent / f"{case}-original.txt"
+        args = (*arguments(f"{kept_uri} {slow_uri} {pending_uri}"),
+                "--output", str(original_file), "--allow-write", str(original_file))
+        stopped = cli("run", *args, case_id=case, expected_exit=2)
+        assert stopped["reason"] == deadline_stop and stopped["guarantee"] == "UNKNOWN"
+        assert stopped["content_plan"] is None and stopped["render"] is None and stopped["receipts"] == []
+        body, failed = stopped["evidence"]
+        assert body["request_uri"] == kept_uri and body["extracted_text"] == kept_text
+        assert failed["request_uri"] == slow_uri and failed["http_status"] == 200
+        assert failed["packet_kind"] == "FETCH_FAILURE" and failed["failure"] == "HTTP_DEADLINE_EXCEEDED"
+        assert bytes(failed["raw_body"]) == TIMED_BODY_PREFIX and failed["extracted_text"] is None
+        assert stopped["dependencies"] == [body["id"], failed["id"]]
+        assert not original_file.exists()
+
+        output = state_path.parent / f"{case}.txt"
+        answer = cli("run", "--input", "followup", "--output", str(output), "--allow-write", str(output),
+                     query, case_id=case)
+        source_id, body_ref, report_ref = answer["dependencies"]
+        assert source_id == stopped["id"] and read_blob(body_ref) == body
+        assert read_blob(report_ref)["source_result_id"] == source_id
+        assert answer["guarantee"] == "HYPOTHESIS" and answer["evidence"] == []
+        assert "元の取得は期限に達して停止しました。" in answer["text"]
+        assert kept_uri in answer["text"] and "実測値は42です。" in answer["text"]
+        assert all(text not in answer["text"] for text in (slow_uri, pending_uri, TIMED_BODY_PREFIX.decode()))
+        (receipt,) = answer["receipts"]
+        before = output.stat()
+        retain_attempted_prefix(state_path, case, "followup", receipt["action_id"])
+        recovered = cli("reconcile", case_id=case)
+        (restored,) = recovered["receipts"]
+        assert restored["action_id"] == receipt["action_id"] and "NO_RESEND" in restored["reason"]
+        assert recovered["dependencies"] == answer["dependencies"] and recovered["text"] == answer["text"]
+        assert output.read_bytes() == bytes(answer["render"]["bytes"])
+        after = output.stat()
+        assert (before.st_ino, before.st_mtime_ns, before.st_size) == (after.st_ino, after.st_mtime_ns, after.st_size)
+        assert cli("run", *args, case_id=case, expected_exit=2) == stopped
+        assert not original_file.exists()
+        outcomes[name] = recovered
+
+    case = "source-after-deadline-no-success"
+    stopped = cli("run", *arguments(f"{slow_uri} {pending_uri}"), case_id=case, expected_exit=2)
+    assert stopped["reason"] == deadline_stop
+    (timed_out,) = stopped["evidence"]
+    assert timed_out["failure"] == "HTTP_DEADLINE_EXCEEDED" and timed_out["extracted_text"] is None
+    unavailable = cli("run", "--input", "followup", question, case_id=case, expected_exit=2)
+    assert "MISSING_ACTUAL_RESULT" in unavailable["reason"] and unavailable["dependencies"] == []
+    expected_paths = [kept, slow] * 3 + [slow]
+    assert [event["path"] for event in fixture.events[seen:]] == expected_paths
+    assert len(fixture.connects) == starts + len(expected_paths) and not fixture.errors, fixture.errors
+    return {**outcomes, "no_success": unavailable}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -2263,6 +2337,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         source_after_wait = check_source_after_redirect_wait(partial(cli, db_path=wait_state), fixture, wait_state)
         first_hop_state = directory / "first-hop-source-state"
         source_after_first_hop = check_source_after_first_hop_wait(partial(cli, db_path=first_hop_state), fixture, first_hop_state)
+        deadline_state = directory / "deadline-source-state"
+        source_after_deadline = check_source_after_deadline(partial(cli, db_path=deadline_state), fixture, deadline_state)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -2274,7 +2350,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "candidate_after_source": candidate_after_source,
                 "source_after_no_match": source_after_no_match,
                 "partial_direct_source": partial_direct_source, "source_after_wait": source_after_wait,
-                "source_after_first_hop": source_after_first_hop}
+                "source_after_first_hop": source_after_first_hop, "source_after_deadline": source_after_deadline}
     finally:
         fixture.close()
 
