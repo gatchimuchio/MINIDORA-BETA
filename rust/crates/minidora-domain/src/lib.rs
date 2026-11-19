@@ -416,6 +416,11 @@ pub enum Intent {
         provider: String,
         query: String,
     },
+    SearchWithFallback {
+        primary_provider: String,
+        fallback_provider: String,
+        query: String,
+    },
     LinearSystem {
         coefficients: Vec<Vec<String>>,
         rhs: Vec<String>,

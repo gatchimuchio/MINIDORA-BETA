@@ -6,7 +6,8 @@
 
 use crate::ports;
 use minidora_domain::{
-    EvidencePacket, Permissions, ResourceBudget, Result, ResultRecord, digest, failure, identity,
+    EvidencePacket, Intent, Permissions, ResourceBudget, Result, ResultRecord, canonical, digest,
+    failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,6 +17,7 @@ use url::{Host, Url};
 const SEARCH_ROWS: usize = 5;
 const MAX_RETAINED_BODY_PACKETS: usize = crate::text_summary::MAX_QUESTION_SOURCE_PACKETS;
 pub(crate) const SEARCH_LISTING_NODE: &str = "search-listing";
+pub(crate) const SEARCH_SELECTION_KIND: &str = "search-listing-selection-v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -135,6 +137,94 @@ pub struct SearchObservation {
     pub candidates: Vec<SearchCandidate>,
     pub rejected: Vec<RejectedCandidate>,
     pub failure: Option<String>,
+}
+
+pub(crate) struct SearchPlan<'a> {
+    pub primary: SearchProvider,
+    pub fallback: Option<SearchProvider>,
+    pub query: &'a str,
+}
+
+pub(crate) fn search_plan(intent: &Intent) -> Result<Option<SearchPlan<'_>>> {
+    let (primary, fallback, query) = match intent {
+        Intent::Search { provider, query } => (provider.as_str(), None, query.as_str()),
+        Intent::SearchWithFallback {
+            primary_provider,
+            fallback_provider,
+            query,
+        } => (
+            primary_provider.as_str(),
+            Some(fallback_provider.as_str()),
+            query.as_str(),
+        ),
+        _ => return Ok(None),
+    };
+    let resolve = |name| {
+        SearchProvider::from_name(name).ok_or_else(|| {
+            failure(
+                "SEARCH_PROVIDER_UNAVAILABLE",
+                "指定された検索接続がありません。",
+            )
+        })
+    };
+    let primary = resolve(primary)?;
+    let fallback = fallback.map(resolve).transpose()?;
+    if fallback == Some(primary) {
+        return Err(failure(
+            "SEARCH_FALLBACK_DUPLICATE",
+            "代替検索先は最初の検索先と異なる必要があります。",
+        ));
+    }
+    Ok(Some(SearchPlan {
+        primary,
+        fallback,
+        query,
+    }))
+}
+
+pub(crate) fn allows_fallback(observation: &SearchObservation) -> bool {
+    observation.failure.as_deref() == Some("SEARCH_LIST_FETCH_FAILED")
+        && matches!(
+            (
+                observation.listing.http_status,
+                observation.listing.failure.as_deref()
+            ),
+            (429, Some("HTTP_RATE_LIMITED")) | (503, Some("HTTP_STATUS_FAILURE"))
+        )
+}
+
+pub(crate) fn validate_failed_observation(
+    observation: &SearchObservation,
+    permissions: Option<&Permissions>,
+) -> Result<()> {
+    let listing = &observation.listing;
+    let invalid = || {
+        failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The failed search differs from its observed request",
+        )
+    };
+    if observation.failure.as_deref() != Some("SEARCH_LIST_FETCH_FAILED")
+        || listing.packet_kind != "SEARCH_LIST"
+        || listing.mode != "LIVE"
+        || listing.failure.is_none()
+        || listing.extracted_text.is_some()
+        || listing.parser_version != "strict-utf8-identity-v1"
+        || listing.independence_group != listing.final_uri
+    {
+        return Err(invalid());
+    }
+    if let Some(permissions) = permissions {
+        ports::validate_observed_route(listing, permissions)?;
+    }
+    let mut fetched = listing.clone();
+    fetched.packet_kind = "FETCH_FAILURE".into();
+    fetched.provider_id = "https-direct-url-v1".into();
+    fetched.id = ports::fetch_packet_identity(&fetched)?;
+    if parse_listing(observation.provider, &observation.query, fetched)? != *observation {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 pub fn search(
@@ -437,6 +527,29 @@ pub(crate) fn listing_lines(observation: &SearchObservation) -> Vec<String> {
     units
 }
 
+pub(crate) fn selected_listing_lines(
+    selected: &SearchObservation,
+    failed: Option<&SearchObservation>,
+    explicit_fallback: bool,
+) -> Vec<String> {
+    let mut units = Vec::new();
+    if let Some(failed) = failed {
+        units.push(format!(
+            "最初の検索先 {} はHTTP {}で一覧を取得できませんでした。",
+            failed.provider.provider_id(),
+            failed.listing.http_status
+        ));
+    }
+    if explicit_fallback {
+        units.push(format!(
+            "採用した検索先: {}",
+            selected.provider.provider_id()
+        ));
+    }
+    units.extend(listing_lines(selected));
+    units
+}
+
 /// Permissions are supplied when replaying the original search. A later
 /// candidate request consumes the already authorized listing as case evidence.
 pub(crate) fn validate_stored_observation(
@@ -512,6 +625,7 @@ pub(crate) fn previous_observation(
     previous: &ResultRecord,
 ) -> Result<Option<(String, SearchObservation)>> {
     let mut found = None;
+    let mut failed: Option<SearchObservation> = None;
     for dependency in &previous.dependencies {
         let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)? else {
             continue;
@@ -522,15 +636,35 @@ pub(crate) fn previous_observation(
         if observation.listing.packet_kind != "SEARCH_LIST" {
             continue;
         }
-        validate_stored_observation(&observation, None)?;
-        if !previous
-            .evidence
-            .iter()
-            .any(|packet| packet == &observation.listing)
+        if canonical(&observation)? != bytes
+            || !previous
+                .evidence
+                .iter()
+                .any(|packet| packet == &observation.listing)
         {
             return Err(failure(
                 "SEARCH_CONTEXT_INVALID",
                 "The retained search report is not the listing observed by the prior result",
+            ));
+        }
+        if observation.failure.is_some() {
+            if failed.is_some() || found.is_some() || !allows_fallback(&observation) {
+                return Err(failure(
+                    "SEARCH_CONTEXT_INVALID",
+                    "Unexpected failed search in prior listing order",
+                ));
+            }
+            validate_failed_observation(&observation, None)?;
+            failed = Some(observation);
+            continue;
+        }
+        validate_stored_observation(&observation, None)?;
+        if failed.as_ref().is_some_and(|earlier| {
+            earlier.provider == observation.provider || earlier.query != observation.query
+        }) {
+            return Err(failure(
+                "SEARCH_CONTEXT_INVALID",
+                "The selected search differs from the retained alternate attempt",
             ));
         }
         if found.is_some() {
@@ -540,6 +674,49 @@ pub(crate) fn previous_observation(
             ));
         }
         found = Some((dependency.clone(), observation));
+    }
+    if let Some((_, selected)) = &found {
+        let sealed =
+            store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?;
+        let plan = match &sealed {
+            Some((_, bundle)) => search_plan(&bundle.meaning.intent)?,
+            None => None,
+        };
+        if let Some(plan) = plan
+            && let Some(fallback) = plan.fallback
+        {
+            let expected = if failed.is_some() {
+                fallback
+            } else {
+                plan.primary
+            };
+            let count = 1 + usize::from(failed.is_some());
+            let (_, bundle) = sealed.as_ref().expect("a stored plan has a sealed input");
+            if identity(&bundle.request)? != previous.id
+                || selected.provider != expected
+                || selected.query != plan.query
+                || failed
+                    .as_ref()
+                    .is_some_and(|earlier| earlier.provider != plan.primary)
+                || previous.dependencies.len() != count
+                || previous.evidence.len() != count
+            {
+                return Err(failure(
+                    "SEARCH_CONTEXT_INVALID",
+                    "The selected listing differs from the sealed search order",
+                ));
+            }
+        } else if failed.is_some() {
+            return Err(failure(
+                "SEARCH_CONTEXT_INVALID",
+                "The failed search has no sealed alternate-provider goal",
+            ));
+        }
+    } else if failed.is_some() {
+        return Err(failure(
+            "SEARCH_CONTEXT_INVALID",
+            "The alternate search has no successfully selected listing",
+        ));
     }
     Ok(found)
 }

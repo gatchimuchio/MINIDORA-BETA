@@ -4409,7 +4409,10 @@ impl Engine {
                 });
             }
         }
-        if matches!(bundle.meaning.intent, Intent::Search { .. }) {
+        if matches!(
+            bundle.meaning.intent,
+            Intent::Search { .. } | Intent::SearchWithFallback { .. }
+        ) {
             let id = search::SEARCH_LISTING_NODE.to_string();
             compute_requires.push(id.clone());
             nodes.push(GoalNode {
@@ -4706,10 +4709,13 @@ impl Engine {
             // for transport admission.
             for result in state.prior_results.values() {
                 budget.time_remaining()?;
-                if result.lifecycle != Lifecycle::Suspend {
-                    continue;
-                }
                 for packet in &result.evidence {
+                    if !matches!(result.lifecycle, Lifecycle::Suspend | Lifecycle::Commit)
+                        && !(result.lifecycle == Lifecycle::Cancel
+                            && packet.packet_kind == "SEARCH_LIST")
+                    {
+                        continue;
+                    }
                     budget.restore_retry_after(packet, &goal.permissions, || {
                         verify_retained_retry_source(store, state, result, packet)
                     })?;
@@ -5379,14 +5385,18 @@ impl Engine {
                 units.push(display);
                 result.guarantee = Guarantee::UserPremise;
             }
-            Intent::Search { provider, query } => {
-                let Some(selected) = search::SearchProvider::from_name(provider) else {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "SEARCH_PROVIDER_UNAVAILABLE",
-                        "指定された検索接続がありません。",
-                    );
+            Intent::Search { .. } | Intent::SearchWithFallback { .. } => {
+                let search_plan = match search::search_plan(&goal.intent) {
+                    Ok(Some(plan)) => plan,
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SEARCH_UNAVAILABLE",
+                            &error.to_string(),
+                        );
+                    }
+                    Ok(None) => unreachable!("search intent was selected"),
                 };
                 if !graph
                     .ready()
@@ -5400,18 +5410,30 @@ impl Engine {
                         "検索一覧を取得する実行枠がありません。",
                     );
                 }
-                let observation =
-                    match retrieval_budget(1, &state, &self.store).and_then(|mut budget| {
-                        search::search_with_budget(
-                            selected,
-                            query,
-                            &goal.permissions,
-                            &goal.budget,
-                            &mut budget,
-                        )
-                    }) {
-                        Ok(value) => value,
+                let mut budget = match retrieval_budget(1, &state, &self.store) {
+                    Ok(budget) => budget,
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SEARCH_UNAVAILABLE",
+                            &error.to_string(),
+                        );
+                    }
+                };
+                let mut provider = search_plan.primary;
+                let mut failed_primary = None;
+                loop {
+                    let observation = match search::search_with_budget(
+                        provider,
+                        search_plan.query,
+                        &goal.permissions,
+                        &goal.budget,
+                        &mut budget,
+                    ) {
+                        Ok(observation) => observation,
                         Err(error) => {
+                            state.result = Some(result);
                             return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,
@@ -5420,35 +5442,84 @@ impl Engine {
                             );
                         }
                     };
-                let artifact = self
-                    .store
-                    .put_artifact(actor, &request.case_id, &observation)?;
-                result.dependencies.push(artifact.clone());
-                result.evidence.push(observation.listing.clone());
-                if let Some(error) = &observation.failure {
-                    state.result = Some(result);
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "SEARCH_OBSERVATION_FAILURE",
-                        error,
+                    let artifact =
+                        self.store
+                            .put_artifact(actor, &request.case_id, &observation)?;
+                    result.dependencies.push(artifact.clone());
+                    result.evidence.push(observation.listing.clone());
+                    if let Some(error) = &observation.failure {
+                        state.result = Some(result.clone());
+                        if let Some(fallback) = search_plan.fallback
+                            && failed_primary.is_none()
+                            && search::allows_fallback(&observation)
+                        {
+                            if let Err(error) = search::validate_failed_observation(
+                                &observation,
+                                Some(&goal.permissions),
+                            ) {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    "SEARCH_OBSERVATION_FAILURE",
+                                    &error.to_string(),
+                                );
+                            }
+                            self.advance(
+                                &mut state,
+                                Lifecycle::Running,
+                                Some("SEARCH_PRIMARY_FAILURE_OBSERVED".into()),
+                            )?;
+                            if self
+                                .store
+                                .load_case(actor, &request.case_id)?
+                                .is_none_or(|latest| latest.revision != state.revision)
+                            {
+                                return Err(failure(
+                                    "CASE_BUSY_OR_RECOVERY_REQUIRED",
+                                    "The case changed before the alternate search could start",
+                                ));
+                            }
+                            failed_primary = Some(observation);
+                            provider = fallback;
+                            continue;
+                        }
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SEARCH_OBSERVATION_FAILURE",
+                            error,
+                        );
+                    }
+                    if let Err(error) =
+                        search::validate_stored_observation(&observation, Some(&goal.permissions))
+                    {
+                        state.result = Some(result);
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SEARCH_OBSERVATION_FAILURE",
+                            &error.to_string(),
+                        );
+                    }
+                    let evidence = if search_plan.fallback.is_some() {
+                        self.store.put_artifact(
+                            actor,
+                            &request.case_id,
+                            &(search::SEARCH_SELECTION_KIND, &result.dependencies),
+                        )?
+                    } else {
+                        artifact
+                    };
+                    graph.observe(search::SEARCH_LISTING_NODE, &evidence, &BTreeMap::new())?;
+                    units = search::selected_listing_lines(
+                        &observation,
+                        failed_primary.as_ref(),
+                        search_plan.fallback.is_some(),
                     );
+                    result.guarantee = Guarantee::SourceReport;
+                    state.result = Some(result.clone());
+                    break;
                 }
-                if let Err(error) =
-                    search::validate_stored_observation(&observation, Some(&goal.permissions))
-                {
-                    state.result = Some(result);
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "SEARCH_OBSERVATION_FAILURE",
-                        &error.to_string(),
-                    );
-                }
-                graph.observe(search::SEARCH_LISTING_NODE, &artifact, &BTreeMap::new())?;
-                units = search::listing_lines(&observation);
-                result.guarantee = Guarantee::SourceReport;
-                state.result = Some(result.clone());
             }
             Intent::FetchPreviousSearchCandidate { rank } => {
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
@@ -10178,22 +10249,43 @@ fn verify_retained_retry_source(
         return Err(invalid());
     }
     if packet.packet_kind == "SEARCH_LIST" {
-        let [reference] = result.dependencies.as_slice() else {
-            return Err(invalid());
-        };
+        let index = result
+            .evidence
+            .iter()
+            .position(|evidence| evidence == packet)
+            .ok_or_else(invalid)?;
+        let reference = result.dependencies.get(index).ok_or_else(invalid)?;
         let bytes = store.get_bytes(&state.actor_id, &state.case_id, reference)?;
         let observation: search::SearchObservation = serde_json::from_slice(&bytes)?;
-        if observation.listing != *packet
-            || observation.failure.as_deref() != Some("SEARCH_LIST_FETCH_FAILED")
-            || canonical(&observation)? != bytes
-        {
+        if observation.listing != *packet || canonical(&observation)? != bytes {
             return Err(invalid());
         }
-        let mut original = packet.clone();
-        original.packet_kind = "FETCH_FAILURE".into();
-        original.provider_id = "https-direct-url-v1".into();
-        original.id = ports::fetch_packet_identity(&original)?;
-        if search::parse_listing(observation.provider, &observation.query, original)? != observation
+        search::validate_failed_observation(&observation, None)?;
+        if result.lifecycle == Lifecycle::Cancel {
+            let (_, bundle) = store
+                .get_input_bundle(
+                    &state.actor_id,
+                    &state.case_id,
+                    &result.input_id,
+                    result.input_version,
+                )?
+                .ok_or_else(invalid)?;
+            let plan = search::search_plan(&bundle.meaning.intent)?.ok_or_else(invalid)?;
+            if identity(&bundle.request)? != result.id
+                || plan.fallback.is_none()
+                || plan.primary != observation.provider
+                || plan.query != observation.query
+                || !search::allows_fallback(&observation)
+                || result.evidence.len() != 1
+                || result.dependencies.len() != 1
+            {
+                return Err(invalid());
+            }
+            search::validate_failed_observation(&observation, Some(&bundle.request.permissions))?;
+        }
+        if result.lifecycle == Lifecycle::Commit
+            && search::previous_observation(store, &state.actor_id, &state.case_id, result)?
+                .is_none()
         {
             return Err(invalid());
         }

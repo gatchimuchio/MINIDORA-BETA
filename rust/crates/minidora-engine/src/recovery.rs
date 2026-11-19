@@ -83,6 +83,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                 Intent::CalculateSequence { .. }
                     | Intent::FetchPreviousSearchCandidate { .. }
                     | Intent::Search { .. }
+                    | Intent::SearchWithFallback { .. }
             )
         }) {
             store_execution_graph(store, actor, case, &graph)?
@@ -2638,33 +2639,88 @@ fn verify_search_listing(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<Option<String>> {
-    let Intent::Search { provider, query } = &goal.intent else {
+    let Some(search_plan) = search::search_plan(&goal.intent)? else {
         return Ok(None);
     };
-    let [reference] = result.dependencies.as_slice() else {
-        return Err(failure(
+    let invalid = || {
+        failure(
             "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "the original search must retain exactly one listing observation reference",
-        ));
+            "the retained searches or adopted report differ from the original search order",
+        )
     };
-    let bytes = store.get_bytes(actor, case, reference)?;
-    let observation: search::SearchObservation = serde_json::from_slice(&bytes)?;
-    if search::SearchProvider::from_name(provider) != Some(observation.provider)
-        || *query != observation.query
-        || canonical(&observation)? != bytes
-        || result.evidence.as_slice() != std::slice::from_ref(&observation.listing)
-        || observation.listing.raw_body.len() > goal.budget.max_evidence_bytes
+    let count = result.dependencies.len();
+    if count == 0
+        || count > 1 + usize::from(search_plan.fallback.is_some())
+        || count != result.evidence.len()
         || result.calculation.is_some()
         || result.guarantee != Guarantee::SourceReport
-        || plan.required_units != search::listing_lines(&observation)
     {
-        return Err(failure(
-            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "the search listing or adopted report differs from the original search",
-        ));
+        return Err(invalid());
     }
-    search::validate_stored_observation(&observation, Some(&goal.permissions))?;
-    Ok(Some(reference.clone()))
+    let mut failed = None;
+    let mut raw_bytes = 0usize;
+    let mut starts = 0usize;
+    for (index, (reference, packet)) in result.dependencies.iter().zip(&result.evidence).enumerate()
+    {
+        let bytes = store.get_bytes(actor, case, reference)?;
+        let observation: search::SearchObservation = serde_json::from_slice(&bytes)?;
+        let expected_provider = if index == 0 {
+            Some(search_plan.primary)
+        } else {
+            search_plan.fallback
+        };
+        if expected_provider != Some(observation.provider)
+            || search_plan.query != observation.query
+            || observation.listing != *packet
+            || canonical(&observation)? != bytes
+        {
+            return Err(invalid());
+        }
+        raw_bytes = raw_bytes
+            .checked_add(packet.raw_body.len())
+            .ok_or_else(invalid)?;
+        starts = starts
+            .checked_add(packet.redirect_chain.len())
+            .ok_or_else(invalid)?;
+        if raw_bytes > goal.budget.max_evidence_bytes
+            || (search_plan.fallback.is_some()
+                && (packet.redirect_chain.len() > crate::ports::MAX_HTTP_STARTS_PER_SOURCE
+                    || starts + 3 + usize::from(goal.output_path.is_some())
+                        > goal.budget.max_actions as usize))
+        {
+            return Err(invalid());
+        }
+        if index + 1 < count {
+            if !search::allows_fallback(&observation) {
+                return Err(invalid());
+            }
+            search::validate_failed_observation(&observation, Some(&goal.permissions))?;
+            failed = Some(observation);
+            continue;
+        }
+        search::validate_stored_observation(&observation, Some(&goal.permissions))?;
+        if plan.required_units
+            != search::selected_listing_lines(
+                &observation,
+                failed.as_ref(),
+                search_plan.fallback.is_some(),
+            )
+        {
+            return Err(invalid());
+        }
+        let evidence = if search_plan.fallback.is_some() {
+            verified_artifact(
+                store,
+                actor,
+                case,
+                &(search::SEARCH_SELECTION_KIND, &result.dependencies),
+            )?
+        } else {
+            reference.clone()
+        };
+        return Ok(Some(evidence));
+    }
+    Err(invalid())
 }
 
 fn verify_search_candidate_context(
@@ -4186,9 +4242,10 @@ fn inspect(
     let search_listing = verify_search_listing(store, actor, case, result, plan, &goal)?;
     // Older sealed search goals used a compute-only graph. They still
     // require the original listing to reproduce the adopted content.
-    let search_requires_listing = nodes
-        .iter()
-        .any(|node| node.id == search::SEARCH_LISTING_NODE);
+    let search_requires_listing = matches!(goal.intent, Intent::SearchWithFallback { .. })
+        || nodes
+            .iter()
+            .any(|node| node.id == search::SEARCH_LISTING_NODE);
     let search_candidate =
         verify_search_candidate_context(store, actor, state, result, plan, &goal, &nodes)?;
     let mut expected_nodes = Vec::new();

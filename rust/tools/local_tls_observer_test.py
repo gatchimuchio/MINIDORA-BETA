@@ -39,15 +39,17 @@ def openssl(directory: Path, *arguments: str) -> None:
     )
 
 
-def certificates(directory: Path, host: str = HOST) -> tuple[Path, Path, Path]:
+def certificates(directory: Path, host: str = HOST,
+                 additional_hosts: tuple[str, ...] = ()) -> tuple[Path, Path, Path]:
     for name in ("ca", "untrusted"):
         openssl(directory, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                 "-keyout", f"{name}.key", "-out", f"{name}.pem", "-days", "1",
                 "-subj", f"/CN=MINIDORA disposable {name}")
     openssl(directory, "req", "-new", "-newkey", "rsa:2048", "-nodes",
             "-keyout", "server.key", "-out", "server.csr", "-subj", f"/CN={host}")
+    subject_names = ",".join(f"DNS:{name}" for name in (host, *additional_hosts))
     (directory / "server.ext").write_text(
-        f"subjectAltName=DNS:{host}\n"
+        f"subjectAltName={subject_names}\n"
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature,keyEncipherment\n"
         "extendedKeyUsage=serverAuth\n"
@@ -76,8 +78,10 @@ def header_block(stream: socket.socket) -> tuple[str, dict[str, str]]:
 
 class Fixture:
     def __init__(self, certificate: Path, key: Path, host: str = HOST,
-                 responses: dict[str, tuple[bytes, str]] | None = None):
+                 responses: dict[str, tuple[bytes, str]] | None = None,
+                 additional_hosts: tuple[str, ...] = ()):
         self.host = host
+        self.hosts = (host, *additional_hosts)
         self.responses = responses or {}
         self.redirects: dict[str, str] = {}
         self.failure_responses: dict[str, tuple[str, bytes, str]] = {}
@@ -116,7 +120,8 @@ class Fixture:
             with stream:
                 stream.settimeout(5)
                 request, connect_headers = header_block(stream)
-                assert request == f"CONNECT {self.host}:443 HTTP/1.1"
+                host = next((name for name in self.hosts if request == f"CONNECT {name}:443 HTTP/1.1"), None)
+                assert host is not None
                 assert not {"authorization", "proxy-authorization", "cookie"} & connect_headers.keys()
                 self.connects.append(request)
                 stream.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
@@ -130,10 +135,10 @@ class Fixture:
                     request, headers = header_block(secured)
                     method, path, protocol = request.split(" ")
                     assert method == "GET" and protocol == "HTTP/1.1"
-                    assert headers.get("host") == self.host
+                    assert headers.get("host") == host
                     assert headers.get("accept-encoding") == "identity"
                     assert not {"authorization", "proxy-authorization", "cookie"} & headers.keys()
-                    self.events.append({"path": path, "request_header_names": sorted(headers)})
+                    self.events.append({"host": host, "path": path, "request_header_names": sorted(headers)})
                     if path == "/drop":
                         return
                     if path == "/unframed":
@@ -656,6 +661,163 @@ def check_retry_continuation(cli, fixture: Fixture, search_failure: dict) -> dic
             "blocked_connections": 0, "case_isolation": True}
 
 
+def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Path) -> dict:
+    primary, fallback = fixture.hosts
+    grants = ("--allow-read-host", primary, "--allow-read-host", fallback)
+    wiki = "/w/rest.php/v1/search/page?"
+    crossref = "/works?"
+    primary_busy = wiki + "q=alternate+trial&limit=5"
+    alternative = crossref + "query=alternate+trial&rows=5"
+    body_url = f"https://{fallback}/selected-article"
+    winner_listing = json.dumps({"message": {"items": [
+        {"title": ["Alternative fixture"], "URL": body_url, "DOI": "10.5555/fixture"},
+    ]}}).encode()
+    selected_body = b"Exact body from the selected alternative."
+    fixture.failure_responses[primary_busy] = (
+        "429 Too Many Requests", b"primary rate limited", "Retry-After: 120\r\n",
+    )
+    fixture.responses[alternative] = (winner_listing, "application/json")
+    fixture.responses["/selected-article"] = (selected_body, "text/plain")
+    fixture.responses[wiki + "q=alternate+empty&limit=5"] = (b'{"pages":[]}', "application/json")
+    fixture.responses[wiki + "q=alternate+malformed&limit=5"] = (b'{"pages":false}', "application/json")
+    denied_redirect = wiki + "q=alternate+redirect&limit=5"
+    fixture.redirects[denied_redirect] = "https://outside.minidora.test/forbidden"
+    unavailable = wiki + "q=alternate+unavailable&limit=5"
+    unavailable_alternate = crossref + "query=alternate+unavailable&rows=5"
+    fixture.failure_responses[unavailable] = ("503 Service Unavailable", b"primary unavailable", "")
+    fixture.responses[unavailable_alternate] = (winner_listing, "application/json")
+    both_failed = crossref + "query=alternate+failed&rows=5"
+    fixture.failure_responses[wiki + "q=alternate+failed&limit=5"] = (
+        "503 Service Unavailable", b"primary unavailable", "",
+    )
+    fixture.failure_responses[both_failed] = ("503 Service Unavailable", b"alternate unavailable", "")
+    request = "検索 wikipedia -> crossref: alternate trial"
+
+    def contacts_since(index: int) -> list[tuple[str, str]]:
+        return [(event["host"], event["path"]) for event in fixture.events[index:]]
+
+    cases = {}
+    for name, query, flags, expected_exit, expected_contacts, reason in (
+        ("explicit-primary", "検索 wikipedia -> crossref: candidate replay", grants, 0,
+         [(primary, wiki + "q=candidate+replay&limit=5")], None),
+        ("explicit-empty", "検索 wikipedia -> crossref: alternate empty", grants, 0,
+         [(primary, wiki + "q=alternate+empty&limit=5")], None),
+        ("explicit-malformed", "検索 wikipedia -> crossref: alternate malformed", grants, 2,
+         [(primary, wiki + "q=alternate+malformed&limit=5")], "MALFORMED_SEARCH_LIST"),
+        ("explicit-duplicate", "検索 wikipedia -> wikipedia: alternate trial", grants, 2,
+         [], "two distinct providers"),
+        ("explicit-budget", request, (*grants, "--max-actions", "4"), 2,
+         [(primary, primary_busy)], "HTTP_START_BUDGET_EXHAUSTED"),
+        ("explicit-denied-primary", request, ("--allow-read-host", fallback), 2,
+         [], "READ_PERMISSION_REQUIRED"),
+        ("explicit-denied-fallback", request, ("--allow-read-host", primary), 2,
+         [(primary, primary_busy)], "READ_PERMISSION_REQUIRED"),
+        ("explicit-denied-redirect", "検索 wikipedia -> crossref: alternate redirect",
+         grants, 2, [(primary, denied_redirect)], "SEARCH_LIST_FETCH_FAILED"),
+        ("explicit-byte-limit", request, (*grants, "--max-evidence-bytes", "64"), 2,
+         [(primary, primary_busy), (fallback, alternative)], "SEARCH_LIST_FETCH_FAILED"),
+        ("explicit-unavailable", "search wikipedia -> crossref: alternate unavailable",
+         (*grants, "--max-actions", "5"), 0, [(primary, unavailable), (fallback, unavailable_alternate)], None),
+        ("explicit-both-failed", "search wikipedia -> crossref: alternate failed",
+         (*grants, "--max-actions", "5"), 2,
+         [(primary, wiki + "q=alternate+failed&limit=5"), (fallback, both_failed)], "SEARCH_LIST_FETCH_FAILED"),
+    ):
+        seen, starts = len(fixture.events), len(fixture.connects)
+        result = cli("run", "--input", "lookup", *flags, query, case_id=name, expected_exit=expected_exit)
+        assert contacts_since(seen) == expected_contacts
+        assert len(fixture.connects) == starts + len(expected_contacts)
+        assert len(result["evidence"]) == len(result["dependencies"]) == len(expected_contacts)
+        if reason is not None:
+            assert reason in result["reason"] and result["render"] is None and result["receipts"] == []
+        cases[name] = result
+    assert "検索候補がありません" in cases["explicit-empty"]["text"]
+    assert cases["explicit-denied-redirect"]["evidence"][0]["failure"] == "REDIRECT_PERMISSION_OR_TARGET_REJECTED"
+    limited = cases["explicit-byte-limit"]["evidence"]
+    assert limited[0]["failure"] == "HTTP_RATE_LIMITED" and limited[1]["failure"] == "EVIDENCE_BYTE_LIMIT"
+
+    seen, starts = len(fixture.events), len(fixture.connects)
+    case = "explicit-fallback-file"
+    output = directory / "alternate-listing.txt"
+    selected = cli("run", "--input", "lookup", *grants, "--max-actions", "6",
+                   "--output", str(output), "--allow-write", str(output), request, case_id=case)
+    failed, listing = selected["evidence"]
+    assert failed["http_status"] == 429 and failed["failure"] == "HTTP_RATE_LIMITED"
+    assert listing["http_status"] == 200 and listing["failure"] is None
+    assert "crossref-works-search-v1" in selected["text"] and "Alternative fixture" in selected["text"]
+
+    def load(reference: str):
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    first_ref, selected_ref = selected["dependencies"]
+    assert load(first_ref)["listing"] == failed
+    assert load(selected_ref)["listing"] == listing
+    assert load(selected_ref)["query"] == load(first_ref)["query"] == "alternate trial"
+    with sqlite3.connect(state_path / "state.sqlite3") as database:
+        revisions = database.execute(
+            "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision", (case,),
+        ).fetchall()
+    checkpoint = next(state for (ref,) in revisions if (state := load(ref))["reason"] == "SEARCH_PRIMARY_FAILURE_OBSERVED")
+    assert checkpoint["lifecycle"] == "RUNNING"
+    assert checkpoint["result"]["evidence"] == [failed]
+    assert checkpoint["result"]["dependencies"] == [first_ref]
+
+    before = output.stat()
+    attempted = retain_attempted_prefix(state_path, case, "lookup", selected["receipts"][0]["action_id"])
+    recovered = cli("reconcile", case_id=case)
+    assert recovered["evidence"] == selected["evidence"] and recovered["dependencies"] == selected["dependencies"]
+    assert recovered["receipts"][0]["action_id"] == attempted["action_id"]
+    assert "NO_RESEND" in recovered["receipts"][0]["reason"]
+    graph = load(recovered["execution_graph_ref"])
+    (selection_ref,) = graph[5]["compute"].values()
+    assert graph[5]["compute"] == {"search-listing": selection_ref}
+    assert load(selection_ref) == ["search-listing-selection-v1", [first_ref, selected_ref]]
+    assert output.read_bytes() == bytes(selected["render"]["bytes"])
+    after = output.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    assert contacts_since(seen) == [(primary, primary_busy), (fallback, alternative)]
+    assert len(fixture.connects) == starts + 2
+
+    body = cli("run", "--input", "body", "--allow-read-host", fallback,
+               "1件目の本文を取得して", case_id=case)
+    assert body["evidence"][0] == listing and len(body["evidence"]) == 2
+    assert bytes(body["evidence"][1]["raw_body"]) == selected_body
+    blocked = cli("run", "--input", "during-retry-after", "--allow-read-host", primary,
+                  "検索 wikipedia: alternate trial", case_id=case, expected_exit=2)
+    assert "HTTP_RETRY_DEFERRED" in blocked["reason"] and failed["id"] in blocked["reason"]
+    assert blocked["evidence"] == []
+    assert contacts_since(seen) == [(primary, primary_busy), (fallback, alternative), (fallback, "/selected-article")]
+    assert len(fixture.connects) == starts + 3 and not fixture.errors
+
+    # Restore the real checkpoint following a primary failure with no alternate start.
+    cancelled_case = "explicit-budget"
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        snapshots = database.execute(
+            "SELECT revision,state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision",
+            (cancelled_case,),
+        ).fetchall()
+        revision, running = next((revision, state) for revision, ref in snapshots
+                                 if (state := load(ref))["reason"] == "SEARCH_PRIMARY_FAILURE_OBSERVED")
+        assert running["result"]["evidence"] == cases[cancelled_case]["evidence"]
+        saved = json.dumps(running["result"], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(saved.encode("utf-8")).hexdigest()
+        database.execute("DROP TRIGGER case_revision_no_delete")
+        database.execute("DELETE FROM case_revision WHERE case_id=? AND revision>?", (cancelled_case, revision))
+        database.execute("UPDATE input_identity SET result_sha256=? WHERE case_id=? AND input_id='lookup'",
+                         (digest, cancelled_case))
+    seen, starts = len(fixture.events), len(fixture.connects)
+    cli("run", "--input", "cancel", "中止", case_id=cancelled_case, expected_exit=5)
+    cancelled_deferred = cli("run", "--input", "after-cancel", "--allow-read-host", primary,
+                             "検索 wikipedia: alternate trial", case_id=cancelled_case, expected_exit=2)
+    assert "HTTP_RETRY_DEFERRED" in cancelled_deferred["reason"]
+    assert running["result"]["evidence"][0]["id"] in cancelled_deferred["reason"]
+    assert cancelled_deferred["evidence"] == []
+    assert not contacts_since(seen) and len(fixture.connects) == starts and not fixture.errors
+    return {"cases": cases, "file": selected, "recovered": recovered, "body": body,
+            "deferred": blocked, "cancelled_deferred": cancelled_deferred}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -670,8 +832,9 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         "/wiki/First?action=raw": (first_body, "text/plain"),
         "/wiki/Second?action=raw": (second_body, "text/plain"),
     }
-    certificate, key, ca = certificates(directory, host)
-    fixture = Fixture(certificate, key, host, responses)
+    additional_hosts = ("api.crossref.org",)
+    certificate, key, ca = certificates(directory, host, additional_hosts)
+    fixture = Fixture(certificate, key, host, responses, additional_hosts)
     state_path, output = directory / "state", directory / "selected-body.txt"
     environment = os.environ.copy()
     for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
@@ -688,7 +851,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         )
         assert process.returncode == expected_exit, (process.returncode, process.stdout, process.stderr)
         result = json.loads(process.stdout)
-        assert result["lifecycle"] == {0: "COMMIT", 2: "SUSPEND", 3: "REJECT"}[expected_exit]
+        assert result["lifecycle"] == {0: "COMMIT", 2: "SUSPEND", 3: "REJECT", 5: "CANCEL"}[expected_exit]
         return result
 
     read = ("--allow-read-host", host, "--deadline-ms", "5000")
@@ -745,8 +908,10 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         )
         search_goals = check_search_goals(cli, fixture, state_path, directory)
         retry_continuation = check_retry_continuation(cli, fixture, search_goals["retry_after"][0])
+        search_fallback = check_ordered_search(cli, fixture, state_path, directory)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
-                "search_goals": search_goals, "retry_continuation": retry_continuation}
+                "search_goals": search_goals, "retry_continuation": retry_continuation,
+                "search_fallback": search_fallback}
     finally:
         fixture.close()
 

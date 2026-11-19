@@ -337,7 +337,7 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
     Ok(text.into())
 }
 
-const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
+pub(crate) const MAX_HTTP_STARTS_PER_SOURCE: usize = 4;
 
 // IMF-fixdate emitted by current HTTP senders. Legacy date layouts take the
 // same conservative path as other unusable header values.
@@ -871,14 +871,7 @@ pub(crate) fn validate_successful_packet(
     packet: &EvidencePacket,
     permissions: &Permissions,
 ) -> Result<()> {
-    let request_uri = approved_url(&packet.request_uri, permissions)?.to_string();
-    let final_uri = approved_url(&packet.final_uri, permissions)?.to_string();
-    let chain_is_valid = packet.redirect_chain.first() == Some(&request_uri)
-        && packet.redirect_chain.last() == Some(&final_uri)
-        && packet
-            .redirect_chain
-            .iter()
-            .all(|uri| approved_url(uri, permissions).is_ok());
+    validate_observed_route(packet, permissions)?;
     let extracted_text = std::str::from_utf8(&packet.raw_body)
         .map_err(|_| failure("RECOVERY_EVIDENCE_MISMATCH", "Observed body is not UTF-8"))?;
     if packet.mode != "LIVE"
@@ -891,7 +884,6 @@ pub(crate) fn validate_successful_packet(
         || packet.raw_sha256 != digest(&packet.raw_body)
         || packet.extracted_text.as_deref() != Some(extracted_text)
         || packet.independence_group != packet.final_uri
-        || !chain_is_valid
     {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
@@ -903,6 +895,27 @@ pub(crate) fn validate_successful_packet(
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
             "Observed body packet identity is invalid",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_observed_route(
+    packet: &EvidencePacket,
+    permissions: &Permissions,
+) -> Result<()> {
+    let request_uri = approved_url(&packet.request_uri, permissions)?.to_string();
+    let final_uri = approved_url(&packet.final_uri, permissions)?.to_string();
+    if packet.redirect_chain.first() != Some(&request_uri)
+        || packet.redirect_chain.last() != Some(&final_uri)
+        || packet
+            .redirect_chain
+            .iter()
+            .any(|uri| approved_url(uri, permissions).is_err())
+    {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "Observed redirect route differs from original read authority",
         ));
     }
     Ok(())

@@ -19,6 +19,7 @@ const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v90-explanation-source-roles";
 const CONDITION_DEFINITION_PARSER_VERSION: &str = "declarative-ja-en-v92-condition-definition";
+const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -179,6 +180,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
+        Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
@@ -1911,13 +1913,14 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
         if text.trim_end_matches(['\r', '\n']).contains(['\r', '\n']) {
             return Ok(Some(Intent::Unknown { reason: "metadata search accepts one explicitly bounded query line; following clauses are not silently discarded".into() }));
         }
-        let Some(capture) =
-            regex(r"^(?:検索|search)\s+(wikipedia|crossref|europepmc):[ \t]*(.+)$")?
-                .captures(header)
+        let Some(capture) = regex(
+            r"^(?:検索|search)\s+(wikipedia|crossref|europepmc)(?:[ \t]+->[ \t]+(wikipedia|crossref|europepmc))?:[ \t]*(.+)$",
+        )?
+        .captures(header)
         else {
             return Ok(Some(Intent::Unknown { reason: "search requires explicit wikipedia, crossref or europepmc provider and a colon-delimited query".into() }));
         };
-        let raw_query = capture[2].trim();
+        let raw_query = capture[3].trim();
         let query = if raw_query.starts_with('"') {
             serde_json::from_str::<String>(raw_query).map_err(|_| {
                 failure(
@@ -1937,9 +1940,20 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
                 "metadata query must not be empty",
             ));
         }
-        return Ok(Some(Intent::Search {
-            provider: capture[1].into(),
-            query,
+        let primary_provider = capture[1].to_owned();
+        return Ok(Some(match capture.get(2) {
+            Some(fallback) if fallback.as_str() == primary_provider => Intent::Unknown {
+                reason: "alternate search requires two distinct providers".into(),
+            },
+            Some(fallback) => Intent::SearchWithFallback {
+                primary_provider,
+                fallback_provider: fallback.as_str().into(),
+                query,
+            },
+            None => Intent::Search {
+                provider: primary_provider,
+                query,
+            },
         }));
     }
     let looks_like_document = header.starts_with("CSVの列")
