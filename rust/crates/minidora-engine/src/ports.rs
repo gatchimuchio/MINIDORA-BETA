@@ -266,7 +266,12 @@ fn packet(
         failure: error.map(str::to_owned),
         retry_after: None,
     };
-    packet.id = identity(&(
+    packet.id = fetch_packet_identity(&packet)?;
+    Ok(packet)
+}
+
+pub(crate) fn fetch_packet_identity(packet: &EvidencePacket) -> Result<String> {
+    let identity_without_retry = identity(&(
         &packet.mode,
         &packet.packet_kind,
         &packet.request_uri,
@@ -279,7 +284,14 @@ fn packet(
         &packet.redirect_chain,
         &packet.provider_id,
     ))?;
-    Ok(packet)
+    match &packet.retry_after {
+        Some(retry) => identity(&(
+            "fetch-failure-retry-after-v1",
+            identity_without_retry,
+            retry,
+        )),
+        None => Ok(identity_without_retry),
+    }
 }
 
 fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
@@ -436,7 +448,12 @@ pub(crate) struct RetrievalBudget {
     deadline: Instant,
     remaining_starts: u32,
     remaining_bytes: usize,
-    retry_not_before: BTreeMap<String, Instant>,
+    retry_not_before: BTreeMap<String, RetryGate>,
+}
+
+struct RetryGate {
+    until: Instant,
+    retained_packet_id: Option<String>,
 }
 
 impl RetrievalBudget {
@@ -462,7 +479,7 @@ impl RetrievalBudget {
         Self::new(Instant::now(), budget, MAX_HTTP_STARTS_PER_SOURCE as u32)
     }
 
-    fn time_remaining(&self) -> Result<Duration> {
+    pub(crate) fn time_remaining(&self) -> Result<Duration> {
         self.deadline
             .checked_duration_since(Instant::now())
             .filter(|duration| !duration.is_zero())
@@ -471,15 +488,14 @@ impl RetrievalBudget {
 
     fn reserve_start(&mut self, host: &str) -> Result<()> {
         self.time_remaining()?;
-        if self
-            .retry_not_before
-            .get(host)
-            .is_some_and(|until| Instant::now() < *until)
+        if let Some(gate) = self.retry_not_before.get(host)
+            && Instant::now() < gate.until
         {
-            return Err(failure(
-                "HTTP_RETRY_DEFERRED",
-                format!("The retained Retry-After for {host} has not elapsed"),
-            ));
+            let mut message = format!("The retained Retry-After for {host} has not elapsed");
+            if let Some(packet_id) = &gate.retained_packet_id {
+                message.push_str(&format!(" (saved packet {packet_id})"));
+            }
+            return Err(failure("HTTP_RETRY_DEFERRED", message));
         }
         self.remaining_starts = self.remaining_starts.checked_sub(1).ok_or_else(|| {
             failure(
@@ -506,12 +522,74 @@ impl RetrievalBudget {
             .and_then(|delay| received.checked_add(Duration::from_millis(delay)))
             .unwrap_or(self.deadline)
             .min(self.deadline);
-        self.retry_not_before.insert(host.to_owned(), until);
+        self.retry_not_before.insert(
+            host.to_owned(),
+            RetryGate {
+                until,
+                retained_packet_id: None,
+            },
+        );
         Ok(Some(RetryAfterObservation {
             directive,
             received_at_unix_ms,
             not_before_unix_ms: delay_ms.and_then(|delay| received_at_unix_ms.checked_add(delay)),
         }))
+    }
+
+    /// Reuse a finite, active, authorized observation only after Core has
+    /// verified its case-bound artifact. No saved observation refreshes time.
+    pub(crate) fn restore_retry_after(
+        &mut self,
+        packet: &EvidencePacket,
+        permissions: &Permissions,
+        verify_source: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        self.time_remaining()?;
+        let Some(retry) = &packet.retry_after else {
+            return Ok(());
+        };
+        let Some(due) = retry.not_before_unix_ms else {
+            return Ok(());
+        };
+        if packet.mode != "LIVE"
+            || !matches!(packet.packet_kind.as_str(), "FETCH_FAILURE" | "SEARCH_LIST")
+            || !matches!(packet.http_status, 429 | 503)
+            || packet.failure.is_none()
+            || packet.extracted_text.is_some()
+            || due <= retry.received_at_unix_ms
+        {
+            return Ok(());
+        }
+        let Ok(uri) = approved_url(&packet.final_uri, permissions) else {
+            return Ok(());
+        };
+        let host = uri.host_str().expect("approved domain");
+        let monotonic_now = Instant::now();
+        let wall_now = unix_ms_now()?.max(retry.received_at_unix_ms);
+        let delay_ms = due.saturating_sub(wall_now);
+        if delay_ms == 0 {
+            return Ok(());
+        }
+        let until = monotonic_now
+            .checked_add(Duration::from_millis(delay_ms))
+            .unwrap_or(self.deadline)
+            .min(self.deadline);
+        if self
+            .retry_not_before
+            .get(host)
+            .is_some_and(|gate| gate.until >= until)
+        {
+            return Ok(());
+        }
+        verify_source()?;
+        self.retry_not_before.insert(
+            host.to_owned(),
+            RetryGate {
+                until,
+                retained_packet_id: Some(packet.id.clone()),
+            },
+        );
+        Ok(())
     }
 }
 
@@ -685,8 +763,8 @@ pub(crate) fn fetch_with_budget(
         let finish = |raw, text, error: Option<&str>| -> Result<EvidencePacket> {
             let mut result = packet(&redirects, raw_url, url.as_str(), status, raw, text, error)?;
             if let Some(retry_after) = &retry_after {
-                result.id = identity(&("fetch-failure-retry-after-v1", &result.id, retry_after))?;
                 result.retry_after = Some(retry_after.clone());
+                result.id = fetch_packet_identity(&result)?;
             }
             Ok(result)
         };
@@ -799,19 +877,7 @@ pub(crate) fn validate_successful_packet(
             "Observed body identity, decode or original read authority differs",
         ));
     }
-    let expected_id = identity(&(
-        &packet.mode,
-        &packet.packet_kind,
-        &packet.request_uri,
-        &packet.final_uri,
-        packet.http_status,
-        &packet.raw_sha256,
-        &packet.parser_version,
-        &packet.independence_group,
-        &packet.failure,
-        &packet.redirect_chain,
-        &packet.provider_id,
-    ))?;
+    let expected_id = fetch_packet_identity(packet)?;
     if packet.id != expected_id {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
@@ -3323,7 +3389,9 @@ mod tests {
         assert_eq!(budget.remaining_starts, 1);
         budget
             .retry_not_before
-            .insert("example.com".into(), Instant::now());
+            .get_mut("example.com")
+            .unwrap()
+            .until = Instant::now();
         budget.reserve_start("example.com").unwrap();
         assert_eq!(budget.remaining_starts, 0);
     }

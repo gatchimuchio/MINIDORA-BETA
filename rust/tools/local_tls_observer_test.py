@@ -21,6 +21,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+import time
 
 
 HOST = "fixture.minidora.test"
@@ -587,6 +588,74 @@ def check_search_goals(cli, fixture: Fixture, state_path: Path, directory: Path)
             "retry_after": [deferred_search, deferred_body]}
 
 
+def check_retry_continuation(cli, fixture: Fixture, search_failure: dict) -> dict:
+    host = fixture.host
+    grant = ("--allow-read-host", host)
+    resource = f"fetch https://{host}/wiki/First?action=raw"
+    # The earlier check temporarily made this candidate a 503 fixture.
+    fixture.failure_responses.pop("/wiki/First?action=raw")
+    fixture.failure_responses.update({
+        "/retry-persisted": ("429 Too Many Requests", b"receive and defer", "Retry-After: 120\r\n"),
+        "/retry-expiring": ("429 Too Many Requests", b"short deferral", "Retry-After: 0\r\n"),
+        "/retry-unbounded": ("429 Too Many Requests", b"oversized deferral", "Retry-After: 1234567890123\r\n"),
+    })
+    seen, starts = len(fixture.events), len(fixture.connects)
+    first_request = f"fetch https://{host}/retry-persisted"
+    first = cli("run", "--input", "rate-limit", *grant, first_request,
+                case_id="prior-rate-limit", expected_exit=2)
+    (first_packet,) = first["evidence"]
+    # The wait comes from authenticated history, even after an unrelated goal.
+    unrelated = cli("run", "--input", "unrelated", "1 + 2", case_id="prior-rate-limit")
+    assert unrelated["calculation"]["exact_value"] == "3"
+    old_listing = search_failure["evidence"][0]
+    for case, command, evidence in (
+        ("prior-rate-limit", resource, first_packet),
+        ("listing-rate-limited", "検索 wikipedia: candidate replay", old_listing),
+    ):
+        for input_id in ("followup", "another"):
+            blocked = cli("run", "--input", input_id, *grant, command,
+                          case_id=case, expected_exit=2)
+            assert "HTTP_RETRY_DEFERRED" in blocked["reason"] and evidence["id"] in blocked["reason"]
+            assert blocked["evidence"] == [] and blocked["content_plan"] is None
+            assert blocked["render"] is None and blocked["receipts"] == []
+    ungranted = cli("run", "--input", "no-grant", resource,
+                    case_id="prior-rate-limit", expected_exit=2)
+    assert "READ_PERMISSION_REQUIRED" in ungranted["reason"]
+    assert first_packet["id"] not in ungranted["reason"]
+    unowned = cli("run", "--input", "foreign", *grant, resource,
+                  case_id="prior-rate-limit", actor_id="fixture-other", expected_exit=3)
+    assert "CASE_ACCESS_DENIED" in unowned["reason"] and unowned["evidence"] == []
+    assert first_packet["id"] not in unowned["reason"]
+    replayed = cli("run", "--input", "rate-limit", *grant, first_request,
+                   case_id="prior-rate-limit", expected_exit=2)
+    assert replayed == first
+    assert len(fixture.connects) == starts + 1
+    assert [event["path"] for event in fixture.events[seen:]] == ["/retry-persisted"]
+
+    for actor, case in (("fixture-local", "separate-case"), ("fixture-other", "foreign-case")):
+        accepted = cli("run", "--input", "retrieve", *grant, resource, case_id=case, actor_id=actor)
+        assert accepted["evidence"][0]["failure"] is None
+    for path, case in (("retry-expiring", "expired-case"), ("retry-unbounded", "unbounded-case")):
+        stopped = cli("run", "--input", "initial", *grant, f"fetch https://{host}/{path}",
+                      case_id=case, expected_exit=2)
+        due = stopped["evidence"][0]["retry_after"]["not_before_unix_ms"]
+        if path == "retry-expiring":
+            assert due is not None
+            time.sleep(max(0, due / 1000 - time.time()) + 0.02)
+        else:
+            assert due is None
+        accepted = cli("run", "--input", "fresh", *grant, resource, case_id=case)
+        assert accepted["evidence"][0]["failure"] is None
+    assert len(fixture.connects) == starts + 7
+    assert [event["path"] for event in fixture.events[seen:]] == [
+        "/retry-persisted", "/wiki/First?action=raw", "/wiki/First?action=raw",
+        "/retry-expiring", "/wiki/First?action=raw", "/retry-unbounded", "/wiki/First?action=raw",
+    ]
+    assert not fixture.errors, fixture.errors
+    return {"source": first, "source_replayed_exactly": replayed == first,
+            "blocked_connections": 0, "case_isolation": True}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -610,15 +679,16 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     environment["NO_PROXY"] = environment["no_proxy"] = ""
     environment["SSL_CERT_FILE"] = str(ca)
 
-    def cli(command: str, *arguments: str, case_id: str = case, expected_exit: int = 0) -> dict:
+    def cli(command: str, *arguments: str, case_id: str = case,
+            actor_id: str = "fixture-local", expected_exit: int = 0) -> dict:
         process = subprocess.run(
             [str(binary), command, "--db", str(state_path), "--case", case_id,
-             "--actor", "fixture-local", "--json", *arguments],
+             "--actor", actor_id, "--json", *arguments],
             env=environment, capture_output=True, text=True, timeout=15, check=False,
         )
         assert process.returncode == expected_exit, (process.returncode, process.stdout, process.stderr)
         result = json.loads(process.stdout)
-        assert result["lifecycle"] == ("COMMIT" if expected_exit == 0 else "SUSPEND")
+        assert result["lifecycle"] == {0: "COMMIT", 2: "SUSPEND", 3: "REJECT"}[expected_exit]
         return result
 
     read = ("--allow-read-host", host, "--deadline-ms", "5000")
@@ -674,8 +744,9 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
             b'{"pages":"not an array"}', "application/json",
         )
         search_goals = check_search_goals(cli, fixture, state_path, directory)
+        retry_continuation = check_retry_continuation(cli, fixture, search_goals["retry_after"][0])
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
-                "search_goals": search_goals}
+                "search_goals": search_goals, "retry_continuation": retry_continuation}
     finally:
         fixture.close()
 

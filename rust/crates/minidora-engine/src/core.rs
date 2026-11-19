@@ -4692,11 +4692,30 @@ impl Engine {
         let mut generation_model = None;
         let mut generation_emission = None;
         let mut sequence_result = None;
-        let retrieval_budget = |read_nodes| {
+        let retrieval_budget = |read_nodes, state: &CaseRevision, store: &Store| -> Result<_> {
             // Each live source node reserves one start. Non-read nodes keep
             // their original allowance, including the saved candidate listing.
             let reserved = (required_actions - read_nodes) as u32;
-            ports::RetrievalBudget::new(started, &goal.budget, goal.budget.max_actions - reserved)
+            let mut budget = ports::RetrievalBudget::new(
+                started,
+                &goal.budget,
+                goal.budget.max_actions - reserved,
+            )?;
+            // The authenticated case contains both its latest result and its
+            // older results. A semantic context_ref does not select history
+            // for transport admission.
+            for result in state.prior_results.values() {
+                budget.time_remaining()?;
+                if result.lifecycle != Lifecycle::Suspend {
+                    continue;
+                }
+                for packet in &result.evidence {
+                    budget.restore_retry_after(packet, &goal.permissions, || {
+                        verify_retained_retry_source(store, state, result, packet)
+                    })?;
+                }
+            }
+            Ok(budget)
         };
         match &goal.intent {
             Intent::Calculate { expression } => match language::calculate(expression) {
@@ -5381,23 +5400,26 @@ impl Engine {
                         "検索一覧を取得する実行枠がありません。",
                     );
                 }
-                let observation = match search::search_with_budget(
-                    selected,
-                    query,
-                    &goal.permissions,
-                    &goal.budget,
-                    &mut retrieval_budget(1)?,
-                ) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "SEARCH_UNAVAILABLE",
-                            &error.to_string(),
-                        );
-                    }
-                };
+                let observation =
+                    match retrieval_budget(1, &state, &self.store).and_then(|mut budget| {
+                        search::search_with_budget(
+                            selected,
+                            query,
+                            &goal.permissions,
+                            &goal.budget,
+                            &mut budget,
+                        )
+                    }) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "SEARCH_UNAVAILABLE",
+                                &error.to_string(),
+                            );
+                        }
+                    };
                 let artifact = self
                     .store
                     .put_artifact(actor, &request.case_id, &observation)?;
@@ -5543,21 +5565,29 @@ impl Engine {
                     }
                     result.dependencies.push(packet_ref);
                 }
-                let packet = match search::fetch_candidate_with_budget(
-                    candidate,
-                    &goal.permissions,
-                    &mut retrieval_budget(1)?,
-                ) {
-                    Ok(packet) => packet,
-                    Err(error) => {
-                        let code = match &error {
-                            Error::Contract { code, .. } => code.as_str(),
-                            _ => "EVIDENCE_UNAVAILABLE",
-                        };
-                        state.result = Some(result);
-                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
-                    }
-                };
+                let packet =
+                    match retrieval_budget(1, &state, &self.store).and_then(|mut budget| {
+                        search::fetch_candidate_with_budget(
+                            candidate,
+                            &goal.permissions,
+                            &mut budget,
+                        )
+                    }) {
+                        Ok(packet) => packet,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "EVIDENCE_UNAVAILABLE",
+                            };
+                            state.result = Some(result);
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
+                        }
+                    };
                 if packet.raw_body.len() > request.budget.max_evidence_bytes {
                     return self.stop(
                         &mut state,
@@ -8506,7 +8536,17 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
             }
             Intent::Retrieve { urls, question: _ } => {
-                let mut retrieval = retrieval_budget(urls.len())?;
+                let mut retrieval = match retrieval_budget(urls.len(), &state, &self.store) {
+                    Ok(budget) => budget,
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "EVIDENCE_UNAVAILABLE",
+                            &error.to_string(),
+                        );
+                    }
+                };
                 for (source_index, uri) in urls.iter().enumerate() {
                     let packet =
                         match ports::fetch_with_budget(uri, &goal.permissions, &mut retrieval) {
@@ -10106,6 +10146,62 @@ fn apply_premise_correction(
     invalidated.push(replacement_fact.id);
     Ok((invalidated, invalidated_count))
 }
+fn verify_retained_retry_source(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    packet: &EvidencePacket,
+) -> Result<()> {
+    let invalid = || {
+        failure(
+            "RETRY_AFTER_SOURCE_INVALID",
+            "Saved Retry-After does not match the case's observed failure artifact",
+        )
+    };
+    let requested = url::Url::parse(&packet.request_uri).map_err(|_| invalid())?;
+    if packet.raw_sha256 != digest(&packet.raw_body)
+        || packet.redirect_chain.first().map(String::as_str) != Some(requested.as_str())
+        || packet.redirect_chain.last() != Some(&packet.final_uri)
+    {
+        return Err(invalid());
+    }
+    if packet.packet_kind == "SEARCH_LIST" {
+        let [reference] = result.dependencies.as_slice() else {
+            return Err(invalid());
+        };
+        let bytes = store.get_bytes(&state.actor_id, &state.case_id, reference)?;
+        let observation: search::SearchObservation = serde_json::from_slice(&bytes)?;
+        if observation.listing != *packet
+            || observation.failure.as_deref() != Some("SEARCH_LIST_FETCH_FAILED")
+            || canonical(&observation)? != bytes
+        {
+            return Err(invalid());
+        }
+        let mut original = packet.clone();
+        original.packet_kind = "FETCH_FAILURE".into();
+        original.provider_id = "https-direct-url-v1".into();
+        original.id = ports::fetch_packet_identity(&original)?;
+        if search::parse_listing(observation.provider, &observation.query, original)? != observation
+        {
+            return Err(invalid());
+        }
+    } else {
+        let bytes = canonical(packet)?;
+        let reference = digest(&bytes);
+        if packet.provider_id != "https-direct-url-v1"
+            || packet.id != ports::fetch_packet_identity(packet)?
+            || !result
+                .dependencies
+                .iter()
+                .any(|id| *id == packet.id || *id == reference)
+            || store.get_bytes(&state.actor_id, &state.case_id, &reference)? != bytes
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 fn base_result(request: &RequestEnvelope) -> ResultRecord {
     ResultRecord {
         id: identity(request).unwrap_or_default(),
