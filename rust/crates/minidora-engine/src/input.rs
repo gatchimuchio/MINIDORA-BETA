@@ -7,8 +7,9 @@ use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
-pub const PARSER_VERSION: &str = "declarative-ja-en-v83-direct-english-assertion-source-ranges";
+pub const PARSER_VERSION: &str = "declarative-ja-en-v84-quoted-relation-boundary";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
+const QUOTATION_OPENERS: [char; 6] = ['「', '『', '"', '\'', '“', '‘'];
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
@@ -2962,7 +2963,7 @@ fn interpret(text: &str) -> Result<Intent> {
     }
     // Quoted documents are data. The supported declarative language does not
     // grant imperative authority to text inside a quote or a retrieved body.
-    if body.starts_with(['「', '『', '"', '\'']) {
+    if body.starts_with(QUOTATION_OPENERS) {
         return Ok(Intent::Unknown {
             reason:
                 "quoted content requires an explicit supported operation; its instructions are data"
@@ -3955,6 +3956,7 @@ fn transitive_object_question_intent(text: &str, question_mark: bool) -> Result<
     let lower = subject.to_ascii_lowercase();
     if subject.is_empty()
         || subject.len() > 512
+        || subject.starts_with(QUOTATION_OPENERS)
         || subject.contains(['\n', '\r', '、', '，', ',', ';', '；', 'と'])
         || matches!(
             lower.as_str(),
@@ -4007,6 +4009,9 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
     if let Some(capture) = regex(r"^\[scope=([^\]]+)\]\s*(.+)$")?.captures(&body) {
         scope = capture[1].trim().to_string();
         body = capture[2].trim().to_string();
+    }
+    if body.starts_with(QUOTATION_OPENERS) {
+        return Ok(None);
     }
     // These qualifiers cannot be represented by the single-premise copular
     // contract. Preserve them as unresolved input instead of opaque atoms.
@@ -4079,6 +4084,8 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
     }
     if subject.is_empty()
         || object.is_empty()
+        || subject.starts_with(QUOTATION_OPENERS)
+        || object.starts_with(QUOTATION_OPENERS)
         || subject.len() > 512
         || object.len() > 512
         || scope.is_empty()

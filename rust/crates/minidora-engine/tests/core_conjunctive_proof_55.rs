@@ -143,6 +143,28 @@ fn two_premises_derive_only_while_both_are_supported_and_uncontested() {
     assert_eq!(render.status, "RENDERED");
     assert_eq!(render.bytes, plan.text.as_bytes());
 
+    let unrelated = engine
+        .assert_atomic_relation(
+            actor,
+            request(case, "other-subject-calibrated", actor),
+            relation("Rook", "calibrated", scope, false),
+        )
+        .unwrap();
+    assert_eq!(unrelated.lifecycle, Lifecycle::Commit);
+    let same_proof = engine
+        .compose_atomic_explanation(
+            actor,
+            request(case, "safe-after-unrelated-fact", actor),
+            relation(subject, "safe", scope, false),
+        )
+        .unwrap();
+    assert_eq!(same_proof.lifecycle, derived.lifecycle);
+    assert_eq!(same_proof.guarantee, derived.guarantee);
+    assert_eq!(same_proof.dependencies, derived.dependencies);
+    assert_eq!(same_proof.content_plan, derived.content_plan);
+    assert_eq!(same_proof.render, derived.render);
+    assert!(!same_proof.dependencies.contains(&unrelated.dependencies[0]));
+
     let contrary_second_fact = engine
         .assert_atomic_relation(
             actor,

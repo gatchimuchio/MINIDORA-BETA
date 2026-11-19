@@ -1106,3 +1106,34 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1。検査対象ソース差分SHA-256 `7
 D3-CのE1出口を `CORE_SHAPED` と判定。同じEngineに二循環と必要な停止経路が接続した観測に基づく。E2の7合同ゲートはこの版で次に実行する。全要求の受入、同期I/Oの実時間、経験的採用契約、体系QC、独立QAは未判定。E02・E04・CAP-D05の受入列は `UNVERIFIED`。
 
 復旧2世代のローカル参照・GitHubタグは `75ac7b3` と `dc0e7e5`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（Core、Store、Recoveryと付属検査、条件の結合検査、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。
+
+
+## 2026-11-19 JST B107 — D3-C E2 同版合同判定 6/7
+
+着工点は `4c29d141bfd436f02fdffa0fc10d4920e22cf9e0`。E1の `CORE_SHAPED` とD2仕様・D2工程・D3-C指示の採用SHAを照合。E2の再判定で二つの欠陥を再現した。scope付き引用が通常前提に昇格し、許可ファイルに出力できた。二前提の関係照会を復旧すると、元の証明が有効な場合でも、以前の依存形式を使って `RECOVERY_PROOF_INVALIDATED` としていた。旧版で再現した二件の回帰テストはいずれもexit 101。
+
+新規の解析は `declarative-ja-en-v84-quoted-relation-boundary`。scope除去後の原子と規則内の引用を通常前提として解釈せず、原文を封印して停止する。復旧は記憶版を固定した関係結果の全証明依存を照合し、同じ作用IDで既存ファイルを確認する。初回の条件版差fixtureに不足した述語引数を補い、最終検査を実行した。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1。最終検査のソース差分SHA-256は `9d815facf0a14199a0328f2858a1dc44c5d7cbe69e7860438ffb91afe11cf2a3`。同一ソース版、隔離SQLite、固定入力・actor・権限・予算で判定した。G07の再生用コピーでは元のGoal・証明・モデル・系列と作用を共通にした。
+
+| ゲート | 判定 | 最終版の観測と根拠 |
+|---|---|---|
+| CORE-G01 | PASS | 主体、極性、時点、scope、条件の四値と引用を変動。scope付き引用と規則内引用は採用・描画・作用なし。同じ非引用の前提を明示すると、そのFactと規則に依存する説明が成立。別actorの先行結果を拒否。 |
+| CORE-G02 | PASS | 二前提・欠落・矛盾・別scope・反事実を比較。同じscopeに無関係Factを加えても証明ID、採否、ContentPlan、描画が一致。反事実は一時評価で、通常記憶を保持。 |
+| CORE-G03 | PARTIAL | 初見の条件付き証明は型付き意味とL6の新しい文面を経てK7で採用。通常CLIの関係比較では実成果物に文面化済みの `content_request.units[].text` と構成結果が入り、算術では厳密値 `7/2` を定型に整形していた。比較・数量・書式を型付き意味からL6へ通す条件が未達。 |
+| CORE-G04 | PASS | 訂正と失効で依存する結果だけが変わり、旧結果と修正前の根拠を保持。別ケースの後続入力と再起動から規則・仮説の参照を実消費。 |
+| CORE-G05 | PASS | 合成前後の新しい主体で証明経路が短縮し、別ケースで生成分布と実作用に差。scope外・失効は適用を停止。標本の反例は保持済み仮説と照合し、経験的採用は保留。 |
+| CORE-G06 | PASS | 封印した厳密値、後段の実消費、物理fileとreceiptを確認。成果欠落、無許可、取消、UNKNOWN、期限で停止。同じ作用を再実行せず、固定記憶版の二前提回答も復旧。 |
+| CORE-G07 | PASS | 同一の実作用journalの中断点を二つの隔離SQLiteに複製し、CLIを別プロセスで起動してGoal・採否・依存・生成系列・計画・作用IDを再照合。実ファイルの内容と更新時刻を保持。証拠版、条件記録だけの失効、同じ証明でのモデル差を個別に検査。異なる実モデル参照だけへの差し替えを復旧で拒否。 |
+
+`rust/` から実行した最終検査はすべてexit 0。Cargoのテスト結果は以下の同版92件。G03の未達は実成果物で別途観測した。
+
+- `cargo test -p minidora-engine --locked --no-fail-fast` に `--test` を指定したG01系7ターゲットで11 PASS。 `core_condition_evaluation_57`、`core_condition_scope_53`、`core_scope_polarity_54`、`core_temporal_scope_51`、`core_temporal_correction_52`、`core_scope_classification_58`、`core_actor_context_boundary_48`。
+- 同命令で10ターゲット11 PASS。 `core_construction_observation_02`、`core_conjunctive_proof_55`、`core_atomic_explanation_50`、`core_atomic_relation_comparison_36`、`core_meaning_composition_03`、`core_construction_observation_04`、`core_construction_observation_05`、`core_proof_composition_learning_49`、`core_construction_observation_06`、`core_construction_observation_07`。
+- `cargo test -p minidora-engine --lib <filter> --locked` は `recovery::tests::` の11フィルタで15 PASS。 `scoped_quotes`、`live_relation_query_reconciles`、`ordinary_why_`、`group_mean_hypothesis`、`calculation_sequence_reconciles`、`exact_arithmetic_goal_requires_the_sealed_value`、`sequence_cancel`、`local_file_deadline_stops`、`local_file_attempt_cannot_be_acquired_twice`、`missing_and_different_files_stay_unknown`、`authorized_cancel_stops_pending`。同じ命令で `input::tests` 39 PASS、`meaning_compare::tests` 9 PASS。
+- `cargo test -p minidora-cli --test normal_route <filter> --locked` は `calculation_sequence_route` 5 PASS、`why_question` 2 PASS。 `cargo build -p minidora-cli --locked` 後、CLIの `reconcile` を独立した2プロセスで実行し同一結果を照合し、通常の関係比較と厳密算術の保存成果物を確認した。
+- `cargo check --workspace --all-targets --locked`、`cargo fmt --all -- --check`、`git diff --check` がPASS。
+
+E2は6/7のため未通過。G03はW07〜W09へ戻し、まず関係比較で左右の型付き根拠と比較結果を意味計画からL6へ渡す。数量・書式も同じ要件で再判定する。E3、体系QC、独立QAは `NOT_RUN`。
+
+復旧2世代のローカル参照・GitHubタグは `4c29d14` と `75ac7b3`。資産計7件。保持2件（この台帳と要求トレース）、保管済み0件、稼働中5件（Input、Recoveryと付属検査、条件と二前提の検査2件、共有Cargoキャッシュ）、ゴミ箱移動0件、保留0件。Windows保管は非該当。

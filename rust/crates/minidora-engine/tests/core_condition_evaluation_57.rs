@@ -669,6 +669,78 @@ fn core_evaluates_condition_truth_composition_time_and_dependency_invalidation()
 }
 
 #[test]
+fn condition_revision_alone_changes_only_its_dependent_explanation() {
+    let directory = TestDirectory::new();
+    let mut engine = Engine::open(directory.path()).unwrap();
+    let actor = "condition-replay-actor";
+    let case = "condition-replay-case";
+    let scope = "condition-replay-lab";
+    let condition_id = "condition:certified:v1";
+    define(
+        &mut engine,
+        actor,
+        case,
+        condition_id,
+        condition_fact(condition_id, "certified", scope),
+    );
+    assert_relation(
+        &mut engine,
+        actor,
+        case,
+        "certificate",
+        relation("Nera", "is", "certified", scope),
+    );
+    let mut target = relation("Nera", "is", "operational", scope);
+    target.condition_refs.insert(condition_id.into());
+    assert_relation(&mut engine, actor, case, "target-premise", target.clone());
+    let control = relation("Nera", "is", "retained", scope);
+    assert_relation(&mut engine, actor, case, "control-premise", control.clone());
+    let query = |engine: &mut Engine, id, proposition| {
+        engine
+            .compose_atomic_explanation(actor, request(case, id, actor), proposition)
+            .unwrap()
+    };
+    let supported = query(&mut engine, "dependent-before", target.clone());
+    let unaffected_before = query(&mut engine, "control-before", control.clone());
+    assert_eq!(supported.lifecycle, Lifecycle::Commit);
+    assert_eq!(unaffected_before.lifecycle, Lifecycle::Commit);
+    let store = Store::open(directory.path()).unwrap();
+    let before = store.load_memory(actor).unwrap();
+    let record_id = &before.conditions[0].id;
+    let invalidated = engine
+        .execute(
+            actor,
+            RequestEnvelope::new(
+                case,
+                "invalidate-condition",
+                actor,
+                &format!("invalidate {record_id}"),
+            ),
+        )
+        .unwrap();
+    assert_eq!(invalidated.lifecycle, Lifecycle::Commit);
+    let mut expected = before;
+    expected.revision += 1;
+    expected.conditions[0].valid = false;
+    assert_eq!(store.load_memory(actor).unwrap(), expected);
+    drop(engine);
+
+    let mut reopened = Engine::open(directory.path()).unwrap();
+    let blocked = query(&mut reopened, "dependent-after", target);
+    assert_stop_before_content(&blocked, "CONDITION_UNKNOWN");
+    let unaffected_after = query(&mut reopened, "control-after", control);
+    assert_eq!(
+        unaffected_after.dependencies,
+        unaffected_before.dependencies
+    );
+    assert_eq!(
+        unaffected_after.content_plan,
+        unaffected_before.content_plan
+    );
+    assert_eq!(unaffected_after.render, unaffected_before.render);
+}
+
+#[test]
 fn conditioned_conjunctive_proofs_intersect_scope_and_keep_condition_dependencies() {
     use minidora_domain::Guarantee;
 

@@ -3447,7 +3447,10 @@ fn inspect(
                 &goal.budget,
             )?;
         }
-        let current_proof_contract = requires_proof_explanation
+        // Revision-pinned results use the complete lineage regardless of the
+        // parser release that sealed their input.
+        let current_proof_contract = result.actor_memory_revision.is_some()
+            || requires_proof_explanation
             || generated_compute_ref.is_some()
             || matches!(
                 bundle.meaning.parser_version.as_str(),
@@ -4705,6 +4708,125 @@ mod tests {
             directory,
             token: String::new(),
         }
+    }
+
+    #[test]
+    fn scoped_quotes_cannot_supply_relation_premises_or_rules() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let execute = |engine: &mut Engine, id: &str, text: &str| {
+            engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap()
+        };
+        for (id, text) in [
+            ("scope-quoted-premise", "[scope=lab]「Nera is a sensor」"),
+            ("scope-quoted-japanese", "[scope=lab]『ネラは測定器です』"),
+            (
+                "quoted-rule-premise",
+                "If [scope=lab]「Nera is a sensor」 then [scope=lab]Nera is reliable",
+            ),
+            (
+                "quoted-rule-conclusion",
+                "If [scope=lab]Nera is a sensor then [scope=lab]「Nera is reliable」",
+            ),
+            ("quoted-query", "なぜ[scope=lab]「ネラは測定器」ですか"),
+        ] {
+            let mut request = RequestEnvelope::new("case", id, "alice", text);
+            request.output_path = Some(fixture.target.clone());
+            request
+                .permissions
+                .write_paths
+                .insert(fixture.target.clone());
+            let result = engine.execute("alice", request).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Suspend, "{text}: {result:?}");
+            assert!(result.content_plan.is_none() && result.receipts.is_empty());
+            assert!(result.dependencies.is_empty());
+            let sealed = engine
+                .latest("alice", "case")
+                .unwrap()
+                .unwrap()
+                .bundle
+                .unwrap();
+            assert_eq!(sealed.request.text, text);
+            assert!(matches!(sealed.meaning.intent, Intent::Unknown { .. }));
+        }
+        assert_eq!(
+            engine.store.load_memory("alice").unwrap(),
+            MemoryState::default()
+        );
+        let rule = execute(
+            &mut engine,
+            "rule",
+            "If [scope=lab]X is a sensor then [scope=lab]X is reliable",
+        );
+        assert_eq!(rule.lifecycle, Lifecycle::Commit);
+        let question = "Why [scope=lab]is Nera reliable?";
+        let before = execute(&mut engine, "before", question);
+        assert_eq!(before.lifecycle, Lifecycle::Suspend, "{before:?}");
+        assert!(before.content_plan.is_none());
+        let premise = execute(&mut engine, "premise", "[scope=lab]Nera is a sensor");
+        assert_eq!(premise.guarantee, Guarantee::UserPremise);
+        let after = execute(&mut engine, "after", question);
+        assert_eq!(after.lifecycle, Lifecycle::Commit, "{after:?}");
+        assert_eq!(after.guarantee, Guarantee::Derived);
+        assert!(after.dependencies.contains(&premise.dependencies[0]));
+        assert!(after.dependencies.contains(&rule.dependencies[0]));
+        assert!(after.render.is_some());
+        assert!(!fixture.target.exists());
+        assert!(engine.store.actions("alice", "case").unwrap().is_empty());
+    }
+
+    #[test]
+    fn live_relation_query_reconciles_its_pinned_proof_lineage() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut roots = Vec::new();
+        for (id, text) in [
+            ("premise-a", "[scope=lab]ネラは測定器です"),
+            ("premise-b", "[scope=lab]ネラは校正済みです"),
+            (
+                "rule",
+                "もし[scope=lab]Xは測定器かつ校正済みなら[scope=lab]Xは使用可能",
+            ),
+        ] {
+            let result = engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            roots.push(result.dependencies[0].clone());
+        }
+        let mut request = RequestEnvelope::new(
+            "case",
+            "relation-query",
+            "alice",
+            "[scope=lab]ネラは使用可能ですか",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.guarantee, Guarantee::Derived);
+        assert!(result.actor_memory_revision.is_some());
+        assert!(roots.iter().all(|root| result.dependencies.contains(root)));
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut restored = Engine::open(&fixture.state).unwrap();
+        let replayed = restored.reconcile("alice", "case").unwrap();
+        assert_eq!(replayed.lifecycle, Lifecycle::Commit, "{replayed:?}");
+        assert_eq!(replayed.dependencies, result.dependencies);
+        assert_eq!(replayed.receipts[0].action_id, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]
@@ -6333,6 +6455,28 @@ mod tests {
         let mut engine = Engine::open(&fixture.state).unwrap();
         inspect(&engine.store, "alice", &retained, &adapted).unwrap();
         inspect(&engine.store, "alice", &cross_retained, &cross_result).unwrap();
+        let control_model = &baseline.content_plan.as_ref().unwrap().model_artifact_ref;
+        let control_model_bytes = engine
+            .store
+            .get_bytes("alice", "control-case", control_model)
+            .unwrap();
+        let mut altered = adapted.clone();
+        let altered_plan = altered.content_plan.as_mut().unwrap();
+        altered_plan.model_artifact_ref = engine
+            .store
+            .put_bytes("alice", "case", &control_model_bytes)
+            .unwrap();
+        assert_ne!(&altered_plan.model_artifact_ref, model_ref);
+        altered_plan.id.clear();
+        altered_plan.id = identity(&*altered_plan).unwrap();
+        altered.render.as_mut().unwrap().plan_id = altered_plan.id.clone();
+        let error = inspect(&engine.store, "alice", &retained, &altered).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("PRIOR_COMPUTATION_ARTIFACT_MISMATCH"),
+            "{error:?}"
+        );
         let foreign = engine
             .execute(
                 "bob",
