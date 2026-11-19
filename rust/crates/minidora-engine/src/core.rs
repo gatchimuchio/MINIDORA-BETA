@@ -3945,6 +3945,7 @@ impl Engine {
         };
         self.store.append_case(actor, &state)?;
         let started = Instant::now();
+        let has_compute_budget = request.budget.max_actions > 0 && request.budget.deadline_ms > 0;
         let sealed = if let Some(bundle) = early_bundle {
             Ok(bundle)
         } else if let Some(bundle) = direct_bundle {
@@ -3964,18 +3965,22 @@ impl Engine {
                 _ => return Ok(bundle),
             };
             let context = if prior_case.lifecycle == Lifecycle::Commit {
-                if request.budget.max_actions == 0 || request.budget.deadline_ms == 0 {
+                if !has_compute_budget {
                     return Ok(bundle);
                 }
-                crate::recovery::committed_source_anchor(&self.store, prior_case)?.filter(
-                    |source| {
-                        requested_rank.is_none()
-                            || source
-                                .evidence
-                                .iter()
-                                .any(|packet| packet.packet_kind == "SEARCH_LIST")
-                    },
-                )
+                crate::recovery::source_followup_anchor(&self.store, prior_case)?.filter(|source| {
+                    requested_rank.is_none()
+                        || source
+                            .evidence
+                            .iter()
+                            .any(|packet| packet.packet_kind == "SEARCH_LIST")
+                })
+            } else if requested_rank.is_none()
+                && has_compute_budget
+                && let Some(source) =
+                    crate::recovery::source_followup_anchor(&self.store, prior_case)?
+            {
+                Some(source)
             } else {
                 search::committed_context_after_candidate_failure(
                     &self.store,
@@ -4150,7 +4155,9 @@ impl Engine {
             };
         let previous_source_question_answer =
             if let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent {
-                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                match previous
+                    .filter(|prior| has_compute_budget && prior.lifecycle == Lifecycle::Commit)
+                {
                     Some(prior) => {
                         let mut source_packets = Vec::new();
                         for (index, packet) in
@@ -4715,7 +4722,7 @@ impl Engine {
                 "この版の表現検証は日本語の限定経路のみ対応しています。",
             );
         }
-        if request.budget.max_actions == 0 || request.budget.deadline_ms == 0 {
+        if !has_compute_budget {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,

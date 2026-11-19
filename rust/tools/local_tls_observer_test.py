@@ -1564,6 +1564,114 @@ def check_candidate_after_source_followup(cli, fixture: Fixture, state_path: Pat
     return {**results, "direct_source": stopped}
 
 
+def check_source_after_question_no_match(cli, fixture: Fixture, state_path: Path) -> dict:
+    path = "/source-after-unmatched-question"
+    body = "実測値は42です。補助値は7です。"
+    uri = f"https://{fixture.host}{path}"
+    fixture.responses[path] = (body.encode(), "text/plain; charset=utf-8")
+    no_match = "本文では火山について何と書かれていますか"
+    matched = "本文では実測値について何と書かれていますか"
+    seen, starts = len(fixture.events), len(fixture.connects)
+
+    def load(reference: str) -> dict | list:
+        raw = (state_path / "blobs" / reference).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == reference
+        return json.loads(raw)
+
+    def fetch(case: str) -> dict:
+        return cli("run", "--input", "source", "--allow-read-host", fixture.host,
+                   f"fetch {uri}", case_id=case)
+
+    def miss(case: str, *flags: str) -> dict:
+        stopped = cli("run", "--input", "unmatched", *flags, no_match, case_id=case, expected_exit=2)
+        assert "SOURCE_QUESTION_NO_MATCH" in stopped["reason"] and stopped["guarantee"] == "UNKNOWN"
+        assert stopped["dependencies"] == [] and stopped["evidence"] == [] and stopped["receipts"] == []
+        assert stopped["content_plan"] is None and stopped["render"] is None
+        return stopped
+
+    results = {}
+    for name, query in (
+        ("question", matched),
+        ("summary", "取得した本文を要約して"),
+        ("constrained", "取得した本文を2点以内、20字以内で要約して"),
+    ):
+        case = f"source-after-no-match-{name}"
+        source = fetch(case)
+        rejected_output = state_path.parent / f"{case}-unmatched.txt"
+        rejected_write = ("--output", str(rejected_output), "--allow-write", str(rejected_output))
+        stopped = miss(case, *rejected_write)
+        assert miss(case, *rejected_write) == stopped
+        assert not rejected_output.exists()
+
+        output = state_path.parent / f"{case}.txt"
+        write = ("--output", str(output), "--allow-write", str(output)) if name == "question" else ()
+        result = cli("run", "--input", "new-question-or-summary", *write, query, case_id=case)
+        assert result["guarantee"] == "HYPOTHESIS" and result["evidence"] == []
+        assert "実測値は42です。" in result["text"] and "火山" not in result["text"] and uri in result["text"]
+        prior_id, body_ref, report_ref = result["dependencies"]
+        assert prior_id == source["id"] and [load(body_ref)] == source["evidence"]
+        assert load(report_ref)["source_result_id"] == prior_id
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database:
+            (reference,) = database.execute(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=? ORDER BY revision DESC LIMIT 1", (case,),
+            ).fetchone()
+        state = load(reference)
+        assert state["bundle"]["request"]["context_ref"] is None
+        assert state["bundle"]["request"]["permissions"]["read_hosts"] == []
+        assert state["bundle"]["meaning"]["context_result_ref"] == source["id"]
+        assert state["prior_results"][stopped["id"]] == stopped
+        if write:
+            before = output.stat()
+            (receipt,) = result["receipts"]
+            retain_attempted_prefix(state_path, case, "new-question-or-summary", receipt["action_id"])
+            recovered = cli("reconcile", case_id=case)
+            assert recovered["dependencies"] == result["dependencies"] and recovered["text"] == result["text"]
+            (restored_receipt,) = recovered["receipts"]
+            assert restored_receipt["action_id"] == receipt["action_id"] and "NO_RESEND" in restored_receipt["reason"]
+            assert output.read_bytes() == bytes(result["render"]["bytes"])
+            after = output.stat()
+            assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+        results[name] = {"stopped": stopped, "result": result}
+
+    case = "source-after-unsupported-topic"
+    fetch(case)
+    unsupported = cli("run", "--input", "unsupported", "本文ではtheについて何と書かれていますか",
+                      case_id=case, expected_exit=2)
+    assert "SOURCE_QUESTION_TOPIC_UNSUPPORTED" in unsupported["reason"]
+    stopped = cli("run", "--input", "next", matched, case_id=case, expected_exit=2)
+    assert "MISSING_ACTUAL_RESULT" in stopped["reason"]
+
+    case = "source-after-zero-budget"
+    fetch(case)
+    limited = cli("run", "--input", "no-budget", "--deadline-ms", "0", no_match,
+                  case_id=case, expected_exit=2)
+    assert "RESOURCE_LIMIT" in limited["reason"]
+    stopped = cli("run", "--input", "next", matched, case_id=case, expected_exit=2)
+    assert "MISSING_ACTUAL_RESULT" in stopped["reason"]
+
+    case = "source-after-no-match-unbound-body"
+    source = fetch(case)
+    miss(case)
+    (packet,) = source["evidence"]
+    encoded = json.dumps(packet, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    body_ref = hashlib.sha256(encoded).hexdigest()
+    assert load(body_ref) == packet
+    # Keep the original bytes while removing the case binding in this disposable store.
+    with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+        removed = database.execute("DELETE FROM case_artifact WHERE case_id=? AND sha256=?", (case, body_ref))
+        assert removed.rowcount == 1
+    try:
+        invalid = cli("run", "--input", "next", matched, case_id=case, expected_exit=4)
+        assert "INPUT_FAILURE" in invalid["reason"] and invalid["receipts"] == []
+    finally:
+        with closing(sqlite3.connect(state_path / "state.sqlite3")) as database, database:
+            database.execute("INSERT INTO case_artifact(case_id,sha256) VALUES(?,?)", (case, body_ref))
+    assert [event["path"] for event in fixture.events[seen:]] == [path] * 6
+    assert len(fixture.connects) == starts + 6
+    assert not fixture.errors, fixture.errors
+    return {**results, "unsupported": unsupported, "limited": limited, "unbound": invalid}
+
+
 def run_candidate_recovery(binary: Path, directory: Path) -> dict:
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
@@ -1667,6 +1775,7 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
         sources_after_failure = check_sources_after_candidate_failure(cli, fixture, state_path)
         source_followup_chain = check_source_followup_chain(cli, fixture, state_path)
         candidate_after_source = check_candidate_after_source_followup(cli, fixture, state_path)
+        source_after_no_match = check_source_after_question_no_match(cli, fixture, state_path)
         return {"result": selected, "recovered": recovered, "observed_requests": candidate_events,
                 "search_goals": search_goals, "retry_continuation": retry_continuation,
                 "search_fallback": search_fallback, "interrupted_retrieval": interrupted_retrieval,
@@ -1674,7 +1783,8 @@ def run_candidate_recovery(binary: Path, directory: Path) -> dict:
                 "versioned_summaries": versioned_summaries, "after_failure": after_failure,
                 "sources_after_failure": sources_after_failure,
                 "source_followup_chain": source_followup_chain,
-                "candidate_after_source": candidate_after_source}
+                "candidate_after_source": candidate_after_source,
+                "source_after_no_match": source_after_no_match}
     finally:
         fixture.close()
 

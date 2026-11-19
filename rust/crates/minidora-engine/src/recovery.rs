@@ -2840,23 +2840,38 @@ fn verify_search_candidate_context(
     }))
 }
 
-/// Authenticate the single original source context of a committed follow-up.
-pub(crate) fn committed_source_anchor<'a>(
+/// Authenticate the original source of a committed follow-up or a no-match question.
+pub(crate) fn source_followup_anchor<'a>(
     store: &Store,
     state: &'a CaseRevision,
 ) -> Result<Option<&'a ResultRecord>> {
     let (Some(bundle), Some(result)) = (&state.bundle, &state.result) else {
         return Ok(None);
     };
-    if state.lifecycle != Lifecycle::Commit
-        || result.lifecycle != Lifecycle::Commit
-        || !matches!(
+    let committed = state.lifecycle == Lifecycle::Commit
+        && result.lifecycle == Lifecycle::Commit
+        && matches!(
             bundle.meaning.intent,
             Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
-        )
-    {
+        );
+    let no_match_query = match &bundle.meaning.intent {
+        Intent::AskPreviousSourceQuestion { query }
+            if state.lifecycle == Lifecycle::Suspend
+                && result.lifecycle == Lifecycle::Suspend
+                && bundle.request.budget.max_actions > 0
+                && bundle.request.budget.deadline_ms > 0
+                && result
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.starts_with("SOURCE_QUESTION_NO_MATCH: ")) =>
+        {
+            Some(query.as_str())
+        }
+        _ => None,
+    };
+    if !committed && no_match_query.is_none() {
         return Ok(None);
     }
 
@@ -2876,6 +2891,48 @@ pub(crate) fn committed_source_anchor<'a>(
             .is_some_and(|(_, registered)| &registered == bundle)
     {
         return Err(mismatch());
+    }
+    let source_id = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .ok_or_else(mismatch)?;
+    let source = state.prior_results.get(source_id).ok_or_else(mismatch)?;
+    if let Some(query) = no_match_query {
+        if source.id != *source_id
+            || source.lifecycle != Lifecycle::Commit
+            || identity(&Some(source))? != bundle.context_sha256
+            || state.goal_sha256.is_some()
+            || state.reason != result.reason
+            || result.guarantee != Guarantee::Unknown
+            || result.content_plan.is_some()
+            || result.render.is_some()
+            || !result.receipts.is_empty()
+            || !result.evidence.is_empty()
+            || !result.dependencies.is_empty()
+            || result.execution_graph_ref.is_some()
+        {
+            return Err(mismatch());
+        }
+        let packets = verified_source_question_packets(store, actor, case, source)?;
+        let same_stop = |error: Option<Error>| {
+            let Some(error) = error else { return false };
+            matches!(&error, Error::Contract { code, .. } if code == "SOURCE_QUESTION_NO_MATCH")
+                && result.reason.as_deref()
+                    == Some(format!("SOURCE_QUESTION_NO_MATCH: {error}").as_str())
+        };
+        // Stopped questions predate operation-tagged answer artifacts. Require
+        // the full recorded diagnostic from the matching lexical version.
+        if !same_stop(
+            crate::text_summary::answer_fetched_source_question_v2(&source.id, query, &packets)
+                .err(),
+        ) && !same_stop(
+            crate::text_summary::answer_fetched_source_question_v1(&source.id, query, &packets)
+                .err(),
+        ) {
+            return Err(mismatch());
+        }
+        return Ok(Some(source));
     }
     let goal_ref = state.goal_sha256.as_ref().ok_or_else(mismatch)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
@@ -2903,12 +2960,6 @@ pub(crate) fn committed_source_anchor<'a>(
     } else {
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     }
-    let source = bundle
-        .meaning
-        .context_result_ref
-        .as_ref()
-        .and_then(|id| state.prior_results.get(id))
-        .ok_or_else(mismatch)?;
     Ok(Some(source))
 }
 
@@ -3176,6 +3227,32 @@ fn verify_previous_result_summary_context(
     }))
 }
 
+fn verified_source_question_packets<'a>(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &'a ResultRecord,
+) -> Result<Vec<(usize, &'a EvidencePacket, String)>> {
+    let mut packets = Vec::new();
+    for (index, packet) in prior.evidence.iter().enumerate().filter(|(_, packet)| {
+        packet.packet_kind == "FETCHED_BODY"
+            && packet.failure.is_none()
+            && packet.retry_after.is_none()
+            && packet.extracted_text.is_some()
+    }) {
+        let encoded = canonical(packet)?;
+        let packet_ref = digest(&encoded);
+        if store.get_bytes(actor, case, &packet_ref)? != encoded {
+            return Err(failure(
+                "RECOVERY_SOURCE_QUESTION_PACKET_MISMATCH",
+                "the original fetched-body packet differs from its retained artifact",
+            ));
+        }
+        packets.push((index, packet, packet_ref));
+    }
+    Ok(packets)
+}
+
 fn verify_source_question_context(
     store: &Store,
     actor: &str,
@@ -3213,27 +3290,17 @@ fn verify_source_question_context(
             "the referenced prior source result is not the same committed result",
         ));
     }
-    let mut packets = Vec::new();
-    let mut source_packet_refs = Vec::new();
+    let packets = verified_source_question_packets(store, actor, case, prior)?;
+    let source_packet_refs: Vec<_> = packets
+        .iter()
+        .map(|(index, _, reference)| (*index, reference.clone()))
+        .collect();
     let mut dependencies = vec![prior.id.clone()];
-    for (index, packet) in prior.evidence.iter().enumerate().filter(|(_, packet)| {
-        packet.packet_kind == "FETCHED_BODY"
-            && packet.failure.is_none()
-            && packet.retry_after.is_none()
-            && packet.extracted_text.is_some()
-    }) {
-        let encoded = canonical(packet)?;
-        let packet_ref = digest(&encoded);
-        if store.get_bytes(actor, case, &packet_ref)? != encoded {
-            return Err(failure(
-                "RECOVERY_SOURCE_QUESTION_PACKET_MISMATCH",
-                "the original fetched-body packet differs from its retained artifact",
-            ));
-        }
-        packets.push((index, packet, packet_ref.clone()));
-        source_packet_refs.push((index, packet_ref.clone()));
-        dependencies.push(packet_ref);
-    }
+    dependencies.extend(
+        source_packet_refs
+            .iter()
+            .map(|(_, reference)| reference.clone()),
+    );
     let answer_ref = result.dependencies.last().ok_or_else(|| {
         failure(
             "RECOVERY_SOURCE_QUESTION_MISMATCH",
