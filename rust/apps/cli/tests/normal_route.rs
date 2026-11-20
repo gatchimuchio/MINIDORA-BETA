@@ -2806,6 +2806,114 @@ fn condition_definition_from_ordinary_input_changes_the_same_query() {
 }
 
 #[test]
+fn timed_condition_definition_from_ordinary_input_respects_half_open_interval() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let start = "2026-11-20T00:00:00Z";
+    let end = "2026-11-21T00:00:00Z";
+    let before_start = "2026-11-19T23:59:59Z";
+    let inside_without_evidence = "2026-11-20T12:00:00Z";
+    for time in [before_start, start, end] {
+        let evidence = format!("[scope=実験室][time={time}]ユリは校正済み");
+        record(&execute(&scratch.0, actor, &[&evidence]));
+    }
+    for time in [before_start, start, inside_without_evidence, end] {
+        let premise = format!("[scope=実験室][time={time}][condition=校正有効]ユリは観測可能");
+        record(&execute(&scratch.0, actor, &[&premise]));
+    }
+    let definition = format!(
+        "　条件定義： [valid_until= {end} ][scope=実験室][condition=校正有効][valid_from={start}] ユリは校正済み。　"
+    );
+    let invalid_definitions = [
+        format!("条件定義: [condition=逆転][valid_from={end}][valid_until={start}] ユリは校正済み"),
+        format!(
+            "条件定義: [condition=重複][valid_from={start}][valid_from={start}] ユリは校正済み"
+        ),
+        "条件定義: [condition=日付][valid_from=2026-02-29T00:00:00Z] ユリは校正済み".into(),
+        format!("条件定義: [condition=時点][time={start}][valid_until={end}] ユリは校正済み"),
+        format!("[valid_until={end}] ユリは校正済み"),
+    ];
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let before = store.load_memory(actor).unwrap();
+    for invalid in &invalid_definitions {
+        let result = stopped(&execute(&scratch.0, actor, &[invalid]), 2, "SUSPEND");
+        assert!(result["content_plan"].is_null(), "{result}");
+        assert!(result["receipts"].as_array().unwrap().is_empty());
+    }
+    assert_eq!(store.load_memory(actor).unwrap(), before);
+
+    let registration = ["--input", "timed-condition", &definition];
+    let registered = record(&execute(&scratch.0, actor, &registration));
+    let bundle = &inspect_normal_case(&scratch.0, actor)["bundle"];
+    assert_eq!(bundle["request"]["text"], definition);
+    let meaning = &bundle["meaning"];
+    assert_eq!(
+        meaning["parser_version"],
+        "declarative-ja-en-v115-timed-condition-definition"
+    );
+    for (field, value) in [("valid_from", start), ("valid_until", end)] {
+        assert_eq!(meaning["intent"]["definition"][field], value);
+        let offset = definition.find(value).unwrap();
+        assert_eq!(
+            meaning["source_roles"][format!("/DefineCondition/definition/{field}")],
+            serde_json::json!([{ "start": offset, "end": offset + value.len(), "text": value }])
+        );
+    }
+    let memory = store.load_memory(actor).unwrap();
+    assert_eq!(memory.conditions.len(), 1);
+    assert_eq!(registered["dependencies"][0], memory.conditions[0].id);
+    assert_eq!(registered["id"], memory.conditions[0].source_input);
+
+    let question = |time: &str| {
+        format!("なぜ[scope=実験室][time={time}][condition=校正有効]ユリは観測可能ですか")
+    };
+    let actual = record(&execute(&scratch.0, actor, &[&question(start)]));
+    let artifact = assert_why_generation(&scratch.0, actor, "normal-route", &actual);
+    assert!(
+        artifact["relation_meaning_plan"]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unit| unit["meaning"]["evaluation"]["status"] == "TRUE")
+    );
+    assert!(
+        actual["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&registered["dependencies"][0])
+    );
+    for (question, code, exit, lifecycle) in [
+        (question(before_start), "CONDITION_FALSE", 3, "REJECT"),
+        (question(end), "CONDITION_FALSE", 3, "REJECT"),
+        (
+            question(inside_without_evidence),
+            "CONDITION_UNKNOWN",
+            2,
+            "SUSPEND",
+        ),
+        (
+            "なぜ[scope=実験室][condition=校正有効]ユリは観測可能ですか".into(),
+            "CONDITION_UNKNOWN",
+            2,
+            "SUSPEND",
+        ),
+    ] {
+        let result = stopped(&execute(&scratch.0, actor, &[&question]), exit, lifecycle);
+        assert!(
+            result["reason"].as_str().unwrap().starts_with(code),
+            "{result}"
+        );
+        assert!(result["render"].is_null());
+        assert!(result["receipts"].as_array().unwrap().is_empty());
+    }
+    assert_eq!(
+        record(&execute(&scratch.0, actor, &registration)),
+        registered
+    );
+    assert_eq!(store.load_memory(actor).unwrap(), memory);
+}
+
+#[test]
 fn declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage() {
     let scratch = Scratch::new();
     let rule = record(&execute_in_case(

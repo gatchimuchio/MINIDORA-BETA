@@ -19,6 +19,8 @@ const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v90-explanation-source-roles";
 const CONDITION_DEFINITION_PARSER_VERSION: &str = "declarative-ja-en-v92-condition-definition";
+const TIMED_CONDITION_DEFINITION_PARSER_VERSION: &str =
+    "declarative-ja-en-v115-timed-condition-definition";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -252,6 +254,11 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
+        Intent::DefineCondition { definition }
+            if definition.valid_from.is_some() || definition.valid_until.is_some() =>
+        {
+            TIMED_CONDITION_DEFINITION_PARSER_VERSION
+        }
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
@@ -528,16 +535,35 @@ fn japanese_assertion_source_roles_with_root(
     proposition: &Proposition,
     role_root: &str,
 ) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    let statement = terminal_trim(text);
+    let source_offset = text.len() - text.trim_start().len();
+    let Some((body, qualifiers)) = relation_qualifiers(statement, QualifierContext::Relation)
+    else {
+        return Ok(None);
+    };
+    japanese_qualified_source_roles(
+        text,
+        body,
+        source_offset,
+        source_offset + statement.len() - body.len(),
+        &qualifiers,
+        proposition,
+        role_root,
+    )
+}
+
+fn japanese_qualified_source_roles(
+    text: &str,
+    body: &str,
+    qualifier_offset: usize,
+    body_offset: usize,
+    qualifiers: &RelationQualifiers<'_>,
+    proposition: &Proposition,
+    role_root: &str,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
     if proposition.predicate != "is" {
         return Ok(None);
     }
-
-    let trimmed = text.trim();
-    let source_offset = text.len() - text.trim_start().len();
-    let statement = terminal_trim(trimmed);
-    let Some((body, qualifiers)) = relation_qualifiers(statement) else {
-        return Ok(None);
-    };
     if qualifiers.scope.map_or("default", |(scope, _)| scope) != proposition.scope
         || qualifiers.time.map(|(time, _)| time) != proposition.temporal_scope.as_deref()
         || !qualifiers
@@ -548,8 +574,6 @@ fn japanese_assertion_source_roles_with_root(
     {
         return Ok(None);
     }
-    let body_offset = source_offset + statement.len() - body.len();
-
     let Some(relation) = regex(r"^([^はが]+?)(は|が)(.+)$")?.captures(body) else {
         return Ok(None);
     };
@@ -629,9 +653,11 @@ fn japanese_assertion_source_roles_with_root(
         ("scope", qualifiers.scope),
         ("temporal_scope", qualifiers.time),
         ("condition_refs/0", qualifiers.condition),
+        ("valid_from", qualifiers.valid_from),
+        ("valid_until", qualifiers.valid_until),
     ] {
         if let Some((value, offset)) = qualifier {
-            let start = source_offset + offset;
+            let start = qualifier_offset + offset;
             let span = source_span_at(text, start, start + value.len())
                 .expect("qualifier is an exact slice of the original statement");
             roles.insert(format!("{role_root}/{role}"), vec![span]);
@@ -4475,9 +4501,20 @@ struct RelationQualifiers<'a> {
     scope: Option<(&'a str, usize)>,
     time: Option<(&'a str, usize)>,
     condition: Option<(&'a str, usize)>,
+    valid_from: Option<(&'a str, usize)>,
+    valid_until: Option<(&'a str, usize)>,
 }
 
-fn relation_qualifiers(text: &str) -> Option<(&str, RelationQualifiers<'_>)> {
+#[derive(Clone, Copy)]
+enum QualifierContext {
+    Relation,
+    ConditionDefinition,
+}
+
+fn relation_qualifiers(
+    text: &str,
+    context: QualifierContext,
+) -> Option<(&str, RelationQualifiers<'_>)> {
     let mut qualifiers = RelationQualifiers::default();
     let mut body = text;
     while let Some(opened) = body.strip_prefix('[') {
@@ -4489,11 +4526,23 @@ fn relation_qualifiers(text: &str) -> Option<(&str, RelationQualifiers<'_>)> {
         }
         let start = text.len() - opened.len() + key.len() + 1 + raw_value.len()
             - raw_value.trim_start().len();
-        let target = match key {
-            "scope" => &mut qualifiers.scope,
-            "time" if crate::relations::valid_utc_instant(value) => &mut qualifiers.time,
-            "condition" if crate::relations::validate_condition_id(value).is_ok() => {
+        let target = match (key, context) {
+            ("scope", _) => &mut qualifiers.scope,
+            ("time", QualifierContext::Relation) if crate::relations::valid_utc_instant(value) => {
+                &mut qualifiers.time
+            }
+            ("condition", _) if crate::relations::validate_condition_id(value).is_ok() => {
                 &mut qualifiers.condition
+            }
+            ("valid_from", QualifierContext::ConditionDefinition)
+                if crate::relations::valid_utc_instant(value) =>
+            {
+                &mut qualifiers.valid_from
+            }
+            ("valid_until", QualifierContext::ConditionDefinition)
+                if crate::relations::valid_utc_instant(value) =>
+            {
+                &mut qualifiers.valid_until
             }
             _ => return None,
         };
@@ -4506,7 +4555,9 @@ fn relation_qualifiers(text: &str) -> Option<(&str, RelationQualifiers<'_>)> {
 }
 
 fn ordinary_relation_proposition(text: &str) -> Result<Option<Proposition>> {
-    let Some((body, qualifiers)) = relation_qualifiers(terminal_trim(text)) else {
+    let Some((body, qualifiers)) =
+        relation_qualifiers(terminal_trim(text), QualifierContext::Relation)
+    else {
         return Ok(None);
     };
     if qualifiers.time.is_none() && qualifiers.condition.is_none() {
@@ -4551,14 +4602,34 @@ fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
     {
         return Ok(Some(unsupported()));
     }
-    let Some(proposition) = ordinary_relation_proposition(payload)? else {
+    let statement = terminal_trim(payload);
+    let Some((body, qualifiers)) =
+        relation_qualifiers(statement, QualifierContext::ConditionDefinition)
+    else {
         return Ok(Some(unsupported()));
     };
-    let mut condition_ids = proposition.condition_refs.into_iter();
-    let Some(condition_id) = condition_ids.next() else {
+    let Some((condition_id, _)) = qualifiers.condition else {
         return Ok(Some(unsupported()));
     };
-    if proposition.temporal_scope.is_some() {
+    let Some(mut proposition) = parse_proposition(body, false)? else {
+        return Ok(Some(unsupported()));
+    };
+    if let Some((scope, _)) = qualifiers.scope {
+        proposition.scope = scope.into();
+    }
+    proposition.condition_refs.insert(condition_id.into());
+    if singular_previous_subject(&proposition.subject)
+        || japanese_qualified_source_roles(
+            payload,
+            body,
+            0,
+            statement.len() - body.len(),
+            &qualifiers,
+            &proposition,
+            "",
+        )?
+        .is_none()
+    {
         return Ok(Some(unsupported()));
     }
     let atom = ConditionExpression::Fact {
@@ -4572,17 +4643,23 @@ fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
     } else {
         atom
     };
-    Ok(Some(Intent::DefineCondition {
-        definition: ConditionDefinition {
-            condition_id,
-            subject: proposition.subject,
-            scope: proposition.scope,
-            expression,
-            valid_from: None,
-            valid_until: None,
-            dependencies: Default::default(),
-        },
-    }))
+    let definition = ConditionDefinition {
+        condition_id: condition_id.into(),
+        subject: proposition.subject,
+        scope: proposition.scope,
+        expression,
+        valid_from: qualifiers.valid_from.map(|(value, _)| value.into()),
+        valid_until: qualifiers.valid_until.map(|(value, _)| value.into()),
+        dependencies: Default::default(),
+    };
+    if (definition.valid_from.is_some() || definition.valid_until.is_some())
+        && let Err(error) = crate::relations::validate_condition_definition(&definition)
+    {
+        return Ok(Some(Intent::Unknown {
+            reason: error.to_string(),
+        }));
+    }
+    Ok(Some(Intent::DefineCondition { definition }))
 }
 
 fn condition_definition_source_roles(
@@ -4596,6 +4673,23 @@ fn condition_definition_source_roles(
             "condition declaration source is missing",
         )
     })?;
+    let statement = terminal_trim(payload);
+    let Some((body, qualifiers)) =
+        relation_qualifiers(statement, QualifierContext::ConditionDefinition)
+    else {
+        return Err(failure(
+            "CONDITION_SOURCE_SPAN",
+            "condition qualifiers do not match the original declaration",
+        ));
+    };
+    if qualifiers.valid_from.map(|(value, _)| value) != definition.valid_from.as_deref()
+        || qualifiers.valid_until.map(|(value, _)| value) != definition.valid_until.as_deref()
+    {
+        return Err(failure(
+            "CONDITION_SOURCE_SPAN",
+            "condition validity bounds do not match the original declaration",
+        ));
+    }
     let (atom, negative, expression_role) = match &definition.expression {
         ConditionExpression::Not { operand } => (operand.as_ref(), true, "expression/operand"),
         atom => (atom, false, "expression"),
@@ -4615,26 +4709,30 @@ fn condition_definition_source_roles(
         temporal_scope: None,
         condition_refs: [definition.condition_id.clone()].into(),
     };
-    let roles =
-        japanese_assertion_source_roles_with_root(payload, &proposition, "")?.ok_or_else(|| {
-            failure(
-                "CONDITION_SOURCE_SPAN",
-                "condition roles do not match the original declaration",
-            )
-        })?;
     let offset = text.len() - text.trim_start().len() + source.len() - payload.len();
+    let roles = japanese_qualified_source_roles(
+        text,
+        body,
+        offset,
+        offset + statement.len() - body.len(),
+        &qualifiers,
+        &proposition,
+        "",
+    )?
+    .ok_or_else(|| {
+        failure(
+            "CONDITION_SOURCE_SPAN",
+            "condition roles do not match the original declaration",
+        )
+    })?;
     Ok(roles
         .into_iter()
-        .map(|(role, mut spans)| {
+        .map(|(role, spans)| {
             let role = match role.as_str() {
                 "/condition_refs/0" => "condition_id".into(),
                 "/predicate" | "/object" => format!("{expression_role}{role}"),
                 _ => role.trim_start_matches('/').to_owned(),
             };
-            for span in &mut spans {
-                span.start += offset;
-                span.end += offset;
-            }
             (format!("/DefineCondition/definition/{role}"), spans)
         })
         .collect())
