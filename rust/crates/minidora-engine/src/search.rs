@@ -4,7 +4,10 @@
 //! snippets/abstracts are not promoted to article text. This module executes a
 //! Core-selected provider; it neither chooses goals nor grants read authority.
 
-use crate::{ports, store::Store};
+use crate::{
+    ports,
+    store::{Store, VerifiedCaseHistory},
+};
 use minidora_domain::{
     CaseRevision, ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle,
     Permissions, ResourceBudget, Result, ResultRecord, canonical, digest, failure, identity,
@@ -756,6 +759,24 @@ pub(crate) fn previous_search_explanation(
         return Ok(None);
     }
     let request = &bundle.request;
+    store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
+        previous_search_explanation_in_history(store, history, bundle, prior_results, previous)
+    })
+}
+
+pub(crate) fn previous_search_explanation_in_history(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+) -> Result<Option<SearchExplanation>> {
+    if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        || previous.guarantee != Guarantee::SourceReport
+    {
+        return Ok(None);
+    }
+    let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
     let invalid = || {
@@ -764,8 +785,7 @@ pub(crate) fn previous_search_explanation(
             "the explanation does not match the retained original search listing",
         )
     };
-    let Some((_, original)) =
-        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    let Some((_, original)) = history.input_bundle(&previous.input_id, previous.input_version)?
     else {
         if previous
             .evidence
@@ -786,8 +806,16 @@ pub(crate) fn previous_search_explanation(
     match original.meaning.intent {
         Intent::Search { .. } | Intent::SearchWithFallback { .. } => {}
         Intent::FetchPreviousSearchCandidate { rank } => {
-            return explain_candidate_body(store, bundle, prior_results, previous, &original, rank)
-                .map(Some);
+            return explain_candidate_body(
+                store,
+                history,
+                bundle,
+                prior_results,
+                previous,
+                &original,
+                rank,
+            )
+            .map(Some);
         }
         _ => return Ok(None),
     }
@@ -932,6 +960,7 @@ pub(crate) fn verify_retained_candidate_body(
     result: &ResultRecord,
     plan: &ContentPlan,
     retains_listing: bool,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<RetainedSearchCandidateBody> {
     const CODE: &str = "RECOVERY_SEARCH_CONTEXT_MISMATCH";
     let invalid = || {
@@ -948,7 +977,8 @@ pub(crate) fn verify_retained_candidate_body(
     let actor = &request.actor_id;
     let case = &request.case_id;
     let (search_ref, observation) =
-        previous_observation(store, actor, case, previous)?.ok_or_else(invalid)?;
+        previous_observation_with_history(store, actor, case, previous, history)?
+            .ok_or_else(invalid)?;
     let candidate = observation
         .candidates
         .iter()
@@ -1023,7 +1053,7 @@ pub(crate) fn verify_retained_candidate_body(
 
 fn committed_search_result<'a>(
     store: &Store,
-    request: &minidora_domain::RequestEnvelope,
+    history: &VerifiedCaseHistory<'_>,
     prior_results: &'a BTreeMap<String, ResultRecord>,
     mut current: &'a ResultRecord,
     selected_ref: &str,
@@ -1040,13 +1070,8 @@ fn committed_search_result<'a>(
         if !visited.insert(current.id.as_str()) {
             return Err(invalid());
         }
-        let (_, bundle) = store
-            .get_input_bundle(
-                &request.actor_id,
-                &request.case_id,
-                &current.input_id,
-                current.input_version,
-            )?
+        let (_, bundle) = history
+            .input_bundle(&current.input_id, current.input_version)?
             .ok_or_else(invalid)?;
         if let Intent::FetchPreviousSearchCandidate { .. } = bundle.meaning.intent {
             let parent = bundle
@@ -1077,6 +1102,7 @@ fn committed_search_result<'a>(
 
 fn explain_candidate_body(
     store: &Store,
+    history: &VerifiedCaseHistory<'_>,
     bundle: &InputBundle,
     prior_results: &BTreeMap<String, ResultRecord>,
     previous: &ResultRecord,
@@ -1114,6 +1140,7 @@ fn explain_candidate_body(
         previous,
         plan,
         retains_listing,
+        Some(history),
     )?;
     let allowed_starts = (original.request.budget.max_actions as usize)
         .checked_sub(nodes.len().saturating_sub(1))
@@ -1143,7 +1170,7 @@ fn explain_candidate_body(
     )?;
     let (root_result, root) = committed_search_result(
         store,
-        request,
+        history,
         prior_results,
         preceding,
         &proof.search_ref,
@@ -1258,6 +1285,16 @@ pub(crate) fn previous_observation(
     case: &str,
     previous: &ResultRecord,
 ) -> Result<Option<(String, SearchObservation)>> {
+    previous_observation_with_history(store, actor, case, previous, None)
+}
+
+fn previous_observation_with_history(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<Option<(String, SearchObservation)>> {
     let mut found = None;
     let mut failed: Option<SearchObservation> = None;
     for dependency in &previous.dependencies {
@@ -1310,8 +1347,10 @@ pub(crate) fn previous_observation(
         found = Some((dependency.clone(), observation));
     }
     if let Some((_, selected)) = &found {
-        let sealed =
-            store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?;
+        let sealed = match history {
+            Some(history) => history.input_bundle(&previous.input_id, previous.input_version),
+            None => store.get_input_bundle(actor, case, &previous.input_id, previous.input_version),
+        }?;
         let plan = match &sealed {
             Some((_, bundle)) => search_plan(&bundle.meaning.intent)?,
             None => None,

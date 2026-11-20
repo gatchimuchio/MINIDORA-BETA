@@ -1801,7 +1801,7 @@ fn explicit_explanation_source<'a>(
         if input.meaning.parser_version
             != crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
         {
-            break direct_source_followup(store, input, prior_results, detail)?
+            break direct_source_followup(store, input, prior_results, detail, Some(history))?
                 .ok_or_else(invalid)?;
         }
         if input.request.context_ref.as_deref() != Some(detail.id.as_str())
@@ -1899,7 +1899,7 @@ pub(crate) fn source_followup_context<'a>(
             explicit_explanation_source(store, history, bundle, prior_results, context)
         });
     }
-    direct_source_followup(store, bundle, prior_results, context)
+    direct_source_followup(store, bundle, prior_results, context, None)
 }
 
 fn direct_source_followup<'a>(
@@ -1907,16 +1907,11 @@ fn direct_source_followup<'a>(
     bundle: &InputBundle,
     prior_results: &'a BTreeMap<String, ResultRecord>,
     context: &'a ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<Option<SourceFollowup<'a>>> {
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let invalid = || {
-        failure(
-            "SOURCE_CONTEXT_INVALID",
-            "the saved explanation or its source differs from the sealed context",
-        )
-    };
     if bundle.meaning.context_result_ref.as_deref() != Some(context.id.as_str())
         || identity(&Some(context))? != bundle.context_sha256
         || !crate::recovery::source_context_available(store, actor, case, context)?
@@ -1931,14 +1926,38 @@ fn direct_source_followup<'a>(
         return Ok(Some(direct));
     }
 
-    let (_, explanation) = store
-        .get_input_bundle(actor, case, &context.input_id, context.input_version)?
+    match history {
+        Some(history) => {
+            selected_body_followup(store, history, prior_results, context, actor, case)
+        }
+        None => store.with_verified_case_history(actor, case, |history| {
+            selected_body_followup(store, history, prior_results, context, actor, case)
+        }),
+    }
+}
+
+fn selected_body_followup<'a>(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    context: &'a ResultRecord,
+    actor: &str,
+    case: &str,
+) -> Result<Option<SourceFollowup<'a>>> {
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "the saved explanation or its source differs from the sealed context",
+        )
+    };
+    let (_, explanation) = history
+        .input_bundle(&context.input_id, context.input_version)?
         .ok_or_else(invalid)?;
     if !matches!(explanation.meaning.intent, Intent::ExplainPrevious)
         || explanation.meaning.parser_version
             != crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
     {
-        return Ok(Some(direct));
+        return Ok(Some(SourceFollowup::direct(context)));
     }
     let source = explanation
         .meaning
@@ -1946,18 +1965,23 @@ fn direct_source_followup<'a>(
         .as_ref()
         .and_then(|id| prior_results.get(id))
         .ok_or_else(invalid)?;
-    let Some(proof) =
-        crate::search::previous_search_explanation(store, &explanation, prior_results, source)?
+    let Some(proof) = crate::search::previous_search_explanation_in_history(
+        store,
+        history,
+        &explanation,
+        prior_results,
+        source,
+    )?
     else {
-        return Ok(Some(direct));
+        return Ok(Some(SourceFollowup::direct(context)));
     };
     let Some(selected_body_index) = proof.selected_body_index else {
-        return Ok(Some(direct));
+        return Ok(Some(SourceFollowup::direct(context)));
     };
     let plan = context.content_plan.as_ref().ok_or_else(invalid)?;
     if identity(&explanation.request)? != context.id
-        || store
-            .get_input_result(actor, case, &context.input_id, context.input_version)?
+        || history
+            .input_result(&context.input_id, context.input_version)?
             .as_ref()
             != Some(context)
         || context.calculation.is_some()

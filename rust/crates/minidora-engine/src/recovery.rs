@@ -4923,6 +4923,7 @@ fn inspect(
             result,
             plan,
             retains_listing,
+            None,
         )?)
     } else {
         None
