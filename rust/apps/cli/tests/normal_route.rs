@@ -15751,6 +15751,205 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
 }
 
 #[test]
+fn text_summary_candidate_explanation_preserves_required_rank_and_escaped_source_evidence() {
+    const LABEL: &str = "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
+    let source = "猫 shared alpha. shared beta. unique gamma. shared delta.";
+    let raw_text = r#""\u732b shared alpha. shared beta. unique gamma. shared delta.""#;
+    let body = format!(
+        r#"{{"text":{raw_text},"max_sentences":3,"max_chars":64,"required_sentence_indices":[2]}}"#
+    );
+    assert_eq!(serde_json::from_str::<String>(raw_text).unwrap(), source);
+    assert_eq!(body.matches(raw_text).count(), 1);
+    let json_start = body.find(raw_text).unwrap();
+    let json_end = json_start + raw_text.len();
+    let expected_output = format!("{LABEL}\n- 猫 shared alpha.\n- unique gamma.\n- shared delta.");
+    // Token frequencies: shared = 3; alpha/beta/unique/gamma/delta = 1.
+    // The first sentence receives a 6/5 multiplier; required index 2 is
+    // selected first. Equal-score fill prefers index 3 over omitted index 1.
+    let selected = [
+        (0, 2, 0, 17, "猫 shared alpha.", 24, 10),
+        (2, 1, 31, 44, "unique gamma.", 2, 2),
+        (3, 3, 45, 58, "shared delta.", 4, 2),
+    ];
+    let mut cursor = LABEL.len();
+    let expected_sentences: Vec<_> = selected
+        .iter()
+        .map(|&(index, rank, start, end, text, numerator, denominator)| {
+            assert_eq!(&source[start..end], text);
+            let output_start = cursor + "\n- ".len();
+            let output_end = output_start + text.len();
+            assert_eq!(&expected_output[output_start..output_end], text);
+            cursor = output_end;
+            serde_json::json!({
+                "sentence_index": index,
+                "selection_rank": rank,
+                "source_start": start,
+                "source_end": end,
+                "output_start": output_start,
+                "output_end": output_end,
+                "text": text,
+                "score_numerator": numerator,
+                "score_denominator": denominator,
+            })
+        })
+        .collect();
+    assert_eq!(cursor, expected_output.len());
+    for header in ["文章を要約して:", "text-summary:"] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\r\n{body}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "summary-before-explanation", &request],
+        ));
+        assert_eq!(first["lifecycle"], "COMMIT");
+        assert_eq!(first["guarantee"], "HYPOTHESIS");
+        assert_eq!(first["text"], expected_output);
+        assert_eq!(first["content_plan"]["text"], first["text"]);
+        assert_eq!(first["render"]["status"], "RENDERED");
+        assert_eq!(
+            first["render"]["actual_sha256"],
+            minidora_domain::digest(expected_output.as_bytes())
+        );
+        assert_eq!(first["receipts"], serde_json::json!([]));
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let report = sequence_artifact(&store, &first["dependencies"][0]);
+        let report_ref = minidora_domain::digest(&minidora_domain::canonical(&report).unwrap());
+        assert_eq!(first["dependencies"], serde_json::json!([report_ref]));
+        assert_eq!(report["operation"], "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4");
+        assert_eq!(
+            report["algorithm"],
+            "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_REQUIRED_CONTENT_OUTPUT_FORMAT_V1"
+        );
+        assert_eq!(report["source_document"], body);
+        assert_eq!(
+            report["source_sha256"],
+            minidora_domain::digest(body.as_bytes())
+        );
+        assert_eq!(report["source_text"], source);
+        assert_eq!(
+            report["source_text_sha256"],
+            minidora_domain::digest(source.as_bytes())
+        );
+        assert_eq!(report["source_text_json_start"], json_start);
+        assert_eq!(report["source_text_json_end"], json_end);
+        assert_eq!(report["text"], expected_output);
+        assert_eq!(
+            report["output_sha256"],
+            minidora_domain::digest(expected_output.as_bytes())
+        );
+        assert_eq!(report["format"], "bullets");
+        assert_eq!(report["sentence_count"], 4);
+        assert_eq!(report["required_sentence_indices"], serde_json::json!([2]));
+        assert_eq!(
+            report["selected_sentence_indices"],
+            serde_json::json!([0, 2, 3])
+        );
+        assert_eq!(report["omitted_sentence_indices"], serde_json::json!([1]));
+        assert_eq!(
+            report["length_limited_sentence_indices"],
+            serde_json::json!([])
+        );
+        assert_eq!(report["selected_character_count"], 41);
+        assert_eq!(report["coverage_verified"], false);
+        assert_eq!(report["sentences"], serde_json::json!(expected_sentences));
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["text"], request);
+        assert_eq!(saved["bundle"]["meaning"]["intent"]["document"], body);
+        let explained = assert_document_explanation(
+            &scratch.0,
+            &first,
+            &report,
+            "previous-text-summary-candidate",
+            "HYPOTHESIS",
+            "依頼JSON",
+        );
+        let text = explained["text"].as_str().unwrap();
+        for expected in [
+            "前回の抽出要約候補を、封印済みの原文から再確認しました。".to_string(),
+            "候補文数: 4。選択文数: 3。未選択文数: 1。文字数制限で見送った文数: 0。".to_string(),
+            format!(
+                "元本文 SHA-256: {}",
+                minidora_domain::digest(source.as_bytes())
+            ),
+            format!(
+                "候補出力 SHA-256: {}",
+                minidora_domain::digest(expected_output.as_bytes())
+            ),
+            format!(
+                "依頼JSONの本文文字列トークン byte[{json_start}..{json_end}) SHA-256: {}",
+                minidora_domain::digest(raw_text.as_bytes())
+            ),
+            "選択と原文の一致を再確認しました。目的・意味・条件・否定の網羅と事実性は未検証です。"
+                .to_string(),
+        ] {
+            assert!(
+                text.lines().any(|line| line == expected),
+                "missing {expected:?} in {text}"
+            );
+        }
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("選択文 元本文第"))
+                .count(),
+            3
+        );
+        assert!(!text.contains("選択文 元本文第2文"), "{text}");
+        let mut previous_heading = None;
+        for (expected, &(index, rank, start, end, raw, numerator, denominator)) in
+            expected_sentences.iter().zip(&selected)
+        {
+            let reason = if index == 2 {
+                "必須指定"
+            } else {
+                "頻度・位置による選択"
+            };
+            let heading = format!(
+                "選択文 元本文第{}文 / 選択順{rank} / {reason} / 評点 {numerator}/{denominator}",
+                index + 1
+            );
+            let position = lines
+                .iter()
+                .position(|line| *line == heading)
+                .unwrap_or_else(|| panic!("missing {heading:?} in {text}"));
+            if let Some(previous) = previous_heading {
+                assert!(previous < position);
+            }
+            previous_heading = Some(position);
+            assert_eq!(
+                lines[position + 1],
+                format!(
+                    "  元本文 byte[{start}..{end}) → 候補出力 byte[{}..{}) / SHA-256: {} / 原文: {raw:?}",
+                    expected["output_start"].as_u64().unwrap(),
+                    expected["output_end"].as_u64().unwrap(),
+                    minidora_domain::digest(raw.as_bytes())
+                )
+            );
+        }
+        let replayed = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "explain", "詳しく説明して"],
+        ));
+        assert_eq!(replayed, explained);
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["bundle"]["request"]["input_id"], "explain");
+        assert_eq!(
+            saved["bundle"]["meaning"]["parser_version"],
+            "declarative-ja-en-v108-text-summary-candidate-explanation"
+        );
+        assert_eq!(
+            saved["bundle"]["meaning"]["context_result_ref"],
+            first["id"]
+        );
+        assert_eq!(saved["result"], explained);
+        assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    }
+}
+
+#[test]
 fn extractive_summary_candidate_normal_route_renders_explicit_paragraph_format() {
     let scratch = Scratch::new();
     let source = "猫は走る。猫は休む。";

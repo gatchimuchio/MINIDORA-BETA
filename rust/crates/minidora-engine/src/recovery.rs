@@ -4328,6 +4328,34 @@ fn inspect(
     } else {
         false
     };
+    let previous_document_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
+        bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .map(|previous| {
+                crate::document::previous_document_explanation(
+                    store,
+                    actor,
+                    case,
+                    previous,
+                    &goal.budget,
+                    &bundle.meaning.parser_version,
+                    Instant::now(),
+                )
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    let saved_summary_explanation =
+        previous_document_explanation
+            .as_ref()
+            .is_some_and(|explanation| {
+                explanation.report_node == crate::document::TEXT_SUMMARY_CANDIDATE_REPORT_NODE
+            });
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
     if plan.id != identity(&unsigned_plan)?
@@ -4351,7 +4379,8 @@ fn inspect(
                     | Intent::AssessPreviousGroupMeanHypothesis { .. }
             )
             && !saved_comparison_explanation
-            && !saved_relation_profile_explanation)
+            && !saved_relation_profile_explanation
+            && !saved_summary_explanation)
     {
         return Err(failure(
             "RECOVERY_CONTENT_MISMATCH",
@@ -4450,28 +4479,6 @@ fn inspect(
         } else {
             None
         };
-    let previous_document_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
-        bundle
-            .meaning
-            .context_result_ref
-            .as_ref()
-            .and_then(|id| state.prior_results.get(id))
-            .map(|previous| {
-                crate::document::previous_document_explanation(
-                    store,
-                    actor,
-                    case,
-                    previous,
-                    &goal.budget,
-                    &bundle.meaning.parser_version,
-                    Instant::now(),
-                )
-            })
-            .transpose()?
-            .flatten()
-    } else {
-        None
-    };
     let previous_json_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
         bundle
             .meaning
@@ -4920,18 +4927,20 @@ fn inspect(
         }
     }
     if let Some(explanation) = &previous_document_explanation {
-        let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
-            failure(
-                "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
-                "the prior CSV table result reference is missing",
-            )
-        })?;
-        let previous = state.prior_results.get(previous_id).ok_or_else(|| {
-            failure(
-                "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
-                "the prior CSV table result is no longer retained",
-            )
-        })?;
+        let code = if saved_summary_explanation {
+            "RECOVERY_TEXT_SUMMARY_CONTEXT_CHANGED"
+        } else {
+            "RECOVERY_CSV_TABLE_CONTEXT_CHANGED"
+        };
+        let previous_id = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .ok_or_else(|| failure(code, "the prior document result reference is missing"))?;
+        let previous = state
+            .prior_results
+            .get(previous_id)
+            .ok_or_else(|| failure(code, "the prior document result is no longer retained"))?;
         let expected_dependencies = vec![
             previous.id.clone(),
             explanation.bundle_ref.clone(),
@@ -4943,8 +4952,8 @@ fn inspect(
             || result.guarantee != previous.guarantee
         {
             return Err(failure(
-                "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
-                "the sealed CSV input, exact table report or source-span explanation changed",
+                code,
+                "the sealed input, exact report or source-span explanation changed",
             ));
         }
     }

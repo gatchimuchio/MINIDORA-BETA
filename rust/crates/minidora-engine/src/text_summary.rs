@@ -15,7 +15,7 @@ const MAX_ARTIFACT_BYTES: usize = 2_000_000;
 const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4";
 const ALGORITHM: &str =
     "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_REQUIRED_CONTENT_OUTPUT_FORMAT_V1";
-const LABEL: &str =
+pub(crate) const EXTRACTIVE_SUMMARY_LABEL: &str =
     "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
 const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; caller-required source sentences are retained before ranked fill, and every retained sentence is copied verbatim with decoded-source byte offsets in the requested bullets or paragraph layout. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
 
@@ -1008,7 +1008,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     selected.sort_unstable();
     let selected_set: std::collections::BTreeSet<_> = selected.iter().copied().collect();
 
-    let mut output = String::from(LABEL);
+    let mut output = String::from(EXTRACTIVE_SUMMARY_LABEL);
     let mut spans = Vec::with_capacity(selected.len());
     for index in &selected {
         let candidate = &candidates[*index];
@@ -1795,7 +1795,7 @@ mod tests {
                 Some(span.text.as_str())
             );
         }
-        assert!(report.text.starts_with(LABEL));
+        assert!(report.text.starts_with(EXTRACTIVE_SUMMARY_LABEL));
     }
 
     #[test]
@@ -1884,7 +1884,11 @@ mod tests {
         let report = extractive_summary_candidates(&document).unwrap();
         assert_eq!(report.operation, OPERATION);
         assert_eq!(report.format, "paragraph");
-        assert!(report.text.starts_with(&format!("{LABEL}\n")));
+        assert!(
+            report
+                .text
+                .starts_with(&format!("{EXTRACTIVE_SUMMARY_LABEL}\n"))
+        );
         assert!(!report.text.contains("\n- "));
         let copied = report
             .sentences
@@ -1892,7 +1896,7 @@ mod tests {
             .map(|sentence| sentence.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        assert_eq!(report.text, format!("{LABEL}\n{copied}"));
+        assert_eq!(report.text, format!("{EXTRACTIVE_SUMMARY_LABEL}\n{copied}"));
         for sentence in &report.sentences {
             assert_eq!(
                 report

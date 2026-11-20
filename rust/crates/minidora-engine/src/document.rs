@@ -5,6 +5,9 @@ use crate::ports::{JsonKind, JsonNode, json_node_at_pointer, strict_json_documen
 use crate::text_editing::{
     EditedText, LocatedTextEdit, edit_explicit_text, locate_explicit_replacement,
 };
+use crate::text_summary::{
+    EXTRACTIVE_SUMMARY_LABEL, ExtractiveSummaryCandidates, extractive_summary_candidates,
+};
 use minidora_domain::{
     Guarantee, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, canonical, digest, failure,
 };
@@ -206,6 +209,10 @@ pub(crate) struct PriorDocumentExplanation {
     pub(crate) lines: Vec<String>,
 }
 
+pub(crate) const TEXT_SUMMARY_CANDIDATE_REPORT_NODE: &str =
+    "previous-text-summary-candidate-report";
+const TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID: &str = "TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID";
+
 #[derive(Clone, Copy)]
 enum CsvTableOperation<'a> {
     Compare(&'a str),
@@ -234,13 +241,18 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
     }
+    let explain_summary = explanation_parser_version
+        == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION;
     let explain_text_document = matches!(
         explanation_parser_version,
         crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
     );
-    if explain_text_document && previous.guarantee == Guarantee::UserPremise {
+    if (explain_text_document && previous.guarantee == Guarantee::UserPremise)
+        || (explain_summary && previous.guarantee == Guarantee::Hypothesis)
+    {
         return previous_text_document_explanation(
             store,
             actor,
@@ -731,13 +743,30 @@ fn previous_text_document_explanation(
     const LOCATION_INVALID: &str = "TEXT_LOCATION_CONTEXT_INVALID";
     const EDIT_INVALID: &str = "TEXT_EDIT_CONTEXT_INVALID";
     const COMPOSITION_INVALID: &str = "TEXT_COMPOSITION_CONTEXT_INVALID";
-    let explain_composition =
-        explanation_parser_version == crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION;
+    let explain_summary = explanation_parser_version
+        == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+        && previous.guarantee == Guarantee::Hypothesis;
+    let explain_composition = matches!(
+        explanation_parser_version,
+        crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+    );
     let explain_text_edit = explain_composition
         || explanation_parser_version == crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION;
     let Some((bundle_ref, bundle)) =
         store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
     else {
+        // The candidate heading can diagnose a missing source, but never
+        // authorizes an explanation without the sealed typed request below.
+        if explain_summary && previous.text.lines().next() == Some(EXTRACTIVE_SUMMARY_LABEL) {
+            return Err(failure(
+                TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
+                "the prior extractive summary candidates have no retained sealed input",
+            ));
+        }
+        if previous.guarantee != Guarantee::UserPremise {
+            return Ok(None);
+        }
         // A text document may itself contain JSON. Recognize a prior location
         // result here only when its displayed report bytes also name its last dependency.
         if let Some((report_ref, ancestors)) = previous.dependencies.split_last()
@@ -783,12 +812,20 @@ fn previous_text_document_explanation(
         }
         return Ok(None);
     };
-    let (code, label) = match &bundle.meaning.intent {
-        Intent::LocateTextReplacement { .. } => (LOCATION_INVALID, "text location"),
-        Intent::EditText { .. } if explain_text_edit => (EDIT_INVALID, "text edit"),
-        Intent::ComposeText { .. } if explain_composition => {
+    let (code, label) = match (&bundle.meaning.intent, &previous.guarantee) {
+        (Intent::LocateTextReplacement { .. }, Guarantee::UserPremise) => {
+            (LOCATION_INVALID, "text location")
+        }
+        (Intent::EditText { .. }, Guarantee::UserPremise) if explain_text_edit => {
+            (EDIT_INVALID, "text edit")
+        }
+        (Intent::ComposeText { .. }, Guarantee::UserPremise) if explain_composition => {
             (COMPOSITION_INVALID, "text composition")
         }
+        (Intent::TextSummaryCandidates { .. }, Guarantee::Hypothesis) if explain_summary => (
+            TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
+            "extractive summary candidates",
+        ),
         _ => return Ok(None),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
@@ -867,6 +904,18 @@ fn previous_text_document_explanation(
                 lines,
             )
         }
+        Intent::TextSummaryCandidates { document } => {
+            let report = extractive_summary_candidates(document)?;
+            let report_ref = verify_report(&canonical(&report)?, &[], report.text.as_bytes())?;
+            let lines =
+                text_summary_candidate_explanation_lines(&report, &bundle_ref, &report_ref)?;
+            (
+                "previous-text-summary-candidate-input",
+                TEXT_SUMMARY_CANDIDATE_REPORT_NODE,
+                report_ref,
+                lines,
+            )
+        }
         _ => unreachable!("only sealed text document operations use this explanation"),
     };
     if lines.join("\n").len() > budget.max_evidence_bytes {
@@ -882,6 +931,90 @@ fn previous_text_document_explanation(
         report_ref,
         lines,
     }))
+}
+
+fn text_summary_candidate_explanation_lines(
+    report: &ExtractiveSummaryCandidates,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    let token = report
+        .source_document
+        .get(report.source_text_json_start..report.source_text_json_end)
+        .filter(|token| {
+            serde_json::from_str::<String>(token).is_ok_and(|text| text == report.source_text)
+        })
+        .ok_or_else(|| {
+            failure(
+                TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
+                "the retained JSON text token does not decode to the source text",
+            )
+        })?;
+    let mut lines = vec![
+        "前回の抽出要約候補を、封印済みの原文から再確認しました。".into(),
+        format!(
+            "候補文数: {}。選択文数: {}。未選択文数: {}。文字数制限で見送った文数: {}。",
+            report.sentence_count,
+            report.sentences.len(),
+            report.omitted_sentence_indices.len(),
+            report.length_limited_sentence_indices.len(),
+        ),
+        format!(
+            "文数上限: {}。選択文の文字数: {} / 上限 {}（書式・注意書きは集計外）。出力書式: {}。",
+            report.max_sentences, report.selected_character_count, report.max_chars, report.format,
+        ),
+        "必須指定の文を先に確保し、残りは語の頻度、先頭文の加点、長文の減点で選びます。同点は元本文の後方を優先し、表示は元本文の順です。".into(),
+        format!("依頼JSON SHA-256: {}", report.source_sha256),
+        format!(
+            "依頼JSONの本文文字列トークン byte[{}..{}) SHA-256: {}",
+            report.source_text_json_start, report.source_text_json_end, digest(token.as_bytes()),
+        ),
+        format!("元本文 SHA-256: {}", report.source_text_sha256),
+        format!("候補出力 SHA-256: {}", report.output_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+    ];
+    for sentence in &report.sentences {
+        let source = report
+            .source_text
+            .get(sentence.source_start..sentence.source_end);
+        let output = report.text.get(sentence.output_start..sentence.output_end);
+        if source != Some(sentence.text.as_str()) || output != source {
+            return Err(failure(
+                TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
+                "the retained candidate does not match the source and output ranges",
+            ));
+        }
+        let reason = if report
+            .required_sentence_indices
+            .contains(&sentence.sentence_index)
+        {
+            "必須指定"
+        } else {
+            "頻度・位置による選択"
+        };
+        lines.push(format!(
+            "選択文 元本文第{}文 / 選択順{} / {reason} / 評点 {}/{}",
+            sentence.sentence_index + 1,
+            sentence.selection_rank,
+            sentence.score_numerator,
+            sentence.score_denominator,
+        ));
+        lines.push(format!(
+            "  元本文 byte[{}..{}) → 候補出力 byte[{}..{}) / SHA-256: {} / 原文: {:?}",
+            sentence.source_start,
+            sentence.source_end,
+            sentence.output_start,
+            sentence.output_end,
+            digest(sentence.text.as_bytes()),
+            preview(&sentence.text),
+        ));
+    }
+    lines.push(
+        "選択と原文の一致を再確認しました。目的・意味・条件・否定の網羅と事実性は未検証です。"
+            .into(),
+    );
+    Ok(lines)
 }
 
 fn text_location_explanation_lines(
@@ -2857,6 +2990,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

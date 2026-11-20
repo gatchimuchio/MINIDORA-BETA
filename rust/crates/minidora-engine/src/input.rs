@@ -49,6 +49,8 @@ pub(crate) const TEXT_EDIT_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v106-text-edit-explanation";
 pub(crate) const TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v107-text-composition-explanation";
+pub(crate) const TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v108-text-summary-candidate-explanation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -216,7 +218,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
         Intent::CsvSelectIndex { .. } => CSV_POSITIONAL_SELECTION_PARSER_VERSION,
-        Intent::ExplainPrevious => TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION,
+        // A derived conclusion keeps the existing proof follow-up contract.
+        Intent::ExplainPrevious
+            if previous.is_some_and(|result| result.guarantee == Guarantee::Derived) =>
+        {
+            PARSER_VERSION
+        }
+        Intent::ExplainPrevious => TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }
