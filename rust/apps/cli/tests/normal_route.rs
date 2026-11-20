@@ -10900,6 +10900,130 @@ fn structured_comparison_json_exact_values_and_pointer_differences() {
     }
 }
 
+#[test]
+fn json_comparison_explanation_preserves_nested_side_evidence_and_semantic_equality() {
+    let changed_left = r#"{"a/b~c":{"change":["\u732b"],"gone":null},"same":1.00}"#;
+    let changed_right = r#"{"a/b~c":{"change":["犬"],"new":null},"same":1}"#;
+    let equal_left = r#"{"a/b~c":[1,-0,9007199254740993,1.2300e+40,"猫"],"empty":[]}"#;
+    let equal_right = r#"{"empty":[],"\u0061/b~c":[1.0,0,9007199254740993.0,123e38,"\u732b"]}"#;
+    let differences = [
+        (
+            "/a~1b~0c/change/0",
+            "CHANGED",
+            Some((r#"["\u732b"]"#, r#""\u732b""#)),
+            Some((r#"["犬"]"#, r#""犬""#)),
+        ),
+        (
+            "/a~1b~0c/gone",
+            "REMOVED",
+            Some((r#""gone":null"#, "null")),
+            None,
+        ),
+        (
+            "/a~1b~0c/new",
+            "ADDED",
+            None,
+            Some((r#""new":null"#, "null")),
+        ),
+    ];
+    for (left, right, header, equal) in [
+        (changed_left, changed_right, "JSONを比較して:", false),
+        (equal_left, equal_right, "json-compare:", true),
+    ] {
+        let scratch = Scratch::new();
+        let source = comparison_wrapper(left, right);
+        let request = format!("{header}\r\n{source}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "json-compare", &request],
+        ));
+        let report = normal_row_report(&scratch.0, "owner", &first, &request, &source);
+        assert_comparison_side_hashes(&report, left, right);
+        assert_ne!(report["left_sha256"], report["right_sha256"]);
+        assert_eq!(report["comparison"], "JSON_STRUCTURAL_EXACT_DECIMAL");
+        assert_eq!(report["equal"], equal);
+        let expected_differences: Vec<_> = differences
+            .iter()
+            .take(if equal { 0 } else { differences.len() })
+            .map(|&(pointer, change, l, r)| {
+                serde_json::json!({
+                    "pointer":pointer,"change":change,
+                    "left":l.map(|(fragment,raw)|comparison_fixture_span(&source,left,fragment,raw)),
+                    "right":r.map(|(fragment,raw)|comparison_fixture_span(&source,right,fragment,raw))
+                })
+            })
+            .collect();
+        assert_eq!(
+            report["differences"],
+            serde_json::json!(expected_differences)
+        );
+        let explained =
+            assert_table_explanation(&scratch.0, &first, &report, "previous-json-comparison");
+        let text = explained["text"].as_str().unwrap();
+        for expected in [
+            "前回のJSON構造比較".to_string(),
+            format!(
+                "比較結果: {}。差分数: {}。",
+                if equal { "一致" } else { "不一致" },
+                expected_differences.len()
+            ),
+            format!(
+                "左の値 SHA-256: {}",
+                minidora_domain::digest(left.as_bytes())
+            ),
+            format!(
+                "右の値 SHA-256: {}",
+                minidora_domain::digest(right.as_bytes())
+            ),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains(" JSON Pointer "))
+                .count(),
+            expected_differences.len()
+        );
+        let mut previous_heading = None;
+        for (index, &(pointer, change, l, r)) in differences
+            .iter()
+            .take(expected_differences.len())
+            .enumerate()
+        {
+            let heading = format!("差分{} JSON Pointer {pointer:?} {change}", index + 1);
+            let heading_index = lines
+                .iter()
+                .position(|line| line.contains(&heading))
+                .unwrap();
+            if let Some(previous) = previous_heading {
+                assert!(previous < heading_index);
+            }
+            previous_heading = Some(heading_index);
+            for (offset, label, side, selection) in [(1, "左", left, l), (2, "右", right, r)] {
+                let expected = if let Some((fragment, raw)) = selection {
+                    let span = comparison_fixture_span(&source, side, fragment, raw);
+                    format!(
+                        "{label} 元 byte[{}..{}) sha256={} 原文={raw:?}",
+                        span["source_start"].as_u64().unwrap(),
+                        span["source_end"].as_u64().unwrap(),
+                        minidora_domain::digest(raw.as_bytes())
+                    )
+                } else {
+                    format!("{label} 対応する値なし")
+                };
+                assert!(
+                    lines[heading_index + offset].contains(&expected),
+                    "missing {expected:?} in {}",
+                    lines[heading_index + offset]
+                );
+            }
+        }
+    }
+}
+
 fn assert_json_table_comparison(
     report: &Value,
     source: &str,

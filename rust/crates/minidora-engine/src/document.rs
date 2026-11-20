@@ -228,8 +228,11 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_object_project =
-        explanation_parser_version == crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION;
+    let explain_json_comparison = explanation_parser_version
+        == crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION;
+    let explain_object_project = explain_json_comparison
+        || explanation_parser_version
+            == crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION;
     let explain_json_value = explain_object_project
         || explanation_parser_version == crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION;
     let explain_conversion = explain_json_value
@@ -331,6 +334,14 @@ pub(crate) fn previous_document_explanation(
                         "the prior JSON object projection has no retained sealed input bundle",
                     ));
                 }
+                if explain_json_comparison
+                    && serde_json::from_slice::<crate::ports::JsonComparisonReport>(&bytes).is_ok()
+                {
+                    return Err(failure(
+                        "JSON_VALUE_CONTEXT_INVALID",
+                        "the prior JSON comparison has no retained sealed input bundle",
+                    ));
+                }
             }
             return Ok(None);
         }
@@ -338,6 +349,7 @@ pub(crate) fn previous_document_explanation(
     let explain_json = match bundle.meaning.intent {
         Intent::JsonPointer { .. } | Intent::JsonStatistics { .. } => explain_json_value,
         Intent::JsonObjectProject { .. } => explain_object_project,
+        Intent::JsonCompare { .. } => explain_json_comparison,
         _ => false,
     };
     if explain_json {
@@ -763,6 +775,22 @@ fn previous_json_value_explanation(
                 lines,
             )
         }
+        Intent::JsonCompare { document } => {
+            let report = crate::ports::json_compare(document)?;
+            let report_ref = verify_report(
+                &canonical(&report)?,
+                &serde_json::to_string_pretty(&report)?,
+                "JSON structural comparison",
+            )?;
+            let lines = json_comparison_lines(document, &report, &report_ref)?;
+            (
+                "previous-json-comparison-input",
+                "previous-json-comparison-report",
+                document,
+                report_ref,
+                lines,
+            )
+        }
         _ => unreachable!("only sealed JSON value operations use this explanation"),
     };
     lines.splice(
@@ -789,6 +817,70 @@ fn previous_json_value_explanation(
 
 fn json_value_range(raw: &str, start: usize, end: usize) -> String {
     format!("元 byte[{start}..{end}) sha256={}", digest(raw.as_bytes()))
+}
+
+fn json_comparison_lines(
+    document: &str,
+    report: &crate::ports::JsonComparisonReport,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_DIFFERENCES: usize = 8;
+    let result = if report.equal { "一致" } else { "不一致" };
+    let mut lines = vec![
+        "前回のJSON構造比較を、封印済みの元入力から再計算しました。".into(),
+        format!("比較結果: {result}。差分数: {}。", report.differences.len()),
+        "オブジェクトのキー順は無視し、配列は同じ位置、文字列は復号後の内容、数値は厳密な十進値で比較しました。".into(),
+        format!("左の値 SHA-256: {}", report.left_sha256),
+        format!("右の値 SHA-256: {}", report.right_sha256),
+        format!("report artifact SHA-256: {report_ref}"),
+    ];
+    if !report.differences.is_empty() {
+        lines.push(
+            "JSON Pointerは左右それぞれの比較対象を起点とし、空文字は対象全体を指します。".into(),
+        );
+    }
+    for (index, difference) in report
+        .differences
+        .iter()
+        .take(PREVIEW_DIFFERENCES)
+        .enumerate()
+    {
+        lines.push(format!(
+            "差分{} JSON Pointer {:?} {}",
+            index + 1,
+            preview(&difference.pointer),
+            difference.change,
+        ));
+        for (side, span) in [("左", &difference.left), ("右", &difference.right)] {
+            let Some(span) = span else {
+                lines.push(format!("{side} 対応する値なし"));
+                continue;
+            };
+            let raw = document
+                .get(span.source_start..span.source_end)
+                .filter(|value| digest(value.as_bytes()) == span.source_sha256)
+                .ok_or_else(|| {
+                    failure(
+                        "JSON_VALUE_CONTEXT_INVALID",
+                        "a JSON difference does not match its original source range",
+                    )
+                })?;
+            lines.push(format!(
+                "{side} 元 byte[{}..{}) sha256={} 原文={:?}",
+                span.source_start,
+                span.source_end,
+                span.source_sha256,
+                preview(raw),
+            ));
+        }
+    }
+    if report.differences.len() > PREVIEW_DIFFERENCES {
+        lines.push(format!(
+            "残りの差分 {}件は保存レポートに保持されています。",
+            report.differences.len() - PREVIEW_DIFFERENCES,
+        ));
+    }
+    Ok(lines)
 }
 
 fn json_object_projection_lines(
@@ -2260,6 +2352,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
             | crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION
             | crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
+            | crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [
