@@ -1,7 +1,7 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
-use crate::store::Store;
+use crate::store::{Store, VerifiedCaseHistory};
 use minidora_domain::{
     ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, Result, ResultRecord,
     canonical, digest, failure, identity,
@@ -1311,6 +1311,7 @@ pub(crate) fn verify_source_explanation_result(
     input: &InputBundle,
     result: &ResultRecord,
     proof: &PreviousResultSummaryExplanation,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<()> {
     let request = &input.request;
     let actor = &request.actor_id;
@@ -1322,13 +1323,14 @@ pub(crate) fn verify_source_explanation_result(
         )
     };
     let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
+    let retained = match history {
+        Some(history) => history.input_result(&result.input_id, result.input_version)?,
+        None => store.get_input_result(actor, case, &result.input_id, result.input_version)?,
+    };
     if result.lifecycle != Lifecycle::Commit
         || result.guarantee != Guarantee::Hypothesis
         || identity(request)? != result.id
-        || store
-            .get_input_result(actor, case, &result.input_id, result.input_version)?
-            .as_ref()
-            != Some(result)
+        || retained.as_ref() != Some(result)
         || result.calculation.is_some()
         || !result.evidence.is_empty()
         || plan.locale != request.locale
@@ -1762,12 +1764,11 @@ struct SourceExplanationStep<'a> {
 
 fn explicit_explanation_source<'a>(
     store: &Store,
+    history: &VerifiedCaseHistory<'_>,
     bundle: &InputBundle,
     prior_results: &'a BTreeMap<String, ResultRecord>,
     context: &'a ResultRecord,
 ) -> Result<Option<SourceFollowup<'a>>> {
-    let actor = &bundle.request.actor_id;
-    let case = &bundle.request.case_id;
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
@@ -1783,8 +1784,8 @@ fn explicit_explanation_source<'a>(
             .ok_or_else(invalid)
     };
     let registered = |result: &ResultRecord| {
-        store
-            .get_input_bundle(actor, case, &result.input_id, result.input_version)?
+        history
+            .input_bundle(&result.input_id, result.input_version)?
             .map(|(_, input)| input)
             .ok_or_else(invalid)
     };
@@ -1854,7 +1855,7 @@ fn explicit_explanation_source<'a>(
                 prior_results,
                 step.derivation,
                 derivation_plan,
-                Some(scope),
+                Some((scope, history)),
             )?
         } else {
             previous_source_summary_explanation(
@@ -1864,14 +1865,20 @@ fn explicit_explanation_source<'a>(
                 prior_results,
                 step.derivation,
                 derivation_plan,
-                Some(scope),
+                Some((scope, history)),
             )?
         };
         let Some(proof) = proof.filter(|proof| proof.source_context_ref.is_some()) else {
             scope = SourceFollowup::direct(step.detail);
             continue;
         };
-        verify_source_explanation_result(store, &step.detail_input, step.detail, &proof)?;
+        verify_source_explanation_result(
+            store,
+            &step.detail_input,
+            step.detail,
+            &proof,
+            Some(history),
+        )?;
         scope.context = step.detail;
     }
     Ok(Some(scope))
@@ -1887,7 +1894,10 @@ pub(crate) fn source_followup_context<'a>(
     if bundle.meaning.parser_version
         == crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     {
-        return explicit_explanation_source(store, bundle, prior_results, context);
+        let request = &bundle.request;
+        return store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
+            explicit_explanation_source(store, history, bundle, prior_results, context)
+        });
     }
     direct_source_followup(store, bundle, prior_results, context)
 }
@@ -2135,7 +2145,7 @@ fn previous_source_summary_explanation<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     summary_result: &ResultRecord,
     plan: &ContentPlan,
-    resolved: Option<SourceFollowup<'a>>,
+    resolved: Option<(SourceFollowup<'a>, &VerifiedCaseHistory<'_>)>,
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let version = explanation.meaning.parser_version.as_str();
     let legacy = version == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
@@ -2157,7 +2167,7 @@ fn previous_source_summary_explanation<'a>(
         prior_results,
         summary_result,
         plan,
-        resolved,
+        resolved.map(|(scope, _)| scope),
     )?
     else {
         return Ok(None);
@@ -2180,14 +2190,16 @@ fn previous_source_summary_explanation<'a>(
             "the original retrieval result is missing",
         )
     })?;
-    let (_, source_bundle) = store
-        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
-        .ok_or_else(|| {
-            failure(
-                "SOURCE_SUMMARY_CONTEXT_INVALID",
-                "the original retrieval request is missing",
-            )
-        })?;
+    let (_, source_bundle) = match resolved {
+        Some((_, history)) => history.input_bundle(&source.input_id, source.input_version),
+        None => store.get_input_bundle(actor, case, &source.input_id, source.input_version),
+    }?
+    .ok_or_else(|| {
+        failure(
+            "SOURCE_SUMMARY_CONTEXT_INVALID",
+            "the original retrieval request is missing",
+        )
+    })?;
     if source.id != identity(&source_bundle.request)? {
         return Err(failure(
             "SOURCE_SUMMARY_CONTEXT_INVALID",
@@ -2338,7 +2350,7 @@ fn previous_source_question_explanation<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     question_result: &ResultRecord,
     plan: &ContentPlan,
-    resolved: Option<SourceFollowup<'a>>,
+    resolved: Option<(SourceFollowup<'a>, &VerifiedCaseHistory<'_>)>,
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let version = explanation.meaning.parser_version.as_str();
     let legacy = matches!(
@@ -2362,7 +2374,7 @@ fn previous_source_question_explanation<'a>(
         prior_results,
         question_result,
         plan,
-        resolved,
+        resolved.map(|(scope, _)| scope),
     )?
     else {
         return Ok(None);
@@ -2388,9 +2400,11 @@ fn previous_source_question_explanation<'a>(
     let source = prior_results
         .get(&proof.source_result_id)
         .ok_or_else(invalid)?;
-    let (_, source_bundle) = store
-        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
-        .ok_or_else(invalid)?;
+    let (_, source_bundle) = match resolved {
+        Some((_, history)) => history.input_bundle(&source.input_id, source.input_version),
+        None => store.get_input_bundle(actor, case, &source.input_id, source.input_version),
+    }?
+    .ok_or_else(invalid)?;
     if source.id != identity(&source_bundle.request)? {
         return Err(invalid());
     }

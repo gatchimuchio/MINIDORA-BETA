@@ -3501,7 +3501,7 @@ pub(crate) fn source_followup_anchor<'a>(
         let Some(anchor_id) = proof.source_context_ref.as_ref() else {
             return Ok(None);
         };
-        crate::text_summary::verify_source_explanation_result(store, bundle, result, &proof)?;
+        crate::text_summary::verify_source_explanation_result(store, bundle, result, &proof, None)?;
         // Keep the already verified source scope as the next implicit context.
         let anchor = state.prior_results.get(anchor_id).ok_or_else(mismatch)?;
         return Ok(Some(anchor));

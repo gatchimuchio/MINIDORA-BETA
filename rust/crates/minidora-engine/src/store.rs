@@ -109,6 +109,30 @@ pub struct Store {
     blobs: PathBuf,
 }
 
+/// Exact input and result reads in one authenticated, verified SQLite snapshot.
+pub(crate) struct VerifiedCaseHistory<'a> {
+    store: &'a Store,
+    connection: &'a Connection,
+    actor: &'a str,
+    case: &'a str,
+}
+
+impl VerifiedCaseHistory<'_> {
+    pub(crate) fn input_bundle(
+        &self,
+        input: &str,
+        version: u64,
+    ) -> Result<Option<(String, InputBundle)>> {
+        self.store
+            .read_input_bundle(self.connection, self.actor, self.case, input, version)
+    }
+
+    pub(crate) fn input_result(&self, input: &str, version: u64) -> Result<Option<ResultRecord>> {
+        self.store
+            .read_input_result(self.connection, self.case, input, version)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum IndexedMemoryValue {
     Fact(Fact),
@@ -1472,7 +1496,17 @@ impl Store {
             return Ok(None);
         }
         self.verify_case(case)?;
-        let sha: Option<String> = sql(self.connection.query_row(
+        self.read_input_result(&self.connection, case, input, version)
+    }
+
+    fn read_input_result(
+        &self,
+        connection: &Connection,
+        case: &str,
+        input: &str,
+        version: u64,
+    ) -> Result<Option<ResultRecord>> {
+        let sha: Option<String> = sql(connection.query_row(
             "SELECT result_sha256 FROM input_identity WHERE case_id=?1 AND input_id=?2 AND input_version=?3",
             params![case, input, integer(version)?], |r| r.get(0),
         ).optional())?.flatten();
@@ -1554,7 +1588,42 @@ impl Store {
             return Ok(None);
         }
         self.verify_case(case)?;
-        let registered: Option<(String, String, Option<String>)> = sql(self.connection.query_row(
+        self.read_input_bundle(&self.connection, actor, case, input, version)
+    }
+
+    /// Keep all history lookups for one proof on the same read snapshot.
+    /// The caller must finish reading before advancing the case or issuing an effect.
+    pub(crate) fn with_verified_case_history<T>(
+        &self,
+        actor: &str,
+        case: &str,
+        read: impl FnOnce(&VerifiedCaseHistory<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let transaction = sql(Transaction::new_unchecked(
+            &self.connection,
+            TransactionBehavior::Deferred,
+        ))?;
+        Self::require_case(&transaction, actor, case)?;
+        self.verify_case(case)?;
+        let value = read(&VerifiedCaseHistory {
+            store: self,
+            connection: &transaction,
+            actor,
+            case,
+        })?;
+        sql(transaction.commit())?;
+        Ok(value)
+    }
+
+    fn read_input_bundle(
+        &self,
+        connection: &Connection,
+        actor: &str,
+        case: &str,
+        input: &str,
+        version: u64,
+    ) -> Result<Option<(String, InputBundle)>> {
+        let registered: Option<(String, String, Option<String>)> = sql(connection.query_row(
             "SELECT fingerprint,request_sha256,bundle_sha256 FROM input_identity WHERE case_id=?1 AND input_id=?2 AND input_version=?3",
             params![case, input, integer(version)?],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -2595,6 +2664,163 @@ mod tests {
             error,
             minidora_domain::Error::Contract { code, .. } if code == "ACCESS_DENIED"
         ));
+    }
+
+    #[test]
+    fn verified_case_history_keeps_snapshot_and_rechecks_new_operations() {
+        fn append_stopped_input(
+            store: &Store,
+            request: &RequestEnvelope,
+            prior: Option<&CaseRevision>,
+        ) -> (CaseRevision, InputBundle, ResultRecord) {
+            assert!(
+                store
+                    .register_input("alice", request, &identity(request).unwrap())
+                    .unwrap()
+            );
+            let mut initial = received(request);
+            if let Some(prior) = prior {
+                initial.revision = prior.revision + 1;
+                initial.parent_revision = Some(prior.revision);
+                initial.prior_results = prior.prior_results.clone();
+                if let Some(result) = &prior.result {
+                    initial
+                        .prior_results
+                        .insert(result.id.clone(), result.clone());
+                }
+            }
+            store.append_case("alice", &initial).unwrap();
+            let bundle = crate::input::seal(request, None).unwrap();
+            let mut next = sealed(store, request, &initial);
+            next.bundle = Some(bundle.clone());
+            store.append_case("alice", &next).unwrap();
+            let result = ResultRecord {
+                id: identity(request).unwrap(),
+                input_id: request.input_id.clone(),
+                input_version: request.input_version,
+                lifecycle: Lifecycle::Suspend,
+                text: format!("retained test stop for {}", request.text),
+                reason: Some("TEST_BOUNDARY".into()),
+                guarantee: Guarantee::Unknown,
+                calculation: None,
+                content_plan: None,
+                render: None,
+                receipts: vec![],
+                evidence: vec![],
+                dependencies: vec![],
+                actor_memory_revision: None,
+                execution_graph_ref: None,
+            };
+            next.parent_revision = Some(next.revision);
+            next.revision += 1;
+            next.lifecycle = Lifecycle::Suspend;
+            next.reason = result.reason.clone();
+            next.result = Some(result.clone());
+            store.append_case("alice", &next).unwrap();
+            (next, bundle, result)
+        }
+
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        let (original_revision, original_bundle, original_result) =
+            append_stopped_input(&store, &request, None);
+        let expected_original = Some((
+            digest(&canonical(&original_bundle).unwrap()),
+            original_bundle,
+        ));
+        assert_eq!(
+            store
+                .get_input_bundle("alice", "case-a", "input-a", 1)
+                .unwrap(),
+            expected_original
+        );
+        assert_eq!(
+            store
+                .get_input_result("alice", "case-a", "input-a", 1)
+                .unwrap(),
+            Some(original_result.clone())
+        );
+        let writer = Store::open(&directory.0).unwrap();
+        let mut new_request = request.clone();
+        new_request.input_version = 2;
+        new_request.text = "3+4".into();
+
+        let (new_bundle, new_result) = store
+            .with_verified_case_history("alice", "case-a", |history| {
+                assert_eq!(history.input_bundle("input-a", 1)?, expected_original);
+                assert_eq!(
+                    history.input_result("input-a", 1)?,
+                    Some(original_result.clone())
+                );
+                assert!(history.input_bundle("input-a", 2)?.is_none());
+                assert!(history.input_result("input-a", 2)?.is_none());
+                let (_, bundle, result) =
+                    append_stopped_input(&writer, &new_request, Some(&original_revision));
+                assert_eq!(
+                    writer.get_input_bundle("alice", "case-a", "input-a", 2)?,
+                    Some((digest(&canonical(&bundle)?), bundle.clone()))
+                );
+                assert_eq!(
+                    writer.get_input_result("alice", "case-a", "input-a", 2)?,
+                    Some(result.clone())
+                );
+                assert!(history.input_bundle("input-a", 2)?.is_none());
+                assert!(history.input_result("input-a", 2)?.is_none());
+                assert_eq!(history.input_bundle("input-a", 1)?, expected_original);
+                assert_eq!(
+                    history.input_result("input-a", 1)?,
+                    Some(original_result.clone())
+                );
+                Ok((bundle, result))
+            })
+            .unwrap();
+
+        store
+            .with_verified_case_history("alice", "case-a", |history| {
+                assert_eq!(history.input_bundle("input-a", 1)?, expected_original);
+                assert_eq!(history.input_result("input-a", 1)?, Some(original_result));
+                assert_eq!(
+                    history.input_bundle("input-a", 2)?,
+                    Some((digest(&canonical(&new_bundle)?), new_bundle))
+                );
+                assert_eq!(
+                    history.input_result("input-a", 2)?,
+                    Some(new_result.clone())
+                );
+                assert!(history.input_bundle("missing", 1)?.is_none());
+                assert!(history.input_result("missing", 1)?.is_none());
+                Ok(())
+            })
+            .unwrap();
+
+        let called = std::cell::Cell::new(false);
+        let error = store
+            .with_verified_case_history("bob", "case-a", |_| {
+                called.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(!called.get());
+        assert!(
+            matches!(error, minidora_domain::Error::Contract { code, .. } if code == "ACCESS_DENIED")
+        );
+
+        let result_ref = digest(&canonical(&new_result).unwrap());
+        fs::write(
+            directory.0.join("blobs").join(result_ref),
+            b"corrupt retained result",
+        )
+        .unwrap();
+        let error = store
+            .with_verified_case_history("alice", "case-a", |history| {
+                history.input_result("input-a", 2)
+            })
+            .unwrap_err();
+        assert!(
+            matches!(error, minidora_domain::Error::Contract { code, .. } if code == "INTEGRITY_FAILURE")
+        );
+        assert!(store.connection.is_autocommit());
     }
 
     fn run_store_workers(store_directory: &Path, mode: &str, records: [Vec<u8>; 2]) -> Vec<String> {
