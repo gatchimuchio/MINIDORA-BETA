@@ -15421,6 +15421,228 @@ fn explicit_text_composition_normal_route_preserves_materials_and_artifact_linea
 }
 
 #[test]
+fn text_composition_explanation_preserves_escaped_material_layout_and_effective_units() {
+    let scratch = Scratch::new();
+    let material = "猫🙂KeepOmit";
+    let raw_material = r#""\u732b🙂KeepOmit""#;
+    let declarations = serde_json::json!([
+        {"id":"condition","kind":"condition","fragments":[{"material":"source","start":7,"end":11}],"with":[],"required":false,"protected":false},
+        {"id":"optional","kind":"paragraph","fragments":[{"material":"source","start":11,"end":15}],"with":[],"required":false,"protected":false},
+        {"id":"title","kind":"heading","fragments":[{"material":"source","start":0,"end":7}],"with":[],"required":false,"protected":false}
+    ]);
+    let body = format!(
+        r#"{{"materials":[{{"id":"source","text":{raw_material}}}],"units":{declarations},"order":["title"],"max_chars":64}}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<String>(raw_material).unwrap(),
+        material
+    );
+    assert_eq!(body.matches(raw_material).count(), 1);
+    let material_start = body.find(raw_material).unwrap();
+    let material_end = material_start + raw_material.len();
+    let directive_range = |index: usize| {
+        let raw = declarations[index].to_string();
+        assert_eq!(body.matches(&raw).count(), 1);
+        let start = body.find(&raw).unwrap();
+        (start, start + raw.len())
+    };
+    let directive_origin = |index, id: &str| {
+        let (start, end) = directive_range(index);
+        serde_json::json!({"kind":"UNIT_DIRECTIVE","unit_id":id,"unit_json_start":start,"unit_json_end":end})
+    };
+    let material_origin = |start, end| serde_json::json!({"kind":"MATERIAL_TEXT","material_id":"source","material_json_start":material_start,"material_json_end":material_end,"text_start":start,"text_end":end});
+    let expected_output = "# 猫🙂\n\n条件: Keep";
+    let spans = [
+        (0, 2, "# ", directive_origin(2, "title")),
+        (2, 9, "猫🙂", material_origin(0, 7)),
+        (9, 11, "\n\n", directive_origin(0, "condition")),
+        (11, 19, "条件: ", directive_origin(0, "condition")),
+        (19, 23, "Keep", material_origin(7, 11)),
+    ];
+    let expected_spans: Vec<_> = spans
+        .iter()
+        .map(|(start, end, text, origin)| {
+            assert_eq!(&expected_output[*start..*end], *text);
+            serde_json::json!({"output_start":start,"output_end":end,"text":text,"origin":origin})
+        })
+        .collect();
+    let units = [
+        ("title", "heading", false, false, 2, 0, 9),
+        ("condition", "condition", true, true, 0, 11, 23),
+    ];
+    let expected_units: Vec<_> = units.iter().map(|&(id,role,required,protected,index,start,end)| {
+        let (directive_start,directive_end)=directive_range(index);
+        serde_json::json!({"id":id,"role":role,"required":required,"protected":protected,"directive_json_start":directive_start,"directive_json_end":directive_end,"output_start":start,"output_end":end})
+    }).collect();
+    let request = format!("文章を構成して:\r\n{body}");
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "compose-before-explanation", &request],
+    ));
+    assert_eq!(first["lifecycle"], "COMMIT");
+    assert_eq!(first["guarantee"], "USER_PREMISE");
+    assert_eq!(first["text"], expected_output);
+    assert_eq!(first["content_plan"]["text"], first["text"]);
+    assert_eq!(first["render"]["status"], "RENDERED");
+    assert_eq!(
+        first["render"]["actual_sha256"],
+        minidora_domain::digest(expected_output.as_bytes())
+    );
+    assert_eq!(first["receipts"], serde_json::json!([]));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let report = sequence_artifact(&store, &first["dependencies"][0]);
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(&report).unwrap());
+    assert_eq!(first["dependencies"], serde_json::json!([report_ref]));
+    assert_eq!(report["operation"], "TEXT_COMPOSE_EXPLICIT_FRAGMENTS");
+    assert_eq!(report["source_document"], body);
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(body.as_bytes())
+    );
+    assert_eq!(report["text"], expected_output);
+    assert_eq!(
+        report["output_sha256"],
+        minidora_domain::digest(expected_output.as_bytes())
+    );
+    assert_eq!(
+        report["selected_unit_ids"],
+        serde_json::json!(["title", "condition"])
+    );
+    assert_eq!(report["omitted_unit_ids"], serde_json::json!(["optional"]));
+    assert_eq!(report["units"], serde_json::json!(expected_units));
+    assert_eq!(report["spans"], serde_json::json!(expected_spans));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["document"], body);
+    let explained = assert_document_explanation(
+        &scratch.0,
+        &first,
+        &report,
+        "previous-text-composition",
+        "USER_PREMISE",
+        "依頼JSON",
+    );
+    let text = explained["text"].as_str().unwrap();
+    for expected in [
+        "前回の文章構成".to_string(),
+        "採用単位数: 2。未採用単位数: 1。出力区間数: 5。".to_string(),
+        "未採用単位: \"optional\"".to_string(),
+        format!(
+            "構成後本文 SHA-256: {}",
+            minidora_domain::digest(expected_output.as_bytes())
+        ),
+    ] {
+        assert!(text.contains(&expected), "missing {expected:?} in {text}");
+    }
+    let lines: Vec<_> = text.lines().collect();
+    let mut previous_unit = None;
+    for (index, &(id, role, required, protected, _, start, end)) in units.iter().enumerate() {
+        let expected = format!(
+            "採用単位{} {id:?} 役割={role} 必須={required} 保護={protected} 出力 byte[{start}..{end})",
+            index + 1
+        );
+        let position = lines
+            .iter()
+            .position(|line| *line == expected)
+            .unwrap_or_else(|| panic!("missing {expected:?} in {text}"));
+        if let Some(previous) = previous_unit {
+            assert!(previous < position);
+        }
+        previous_unit = Some(position);
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("出力区間"))
+            .count(),
+        spans.len()
+    );
+    let mut previous_span = None;
+    for (index, (start, end, piece, origin)) in spans.iter().enumerate() {
+        let expected = format!(
+            "出力区間{} byte[{start}..{end}) sha256={} 出力={piece:?}",
+            index + 1,
+            minidora_domain::digest(piece.as_bytes())
+        );
+        let position = lines
+            .iter()
+            .position(|line| *line == expected)
+            .unwrap_or_else(|| panic!("missing {expected:?} in {text}"));
+        if let Some(previous) = previous_span {
+            assert!(previous < position);
+        }
+        previous_span = Some(position);
+        let source_line = if origin["kind"] == "MATERIAL_TEXT" {
+            let start = origin["text_start"].as_u64().unwrap() as usize;
+            let end = origin["text_end"].as_u64().unwrap() as usize;
+            assert_eq!(&material[start..end], *piece);
+            format!(
+                "素材 \"source\" 復号後 byte[{start}..{end}) 依頼JSON byte[{material_start}..{material_end}) sha256={}",
+                minidora_domain::digest(raw_material.as_bytes())
+            )
+        } else {
+            let id = origin["unit_id"].as_str().unwrap();
+            let start = origin["unit_json_start"].as_u64().unwrap() as usize;
+            let end = origin["unit_json_end"].as_u64().unwrap() as usize;
+            format!(
+                "書式 単位 {id:?} 依頼JSON byte[{start}..{end}) sha256={}",
+                minidora_domain::digest(body[start..end].as_bytes())
+            )
+        };
+        assert_eq!(lines[position + 1], source_line);
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn explicit_text_composition_limits_retained_artifact_before_delivery() {
+    let scratch = Scratch::new();
+    let body = serde_json::json!({
+        "materials":[{"id":"short","text":"x"},{"id":"unused","text":"z".repeat(4096)}],
+        "units":[{"id":"tiny","kind":"heading","fragments":[{"material":"short","start":0,"end":1}],"with":[],"required":false,"protected":false}],
+        "order":["tiny"],"max_chars":16
+    }).to_string();
+    let request = format!("text-compose:\n{body}");
+    let target = scratch.0.join("budget-limited-composition.txt");
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "composition-report-budget",
+                "--max-evidence-bytes",
+                "128",
+                "--output",
+                target.to_str().unwrap(),
+                "--allow-write",
+                target.to_str().unwrap(),
+                &request,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert_eq!(result["guarantee"], "UNKNOWN");
+    assert_eq!(result["dependencies"], serde_json::json!([]));
+    assert_eq!(result["receipts"], serde_json::json!([]));
+    assert!(result["content_plan"].is_null());
+    assert!(!target.exists());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], request);
+    assert_eq!(saved["result"], result);
+}
+
+#[test]
 fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverage() {
     let source = "猫たちは 川沿いで 走る。猫たちは 川沿いで 休む。雨の日は 近づかない。";
     for header in ["文章を要約して:", "text-summary:"] {

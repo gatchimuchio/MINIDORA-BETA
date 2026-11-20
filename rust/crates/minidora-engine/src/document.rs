@@ -234,11 +234,13 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
     }
-    let explain_text_edit =
-        explanation_parser_version == crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION;
-    let explain_text_location = explain_text_edit
-        || explanation_parser_version == crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION;
-    if explain_text_location && previous.guarantee == Guarantee::UserPremise {
+    let explain_text_document = matches!(
+        explanation_parser_version,
+        crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+    );
+    if explain_text_document && previous.guarantee == Guarantee::UserPremise {
         return previous_text_document_explanation(
             store,
             actor,
@@ -246,14 +248,14 @@ pub(crate) fn previous_document_explanation(
             previous,
             budget,
             started,
-            explain_text_edit,
+            explanation_parser_version,
         );
     }
     if previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
     let max_evidence_bytes = budget.max_evidence_bytes;
-    let explain_csv_select_index = explain_text_location
+    let explain_csv_select_index = explain_text_document
         || explanation_parser_version == crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION;
     let explain_json_comparison = explain_csv_select_index
         || explanation_parser_version
@@ -724,10 +726,15 @@ fn previous_text_document_explanation(
     previous: &ResultRecord,
     budget: &ResourceBudget,
     started: Instant,
-    explain_text_edit: bool,
+    explanation_parser_version: &str,
 ) -> Result<Option<PriorDocumentExplanation>> {
     const LOCATION_INVALID: &str = "TEXT_LOCATION_CONTEXT_INVALID";
     const EDIT_INVALID: &str = "TEXT_EDIT_CONTEXT_INVALID";
+    const COMPOSITION_INVALID: &str = "TEXT_COMPOSITION_CONTEXT_INVALID";
+    let explain_composition =
+        explanation_parser_version == crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION;
+    let explain_text_edit = explain_composition
+        || explanation_parser_version == crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION;
     let Some((bundle_ref, bundle)) =
         store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
     else {
@@ -759,14 +766,28 @@ fn previous_text_document_explanation(
                 "the prior text edit has no retained sealed input",
             ));
         }
+        if explain_composition
+            && let [report_ref] = previous.dependencies.as_slice()
+            && let Some(bytes) = store.get_bytes_if_present(actor, case, report_ref)?
+            && serde_json::from_slice::<TextCompositionResult>(&bytes).is_ok_and(|report| {
+                report.operation == "TEXT_COMPOSE_EXPLICIT_FRAGMENTS"
+                    && report.text == previous.text
+                    && report.output_sha256 == digest(previous.text.as_bytes())
+                    && canonical(&report).is_ok_and(|expected| expected == bytes)
+            })
+        {
+            return Err(failure(
+                COMPOSITION_INVALID,
+                "the prior text composition has no retained sealed input",
+            ));
+        }
         return Ok(None);
     };
-    let (document, is_edit, code, label) = match &bundle.meaning.intent {
-        Intent::LocateTextReplacement { document } => {
-            (document, false, LOCATION_INVALID, "text location")
-        }
-        Intent::EditText { document } if explain_text_edit => {
-            (document, true, EDIT_INVALID, "text edit")
+    let (code, label) = match &bundle.meaning.intent {
+        Intent::LocateTextReplacement { .. } => (LOCATION_INVALID, "text location"),
+        Intent::EditText { .. } if explain_text_edit => (EDIT_INVALID, "text edit"),
+        Intent::ComposeText { .. } if explain_composition => {
+            (COMPOSITION_INVALID, "text composition")
         }
         _ => return Ok(None),
     };
@@ -806,31 +827,47 @@ fn previous_text_document_explanation(
         )?;
         Ok(report_ref)
     };
-    let (input_node, report_node, report_ref, lines) = if is_edit {
-        let report = edit_explicit_text(document, load, started, budget.deadline_ms)?;
-        let report_ref = verify_report(
-            &canonical(&report)?,
-            &report.consumed_artifacts,
-            report.text.as_bytes(),
-        )?;
-        let lines = text_edit_explanation_lines(&report, &bundle_ref, &report_ref)?;
-        (
-            "previous-text-edit-input",
-            "previous-text-edit-report",
-            report_ref,
-            lines,
-        )
-    } else {
-        let report = locate_explicit_replacement(document, load, started, budget.deadline_ms)?;
-        let report_bytes = canonical(&report)?;
-        let report_ref = verify_report(&report_bytes, &report.consumed_artifacts, &report_bytes)?;
-        let lines = text_location_explanation_lines(&report, &bundle_ref, &report_ref)?;
-        (
-            "previous-text-location-input",
-            "previous-text-location-report",
-            report_ref,
-            lines,
-        )
+    let (input_node, report_node, report_ref, lines) = match &bundle.meaning.intent {
+        Intent::EditText { document } => {
+            let report = edit_explicit_text(document, load, started, budget.deadline_ms)?;
+            let report_ref = verify_report(
+                &canonical(&report)?,
+                &report.consumed_artifacts,
+                report.text.as_bytes(),
+            )?;
+            let lines = text_edit_explanation_lines(&report, &bundle_ref, &report_ref)?;
+            (
+                "previous-text-edit-input",
+                "previous-text-edit-report",
+                report_ref,
+                lines,
+            )
+        }
+        Intent::LocateTextReplacement { document } => {
+            let report = locate_explicit_replacement(document, load, started, budget.deadline_ms)?;
+            let report_bytes = canonical(&report)?;
+            let report_ref =
+                verify_report(&report_bytes, &report.consumed_artifacts, &report_bytes)?;
+            let lines = text_location_explanation_lines(&report, &bundle_ref, &report_ref)?;
+            (
+                "previous-text-location-input",
+                "previous-text-location-report",
+                report_ref,
+                lines,
+            )
+        }
+        Intent::ComposeText { document } => {
+            let report = compose_explicit_text(document)?;
+            let report_ref = verify_report(&canonical(&report)?, &[], report.text.as_bytes())?;
+            let lines = text_composition_explanation_lines(&report, &bundle_ref, &report_ref)?;
+            (
+                "previous-text-composition-input",
+                "previous-text-composition-report",
+                report_ref,
+                lines,
+            )
+        }
+        _ => unreachable!("only sealed text document operations use this explanation"),
     };
     if lines.join("\n").len() > budget.max_evidence_bytes {
         return Err(failure(
@@ -979,6 +1016,127 @@ fn text_edit_explanation_lines(
             "残りの変更 {}件は保存レポートに保持されています。",
             report.changes.len() - PREVIEW_CHANGES,
         ));
+    }
+    Ok(lines)
+}
+
+fn text_composition_explanation_lines(
+    report: &TextCompositionResult,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_ITEMS: usize = 8;
+    const CODE: &str = "TEXT_COMPOSITION_CONTEXT_INVALID";
+    let source = |start, end| {
+        report.source_document.get(start..end).ok_or_else(|| {
+            failure(
+                CODE,
+                "a composition source range is outside the sealed JSON input",
+            )
+        })
+    };
+    let mut lines = vec![
+        "前回の文章構成を、封印済みの素材と構成指示から再確認しました。".into(),
+        format!(
+            "採用単位数: {}。未採用単位数: {}。出力区間数: {}。",
+            report.units.len(),
+            report.omitted_unit_ids.len(),
+            report.spans.len(),
+        ),
+        format!(
+            "文字数: {} / 上限 {}",
+            report.text.chars().count(),
+            report.max_chars
+        ),
+        format!("依頼JSON SHA-256: {}", report.source_sha256),
+        format!("構成後本文 SHA-256: {}", report.output_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+    ];
+    for (index, unit) in report.units.iter().take(PREVIEW_ITEMS).enumerate() {
+        lines.push(format!(
+            "採用単位{} {:?} 役割={} 必須={} 保護={} 出力 byte[{}..{})",
+            index + 1,
+            preview(&unit.id),
+            unit.role,
+            unit.required,
+            unit.protected,
+            unit.output_start,
+            unit.output_end,
+        ));
+    }
+    for id in report.omitted_unit_ids.iter().take(PREVIEW_ITEMS) {
+        lines.push(format!("未採用単位: {:?}", preview(id)));
+    }
+    for (index, span) in report.spans.iter().take(PREVIEW_ITEMS).enumerate() {
+        let output = report
+            .text
+            .get(span.output_start..span.output_end)
+            .filter(|text| *text == span.text)
+            .ok_or_else(|| failure(CODE, "a composition span differs from its verified output"))?;
+        let origin = match &span.origin {
+            TextCompositionOrigin::MaterialText {
+                material_id,
+                material_json_start,
+                material_json_end,
+                text_start,
+                text_end,
+            } => {
+                let token = source(*material_json_start, *material_json_end)?;
+                let decoded: String = serde_json::from_str(token).map_err(|_| {
+                    failure(
+                        CODE,
+                        "a composition material range has no exact JSON string",
+                    )
+                })?;
+                if decoded.get(*text_start..*text_end) != Some(output) {
+                    return Err(failure(
+                        CODE,
+                        "a composition range differs from its original material",
+                    ));
+                }
+                format!(
+                    "素材 {:?} 復号後 byte[{text_start}..{text_end}) 依頼JSON byte[{material_json_start}..{material_json_end}) sha256={}",
+                    preview(material_id),
+                    digest(token.as_bytes()),
+                )
+            }
+            TextCompositionOrigin::UnitDirective {
+                unit_id,
+                unit_json_start,
+                unit_json_end,
+            } => {
+                let directive = source(*unit_json_start, *unit_json_end)?;
+                format!(
+                    "書式 単位 {:?} 依頼JSON byte[{unit_json_start}..{unit_json_end}) sha256={}",
+                    preview(unit_id),
+                    digest(directive.as_bytes()),
+                )
+            }
+        };
+        lines.extend([
+            format!(
+                "出力区間{} byte[{}..{}) sha256={} 出力={:?}",
+                index + 1,
+                span.output_start,
+                span.output_end,
+                digest(output.as_bytes()),
+                preview(output),
+            ),
+            origin,
+        ]);
+    }
+    for (label, count) in [
+        ("採用単位", report.units.len()),
+        ("未採用単位", report.omitted_unit_ids.len()),
+        ("出力区間", report.spans.len()),
+    ] {
+        if count > PREVIEW_ITEMS {
+            lines.push(format!(
+                "残りの{label} {}件は保存レポートに保持されています。",
+                count - PREVIEW_ITEMS,
+            ));
+        }
     }
     Ok(lines)
 }
@@ -2698,6 +2856,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION
             | crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

@@ -5444,6 +5444,14 @@ impl Engine {
                         return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
                     }
                 };
+                if canonical(&value)?.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "text composition artifact exceeds request evidence budget",
+                    );
+                }
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
                 result.dependencies.push(artifact);
                 units.push(value.text);
