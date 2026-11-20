@@ -2,7 +2,9 @@
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
 use crate::ports::{JsonKind, JsonNode, json_node_at_pointer, strict_json_document};
-use crate::text_editing::{LocatedTextEdit, locate_explicit_replacement};
+use crate::text_editing::{
+    EditedText, LocatedTextEdit, edit_explicit_text, locate_explicit_replacement,
+};
 use minidora_domain::{
     Guarantee, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, canonical, digest, failure,
 };
@@ -232,10 +234,20 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
     }
-    let explain_text_location =
-        explanation_parser_version == crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION;
+    let explain_text_edit =
+        explanation_parser_version == crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION;
+    let explain_text_location = explain_text_edit
+        || explanation_parser_version == crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION;
     if explain_text_location && previous.guarantee == Guarantee::UserPremise {
-        return previous_text_location_explanation(store, actor, case, previous, budget, started);
+        return previous_text_document_explanation(
+            store,
+            actor,
+            case,
+            previous,
+            budget,
+            started,
+            explain_text_edit,
+        );
     }
     if previous.guarantee != Guarantee::Computed {
         return Ok(None);
@@ -705,15 +717,17 @@ fn revalidate_previous_document_render(
     Ok(render_ref)
 }
 
-fn previous_text_location_explanation(
+fn previous_text_document_explanation(
     store: &crate::store::Store,
     actor: &str,
     case: &str,
     previous: &ResultRecord,
     budget: &ResourceBudget,
     started: Instant,
+    explain_text_edit: bool,
 ) -> Result<Option<PriorDocumentExplanation>> {
-    const CODE: &str = "TEXT_LOCATION_CONTEXT_INVALID";
+    const LOCATION_INVALID: &str = "TEXT_LOCATION_CONTEXT_INVALID";
+    const EDIT_INVALID: &str = "TEXT_EDIT_CONTEXT_INVALID";
     let Some((bundle_ref, bundle)) =
         store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
     else {
@@ -726,56 +740,119 @@ fn previous_text_location_explanation(
                 .is_ok_and(|report| report.consumed_artifacts.as_slice() == ancestors)
         {
             return Err(failure(
-                CODE,
+                LOCATION_INVALID,
                 "the prior text location has no retained sealed input",
+            ));
+        }
+        if explain_text_edit
+            && let Some((report_ref, ancestors)) = previous.dependencies.split_last()
+            && !ancestors.is_empty()
+            && let Some(bytes) = store.get_bytes_if_present(actor, case, report_ref)?
+            && serde_json::from_slice::<EditedText>(&bytes).is_ok_and(|report| {
+                report.text == previous.text
+                    && report.output_sha256 == digest(previous.text.as_bytes())
+                    && report.consumed_artifacts.as_slice() == ancestors
+            })
+        {
+            return Err(failure(
+                EDIT_INVALID,
+                "the prior text edit has no retained sealed input",
             ));
         }
         return Ok(None);
     };
-    let Intent::LocateTextReplacement { document } = &bundle.meaning.intent else {
-        return Ok(None);
+    let (document, is_edit, code, label) = match &bundle.meaning.intent {
+        Intent::LocateTextReplacement { document } => {
+            (document, false, LOCATION_INVALID, "text location")
+        }
+        Intent::EditText { document } if explain_text_edit => {
+            (document, true, EDIT_INVALID, "text edit")
+        }
+        _ => return Ok(None),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
         return Err(failure(
-            CODE,
-            "the prior text-location input bundle hash changed",
+            code,
+            format!("the prior {label} input bundle hash changed"),
         ));
     }
-    let report = locate_explicit_replacement(
-        document,
-        |reference| {
-            store
-                .get_bytes_if_present(actor, case, reference)?
-                .ok_or_else(|| failure(CODE, "a prior text-location base artifact is missing"))
-        },
-        started,
-        budget.deadline_ms,
-    )?;
-    let report_bytes = canonical(&report)?;
-    let report_ref = digest(&report_bytes);
-    if previous.dependencies.split_last()
-        != Some((&report_ref, report.consumed_artifacts.as_slice()))
-        || previous.text.as_bytes() != report_bytes
-        || store
-            .get_bytes_if_present(actor, case, &report_ref)?
-            .as_deref()
-            != Some(report_bytes.as_slice())
-    {
+    let load = |reference: &str| {
+        store
+            .get_bytes_if_present(actor, case, reference)?
+            .ok_or_else(|| failure(code, format!("a prior {label} base artifact is missing")))
+    };
+    let verify_report = |report_bytes: &[u8], ancestors: &[String], display: &[u8]| {
+        let report_ref = digest(report_bytes);
+        if previous.dependencies.split_last() != Some((&report_ref, ancestors))
+            || previous.text.as_bytes() != display
+            || store
+                .get_bytes_if_present(actor, case, &report_ref)?
+                .as_deref()
+                != Some(report_bytes)
+        {
+            return Err(failure(
+                code,
+                format!("the prior {label} no longer matches its retained report"),
+            ));
+        }
+        revalidate_previous_document_render(
+            store,
+            actor,
+            case,
+            previous,
+            Some(&report_ref),
+            code,
+            label,
+        )?;
+        Ok(report_ref)
+    };
+    let (input_node, report_node, report_ref, lines) = if is_edit {
+        let report = edit_explicit_text(document, load, started, budget.deadline_ms)?;
+        let report_ref = verify_report(
+            &canonical(&report)?,
+            &report.consumed_artifacts,
+            report.text.as_bytes(),
+        )?;
+        let lines = text_edit_explanation_lines(&report, &bundle_ref, &report_ref)?;
+        (
+            "previous-text-edit-input",
+            "previous-text-edit-report",
+            report_ref,
+            lines,
+        )
+    } else {
+        let report = locate_explicit_replacement(document, load, started, budget.deadline_ms)?;
+        let report_bytes = canonical(&report)?;
+        let report_ref = verify_report(&report_bytes, &report.consumed_artifacts, &report_bytes)?;
+        let lines = text_location_explanation_lines(&report, &bundle_ref, &report_ref)?;
+        (
+            "previous-text-location-input",
+            "previous-text-location-report",
+            report_ref,
+            lines,
+        )
+    };
+    if lines.join("\n").len() > budget.max_evidence_bytes {
         return Err(failure(
-            CODE,
-            "the prior text location no longer matches its retained report",
+            "RESOURCE_LIMIT",
+            format!("the {label} explanation exceeds the request evidence budget"),
         ));
     }
-    revalidate_previous_document_render(
-        store,
-        actor,
-        case,
-        previous,
-        Some(&report_ref),
-        CODE,
-        "text location",
-    )?;
+    Ok(Some(PriorDocumentExplanation {
+        input_node,
+        report_node,
+        bundle_ref,
+        report_ref,
+        lines,
+    }))
+}
 
+fn text_location_explanation_lines(
+    report: &LocatedTextEdit,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const CODE: &str = "TEXT_LOCATION_CONTEXT_INVALID";
     let location = &report.location;
     let [patch] = report.proposed_edit.edits.as_slice() else {
         return Err(failure(
@@ -784,7 +861,8 @@ fn previous_text_location_explanation(
         ));
     };
     let json_token = |label, start, end, expected: &str| {
-        let token = document
+        let token = report
+            .source_document
             .get(start..end)
             .filter(|text| {
                 serde_json::from_str::<String>(text).is_ok_and(|value| value == expected)
@@ -801,7 +879,7 @@ fn previous_text_location_explanation(
             preview(token),
         ))
     };
-    let lines = vec![
+    Ok(vec![
         "前回の置換箇所の特定を、保存済みの対象本文と依頼JSONから再確認しました。".into(),
         "指定された文字列と完全に一致する箇所は1件で、保護範囲との重なりはありません。".into(),
         format!("対象本文の成果物 SHA-256: {}", report.base_artifact),
@@ -835,20 +913,74 @@ fn previous_text_location_explanation(
         ),
         "適用するには、別途 `text-edit:` で置換案を指定します。そのときに適用条件を検査します。"
             .into(),
+    ])
+}
+
+fn text_edit_explanation_lines(
+    report: &EditedText,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_CHANGES: usize = 8;
+    let mut lines = vec![
+        "前回の文章編集を、保存済みの編集前本文と依頼JSONから再確認しました。".into(),
+        format!(
+            "編集版: {}。変更数: {}。保護範囲数: {}。",
+            report.revision,
+            report.changes.len(),
+            report.protected.len(),
+        ),
+        format!("編集前本文の成果物 SHA-256: {}", report.base_artifact),
+        format!("編集前本文 SHA-256: {}", report.base_output_sha256),
+        format!("編集後本文 SHA-256: {}", report.output_sha256),
+        format!("依頼JSON SHA-256: {}", report.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
     ];
-    if lines.join("\n").len() > budget.max_evidence_bytes {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "the text location explanation exceeds the request evidence budget",
+    for (index, change) in report.changes.iter().take(PREVIEW_CHANGES).enumerate() {
+        let original = &change.expected;
+        let output = report
+            .text
+            .get(change.new_start..change.new_end)
+            .filter(|text| *text == change.replacement)
+            .ok_or_else(|| {
+                failure(
+                    "TEXT_EDIT_CONTEXT_INVALID",
+                    "an edit differs from its verified output range",
+                )
+            })?;
+        let operation = if original.is_empty() {
+            "挿入"
+        } else if output.is_empty() {
+            "削除"
+        } else {
+            "置換"
+        };
+        lines.extend([
+            format!("変更{} {:?} ({operation})", index + 1, preview(&change.id)),
+            format!(
+                "編集前 byte[{}..{}) sha256={} 原文={:?}",
+                change.old_start,
+                change.old_end,
+                digest(original.as_bytes()),
+                preview(original),
+            ),
+            format!(
+                "編集後 byte[{}..{}) sha256={} 出力={:?}",
+                change.new_start,
+                change.new_end,
+                digest(output.as_bytes()),
+                preview(output),
+            ),
+        ]);
+    }
+    if report.changes.len() > PREVIEW_CHANGES {
+        lines.push(format!(
+            "残りの変更 {}件は保存レポートに保持されています。",
+            report.changes.len() - PREVIEW_CHANGES,
         ));
     }
-    Ok(Some(PriorDocumentExplanation {
-        input_node: "previous-text-location-input",
-        report_node: "previous-text-location-report",
-        bundle_ref,
-        report_ref,
-        lines,
-    }))
+    Ok(lines)
 }
 
 fn previous_json_value_explanation(
@@ -2565,6 +2697,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
             | crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION
             | crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
+            | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

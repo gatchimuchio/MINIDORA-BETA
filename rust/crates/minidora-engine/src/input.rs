@@ -45,6 +45,8 @@ pub(crate) const CSV_POSITIONAL_SELECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v104-csv-positional-selection";
 pub(crate) const TEXT_LOCATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v105-text-location-explanation";
+pub(crate) const TEXT_EDIT_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v106-text-edit-explanation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -212,7 +214,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
         Intent::CsvSelectIndex { .. } => CSV_POSITIONAL_SELECTION_PARSER_VERSION,
-        Intent::ExplainPrevious => TEXT_LOCATION_EXPLANATION_PARSER_VERSION,
+        Intent::ExplainPrevious => TEXT_EDIT_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

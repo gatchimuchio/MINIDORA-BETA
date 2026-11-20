@@ -15940,6 +15940,152 @@ fn text_editing_route_imports_actual_text_versions_and_confirms_file_once() {
 }
 
 #[test]
+fn text_edit_explanation_preserves_sorted_changes_zero_width_ranges_and_protection() {
+    let scratch = Scratch::new();
+    let original = "aaa|引用:「保持」|末尾";
+    let output = "longaaa|前引用:「保持」";
+    let protected = "引用:「保持」";
+    assert_eq!(&original[4..23], protected);
+    assert_eq!(&output[11..30], protected);
+    let import_request = format!(
+        "text-import:\n{}",
+        serde_json::json!({"text":original,"protected":[{"id":"quote","start":4,"end":23,"expected":protected}],"max_chars":64})
+    );
+    let imported = record(&execute(&scratch.0, "owner", &[&import_request]));
+    let base = assert_text_document_artifact(&scratch.0, &imported, &import_request);
+    let base_ref = imported["dependencies"][0].as_str().unwrap();
+    let declarations = serde_json::json!([
+        text_patch("remove-tail", 23, 30, "|末尾", ""),
+        text_patch("insert-before-lock", 4, 4, "", "前"),
+        text_patch("replace", 0, 3, "aaa", "longaaa")
+    ]);
+    let request = text_edit_request("文章を編集して:", base_ref, original, declarations.clone());
+    let body = request.split_once('\n').unwrap().1;
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "edit-before-explanation", &request],
+    ));
+    assert_eq!(first["text"], output);
+    assert_eq!(first["receipts"], serde_json::json!([]));
+    let report = assert_text_document_artifact(&scratch.0, &first, &request);
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(&report).unwrap());
+    assert_eq!(
+        first["dependencies"],
+        serde_json::json!([base_ref, report_ref])
+    );
+    assert_eq!(report["base_artifact"], base_ref);
+    assert_eq!(report["consumed_artifacts"], serde_json::json!([base_ref]));
+    assert_eq!(report["revision"], 1);
+    assert_eq!(
+        report["protected"],
+        serde_json::json!([{"id":"quote","start":11,"end":30,"expected":protected}])
+    );
+    let changes = [
+        ("replace", "置換", 0, 3, "aaa", 0, 7, "longaaa"),
+        ("insert-before-lock", "挿入", 4, 4, "", 8, 11, "前"),
+        ("remove-tail", "削除", 23, 30, "|末尾", 30, 30, ""),
+    ];
+    let expected_changes: Vec<_> = changes.iter().map(|&(id,_,old_start,old_end,expected,new_start,new_end,replacement)| {
+        assert_eq!(&original[old_start..old_end], expected);
+        assert_eq!(&output[new_start..new_end], replacement);
+        serde_json::json!({"id":id,"old_start":old_start,"old_end":old_end,"new_start":new_start,"new_end":new_end,"expected":expected,"replacement":replacement,"reason":"explicit requested revision"})
+    }).collect();
+    assert_eq!(report["changes"], serde_json::json!(expected_changes));
+    // Replacement JSON offsets follow the original declaration indices,
+    // independently of the source-order change records and output spans.
+    let replacement_span = |declaration_index: usize, start, end, text: &str| {
+        let edit = &declarations[declaration_index];
+        let fragment = serde_json::to_string(edit).unwrap();
+        assert_eq!(body.matches(&fragment).count(), 1);
+        let raw = serde_json::to_string(text).unwrap();
+        let marker = format!("\"replacement\":{raw}");
+        let json_start = body.find(&fragment).unwrap()
+            + fragment.find(&marker).unwrap()
+            + "\"replacement\":".len();
+        let json_end = json_start + raw.len();
+        assert_eq!(&body[json_start..json_end], raw);
+        serde_json::json!({"output_start":start,"output_end":end,"text":text,
+            "origin":{"kind":"REPLACEMENT_TEXT","edit_id":edit["id"],"json_start":json_start,"json_end":json_end,"text_start":0,"text_end":text.len()}})
+    };
+    assert_eq!(
+        report["spans"],
+        serde_json::json!([
+            replacement_span(2,0,7,"longaaa"),
+            {"output_start":7,"output_end":8,"text":"|","origin":{"kind":"PARENT_TEXT","artifact_sha256":base_ref,"start":3,"end":4}},
+            replacement_span(1,8,11,"前"),
+            {"output_start":11,"output_end":30,"text":protected,"origin":{"kind":"PARENT_TEXT","artifact_sha256":base_ref,"start":4,"end":23}}
+        ])
+    );
+    let explained = assert_document_explanation(
+        &scratch.0,
+        &first,
+        &report,
+        "previous-text-edit",
+        "USER_PREMISE",
+        "依頼JSON",
+    );
+    let text = explained["text"].as_str().unwrap();
+    assert!(text.contains("前回の文章編集"), "{text}");
+    assert!(
+        text.contains("編集版: 1。変更数: 3。保護範囲数: 1。"),
+        "{text}"
+    );
+    for expected in [
+        format!("編集前本文の成果物 SHA-256: {base_ref}"),
+        format!(
+            "編集前本文 SHA-256: {}",
+            minidora_domain::digest(original.as_bytes())
+        ),
+        format!(
+            "編集後本文 SHA-256: {}",
+            minidora_domain::digest(output.as_bytes())
+        ),
+    ] {
+        assert!(text.contains(&expected), "missing {expected:?} in {text}");
+    }
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with("変更")).count(),
+        changes.len()
+    );
+    let mut previous_heading = None;
+    for (index, &(id, kind, old_start, old_end, old_raw, new_start, new_end, new_raw)) in
+        changes.iter().enumerate()
+    {
+        let heading = format!("変更{} {id:?} ({kind})", index + 1);
+        let position = lines
+            .iter()
+            .position(|line| *line == heading)
+            .unwrap_or_else(|| panic!("missing {heading:?} in {text}"));
+        if let Some(previous) = previous_heading {
+            assert!(previous < position);
+        }
+        previous_heading = Some(position);
+        assert_eq!(
+            lines[position + 1],
+            format!(
+                "編集前 byte[{old_start}..{old_end}) sha256={} 原文={old_raw:?}",
+                minidora_domain::digest(old_raw.as_bytes())
+            )
+        );
+        assert_eq!(
+            lines[position + 2],
+            format!(
+                "編集後 byte[{new_start}..{new_end}) sha256={} 出力={new_raw:?}",
+                minidora_domain::digest(new_raw.as_bytes())
+            )
+        );
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(
+        sequence_artifact(&store, &Value::String(base_ref.into())),
+        base
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn text_editing_route_consumes_composition_and_enforces_artifact_case_scope() {
     let scratch = Scratch::new();
     let composition = serde_json::json!({
