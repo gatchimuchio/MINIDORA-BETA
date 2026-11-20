@@ -1099,8 +1099,7 @@ impl Store {
     /// Read an exact verified artifact through its authenticated case scope.
     pub fn get_bytes(&self, actor: &str, case: &str, sha: &str) -> Result<Vec<u8>> {
         Self::require_case(&self.connection, actor, case)?;
-        self.require_artifact(&self.connection, case, sha)?;
-        self.read_blob_bytes(sha)
+        self.read_case_artifact(&self.connection, case, sha)
     }
 
     /// Reads a case-scoped artifact only when the supplied identity is bound
@@ -1124,7 +1123,12 @@ impl Store {
         Ok(Some(self.read_blob_bytes(sha)?))
     }
 
-    fn require_artifact(&self, connection: &Connection, case: &str, sha: &str) -> Result<()> {
+    fn read_case_artifact(
+        &self,
+        connection: &Connection,
+        case: &str,
+        sha: &str,
+    ) -> Result<Vec<u8>> {
         let available: bool = sql(connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM case_artifact WHERE case_id=?1 AND sha256=?2)",
             params![case, sha],
@@ -1136,8 +1140,7 @@ impl Store {
                 "artifact is not durably bound to this case",
             ));
         }
-        self.read_blob_bytes(sha)?;
-        Ok(())
+        self.read_blob_bytes(sha)
     }
 
     pub fn register_input(
@@ -1386,7 +1389,7 @@ impl Store {
             }
         }
         if let Some(goal) = &revision.goal_sha256 {
-            self.require_artifact(&transaction, &revision.case_id, goal)?;
+            self.read_case_artifact(&transaction, &revision.case_id, goal)?;
         }
         Self::reference(&transaction, &sha, length, "case_revision")?;
         if let Some((bundle_sha, bundle_length)) = &bundle {
@@ -1855,8 +1858,8 @@ impl Store {
                 "action has no accepted input fingerprint",
             ));
         }
-        self.require_artifact(&transaction, &action.case_id, &action.authorization_sha256)?;
-        self.require_artifact(&transaction, &action.case_id, &action.exact_request_sha256)?;
+        self.read_case_artifact(&transaction, &action.case_id, &action.authorization_sha256)?;
+        self.read_case_artifact(&transaction, &action.case_id, &action.exact_request_sha256)?;
         let (sha, length) = match published {
             Some(blob) => blob,
             None => self.publish_blob(action)?,
@@ -3298,6 +3301,19 @@ mod tests {
         assert!(store.load_case("bob", "case-a").is_err());
         assert!(store.actions("bob", "case-a").is_err());
         assert!(store.put_bytes("bob", "case-a", b"private").is_err());
+        let bytes = b"\x00\xffexact evidence\n";
+        let sha = store.put_bytes("alice", "case-a", bytes).unwrap();
+        assert_eq!(store.get_bytes("alice", "case-a", &sha).unwrap(), bytes);
+        assert!(matches!(
+            store.get_bytes("bob", "case-a", &sha),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "ACCESS_DENIED"
+        ));
+        let unrelated = RequestEnvelope::new("case-b", "input-a", "alice", "2+3");
+        register(&store, &unrelated);
+        assert!(matches!(
+            store.get_bytes("alice", "case-b", &sha),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "INTEGRITY_FAILURE"
+        ));
         assert!(
             store
                 .get_input_result("bob", "case-a", "input-a", 1)
@@ -3750,20 +3766,22 @@ mod tests {
     fn corrupt_or_missing_referenced_blob_blocks_restart() {
         for missing in [false, true] {
             let directory = Directory::new();
-            let sha;
-            {
-                let store = Store::open(&directory.0).unwrap();
-                register(&store, &request());
-                sha = store
-                    .put_bytes("alice", "case-a", b"original evidence")
-                    .unwrap();
-            }
-            let path = directory.0.join("blobs").join(sha);
+            let store = Store::open(&directory.0).unwrap();
+            register(&store, &request());
+            let sha = store
+                .put_bytes("alice", "case-a", b"original evidence")
+                .unwrap();
+            let path = directory.0.join("blobs").join(&sha);
             if missing {
                 fs::remove_file(path).unwrap();
             } else {
                 fs::write(path, b"altered evidence").unwrap();
             }
+            assert!(matches!(
+                store.get_bytes("alice", "case-a", &sha),
+                Err(minidora_domain::Error::Contract { code, .. }) if code == "INTEGRITY_FAILURE"
+            ));
+            drop(store);
             assert!(Store::open(&directory.0).is_err());
         }
     }
