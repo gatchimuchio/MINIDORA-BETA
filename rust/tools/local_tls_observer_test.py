@@ -2962,12 +2962,18 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
                                    legacy_b143_binary: Path | None = None,
                                    legacy_b144_binary: Path | None = None, *,
                                    legacy_b142_binary: Path | None = None,
-                                   legacy_b145_binary: Path | None = None) -> dict:
+                                   legacy_b145_binary: Path | None = None,
+                                   legacy_early_binaries: tuple[tuple[str, Path], ...] = (),
+                                   legacy_b146_binary: Path | None = None) -> dict:
     """Consume authentic old CLI stops without editing their saved lineage."""
-    if legacy_b144_binary is not None and legacy_b143_binary is None and legacy_b142_binary is None:
+    if any(version not in ("v2", "v3", "v4") for version, _ in legacy_early_binaries):
+        raise ValueError("early stop versions must be v2, v3 or v4")
+    if legacy_b144_binary is not None and legacy_b143_binary is None and legacy_b142_binary is None and not legacy_early_binaries:
         raise ValueError("a B144 stop tail requires the supplied B142 or B143 binary")
-    if legacy_b145_binary is not None and legacy_b142_binary is None:
+    if legacy_b145_binary is not None and legacy_b142_binary is None and not legacy_early_binaries:
         raise ValueError("a B145 stop tail requires the supplied B142 binary")
+    if legacy_b146_binary is not None and not legacy_early_binaries:
+        raise ValueError("a B146 stop tail requires a supplied early stop binary")
     start, hop, kept, pending, later, terminal = [
         f"/legacy-b138-direct-{part}" for part in ("start", "hop", "kept", "pending", "later", "terminal")
     ]
@@ -2982,7 +2988,8 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
     allow = ("--allow-read-host", fixture.host, "--deadline-ms", "5000")
     command = "前回の取得で未接続の次のURLを取得して"
     old = partial(cli, binary_path=legacy_binary)
-    wrappers = []
+    wrappers = [(f"direct-source-continuation-{version}", partial(cli, binary_path=path))
+                for version, path in legacy_early_binaries]
     if legacy_b142_binary is not None:
         wrappers.append(("direct-source-continuation-v5", partial(cli, binary_path=legacy_b142_binary)))
     if legacy_b143_binary is not None:
@@ -2991,6 +2998,8 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
         wrappers.append(("direct-source-continuation-v7", partial(cli, binary_path=legacy_b144_binary)))
     if legacy_b145_binary is not None:
         wrappers.append(("direct-source-continuation-v8", partial(cli, binary_path=legacy_b145_binary)))
+    if legacy_b146_binary is not None:
+        wrappers.append(("direct-source-continuation-v9", partial(cli, binary_path=legacy_b146_binary)))
     connect = f"CONNECT {fixture.host}:443 HTTP/1.1"
     seen, starts = len(fixture.events), len(fixture.connects)
 
@@ -3055,14 +3064,21 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
     assert fixture.connects[before[0]:] == [connect]
     assert [event["path"] for event in fixture.events[before[1]:]] == [pending]
     stop1, stop1_args = old_stop(case, "legacy-stop-1", first)
-    stop2, stop2_args = old_stop(case, "legacy-stop-2", stop1)
+    legacy_stops = [stop1]
     prior_replays = [(original_args, original, 2), (first_args, first, 0),
-                     (stop1_args, stop1, 2), (stop2_args, stop2, 2)]
-    predecessor = stop2
+                     (stop1_args, stop1, 2)]
+    predecessor = stop1
+    if not legacy_early_binaries:
+        predecessor, arguments = old_stop(case, "legacy-stop-2", stop1)
+        legacy_stops.append(predecessor)
+        prior_replays.append((arguments, predecessor, 2))
     wrapped_stops = []
-    for parser_version, old_cli in wrappers:
+    for index, (parser_version, old_cli) in enumerate(wrappers):
+        input_id = f"legacy-{parser_version.rsplit('-', 1)[-1]}-stop"
+        if legacy_early_binaries:
+            input_id += f"-{index + 1}"
         predecessor, arguments = old_stop(
-            case, f"legacy-{parser_version.rsplit('-', 1)[-1]}-stop", predecessor,
+            case, input_id, predecessor,
             old_cli=old_cli, parser_version=parser_version)
         prior_replays.append((arguments, predecessor, 2))
         wrapped_stops.append({"parser_version": parser_version, "result": predecessor})
@@ -3100,15 +3116,22 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
     terminal_args = ("--input", "original", *allow, f"fetch {uri(terminal)}")
     terminal_original = old("run", *terminal_args, case_id=terminal_case)
     terminal1, terminal1_args = old_stop(terminal_case, "legacy-stop-1", terminal_original)
-    terminal2, terminal2_args = old_stop(terminal_case, "legacy-stop-2", terminal1)
+    terminal_stops = [terminal1]
     terminal_replays = [
-        (terminal_args, terminal_original, 0), (terminal1_args, terminal1, 2), (terminal2_args, terminal2, 2),
+        (terminal_args, terminal_original, 0), (terminal1_args, terminal1, 2),
     ]
-    terminal_predecessor = terminal2
+    terminal_predecessor = terminal1
+    if not legacy_early_binaries:
+        terminal_predecessor, arguments = old_stop(terminal_case, "legacy-stop-2", terminal1)
+        terminal_stops.append(terminal_predecessor)
+        terminal_replays.append((arguments, terminal_predecessor, 2))
     terminal_wrapped_stops = []
-    for parser_version, old_cli in wrappers:
+    for index, (parser_version, old_cli) in enumerate(wrappers):
+        input_id = f"legacy-{parser_version.rsplit('-', 1)[-1]}-stop"
+        if legacy_early_binaries:
+            input_id += f"-{index + 1}"
         terminal_predecessor, arguments = old_stop(
-            terminal_case, f"legacy-{parser_version.rsplit('-', 1)[-1]}-stop", terminal_predecessor,
+            terminal_case, input_id, terminal_predecessor,
             old_cli=old_cli, parser_version=parser_version)
         terminal_replays.append((arguments, terminal_predecessor, 2))
         terminal_wrapped_stops.append({"parser_version": parser_version, "result": terminal_predecessor})
@@ -3132,8 +3155,8 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
         return digest.hexdigest()
 
     report = {"legacy_binary_sha256": binary_sha256(legacy_binary), "original": original, "first": first,
-            "legacy_stops": [stop1, stop2], "resumed": resumed, "exhausted": exhausted,
-            "terminal_control": {"original": terminal_original, "legacy_stops": [terminal1, terminal2],
+            "legacy_stops": legacy_stops, "resumed": resumed, "exhausted": exhausted,
+            "terminal_control": {"original": terminal_original, "legacy_stops": terminal_stops,
                                  "current": terminal_current},
             "observed_requests": fixture.events[seen:], "connect_count": len(fixture.connects) - starts,
             "scope": "Authentic separately built B138 v1 CLI state and current normal CLI; no store or blob mutation/injection"}
@@ -3150,6 +3173,14 @@ def check_legacy_b138_direct_budget(cli, fixture: Fixture, state_path: Path,
         report["legacy_b144_binary_sha256"] = binary_sha256(legacy_b144_binary)
     if legacy_b145_binary is not None:
         report["legacy_b145_binary_sha256"] = binary_sha256(legacy_b145_binary)
+    if legacy_early_binaries:
+        report["legacy_early_binaries"] = [
+            {"parser_version": f"direct-source-continuation-{version}", "binary_sha256": binary_sha256(path)}
+            for version, path in legacy_early_binaries
+        ]
+        report["scope"] = "Authentic B138 v1 stop followed by supplied v2/v3/v4 stops and optional v5-v9 tails; current normal CLI; no store or blob mutation/injection"
+    if legacy_b146_binary is not None:
+        report["legacy_b146_binary_sha256"] = binary_sha256(legacy_b146_binary)
     return report
 
 
@@ -3158,15 +3189,23 @@ def run_candidate_recovery(binary: Path, directory: Path,
                            legacy_b143_binary: Path | None = None,
                            legacy_b144_binary: Path | None = None, *,
                            legacy_b142_binary: Path | None = None,
-                           legacy_b145_binary: Path | None = None) -> dict:
+                           legacy_b145_binary: Path | None = None,
+                           legacy_early_binaries: tuple[tuple[str, Path], ...] = (),
+                           legacy_b146_binary: Path | None = None) -> dict:
+    if any(version not in ("v2", "v3", "v4") for version, _ in legacy_early_binaries):
+        raise ValueError("early stop versions must be v2, v3 or v4")
+    if legacy_early_binaries and legacy_b138_binary is None:
+        raise ValueError("early stop wrappers require the supplied B138 binary")
     if legacy_b142_binary is not None and legacy_b138_binary is None:
         raise ValueError("a B142 stop wrapper requires the supplied B138 binary")
     if legacy_b143_binary is not None and legacy_b138_binary is None:
         raise ValueError("a B143 stop wrapper requires the supplied B138 binary")
-    if legacy_b144_binary is not None and legacy_b143_binary is None and legacy_b142_binary is None:
+    if legacy_b144_binary is not None and legacy_b143_binary is None and legacy_b142_binary is None and not legacy_early_binaries:
         raise ValueError("a B144 stop tail requires the supplied B142 or B143 binary")
-    if legacy_b145_binary is not None and legacy_b142_binary is None:
+    if legacy_b145_binary is not None and legacy_b142_binary is None and not legacy_early_binaries:
         raise ValueError("a B145 stop tail requires the supplied B142 binary")
+    if legacy_b146_binary is not None and not legacy_early_binaries:
+        raise ValueError("a B146 stop tail requires a supplied early stop binary")
     directory.mkdir()
     host, case = "ja.wikipedia.org", "candidate-recovery"
     first_body = b"First observed body."
@@ -3312,7 +3351,8 @@ def run_candidate_recovery(binary: Path, directory: Path,
             report["legacy_b138_direct_budget"] = check_legacy_b138_direct_budget(
                 partial(cli, db_path=legacy_state), fixture, legacy_state, legacy_b138_binary,
                 legacy_b143_binary, legacy_b144_binary, legacy_b142_binary=legacy_b142_binary,
-                legacy_b145_binary=legacy_b145_binary)
+                legacy_b145_binary=legacy_b145_binary, legacy_early_binaries=legacy_early_binaries,
+                legacy_b146_binary=legacy_b146_binary)
         return report
     finally:
         fixture.close()
@@ -3323,30 +3363,43 @@ def main() -> None:
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--legacy-b138-binary", type=Path,
                         help="optionally regress authentic saved v1 continuation state using a separately built B138 CLI")
+    parser.add_argument("--legacy-early-binary", action="append", nargs=2, metavar=("VERSION", "PATH"),
+                        help="append an authentic v2, v3 or v4 stop in occurrence order; repeatable, requires --legacy-b138-binary")
     parser.add_argument("--legacy-b142-binary", type=Path,
                         help="append authentic v5 no-pending stops after B138 v1 stops; requires --legacy-b138-binary")
     parser.add_argument("--legacy-b143-binary", type=Path,
                         help="append authentic v6 no-pending stops after B138 v1 stops; requires --legacy-b138-binary")
     parser.add_argument("--legacy-b144-binary", type=Path,
-                        help="append an authentic v7 no-pending tail; requires --legacy-b142-binary or --legacy-b143-binary")
+                        help="append an authentic v7 no-pending tail; requires --legacy-b142-binary, --legacy-b143-binary or --legacy-early-binary")
     parser.add_argument("--legacy-b145-binary", type=Path,
-                        help="append an authentic v8 no-pending tail; requires --legacy-b142-binary")
+                        help="append an authentic v8 no-pending tail; requires --legacy-b142-binary or --legacy-early-binary")
+    parser.add_argument("--legacy-b146-binary", type=Path,
+                        help="append an authentic v9 no-pending tail; requires --legacy-early-binary")
     parser.add_argument("--evidence-output", type=Path)
     arguments = parser.parse_args()
+    early_binaries = tuple((version, Path(path)) for version, path in arguments.legacy_early_binary or ())
+    if any(version not in ("v2", "v3", "v4") for version, _ in early_binaries):
+        parser.error("--legacy-early-binary VERSION must be v2, v3 or v4")
+    if early_binaries and not arguments.legacy_b138_binary:
+        parser.error("--legacy-early-binary requires --legacy-b138-binary")
     if arguments.legacy_b142_binary and not arguments.legacy_b138_binary:
         parser.error("--legacy-b142-binary requires --legacy-b138-binary")
     if arguments.legacy_b143_binary and not arguments.legacy_b138_binary:
         parser.error("--legacy-b143-binary requires --legacy-b138-binary")
-    if arguments.legacy_b144_binary and not (arguments.legacy_b142_binary or arguments.legacy_b143_binary):
+    if arguments.legacy_b144_binary and not (arguments.legacy_b142_binary or arguments.legacy_b143_binary or early_binaries):
         parser.error("--legacy-b144-binary requires --legacy-b142-binary or --legacy-b143-binary")
-    if arguments.legacy_b145_binary and not arguments.legacy_b142_binary:
+    if arguments.legacy_b145_binary and not (arguments.legacy_b142_binary or early_binaries):
         parser.error("--legacy-b145-binary requires --legacy-b142-binary")
+    if arguments.legacy_b146_binary and not early_binaries:
+        parser.error("--legacy-b146-binary requires --legacy-early-binary")
     binary = arguments.binary.resolve(strict=True)
     legacy_b138_binary = arguments.legacy_b138_binary.resolve(strict=True) if arguments.legacy_b138_binary else None
     legacy_b142_binary = arguments.legacy_b142_binary.resolve(strict=True) if arguments.legacy_b142_binary else None
     legacy_b143_binary = arguments.legacy_b143_binary.resolve(strict=True) if arguments.legacy_b143_binary else None
     legacy_b144_binary = arguments.legacy_b144_binary.resolve(strict=True) if arguments.legacy_b144_binary else None
     legacy_b145_binary = arguments.legacy_b145_binary.resolve(strict=True) if arguments.legacy_b145_binary else None
+    legacy_early_binaries = tuple((version, path.resolve(strict=True)) for version, path in early_binaries)
+    legacy_b146_binary = arguments.legacy_b146_binary.resolve(strict=True) if arguments.legacy_b146_binary else None
     with tempfile.TemporaryDirectory(prefix="minidora-tls-fixture-") as raw:
         directory = Path(raw)
         certificate, key, ca = certificates(directory)
@@ -3400,7 +3453,8 @@ def main() -> None:
             "candidate_recovery": run_candidate_recovery(
                 binary, directory / "candidate-recovery", legacy_b138_binary,
                 legacy_b143_binary, legacy_b144_binary, legacy_b142_binary=legacy_b142_binary,
-                legacy_b145_binary=legacy_b145_binary),
+                legacy_b145_binary=legacy_b145_binary, legacy_early_binaries=legacy_early_binaries,
+                legacy_b146_binary=legacy_b146_binary),
             "scope": "Actual compiled CLI/reqwest/native-TLS transport, persisted separate-process source follow-up and fixture source bytes; not LIVE Internet or benchmark acceptance",
         }
         if arguments.evidence_output:

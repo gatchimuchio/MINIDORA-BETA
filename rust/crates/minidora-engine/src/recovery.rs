@@ -3066,12 +3066,16 @@ pub(crate) fn next_direct_retrieval<'a>(
             .as_ref()
             .and_then(|id| prior_results.get(id))
             .ok_or_else(invalid)?;
-        if let Some(version) = legacy_version
-            && !version.matches_parent(store, actor, case, parent)?
-        {
-            // These producers also wrote this reason for ordinary terminal histories.
-            return without_legacy_lineage();
-        }
+        let legacy_versions = if let Some(version) = legacy_version {
+            let Some(parent_version) = version.saved_parent_version(store, actor, case, parent)?
+            else {
+                // These producers also wrote this reason for ordinary terminal histories.
+                return without_legacy_lineage();
+            };
+            Some((version, parent_version))
+        } else {
+            None
+        };
         if identity(&sealed.request)? != root.id || !binds_direct_predecessor(&sealed, parent)? {
             return Err(invalid());
         }
@@ -3083,8 +3087,8 @@ pub(crate) fn next_direct_retrieval<'a>(
         {
             return Err(invalid());
         }
-        only_legacy_stops &= legacy_version.is_some();
-        steps.push((parent, root, sealed, stop, legacy_version));
+        only_legacy_stops &= legacy_versions.is_some();
+        steps.push((parent, root, sealed, stop, legacy_versions));
         root = parent;
     }
     let Some(stop @ crate::text_summary::PartialRetrievalStop::BeforeFirstHop(_)) =
@@ -3114,11 +3118,11 @@ pub(crate) fn next_direct_retrieval<'a>(
         .cloned()
         .collect();
     let mut legacy_prefix: Option<LegacyNoPendingPrefix> = None;
-    for (parent, result, sealed, stop, legacy_version) in steps.into_iter().rev() {
+    for (parent, result, sealed, stop, legacy_versions) in steps.into_iter().rev() {
         let request = &sealed.request;
         if let Some(stop) = stop {
             let uri = urls.peek().map(String::as_str);
-            if legacy_version.is_none() {
+            if legacy_versions.is_none() {
                 legacy_prefix = None;
                 if uri.is_none_or(|uri| {
                     url::Url::parse(uri).is_ok_and(|url| observed_routes.contains(url.as_str()))
@@ -3126,14 +3130,14 @@ pub(crate) fn next_direct_retrieval<'a>(
                     return Err(invalid());
                 }
             }
-            verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
-            if let Some(version) = legacy_version {
+            if let Some((version, parent_version)) = legacy_versions {
                 let prefix = legacy_prefix.ok_or_else(invalid)?;
-                legacy_prefix = prefix.extended_by(version);
+                legacy_prefix = prefix.extended_by(version, parent_version);
                 if legacy_prefix.is_none() {
                     return Ok(None);
                 }
             }
+            verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
             // This request observed no URL, so the pending slot has not moved.
             continue;
         }
@@ -3190,10 +3194,12 @@ fn binds_direct_predecessor(bundle: &InputBundle, previous: &ResultRecord) -> Re
 #[derive(Clone, Copy)]
 enum LegacyNoPendingVersion {
     V1,
+    V2ToV4,
     V5,
     V6,
     V7,
     V8,
+    V9,
 }
 
 impl LegacyNoPendingVersion {
@@ -3203,40 +3209,39 @@ impl LegacyNoPendingVersion {
         }
         match bundle.meaning.parser_version.as_str() {
             crate::input::FIRST_DIRECT_CONTINUATION_PARSER_VERSION => Some(Self::V1),
+            "direct-source-continuation-v2"
+            | "direct-source-continuation-v3"
+            | "direct-source-continuation-v4" => Some(Self::V2ToV4),
             "direct-source-continuation-v5" => Some(Self::V5),
             "direct-source-continuation-v6" => Some(Self::V6),
             "direct-source-continuation-v7" => Some(Self::V7),
             "direct-source-continuation-v8" => Some(Self::V8),
+            "direct-source-continuation-v9" => Some(Self::V9),
             _ => None,
         }
     }
 
-    fn matches_parent(
+    fn saved_parent_version(
         self,
         store: &Store,
         actor: &str,
         case: &str,
         parent: &ResultRecord,
-    ) -> Result<bool> {
+    ) -> Result<Option<Self>> {
         let parent_is_stop = matches!(
             direct_preconnection_stop(parent),
             Some(DirectPreconnectionStop::LegacyNoPending)
         );
         if !(parent_is_stop || (matches!(self, Self::V1) && parent.lifecycle == Lifecycle::Commit))
         {
-            return Ok(false);
+            return Ok(None);
         }
-        let parent_version = store
+        Ok(store
             .get_input_bundle(actor, case, &parent.input_id, parent.input_version)?
-            .and_then(|(_, bundle)| Self::from_bundle(&bundle));
-        Ok(matches!(
-            (self, parent_version),
-            (Self::V1, Some(Self::V1))
-                | (Self::V5, Some(Self::V1 | Self::V5))
-                | (Self::V6, Some(Self::V1 | Self::V5 | Self::V6))
-                | (Self::V7, Some(Self::V5 | Self::V6 | Self::V7))
-                | (Self::V8, Some(Self::V5 | Self::V6 | Self::V7 | Self::V8))
-        ))
+            .and_then(|(_, bundle)| Self::from_bundle(&bundle))
+            .filter(|parent_version| {
+                !matches!(self, Self::V1) || matches!(parent_version, Self::V1)
+            }))
     }
 }
 
@@ -3246,22 +3251,38 @@ enum LegacyNoPendingPrefix {
     OneV1Stop,
     MultipleV1Stops,
     WithV5Stop,
+    WithV2ToV4Stop,
 }
 
 impl LegacyNoPendingPrefix {
-    fn extended_by(self, version: LegacyNoPendingVersion) -> Option<Self> {
-        use LegacyNoPendingVersion::{V1, V5, V6, V7, V8};
+    fn extended_by(
+        self,
+        version: LegacyNoPendingVersion,
+        parent_version: LegacyNoPendingVersion,
+    ) -> Option<Self> {
+        use LegacyNoPendingVersion::{V1, V2ToV4, V5, V6, V7, V8};
 
-        // Parent versions have already been checked. Among NO_PENDING stops,
-        // V5 could not resolve any V1 stop, V6 could resolve one, and V8 could
-        // resolve the V6/V7 chain unless it led back to V5.
-        match (self, version) {
-            (Self::FirstCommit, V1) => Some(Self::OneV1Stop),
-            (Self::OneV1Stop | Self::MultipleV1Stops, V1) => Some(Self::MultipleV1Stops),
-            (Self::OneV1Stop | Self::MultipleV1Stops | Self::WithV5Stop, V5) => {
+        // Once a V2–V4 stop is verified, none of the later saved producers
+        // could resolve the chain. Repeated stops could come from older builds.
+        if matches!(self, Self::WithV2ToV4Stop) {
+            return (!matches!(version, V1)).then_some(self);
+        }
+        if matches!(version, V2ToV4) && !matches!(self, Self::FirstCommit) {
+            return Some(Self::WithV2ToV4Stop);
+        }
+
+        // Preserve the producer boundaries for chains without a V2–V4 stop.
+        match (self, version, parent_version) {
+            (Self::FirstCommit, V1, V1) => Some(Self::OneV1Stop),
+            (Self::OneV1Stop | Self::MultipleV1Stops, V1, V1) => Some(Self::MultipleV1Stops),
+            (Self::OneV1Stop | Self::MultipleV1Stops | Self::WithV5Stop, V5, V1 | V5) => {
                 Some(Self::WithV5Stop)
             }
-            (Self::MultipleV1Stops, V6 | V7) | (Self::WithV5Stop, V6 | V7 | V8) => Some(self),
+            (Self::MultipleV1Stops, V6, V1 | V6)
+            | (Self::MultipleV1Stops, V7, V6 | V7)
+            | (Self::WithV5Stop, V6, V5 | V6)
+            | (Self::WithV5Stop, V7, V5 | V6 | V7)
+            | (Self::WithV5Stop, V8, V5 | V6 | V7 | V8) => Some(self),
             _ => None,
         }
     }
