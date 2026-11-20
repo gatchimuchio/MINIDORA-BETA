@@ -228,8 +228,10 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_json_value =
-        explanation_parser_version == crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION;
+    let explain_object_project =
+        explanation_parser_version == crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION;
+    let explain_json_value = explain_object_project
+        || explanation_parser_version == crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION;
     let explain_conversion = explain_json_value
         || explanation_parser_version == crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION;
     let explain_select = explain_conversion
@@ -313,22 +315,32 @@ pub(crate) fn previous_document_explanation(
             if explain_json_value
                 && let [dependency] = previous.dependencies.as_slice()
                 && let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)?
-                && serde_json::from_slice::<crate::ports::JsonStatisticsReport>(&bytes).is_ok()
             {
-                return Err(failure(
-                    "JSON_VALUE_CONTEXT_INVALID",
-                    "the prior JSON statistics have no retained sealed input bundle",
-                ));
+                if serde_json::from_slice::<crate::ports::JsonStatisticsReport>(&bytes).is_ok() {
+                    return Err(failure(
+                        "JSON_VALUE_CONTEXT_INVALID",
+                        "the prior JSON statistics have no retained sealed input bundle",
+                    ));
+                }
+                if explain_object_project
+                    && serde_json::from_slice::<crate::ports::JsonObjectProjectReport>(&bytes)
+                        .is_ok()
+                {
+                    return Err(failure(
+                        "JSON_VALUE_CONTEXT_INVALID",
+                        "the prior JSON object projection has no retained sealed input bundle",
+                    ));
+                }
             }
             return Ok(None);
         }
     };
-    if explain_json_value
-        && matches!(
-            bundle.meaning.intent,
-            Intent::JsonPointer { .. } | Intent::JsonStatistics { .. }
-        )
-    {
+    let explain_json = match bundle.meaning.intent {
+        Intent::JsonPointer { .. } | Intent::JsonStatistics { .. } => explain_json_value,
+        Intent::JsonObjectProject { .. } => explain_object_project,
+        _ => false,
+    };
+    if explain_json {
         return previous_json_value_explanation(
             store,
             actor,
@@ -652,6 +664,31 @@ fn previous_json_value_explanation(
     if bundle_ref != digest(&canonical(bundle)?) {
         return Err(failure(CODE, "the sealed JSON input bundle hash changed"));
     }
+    let verify_report = |bytes: &[u8], text: &str, label: &str| -> Result<String> {
+        let report_ref = digest(bytes);
+        if previous.dependencies != [report_ref.clone()]
+            || previous.text != text
+            || store
+                .get_bytes_if_present(actor, case, &report_ref)?
+                .as_deref()
+                != Some(bytes)
+        {
+            return Err(failure(
+                CODE,
+                format!("the prior {label} no longer matches the retained report"),
+            ));
+        }
+        revalidate_previous_document_render(
+            store,
+            actor,
+            case,
+            previous,
+            Some(&report_ref),
+            CODE,
+            label,
+        )?;
+        Ok(report_ref)
+    };
     let (input_node, report_node, document, report_ref, mut lines) = match &bundle.meaning.intent {
         Intent::JsonPointer { document, pointer } => {
             let root = strict_json_document(document)?;
@@ -699,33 +736,28 @@ fn previous_json_value_explanation(
         }
         Intent::JsonStatistics { document, pointer } => {
             let report = crate::ports::json_pointer_statistics(document, pointer)?;
-            let bytes = canonical(&report)?;
-            let report_ref = digest(&bytes);
-            if previous.dependencies != [report_ref.clone()]
-                || previous.text != serde_json::to_string_pretty(&report)?
-                || store
-                    .get_bytes_if_present(actor, case, &report_ref)?
-                    .as_deref()
-                    != Some(bytes.as_slice())
-            {
-                return Err(failure(
-                    CODE,
-                    "the prior JSON statistics no longer match the retained report",
-                ));
-            }
-            revalidate_previous_document_render(
-                store,
-                actor,
-                case,
-                previous,
-                Some(&report_ref),
-                CODE,
+            let report_ref = verify_report(
+                &canonical(&report)?,
+                &serde_json::to_string_pretty(&report)?,
                 "JSON statistics",
             )?;
             let lines = json_statistics_lines(document, &report, &report_ref)?;
             (
                 "previous-json-statistics-input",
                 "previous-json-statistics-report",
+                document,
+                report_ref,
+                lines,
+            )
+        }
+        Intent::JsonObjectProject { document, fields } => {
+            let report = crate::ports::json_object_project(document, fields)?;
+            let report_ref =
+                verify_report(&canonical(&report)?, &report.json, "JSON object projection")?;
+            let lines = json_object_projection_lines(document, &report, &report_ref)?;
+            (
+                "previous-json-object-project-input",
+                "previous-json-object-project-report",
                 document,
                 report_ref,
                 lines,
@@ -757,6 +789,97 @@ fn previous_json_value_explanation(
 
 fn json_value_range(raw: &str, start: usize, end: usize) -> String {
     format!("元 byte[{start}..{end}) sha256={}", digest(raw.as_bytes()))
+}
+
+fn json_object_projection_lines(
+    document: &str,
+    report: &crate::ports::JsonObjectProjectReport,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_FIELDS: usize = 8;
+    let invalid = || {
+        failure(
+            "JSON_VALUE_CONTEXT_INVALID",
+            "a JSON object field does not match the verified key or value range",
+        )
+    };
+    let tokens = |source: &crate::ports::JsonComparisonSpan, start, end| {
+        let raw = document
+            .get(source.source_start..source.source_end)
+            .ok_or_else(invalid)?;
+        let output = report.json.get(start..end).ok_or_else(invalid)?;
+        if digest(raw.as_bytes()) != source.source_sha256 {
+            return Err(invalid());
+        }
+        Ok((raw, output))
+    };
+    let mut lines = vec![
+        "前回のJSONオブジェクト項目選択を、封印済みの元入力から再計算しました。".into(),
+        format!(
+            "選択項目数: {}。指定された順序で、各値の元の表記を保って出力しました。",
+            report.fields.len()
+        ),
+        format!("選択結果 SHA-256: {}", report.output_sha256),
+        format!("report artifact SHA-256: {report_ref}"),
+    ];
+    for (index, field) in report.fields.iter().take(PREVIEW_FIELDS).enumerate() {
+        let (key, output_key) = tokens(
+            &field.key_source,
+            field.output_key_start,
+            field.output_key_end,
+        )?;
+        let (value, output_value) = tokens(
+            &field.value_source,
+            field.output_value_start,
+            field.output_value_end,
+        )?;
+        if serde_json::from_str::<String>(key).ok().as_deref() != Some(field.name.as_str())
+            || serde_json::from_str::<String>(output_key).ok().as_deref()
+                != Some(field.name.as_str())
+            || value != output_value
+        {
+            return Err(invalid());
+        }
+        lines.push(format!(
+            "項目{} {:?} JSON Pointer {:?}",
+            index + 1,
+            preview(&field.name),
+            preview(&field.source_pointer),
+        ));
+        for (label, span, raw, start, end, output) in [
+            (
+                "キー",
+                &field.key_source,
+                key,
+                field.output_key_start,
+                field.output_key_end,
+                output_key,
+            ),
+            (
+                "値",
+                &field.value_source,
+                value,
+                field.output_value_start,
+                field.output_value_end,
+                output_value,
+            ),
+        ] {
+            lines.push(format!(
+                "{label} {} 原文={:?} → 出力 byte[{start}..{end}) sha256={} 表記={:?}",
+                json_value_range(raw, span.source_start, span.source_end),
+                preview(raw),
+                digest(output.as_bytes()),
+                preview(output),
+            ));
+        }
+    }
+    if report.fields.len() > PREVIEW_FIELDS {
+        lines.push(format!(
+            "残りの項目 {}件は保存レポートに保持されています。",
+            report.fields.len() - PREVIEW_FIELDS
+        ));
+    }
+    Ok(lines)
 }
 
 fn json_statistics_lines(
@@ -2136,6 +2259,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION
             | crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
             | crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION
+            | crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

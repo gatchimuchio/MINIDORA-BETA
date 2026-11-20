@@ -11904,6 +11904,112 @@ fn table_projection_object_fields_preserve_raw_values_and_json_pointer_identity(
 }
 
 #[test]
+fn json_object_projection_explanation_preserves_field_order_and_raw_source_output_pairs() {
+    let selected = [
+        ("nt", r#""\u006et""#, "/nt", "9007199254740993"),
+        (
+            "a/b~c",
+            r#""a/b~c""#,
+            "/a~1b~0c",
+            r#"{ "n":1.2300e+40,"s":"\u732b" }"#,
+        ),
+    ];
+    for (header, order, expected_output) in [
+        (
+            "JSONオブジェクトからフィールド[\"nt\",\"a/b~c\"]を抽出して:",
+            [0, 1],
+            r#"{"nt":9007199254740993,"a/b~c":{ "n":1.2300e+40,"s":"\u732b" }}"#,
+        ),
+        (
+            "json-object-project [\"a/b~c\",\"nt\"]:",
+            [1, 0],
+            r#"{"a/b~c":{ "n":1.2300e+40,"s":"\u732b" },"nt":9007199254740993}"#,
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\r\n{OBJECT_PROJECTION_JSON}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "object-project", &request],
+        ));
+        assert_eq!(first["text"], expected_output);
+        let report = normal_object_projection(
+            &scratch.0,
+            "owner",
+            &first,
+            &request,
+            OBJECT_PROJECTION_JSON,
+        );
+        let expected_fields: Vec<_> = order
+            .iter()
+            .map(|&index| {
+                let (name, raw_key, pointer, _) = selected[index];
+                (name, raw_key, pointer)
+            })
+            .collect();
+        assert_object_projection_maps(&report, OBJECT_PROJECTION_JSON, &expected_fields);
+        let explained =
+            assert_table_explanation(&scratch.0, &first, &report, "previous-json-object-project");
+        let text = explained["text"].as_str().unwrap();
+        for expected in [
+            "前回のJSONオブジェクト項目選択".to_string(),
+            "選択項目数: 2".to_string(),
+            format!(
+                "選択結果 SHA-256: {}",
+                minidora_domain::digest(expected_output.as_bytes())
+            ),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        let lines: Vec<_> = text.lines().collect();
+        let mut previous_heading = None;
+        for (index, field_index) in order.into_iter().enumerate() {
+            let (name, raw_key, pointer, raw_value) = selected[field_index];
+            let heading = format!("項目{} {name:?} JSON Pointer {pointer:?}", index + 1);
+            let heading_index = lines
+                .iter()
+                .position(|line| line.contains(&heading))
+                .unwrap();
+            if let Some(previous) = previous_heading {
+                assert!(previous < heading_index);
+            }
+            previous_heading = Some(heading_index);
+            let output_key = serde_json::to_string(name).unwrap();
+            let output_field = format!("{output_key}:{raw_value}");
+            let output_key_start = expected_output.find(&output_field).unwrap();
+            for (offset, label, source_raw, output_raw, output_start) in [
+                (1, "キー", raw_key, output_key.as_str(), output_key_start),
+                (
+                    2,
+                    "値",
+                    raw_value,
+                    raw_value,
+                    output_key_start + output_key.len() + 1,
+                ),
+            ] {
+                let source_start = OBJECT_PROJECTION_JSON.find(source_raw).unwrap();
+                let line = lines[heading_index + offset];
+                for expected in [
+                    format!(
+                        "{label} 元 byte[{source_start}..{}) sha256={} 原文={source_raw:?}",
+                        source_start + source_raw.len(),
+                        minidora_domain::digest(source_raw.as_bytes())
+                    ),
+                    format!(
+                        "→ 出力 byte[{output_start}..{}) sha256={} 表記={output_raw:?}",
+                        output_start + output_raw.len(),
+                        minidora_domain::digest(output_raw.as_bytes())
+                    ),
+                ] {
+                    assert!(line.contains(&expected), "missing {expected:?} in {line}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn table_projection_actual_sort_report_becomes_csv_only_after_explicit_projection() {
     for (actor, sort_header, project_header) in [
         (
