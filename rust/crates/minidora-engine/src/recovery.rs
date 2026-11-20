@@ -4449,27 +4449,27 @@ fn inspect(
         } else {
             None
         };
-    let previous_csv_table_comparison_explanation =
-        if matches!(goal.intent, Intent::ExplainPrevious) {
-            bundle
-                .meaning
-                .context_result_ref
-                .as_ref()
-                .and_then(|id| state.prior_results.get(id))
-                .map(|previous| {
-                    crate::document::previous_csv_table_comparison_explanation(
-                        store,
-                        actor,
-                        case,
-                        previous,
-                        goal.budget.max_evidence_bytes,
-                    )
-                })
-                .transpose()?
-                .flatten()
-        } else {
-            None
-        };
+    let previous_csv_table_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
+        bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .map(|previous| {
+                crate::document::previous_csv_table_explanation(
+                    store,
+                    actor,
+                    case,
+                    previous,
+                    goal.budget.max_evidence_bytes,
+                    &bundle.meaning.parser_version,
+                )
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
     let previous_json_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
         bundle
             .meaning
@@ -4917,31 +4917,32 @@ fn inspect(
             ));
         }
     }
-    if let Some((bundle_ref, report_ref, expected_units)) =
-        &previous_csv_table_comparison_explanation
-    {
+    if let Some(explanation) = &previous_csv_table_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
                 "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
-                "the prior CSV comparison result reference is missing",
+                "the prior CSV table result reference is missing",
             )
         })?;
         let previous = state.prior_results.get(previous_id).ok_or_else(|| {
             failure(
                 "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
-                "the prior CSV comparison result is no longer retained",
+                "the prior CSV table result is no longer retained",
             )
         })?;
-        let expected_dependencies =
-            vec![previous.id.clone(), bundle_ref.clone(), report_ref.clone()];
+        let expected_dependencies = vec![
+            previous.id.clone(),
+            explanation.bundle_ref.clone(),
+            explanation.report_ref.clone(),
+        ];
         if previous.lifecycle != Lifecycle::Commit
             || result.dependencies != expected_dependencies
-            || plan.required_units != *expected_units
+            || plan.required_units != explanation.lines
             || result.guarantee != previous.guarantee
         {
             return Err(failure(
                 "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
-                "the sealed CSV input, exact comparison report or source-span explanation changed",
+                "the sealed CSV input, exact table report or source-span explanation changed",
             ));
         }
     }
@@ -5342,9 +5343,9 @@ fn inspect(
         });
         sources.push(report_id);
     }
-    if previous_csv_table_comparison_explanation.is_some() {
-        let input_id = "previous-csv-table-comparison-input".to_string();
-        let report_id = "previous-csv-table-comparison-report".to_string();
+    if let Some(explanation) = &previous_csv_table_explanation {
+        let input_id = explanation.input_node.to_string();
+        let report_id = explanation.report_node.to_string();
         expected_nodes.push(GoalNode {
             id: input_id.clone(),
             kind: GoalNodeKind::Evidence,
@@ -5594,16 +5595,24 @@ fn inspect(
         )?;
         source_refs.insert(report_id, report_ref.clone());
     }
-    if let Some((bundle_ref, report_ref, _)) = &previous_csv_table_comparison_explanation {
-        let input_id = "previous-csv-table-comparison-input".to_string();
-        let report_id = "previous-csv-table-comparison-report".to_string();
-        graph.observe(&input_id, bundle_ref, &BTreeMap::new())?;
+    if let Some(explanation) = &previous_csv_table_explanation {
         graph.observe(
-            &report_id,
-            report_ref,
-            &BTreeMap::from([(input_id, bundle_ref.clone())]),
+            explanation.input_node,
+            &explanation.bundle_ref,
+            &BTreeMap::new(),
         )?;
-        source_refs.insert(report_id, report_ref.clone());
+        graph.observe(
+            explanation.report_node,
+            &explanation.report_ref,
+            &BTreeMap::from([(
+                explanation.input_node.into(),
+                explanation.bundle_ref.clone(),
+            )]),
+        )?;
+        source_refs.insert(
+            explanation.report_node.into(),
+            explanation.report_ref.clone(),
+        );
     }
     if let Some((_, source_ref, report_ref, answer_ref, _, _)) = &previous_json_group_mean_answer {
         let source_id = "previous-json-group-statistics-source".to_string();

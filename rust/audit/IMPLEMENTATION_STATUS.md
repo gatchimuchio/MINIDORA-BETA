@@ -1838,3 +1838,19 @@ Linux x86_64 6.18.57、Rust/Cargo 1.99.1、OpenSSL 3.5.7、製品 `0.7.0-alpha.1
 凍結β・原典台帳・現物のblobが一致する `src/minidora/HDS構文化履歴.py` の85行を全文確認し、読解台帳を132件に更新した。直前のIRと現行IRの意味差分、返却する座標、構文化器の利用先を照合した。凍結Pythonの意味差分処理との同等性は未検証。C12・C13・E04・E12の受入は `UNVERIFIED`。E6の全数照合は継続中。実プロバイダー通信、全workspace実行試験、E7 QC・E8 QA、配布は `NOT_RUN`。
 
 復旧2世代は `750a628` と `d8ad3eb`。今回の終了時資産は10件。保持3件（実装記録、要求トレース、読解台帳）、稼働中4件（入力封印、復旧、TLS検査、共有Cargoキャッシュ）、LinuxのGIOゴミ箱移動3件、保管済み・保留は各0件。移動元は `/workspace/.minidora-cloud/b147-legacy-review.5Lq3Bz`（隔離ビルド・比較用保存履歴、18,450ファイル、8,557,611,854論理バイト）、`/workspace/.minidora-cloud/b147-legacy-smoke-gphqtsic`（577ファイル、2,588,095バイト）、`/workspace/.minidora-cloud/b147-scoped-fixture-e5_hvxe9`（296ファイル、1,364,208バイト）。各元パスの不存在とTrashの実体・復元情報を照合した。合計19,323ファイル、8,561,564,157論理バイト、容量回収0、指示者の最終処分待ち3件。仮設TLS鍵は各検査プロセスの一時領域で扱った。Windows保管とオンライン専用化は非該当。
+
+## 2026-11-20 JST B148 — D3-C E6 CSV内部結合の結果を元の行とセルに結び付けて説明
+
+着工点は `7835beee946d9c3223e87c9a1f9426e653c27c99`。D2仕様・工程とD3-C指示を全読して採用SHAを照合し、R2 §14・§16とA14・B04・E08・E12・F04の該当契約を確認した。実CLIでCSV内部結合を確定してから「詳しく説明して」と続けると、着工点では結合結果のJSONが同一バイトで返った。依存は直前結果1件だった。対照のJSON表内部結合は左右の元行と元バイトを説明した。
+
+新しい `ExplainPrevious` の封印版は `declarative-ja-en-v95-csv-join-explanation`。同じケースの確定済みCSV内部結合を参照すると、Coreは封印済みの両側CSVで結合を再計算し、保存済みの結果とレポート、元バイト・出力トークンの範囲、描画を照合する。説明には完全一致した列、左右の元行番号と元セル、未一致キー、元資料・入力・レポートのハッシュを含める。表示は一致と左右それぞれの未一致を先頭8行までとし、一致行は片側の先頭8列と結合キーまで出す。元セル全体は保存レポートに残る。Graphは封印入力→レポート→説明を結ぶ。着工点が封印したv89の説明は、その入力ID・文面・作用IDで復旧できる。
+
+Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。実装・検査5ファイルの `git diff --binary` SHA-256は `953f13ead7e942249c9f4b3f6216fb027cc79981c0a2a0a04aa3a63366f1f462`、`Cargo.lock` は `b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc`。実CLIのSHA-256は着工点 `11b2b74d639a3ca7242b5461f18036182e3400c26d7231ca78b3b2a23edf1bbf`、新CLI `4a41f77db30721209332180d68e30ed17afab88238508ce163547de79f5e0766`。
+
+- `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo build -p minidora-cli --locked` は終了0。Rustの入力39、文書11、通常CLIの説明11・CSV結合2の計63件PASS。追加検査で引用符・UTF-8・左右で異なる行順、未一致、原範囲とハッシュ、依存3件、計算Graph、描画を照合した。証拠予算不足と書込許可不足は型付き停止になり、新規書込と作用記録は0。
+- 着工点の実CLIで保存した結合の後に、新CLIから説明をファイル出力した。新旧の同一入力IDはそれぞれ以前の結果と一致した。旧v89と新v95の実保存状態をコピーし、書込が物理的に済んだ後の `ADOPTED/ATTEMPTED` を再現した。別プロセスの `reconcile` がいずれも終了0で `LOCAL_FILE_RECONCILED_NO_RESEND` を返した。両ファイルの作用ID、バイト列、inode、更新時刻、サイズは同一で、再書き込みは0回。
+- 一致行0件の実CLI説明も確定した。ケースからのレポート参照を外した隔離状態は `CSV_TABLE_CONTEXT_INVALID` で終了2となり、説明と作用記録は作られなかった。参照先ファイル自体を退避した場合はStore整合性検査で終了1、ケースの他主体からの操作は終了3。CSV絞り込み・並べ替えの通常説明には元の表を返す経路が残ることも観測した。
+
+凍結β・原典台帳・現物のblobが一致する `src/minidora/構造化文書操作.py` 262行を全文確認し、読解台帳を133件に更新した。指定順の選択、元の値と見出しの位置、保存版からの再構成、実consumerを照合した。凍結Pythonの操作群との同等性は未検証。A14・B04・E08・E12・F04の受入は `UNVERIFIED`。E6の全数照合は継続中。全workspace実行試験、厳格Clippyの再検査、E7 QC・E8 QA、配布は `NOT_RUN`。
+
+復旧2世代は `7835bee` と `750a628`。今回の終了時資産は12件。保持3件（実装記録、要求トレース、読解台帳）、稼働中6件（4実装ファイル、通常CLI検査、共有Cargoキャッシュ）、LinuxのGIOゴミ箱移動3件、保管済み・保留は各0件。移動元は `/workspace/.minidora-cloud/b148-baseline.80elTj`（692ファイル、4,595,469バイト）、`/workspace/.minidora-cloud/b148-join-discovery-7mr_2jag`（91ファイル、1,483,181バイト）、`/workspace/.minidora-cloud/b148-table-row-discovery-7exz4ury`（180ファイル、2,540,329バイト）。元パスの不存在とTrashの実体・復元情報を照合した。合計963ファイル、8,618,979バイト。容量回収0、指示者の最終処分待ち3件。Windows保管とオンライン専用化は非該当。

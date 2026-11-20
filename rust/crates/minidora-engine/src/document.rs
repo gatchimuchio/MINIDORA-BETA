@@ -194,18 +194,35 @@ enum CsvTableComparisonChange {
     RowAdded { key: String, row: Vec<String> },
 }
 
-/// Recompute a prior keyed CSV comparison from its immutable sealed input,
-/// then explain the exact retained changes and their two-sided source ranges.
-pub(crate) fn previous_csv_table_comparison_explanation(
+pub(crate) struct CsvTableExplanation {
+    pub(crate) input_node: &'static str,
+    pub(crate) report_node: &'static str,
+    pub(crate) bundle_ref: String,
+    pub(crate) report_ref: String,
+    pub(crate) lines: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum CsvTableOperation<'a> {
+    Compare(&'a str),
+    Join(&'a str, &'a str),
+}
+
+/// Recompute a prior CSV table operation from its immutable sealed input
+/// before explaining its exact result and two-sided source ranges.
+pub(crate) fn previous_csv_table_explanation(
     store: &crate::store::Store,
     actor: &str,
     case: &str,
     previous: &ResultRecord,
     max_evidence_bytes: usize,
-) -> Result<Option<(String, String, Vec<String>)>> {
+    explanation_parser_version: &str,
+) -> Result<Option<CsvTableExplanation>> {
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
+    let explain_join =
+        explanation_parser_version == crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION;
 
     let (bundle_ref, bundle) =
         match store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)? {
@@ -234,24 +251,75 @@ pub(crate) fn previous_csv_table_comparison_explanation(
                         "the prior CSV comparison has no retained sealed input bundle",
                     ));
                 }
+                if explain_join && serde_json::from_str::<CsvTableJoinText>(&previous.text).is_ok()
+                {
+                    return Err(failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "the prior CSV inner join has no retained sealed input bundle",
+                    ));
+                }
                 return Ok(None);
             }
         };
-    let (document, key_column) = match &bundle.meaning.intent {
+    let (document, operation) = match &bundle.meaning.intent {
         Intent::CsvCompare {
             document,
             key_column,
-        } => (document.as_str(), key_column.as_str()),
+        } => (document.as_str(), CsvTableOperation::Compare(key_column)),
+        Intent::CsvInnerJoin {
+            document,
+            left_key_column,
+            right_key_column,
+        } if explain_join => (
+            document.as_str(),
+            CsvTableOperation::Join(left_key_column, right_key_column),
+        ),
         _ => return Ok(None),
+    };
+    let (label, input_node, report_node) = match operation {
+        CsvTableOperation::Compare(_) => (
+            "comparison",
+            "previous-csv-table-comparison-input",
+            "previous-csv-table-comparison-report",
+        ),
+        CsvTableOperation::Join(_, _) => (
+            "inner join",
+            "previous-csv-table-inner-join-input",
+            "previous-csv-table-inner-join-report",
+        ),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
         return Err(failure(
             "CSV_TABLE_CONTEXT_INVALID",
-            "the sealed CSV comparison input bundle hash changed",
+            format!("the sealed CSV {label} input bundle hash changed"),
         ));
     }
 
-    let recomputed = csv_compare_by(document, key_column)?;
+    let recomputed = match operation {
+        CsvTableOperation::Compare(key_column) => csv_compare_by(document, key_column)?,
+        CsvTableOperation::Join(left_key, right_key) => {
+            csv_inner_join(document, left_key, right_key)?
+        }
+    };
+    let parameters_match = match operation {
+        CsvTableOperation::Compare(key_column) => {
+            recomputed.operation == "CSV_TABLE_COMPARE"
+                && recomputed.parameters.get("key_column").map(String::as_str) == Some(key_column)
+        }
+        CsvTableOperation::Join(left_key, right_key) => {
+            recomputed.operation == "CSV_INNER_JOIN"
+                && recomputed
+                    .parameters
+                    .get("left_key_column")
+                    .map(String::as_str)
+                    == Some(left_key)
+                && recomputed
+                    .parameters
+                    .get("right_key_column")
+                    .map(String::as_str)
+                    == Some(right_key)
+        }
+    };
     let report_bytes = canonical(&recomputed)?;
     let report_ref = digest(&report_bytes);
     let stored_report = store
@@ -259,24 +327,102 @@ pub(crate) fn previous_csv_table_comparison_explanation(
         .ok_or_else(|| {
             failure(
                 "CSV_TABLE_CONTEXT_INVALID",
-                "the prior CSV comparison report artifact is missing",
+                format!("the prior CSV {label} report artifact is missing"),
             )
         })?;
     if previous.dependencies != [report_ref.clone()]
         || stored_report != report_bytes
         || previous.text != recomputed.text
-        || recomputed.operation != "CSV_TABLE_COMPARE"
+        || !parameters_match
         || recomputed.source_document != document
-        || recomputed.parameters.get("key_column").map(String::as_str) != Some(key_column)
         || recomputed.source_sha256 != digest(document.as_bytes())
         || recomputed.output_sha256 != digest(recomputed.text.as_bytes())
     {
         return Err(failure(
             "CSV_TABLE_CONTEXT_INVALID",
-            "the prior CSV comparison input, report artifact or result text no longer revalidates",
+            format!(
+                "the prior CSV {label} input, report artifact or result text no longer revalidates"
+            ),
         ));
     }
 
+    let lines = match operation {
+        CsvTableOperation::Compare(key_column) => {
+            csv_table_comparison_lines(&recomputed, key_column, &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::Join(left_key, right_key) => {
+            csv_table_join_lines(&recomputed, left_key, right_key, &bundle_ref, &report_ref)?
+        }
+    };
+
+    let (Some(prior_plan), Some(prior_render)) =
+        (previous.content_plan.as_ref(), previous.render.as_ref())
+    else {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            format!("the prior CSV {label} has no retained content plan or render observation"),
+        ));
+    };
+    let mut unsigned_plan = prior_plan.clone();
+    unsigned_plan.id.clear();
+    if prior_plan.id != minidora_domain::identity(&unsigned_plan)?
+        || prior_plan.text != previous.text
+        || prior_plan.guarantee != previous.guarantee
+        || !prior_plan.dependencies.contains(&report_ref)
+        || !crate::core::validate_render(prior_plan, prior_render)
+    {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            format!("the prior CSV {label} content plan or rendered output is invalid"),
+        ));
+    }
+    let prior_plan_bytes = canonical(prior_plan)?;
+    let prior_render_bytes = canonical(prior_render)?;
+    for (artifact_ref, artifact_bytes, artifact_label) in [
+        (digest(&prior_plan_bytes), prior_plan_bytes, "content plan"),
+        (
+            digest(&prior_render_bytes),
+            prior_render_bytes,
+            "render observation",
+        ),
+    ] {
+        match store.get_bytes_if_present(actor, case, &artifact_ref)? {
+            Some(stored) if stored == artifact_bytes => {}
+            Some(_) => {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    format!("the prior CSV {label} {artifact_label} artifact changed"),
+                ));
+            }
+            None => {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    format!("the prior CSV {label} {artifact_label} artifact is missing"),
+                ));
+            }
+        }
+    }
+    if lines.join("\n").len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            format!("the exact CSV table {label} explanation exceeds the request evidence budget"),
+        ));
+    }
+    Ok(Some(CsvTableExplanation {
+        input_node,
+        report_node,
+        bundle_ref,
+        report_ref,
+        lines,
+    }))
+}
+
+fn csv_table_comparison_lines(
+    recomputed: &DocumentResult,
+    key_column: &str,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
     let typed: CsvTableComparisonText = serde_json::from_str(&recomputed.text).map_err(|_| {
         failure(
             "CSV_TABLE_CONTEXT_INVALID",
@@ -290,10 +436,10 @@ pub(crate) fn previous_csv_table_comparison_explanation(
         ));
     }
     for span in &recomputed.spans {
-        csv_table_comparison_span(&recomputed, span)?;
+        csv_table_span(recomputed, span)?;
     }
-    let key_header = csv_table_comparison_find_span(
-        &recomputed,
+    let key_header = csv_table_find_span(
+        recomputed,
         "CSV_COMPARE_KEY_HEADER",
         Some(0),
         None,
@@ -332,10 +478,7 @@ pub(crate) fn previous_csv_table_comparison_explanation(
         format!("元資料 SHA-256: {}", recomputed.source_sha256),
         format!("封印済みInputBundle SHA-256: {bundle_ref}"),
         format!("report artifact SHA-256: {report_ref}"),
-        format!(
-            "キー見出し: {}",
-            csv_table_comparison_span(&recomputed, key_header)?
-        ),
+        format!("キー見出し: {}", csv_table_span(recomputed, key_header)?),
     ];
     for change in typed.changes.iter().take(8) {
         match change {
@@ -345,22 +488,22 @@ pub(crate) fn previous_csv_table_comparison_explanation(
                 left,
                 right,
             } => {
-                let left_key = csv_table_comparison_find_span(
-                    &recomputed,
+                let left_key = csv_table_find_span(
+                    recomputed,
                     "CSV_COMPARE_CHANGED_KEY",
                     None,
                     None,
                     Some(key),
                 )?;
-                let right_key = csv_table_comparison_find_span(
-                    &recomputed,
+                let right_key = csv_table_find_span(
+                    recomputed,
                     "CSV_COMPARE_MATCHED_KEY",
                     None,
                     None,
                     Some(key),
                 )?;
-                let column_span = csv_table_comparison_find_span(
-                    &recomputed,
+                let column_span = csv_table_find_span(
+                    recomputed,
                     "CSV_COMPARE_COLUMN",
                     Some(0),
                     None,
@@ -372,15 +515,15 @@ pub(crate) fn previous_csv_table_comparison_explanation(
                         "a changed comparison column has no original column index",
                     )
                 })?;
-                let left_span = csv_table_comparison_find_span(
-                    &recomputed,
+                let left_span = csv_table_find_span(
+                    recomputed,
                     "CSV_COMPARE_LEFT_CELL",
                     left_key.row,
                     Some(column_index),
                     Some(left),
                 )?;
-                let right_span = csv_table_comparison_find_span(
-                    &recomputed,
+                let right_span = csv_table_find_span(
+                    recomputed,
                     "CSV_COMPARE_RIGHT_CELL",
                     right_key.row,
                     Some(column_index),
@@ -392,17 +535,17 @@ pub(crate) fn previous_csv_table_comparison_explanation(
                     preview(column),
                     left_key.row.unwrap_or(0),
                     preview(left),
-                    csv_table_comparison_span(&recomputed, left_span)?,
+                    csv_table_span(recomputed, left_span)?,
                     right_key.row.unwrap_or(0),
                     preview(right),
-                    csv_table_comparison_span(&recomputed, right_span)?,
-                    csv_table_comparison_span(&recomputed, left_key)?,
-                    csv_table_comparison_span(&recomputed, right_key)?
+                    csv_table_span(recomputed, right_span)?,
+                    csv_table_span(recomputed, left_key)?,
+                    csv_table_span(recomputed, right_key)?
                 ));
             }
             CsvTableComparisonChange::RowRemoved { key, row } => {
                 lines.push(csv_table_comparison_row_line(
-                    &recomputed,
+                    recomputed,
                     "CSV_COMPARE_REMOVED_KEY",
                     "CSV_COMPARE_REMOVED_CELL",
                     "左側のみの行",
@@ -412,7 +555,7 @@ pub(crate) fn previous_csv_table_comparison_explanation(
             }
             CsvTableComparisonChange::RowAdded { key, row } => {
                 lines.push(csv_table_comparison_row_line(
-                    &recomputed,
+                    recomputed,
                     "CSV_COMPARE_ADDED_KEY",
                     "CSV_COMPARE_ADDED_CELL",
                     "右側のみの行",
@@ -428,64 +571,216 @@ pub(crate) fn previous_csv_table_comparison_explanation(
             typed.changes.len() - 8
         ));
     }
+    Ok(lines)
+}
 
-    let (Some(prior_plan), Some(prior_render)) =
-        (previous.content_plan.as_ref(), previous.render.as_ref())
-    else {
-        return Err(failure(
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CsvTableJoinText {
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+    left_source_record_numbers: Vec<usize>,
+    right_source_record_numbers: Vec<usize>,
+    unmatched_left: Vec<CsvTableUnmatchedKey>,
+    unmatched_right: Vec<CsvTableUnmatchedKey>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CsvTableUnmatchedKey {
+    key: String,
+    source_record_number: usize,
+}
+
+fn csv_table_join_lines(
+    report: &DocumentResult,
+    left_key: &str,
+    right_key: &str,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    let invalid = || {
+        failure(
             "CSV_TABLE_CONTEXT_INVALID",
-            "the prior CSV comparison has no retained content plan or render observation",
-        ));
+            "the recomputed CSV inner join has inconsistent rows or key columns",
+        )
     };
-    let mut unsigned_plan = prior_plan.clone();
-    unsigned_plan.id.clear();
-    if prior_plan.id != minidora_domain::identity(&unsigned_plan)?
-        || prior_plan.text != previous.text
-        || prior_plan.guarantee != previous.guarantee
-        || !prior_plan.dependencies.contains(&report_ref)
-        || !crate::core::validate_render(prior_plan, prior_render)
+    let joined: CsvTableJoinText = serde_json::from_str(&report.text).map_err(|_| invalid())?;
+    if joined.rows.len() != joined.left_source_record_numbers.len()
+        || joined.rows.len() != joined.right_source_record_numbers.len()
+        || joined
+            .rows
+            .iter()
+            .any(|row| row.len() != joined.columns.len())
     {
-        return Err(failure(
-            "CSV_TABLE_CONTEXT_INVALID",
-            "the prior CSV comparison content plan or rendered output is invalid",
-        ));
+        return Err(invalid());
     }
-    let prior_plan_bytes = canonical(prior_plan)?;
-    let prior_render_bytes = canonical(prior_render)?;
-    for (artifact_ref, artifact_bytes, label) in [
-        (digest(&prior_plan_bytes), prior_plan_bytes, "content plan"),
-        (
-            digest(&prior_render_bytes),
-            prior_render_bytes,
-            "render observation",
+    for span in &report.spans {
+        csv_table_span(report, span)?;
+    }
+    let left_header = csv_table_find_span(
+        report,
+        "CSV_INNER_JOIN_LEFT_HEADER",
+        Some(0),
+        None,
+        Some(left_key),
+    )?;
+    let right_header = csv_table_find_span(
+        report,
+        "CSV_INNER_JOIN_RIGHT_HEADER",
+        Some(0),
+        None,
+        Some(right_key),
+    )?;
+    let left_key_index = left_header.column.ok_or_else(invalid)?;
+    let right_key_index = right_header.column.ok_or_else(invalid)?;
+    let left_columns = report
+        .spans
+        .iter()
+        .filter(|span| span.kind == "CSV_INNER_JOIN_LEFT_HEADER")
+        .count();
+    let mut lines = vec![
+        "前回のCSV表内部結合を、封印済みの元入力から再計算しました。".into(),
+        format!("左のキー {:?} と右のキー {:?} は、CSVをデコードした後の文字列が完全に等しい場合に一致します。", preview(left_key), preview(right_key)),
+        "左右でキーはそれぞれ一意です。一致した組を左の元行順に出力し、片側にしかない行は別に記録します。".into(),
+        format!(
+            "一致行: {}、左の未一致行: {}、右の未一致行: {}",
+            joined.rows.len(),
+            joined.unmatched_left.len(),
+            joined.unmatched_right.len()
         ),
-    ] {
-        match store.get_bytes_if_present(actor, case, &artifact_ref)? {
-            Some(stored) if stored == artifact_bytes => {}
-            Some(_) => {
-                return Err(failure(
-                    "CSV_TABLE_CONTEXT_INVALID",
-                    format!("the prior CSV comparison {label} artifact changed"),
-                ));
+        format!("元資料 SHA-256: {}", report.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!("左のキー見出し {}", csv_table_span(report, left_header)?),
+        format!("右のキー見出し {}", csv_table_span(report, right_header)?),
+    ];
+    for (index, (row, (left_row, right_row))) in joined
+        .rows
+        .iter()
+        .zip(
+            joined
+                .left_source_record_numbers
+                .iter()
+                .zip(&joined.right_source_record_numbers),
+        )
+        .take(8)
+        .enumerate()
+    {
+        let key = row.get(left_key_index).ok_or_else(invalid)?;
+        if row.get(left_columns + right_key_index) != Some(key) {
+            return Err(invalid());
+        }
+        let left = csv_table_find_span(
+            report,
+            "CSV_INNER_JOIN_LEFT_CELL",
+            Some(*left_row),
+            Some(left_key_index),
+            Some(key),
+        )?;
+        let right = csv_table_find_span(
+            report,
+            "CSV_INNER_JOIN_RIGHT_CELL",
+            Some(*right_row),
+            Some(right_key_index),
+            Some(key),
+        )?;
+        lines.push(format!(
+            "出力行{} ← 左元行{} + 右元行{}。キー {:?}、左 {}、右 {}",
+            index + 1,
+            left_row,
+            right_row,
+            preview(key),
+            csv_table_span(report, left)?,
+            csv_table_span(report, right)?,
+        ));
+        let (left_values, right_values) = row.split_at_checked(left_columns).ok_or_else(invalid)?;
+        for (side, kind, row_number, key_index, values) in [
+            (
+                "左",
+                "CSV_INNER_JOIN_LEFT_CELL",
+                *left_row,
+                left_key_index,
+                left_values,
+            ),
+            (
+                "右",
+                "CSV_INNER_JOIN_RIGHT_CELL",
+                *right_row,
+                right_key_index,
+                right_values,
+            ),
+        ] {
+            for (column, value) in values.iter().take(8).enumerate() {
+                if column != key_index {
+                    let span = csv_table_find_span(
+                        report,
+                        kind,
+                        Some(row_number),
+                        Some(column),
+                        Some(value),
+                    )?;
+                    lines.push(format!(
+                        "{side}元行{row_number} 列{} 値 {:?} {}",
+                        column + 1,
+                        preview(value),
+                        csv_table_span(report, span)?,
+                    ));
+                }
             }
-            None => {
-                return Err(failure(
-                    "CSV_TABLE_CONTEXT_INVALID",
-                    format!("the prior CSV comparison {label} artifact is missing"),
+            if values.len() > 8 {
+                lines.push(format!(
+                    "{side}元行{row_number}の9列目以降も保存artifactに保持されています。"
                 ));
             }
         }
     }
-    if lines.join("\n").len() > max_evidence_bytes {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "the exact CSV table comparison explanation exceeds the request evidence budget",
+    if joined.rows.len() > 8 {
+        lines.push(format!(
+            "残りの一致行 {}件は保存artifactに保持されています。",
+            joined.rows.len() - 8
         ));
     }
-    Ok(Some((bundle_ref, report_ref, lines)))
+    for (side, kind, key_index, unmatched) in [
+        (
+            "左",
+            "CSV_INNER_JOIN_UNMATCHED_LEFT_KEY",
+            left_key_index,
+            &joined.unmatched_left,
+        ),
+        (
+            "右",
+            "CSV_INNER_JOIN_UNMATCHED_RIGHT_KEY",
+            right_key_index,
+            &joined.unmatched_right,
+        ),
+    ] {
+        for entry in unmatched.iter().take(8) {
+            let span = csv_table_find_span(
+                report,
+                kind,
+                Some(entry.source_record_number),
+                Some(key_index),
+                Some(&entry.key),
+            )?;
+            lines.push(format!(
+                "{side}の未一致: 元行{} キー {:?} {}",
+                entry.source_record_number,
+                preview(&entry.key),
+                csv_table_span(report, span)?,
+            ));
+        }
+        if unmatched.len() > 8 {
+            lines.push(format!(
+                "{side}の残りの未一致行 {}件は保存artifactに保持されています。",
+                unmatched.len() - 8
+            ));
+        }
+    }
+    Ok(lines)
 }
 
-fn csv_table_comparison_find_span<'a>(
+fn csv_table_find_span<'a>(
     report: &'a DocumentResult,
     kind: &str,
     row: Option<usize>,
@@ -509,26 +804,26 @@ fn csv_table_comparison_find_span<'a>(
         })
 }
 
-fn csv_table_comparison_span(report: &DocumentResult, span: &DocumentSpan) -> Result<String> {
+fn csv_table_span(report: &DocumentResult, span: &DocumentSpan) -> Result<String> {
     let raw = report
         .source_document
         .get(span.source_start..span.source_end)
         .ok_or_else(|| {
             failure(
                 "CSV_TABLE_CONTEXT_INVALID",
-                "a retained CSV comparison source range is outside the sealed input",
+                "a retained CSV source range is outside the sealed input",
             )
         })?;
     if raw != span.source_text {
         return Err(failure(
             "CSV_TABLE_CONTEXT_INVALID",
-            "a retained CSV comparison source range differs from its original bytes",
+            "a retained CSV source range differs from its original bytes",
         ));
     }
     let decoded = span.decoded_value.as_deref().ok_or_else(|| {
         failure(
             "CSV_TABLE_CONTEXT_INVALID",
-            "a retained CSV comparison cell has no decoded value",
+            "a retained CSV cell has no decoded value",
         )
     })?;
     match (span.output_start, span.output_end) {
@@ -536,13 +831,21 @@ fn csv_table_comparison_span(report: &DocumentResult, span: &DocumentSpan) -> Re
             let token = report.text.get(start..end).ok_or_else(|| {
                 failure(
                     "CSV_TABLE_CONTEXT_INVALID",
-                    "a retained CSV comparison output range is outside the report",
+                    "a retained CSV output range is outside the report",
                 )
             })?;
-            if serde_json::from_str::<String>(token).ok().as_deref() != Some(decoded) {
+            let output = serde_json::from_str::<String>(token).ok();
+            let projected = output
+                .as_deref()
+                .and_then(|value| match span.kind.as_str() {
+                    "CSV_INNER_JOIN_LEFT_HEADER" => value.strip_prefix("left."),
+                    "CSV_INNER_JOIN_RIGHT_HEADER" => value.strip_prefix("right."),
+                    _ => Some(value),
+                });
+            if projected != Some(decoded) {
                 return Err(failure(
                     "CSV_TABLE_CONTEXT_INVALID",
-                    "a retained CSV comparison output token differs from its decoded source cell",
+                    "a retained CSV output token differs from its decoded source cell",
                 ));
             }
         }
@@ -550,7 +853,7 @@ fn csv_table_comparison_span(report: &DocumentResult, span: &DocumentSpan) -> Re
         _ => {
             return Err(failure(
                 "CSV_TABLE_CONTEXT_INVALID",
-                "a retained CSV comparison output range is incomplete",
+                "a retained CSV output range is incomplete",
             ));
         }
     }
@@ -571,7 +874,7 @@ fn csv_table_comparison_row_line(
     key: &str,
     row: &[String],
 ) -> Result<String> {
-    let key_span = csv_table_comparison_find_span(report, key_kind, None, None, Some(key))?;
+    let key_span = csv_table_find_span(report, key_kind, None, None, Some(key))?;
     let row_index = key_span.row.ok_or_else(|| {
         failure(
             "CSV_TABLE_CONTEXT_INVALID",
@@ -586,7 +889,7 @@ fn csv_table_comparison_row_line(
     }
     let mut cells = Vec::new();
     for (column, value) in row.iter().enumerate().take(8) {
-        let span = csv_table_comparison_find_span(
+        let span = csv_table_find_span(
             report,
             cell_kind,
             Some(row_index),
@@ -597,7 +900,7 @@ fn csv_table_comparison_row_line(
             "列{} {:?} {}",
             column + 1,
             preview(value),
-            csv_table_comparison_span(report, span)?
+            csv_table_span(report, span)?
         ));
     }
     if row.len() > 8 {
@@ -611,7 +914,7 @@ fn csv_table_comparison_row_line(
         row_index,
         preview(key),
         cells.join("; "),
-        csv_table_comparison_span(report, key_span)?
+        csv_table_span(report, key_span)?
     ))
 }
 

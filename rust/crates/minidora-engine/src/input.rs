@@ -23,6 +23,8 @@ const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallb
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v94-versioned-source-summary";
+pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v95-csv-join-explanation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -189,6 +191,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
+        Intent::ExplainPrevious => CSV_JOIN_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

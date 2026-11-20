@@ -12327,6 +12327,204 @@ fn json_table_transform_explanations_replay_the_sealed_input_and_report() {
 }
 
 #[test]
+fn csv_inner_join_explanation_replays_sealed_rows_and_unmatched_keys() {
+    let left = "名前,id\r\n\"犬,\"\"北\"\"\",2\r\n猫,1\r\n狐,4";
+    let right = "record_id,分類\r\n1,猫科\r\n3,鳥類\r\n2,イヌ科\r\n";
+    let source =
+        format!("--- MINIDORA LEFT CSV ---\n{left}\r\n--- MINIDORA RIGHT CSV ---\n{right}");
+    let request = format!("CSVを「id」と「record_id」で内部結合して:\n{source}");
+    let scratch = Scratch::new();
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "csv-join-explain", &request],
+    ));
+    let artifact = normal_document_artifact(
+        &scratch.0,
+        "owner",
+        &first,
+        &request,
+        &source,
+        "CSV_INNER_JOIN",
+    );
+    let joined: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        joined["rows"],
+        serde_json::json!([["犬,\"北\"", "2", "2", "イヌ科"], ["猫", "1", "1", "猫科"]])
+    );
+    assert_eq!(
+        joined["left_source_record_numbers"],
+        serde_json::json!([1, 2])
+    );
+    assert_eq!(
+        joined["right_source_record_numbers"],
+        serde_json::json!([3, 1])
+    );
+    assert_eq!(
+        joined["unmatched_left"],
+        serde_json::json!([{"key":"4","source_record_number":3}])
+    );
+    assert_eq!(
+        joined["unmatched_right"],
+        serde_json::json!([{"key":"3","source_record_number":2}])
+    );
+    let original_revision = inspect_normal_case(&scratch.0, "owner");
+    let input_bundle_ref =
+        minidora_domain::digest(&minidora_domain::canonical(&original_revision["bundle"]).unwrap());
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(&artifact).unwrap());
+    assert_eq!(first["dependencies"], serde_json::json!([report_ref]));
+
+    let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "COMPUTED");
+    assert_eq!(explanation["content_plan"]["text"], explanation["text"]);
+    assert_eq!(explanation["render"]["status"], "RENDERED");
+    assert_ne!(explanation["text"], first["text"]);
+    let text = explanation["text"].as_str().unwrap();
+    for expected in [
+        "前回のCSV表内部結合",
+        "一致行: 2、左の未一致行: 1、右の未一致行: 1",
+        "出力行1 ← 左元行1 + 右元行3",
+        "出力行2 ← 左元行2 + 右元行1",
+        "左の未一致: 元行3 キー",
+        "右の未一致: 元行2 キー",
+        "\"id\"",
+        "\"record_id\"",
+        "封印済みInputBundle SHA-256",
+        "report artifact SHA-256",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    for reference in [
+        minidora_domain::digest(source.as_bytes()),
+        input_bundle_ref.clone(),
+        report_ref.clone(),
+    ] {
+        assert!(text.contains(&reference), "missing {reference} in {text}");
+    }
+    let spans = artifact["spans"].as_array().unwrap();
+    let disclosed: Vec<_> = spans
+        .iter()
+        .filter(|span| {
+            matches!(
+                span["kind"].as_str(),
+                Some(
+                    "CSV_INNER_JOIN_LEFT_CELL"
+                        | "CSV_INNER_JOIN_RIGHT_CELL"
+                        | "CSV_INNER_JOIN_UNMATCHED_LEFT_KEY"
+                        | "CSV_INNER_JOIN_UNMATCHED_RIGHT_KEY"
+                )
+            )
+        })
+        .collect();
+    assert_eq!(disclosed.len(), 10);
+    for span in disclosed {
+        let start = span["source_start"].as_u64().unwrap() as usize;
+        let end = span["source_end"].as_u64().unwrap() as usize;
+        let raw = &source[start..end];
+        assert_eq!(span["source_text"], raw);
+        assert!(text.contains(&format!("byte[{start}..{end})")));
+        assert!(text.contains(&format!(
+            "sha256={}",
+            minidora_domain::digest(raw.as_bytes())
+        )));
+    }
+    assert_eq!(
+        explanation["dependencies"].as_array().unwrap(),
+        &vec![
+            first["id"].clone(),
+            Value::String(input_bundle_ref.clone()),
+            Value::String(report_ref.clone()),
+        ]
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let graph = sequence_artifact(&store, &explanation["execution_graph_ref"]);
+    let input_id = "previous-csv-table-inner-join-input";
+    let report_id = "previous-csv-table-inner-join-report";
+    let nodes = graph[0].as_array().unwrap();
+    assert!(nodes.iter().any(|node| {
+        node["id"] == input_id
+            && node["kind"] == "EVIDENCE"
+            && node["requires"] == serde_json::json!([])
+    }));
+    assert!(nodes.iter().any(|node| {
+        node["id"] == report_id
+            && node["kind"] == "COMPUTED_VALUE"
+            && node["requires"] == serde_json::json!([input_id])
+    }));
+    assert!(nodes.iter().any(|node| {
+        node["id"] == "compute"
+            && node["requires"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(report_id.into()))
+    }));
+    assert_eq!(graph[1][input_id], input_bundle_ref);
+    assert_eq!(graph[1][report_id], report_ref);
+    assert_eq!(
+        graph[5][report_id],
+        serde_json::json!({input_id:input_bundle_ref})
+    );
+    assert_eq!(graph[5]["compute"][report_id], report_ref);
+    assert_eq!(
+        explanation["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let revision = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        revision["bundle"]["meaning"]["context_result_ref"],
+        first["id"]
+    );
+    assert_eq!(revision["result"], explanation);
+}
+
+#[test]
+fn csv_inner_join_explanation_stops_on_budget_and_missing_file_permission() {
+    let source = "--- MINIDORA LEFT CSV ---\nid,name\r\n1,猫\r\n--- MINIDORA RIGHT CSV ---\nrecord_id,kind\r\n1,猫科\r\n";
+    let request = format!("csv-inner-join \"id\" \"record_id\":\n{source}");
+    for budget_limited in [true, false] {
+        let scratch = Scratch::new();
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "csv-join-before-stop", &request],
+        ));
+        assert_eq!(first["lifecycle"], "COMMIT");
+        let target = scratch.0.join("unauthorized-explanation.txt");
+        let args = if budget_limited {
+            vec!["--max-evidence-bytes", "1", "詳しく説明して"]
+        } else {
+            vec!["--output", target.to_str().unwrap(), "詳しく説明して"]
+        };
+        let result = stopped(&execute(&scratch.0, "owner", &args), 2, "SUSPEND");
+        let code = if budget_limited {
+            "RESOURCE_LIMIT:"
+        } else {
+            "WRITE_PERMISSION_MISSING:"
+        };
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!target.exists());
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+        if budget_limited {
+            assert_eq!(result["dependencies"], serde_json::json!([]));
+            assert!(result["content_plan"].is_null());
+        } else {
+            assert_eq!(result["dependencies"].as_array().unwrap().len(), 3);
+            assert_eq!(result["dependencies"][0], first["id"]);
+            assert_eq!(result["render"]["status"], "RENDERED");
+        }
+        let revision = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(revision["result"], result);
+        assert_eq!(
+            revision["bundle"]["meaning"]["context_result_ref"],
+            first["id"]
+        );
+    }
+}
+
+#[test]
 fn json_table_inner_join_explanation_replays_sealed_rows_and_unmatched_keys() {
     let left = r#"{"columns":["名前","id"],"rows":[["犬","北"],["猫","南"],["狐","西"]]}"#;
     let right = r#"{"columns":["record_id","分類"],"rows":[["南","猫科"],["東","鳥類"],["\u5317","イヌ科"]]}"#;
