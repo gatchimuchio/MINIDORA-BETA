@@ -4142,6 +4142,7 @@ impl Engine {
                             &request.case_id,
                             prior,
                             request.budget.max_evidence_bytes,
+                            &bundle.meaning.parser_version,
                         ) {
                             Ok(value) => value,
                             Err(error) => {

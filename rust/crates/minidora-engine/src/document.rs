@@ -225,8 +225,11 @@ pub(crate) fn previous_csv_table_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_groups =
-        explanation_parser_version == crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION;
+    let explain_groups = matches!(
+        explanation_parser_version,
+        crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION
+            | crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
+    );
     let explain_rows = explain_groups
         || explanation_parser_version == crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION;
     let explain_join = explain_rows
@@ -1540,6 +1543,7 @@ pub(crate) fn previous_json_table_operation_explanation(
     case: &str,
     previous: &ResultRecord,
     max_evidence_bytes: usize,
+    explanation_parser_version: &str,
 ) -> Result<Option<(String, String, Vec<String>)>> {
     if previous.lifecycle != Lifecycle::Commit
         || !matches!(
@@ -1590,6 +1594,24 @@ pub(crate) fn previous_json_table_operation_explanation(
         "select"
     } else if value.get("selected_column_indices").is_some() {
         "project"
+    } else if explanation_parser_version
+        == crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
+        && value.as_object().is_some_and(|object| {
+            object.len() == 7
+                && [
+                    "source_sha256",
+                    "group_by",
+                    "group_by_source",
+                    "group_by_index",
+                    "row_count",
+                    "groups",
+                    "guarantee",
+                ]
+                .iter()
+                .all(|field| object.contains_key(*field))
+        })
+    {
+        "group_count"
     } else {
         return Ok(None);
     };
@@ -1606,20 +1628,20 @@ pub(crate) fn previous_json_table_operation_explanation(
                 "the prior table operation has no retained sealed input bundle",
             )
         })?;
-    if !matches!(
-        &bundle.meaning.intent,
-        Intent::JsonTableCompare { .. }
-            | Intent::JsonTableInnerJoin { .. }
-            | Intent::JsonTableFilter { .. }
-            | Intent::JsonTableSort { .. }
-            | Intent::JsonTableSelect { .. }
-            | Intent::JsonTableProject { .. }
-    ) {
-        return Ok(None);
-    }
-    if operation == "comparison"
-        && !matches!(bundle.meaning.intent, Intent::JsonTableCompare { .. })
-    {
+    let applicable_intent = match operation {
+        "comparison" => matches!(bundle.meaning.intent, Intent::JsonTableCompare { .. }),
+        "group_count" => matches!(bundle.meaning.intent, Intent::JsonTableGroupCount { .. }),
+        _ => matches!(
+            bundle.meaning.intent,
+            Intent::JsonTableCompare { .. }
+                | Intent::JsonTableInnerJoin { .. }
+                | Intent::JsonTableFilter { .. }
+                | Intent::JsonTableSort { .. }
+                | Intent::JsonTableSelect { .. }
+                | Intent::JsonTableProject { .. }
+        ),
+    };
+    if !applicable_intent {
         return Ok(None);
     }
 
@@ -1630,6 +1652,7 @@ pub(crate) fn previous_json_table_operation_explanation(
         Select(crate::ports::JsonTableSelectReport),
         Project(crate::ports::JsonTableProjectReport),
         Join(Box<crate::ports::JsonTableInnerJoinReport>),
+        GroupCount(crate::ports::JsonTableGroupCountReport),
     }
 
     let report = match (operation, &bundle.meaning.intent) {
@@ -1679,6 +1702,9 @@ pub(crate) fn previous_json_table_operation_explanation(
         }
         ("project", Intent::JsonTableProject { document, columns }) => {
             Report::Project(crate::ports::json_table_project(document, columns)?)
+        }
+        ("group_count", Intent::JsonTableGroupCount { document, column }) => {
+            Report::GroupCount(crate::ports::json_table_group_count(document, column)?)
         }
         _ => {
             return Err(failure(
@@ -2122,6 +2148,17 @@ pub(crate) fn previous_json_table_operation_explanation(
             }
             (bytes, text, document, lines)
         }
+        Report::GroupCount(report) => {
+            let Intent::JsonTableGroupCount { document, .. } = &bundle.meaning.intent else {
+                unreachable!("operation and sealed intent were checked");
+            };
+            (
+                canonical(&report)?,
+                serde_json::to_string_pretty(&report)?,
+                document.as_str(),
+                json_table_group_count_lines(document, &report)?,
+            )
+        }
     };
 
     let report_ref = digest(&report_bytes);
@@ -2204,6 +2241,64 @@ pub(crate) fn previous_json_table_operation_explanation(
         ));
     }
     Ok(Some((bundle_ref, report_ref, lines)))
+}
+
+fn json_table_group_count_lines(
+    document: &str,
+    report: &crate::ports::JsonTableGroupCountReport,
+) -> Result<Vec<String>> {
+    const PREVIEW_GROUPS: usize = 8;
+    const PREVIEW_MEMBERS: usize = 4;
+    let column_index = report.group_by_index;
+    let mut lines = vec![
+        "前回のJSON表グループ件数を、封印済みの元入力から再計算しました。".into(),
+        format!(
+            "グループ列: {:?}。JSON文字列をデコードし、文字が完全一致する行をまとめて初出順に示します。",
+            preview(&report.group_by)
+        ),
+        format!(
+            "行数: {}、グループ数: {}",
+            report.row_count,
+            report.groups.len()
+        ),
+        format!(
+            "列見出し JSON Pointer /columns/{column_index} {}",
+            table_span(document, &report.group_by_source)?
+        ),
+    ];
+    for (index, group) in report.groups.iter().take(PREVIEW_GROUPS).enumerate() {
+        lines.push(format!(
+            "グループ{} {:?}。件数: {}",
+            index + 1,
+            preview(&group.value),
+            group.count
+        ));
+        for (source_row, span) in group
+            .source_row_indices
+            .iter()
+            .zip(&group.member_source_spans)
+            .take(PREVIEW_MEMBERS)
+        {
+            lines.push(format!(
+                "元行{} JSON Pointer /rows/{source_row}/{column_index} {}",
+                source_row + 1,
+                table_span(document, span)?
+            ));
+        }
+        if group.count > PREVIEW_MEMBERS {
+            lines.push(format!(
+                "このグループの残り {}行は保存レポートに保持されています。",
+                group.count - PREVIEW_MEMBERS
+            ));
+        }
+    }
+    if report.groups.len() > PREVIEW_GROUPS {
+        lines.push(format!(
+            "残り {}グループは保存レポートに保持されています。",
+            report.groups.len() - PREVIEW_GROUPS
+        ));
+    }
+    Ok(lines)
 }
 
 fn preview(value: &str) -> String {

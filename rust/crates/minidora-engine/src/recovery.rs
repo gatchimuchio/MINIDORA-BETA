@@ -4442,6 +4442,7 @@ fn inspect(
                         case,
                         previous,
                         goal.budget.max_evidence_bytes,
+                        &bundle.meaning.parser_version,
                     )
                 })
                 .transpose()?

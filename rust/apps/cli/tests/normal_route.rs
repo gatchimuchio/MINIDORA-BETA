@@ -12566,6 +12566,20 @@ fn assert_csv_row_explanation(
     artifact: &Value,
     operation: &str,
 ) -> Value {
+    assert_table_explanation(
+        directory,
+        first,
+        artifact,
+        &format!("previous-csv-table-{operation}"),
+    )
+}
+
+fn assert_table_explanation(
+    directory: &Path,
+    first: &Value,
+    artifact: &Value,
+    node_prefix: &str,
+) -> Value {
     let original = inspect_normal_case(directory, "owner");
     assert_eq!(original["result"], *first);
     let input_bytes = minidora_domain::canonical(&original["bundle"]).unwrap();
@@ -12612,8 +12626,8 @@ fn assert_csv_row_explanation(
     );
     assert!(store.actions("owner", "normal-route").unwrap().is_empty());
     let graph = sequence_artifact(&store, &explanation["execution_graph_ref"]);
-    let input_id = format!("previous-csv-table-{operation}-input");
-    let report_id = format!("previous-csv-table-{operation}-report");
+    let input_id = format!("{node_prefix}-input");
+    let report_id = format!("{node_prefix}-report");
     let nodes = graph[0].as_array().unwrap();
     assert!(nodes.iter().any(|node| node["id"] == input_id
         && node["kind"] == "EVIDENCE"
@@ -12656,6 +12670,111 @@ fn assert_csv_row_explanation(
     );
     assert_eq!(revision["result"], explanation);
     explanation
+}
+
+#[test]
+fn json_table_group_count_explanation_preserves_decoded_keys_and_original_tokens() {
+    const SOURCE: &str = r#"{"columns":["id","\u5206\u985e"],"rows":[["a","\u732b"],["b",""],["c","猫"],["d","open"],["e","\u006fpen"],["f","Open"],["g",""]]}"#;
+    const EMPTY: &str = r#"{"columns":["id","\u5206\u985e"],"rows":[]}"#;
+    const MEMBERS: [(&str, &[usize]); 4] = [
+        ("猫", &[0, 2]),
+        ("", &[1, 6]),
+        ("open", &[3, 4]),
+        ("Open", &[5]),
+    ];
+    const TOKENS: [&str; 7] = [
+        r#""\u732b""#,
+        "\"\"",
+        "\"猫\"",
+        "\"open\"",
+        r#""\u006fpen""#,
+        "\"Open\"",
+        "\"\"",
+    ];
+    for empty in [false, true] {
+        let source = if empty { EMPTY } else { SOURCE };
+        for header in [
+            "JSON表を列「分類」で件数集計して:",
+            "json-table-count-by \"分類\":",
+        ] {
+            let scratch = Scratch::new();
+            let request = format!("{header}\n{source}");
+            let first = record(&execute(
+                &scratch.0,
+                "owner",
+                &["--input", "group-count", &request],
+            ));
+            let report = normal_row_report(&scratch.0, "owner", &first, &request, source);
+            assert_eq!(report["group_by"], "分類");
+            assert_eq!(report["group_by_index"], 1);
+            assert_eq!(report["row_count"], if empty { 0 } else { 7 });
+            let groups = report["groups"].as_array().unwrap();
+            assert_eq!(groups.len(), if empty { 0 } else { MEMBERS.len() });
+            let explanation = assert_table_explanation(
+                &scratch.0,
+                &first,
+                &report,
+                "previous-json-table-transform",
+            );
+            let text = explanation["text"].as_str().unwrap();
+            for expected in [
+                "前回のJSON表グループ件数".to_string(),
+                "初出順".to_string(),
+                format!(
+                    "行数: {}、グループ数: {}",
+                    if empty { 0 } else { 7 },
+                    groups.len()
+                ),
+            ] {
+                assert!(text.contains(&expected), "missing {expected:?} in {text}");
+            }
+            // Literal fixture tokens and row IDs are the oracle, independently
+            // of report spans; repeated empty/decoded keys have distinct ranges.
+            let check_span =
+                |span: &Value, pointer: &str, fragment: &str, offset: usize, token: &str| {
+                    let start = source.find(fragment).unwrap() + offset;
+                    let end = start + token.len();
+                    assert_eq!(&source[start..end], token);
+                    assert_eq!(span["source_start"], start);
+                    assert_eq!(span["source_end"], end);
+                    let hash = minidora_domain::digest(token.as_bytes());
+                    assert_eq!(span["source_sha256"], hash);
+                    let marker = format!("JSON Pointer {pointer}");
+                    let line = text
+                        .lines()
+                        .find(|line| line.contains(&marker))
+                        .unwrap_or_else(|| panic!("missing {marker:?} in {text}"));
+                    assert!(line.contains(&format!("byte[{start}..{end})=")), "{line}");
+                    assert!(line.contains(&format!("sha256={hash}")), "{line}");
+                };
+            check_span(
+                &report["group_by_source"],
+                "/columns/1",
+                r#"["id","\u5206\u985e"]"#,
+                6,
+                r#""\u5206\u985e""#,
+            );
+            for (index, (group, (value, rows))) in groups.iter().zip(MEMBERS).enumerate() {
+                assert_eq!(group["value"], value);
+                assert_eq!(group["count"], rows.len());
+                assert_eq!(group["source_row_indices"], serde_json::json!(rows));
+                let spans = group["member_source_spans"].as_array().unwrap();
+                assert_eq!(spans.len(), rows.len());
+                let summary = format!("グループ{} {value:?}。件数: {}", index + 1, rows.len());
+                assert!(text.contains(&summary), "missing {summary:?} in {text}");
+                for (span, row) in spans.iter().zip(rows) {
+                    let id = char::from(b'a' + *row as u8);
+                    let fragment = format!("[\"{id}\",{}]", TOKENS[*row]);
+                    let pointer = format!("/rows/{row}/1");
+                    check_span(span, &pointer, &fragment, 5, TOKENS[*row]);
+                    assert!(
+                        text.contains(&format!("元行{} JSON Pointer {pointer}", row + 1)),
+                        "{text}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
