@@ -5176,6 +5176,40 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::CsvSelectIndex {
+                document,
+                column_index,
+                has_header,
+            } => {
+                let value =
+                    match crate::document::csv_select_index(document, *column_index, *has_header) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "CSV_SELECT_UNSUPPORTED",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
+                        }
+                    };
+                if value.text.len() > request.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "CSV positional selection exceeds the request output budget",
+                    );
+                }
+                let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
+                result.dependencies.push(artifact);
+                units.push(value.text);
+                result.guarantee = Guarantee::Computed;
+            }
             Intent::CsvFilter {
                 document,
                 column,

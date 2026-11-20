@@ -311,6 +311,11 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    CsvSelectIndex {
+        document: String,
+        column_index: usize,
+        has_header: bool,
+    },
     CsvFilter {
         document: String,
         column: String,

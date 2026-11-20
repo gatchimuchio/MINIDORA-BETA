@@ -211,6 +211,7 @@ enum CsvTableOperation<'a> {
     GroupCount(&'a str),
     GroupStatistics(&'a str, &'a str),
     Select(&'a str),
+    SelectIndex(usize, bool),
     CsvToJson(bool),
     JsonToCsv,
 }
@@ -228,8 +229,11 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_json_comparison = explanation_parser_version
-        == crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION;
+    let explain_csv_select_index =
+        explanation_parser_version == crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION;
+    let explain_json_comparison = explain_csv_select_index
+        || explanation_parser_version
+            == crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION;
     let explain_object_project = explain_json_comparison
         || explanation_parser_version
             == crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION;
@@ -404,6 +408,14 @@ pub(crate) fn previous_document_explanation(
         Intent::CsvSelect { document, column } if explain_select => {
             (document.as_str(), CsvTableOperation::Select(column))
         }
+        Intent::CsvSelectIndex {
+            document,
+            column_index,
+            has_header,
+        } if explain_csv_select_index => (
+            document.as_str(),
+            CsvTableOperation::SelectIndex(*column_index, *has_header),
+        ),
         Intent::CsvToJson {
             document,
             has_header,
@@ -449,6 +461,11 @@ pub(crate) fn previous_document_explanation(
             "previous-csv-table-select-input",
             "previous-csv-table-select-report",
         ),
+        CsvTableOperation::SelectIndex(_, _) => (
+            "positional selection",
+            "previous-csv-table-select-index-input",
+            "previous-csv-table-select-index-report",
+        ),
         CsvTableOperation::CsvToJson(_) | CsvTableOperation::JsonToCsv => (
             "conversion",
             "previous-csv-table-conversion-input",
@@ -474,6 +491,9 @@ pub(crate) fn previous_document_explanation(
             csv_group_statistics(document, group, value)?
         }
         CsvTableOperation::Select(column) => csv_select(document, column)?,
+        CsvTableOperation::SelectIndex(index, has_header) => {
+            csv_select_index(document, index, has_header)?
+        }
         CsvTableOperation::CsvToJson(has_header) => csv_to_json(document, has_header)?,
         CsvTableOperation::JsonToCsv => json_to_csv(document)?,
     };
@@ -515,6 +535,13 @@ pub(crate) fn previous_document_explanation(
             recomputed.operation == "CSV_SELECT"
                 && parameter("column_name") == Some(column)
                 && parameter("has_header") == Some("true")
+                && parameter("value_type") == Some("STRING")
+        }
+        CsvTableOperation::SelectIndex(index, has_header) => {
+            recomputed.operation == "CSV_SELECT"
+                && parameter("column_index") == Some(index.to_string().as_str())
+                && parameter("column_name").is_none()
+                && parameter("has_header") == Some(if has_header { "true" } else { "false" })
                 && parameter("value_type") == Some("STRING")
         }
         CsvTableOperation::CsvToJson(has_header) => {
@@ -571,7 +598,10 @@ pub(crate) fn previous_document_explanation(
             csv_table_group_lines(&recomputed, group, Some(value), &bundle_ref, &report_ref)?
         }
         CsvTableOperation::Select(column) => {
-            csv_table_select_lines(&recomputed, column, &bundle_ref, &report_ref)?
+            csv_table_select_lines(&recomputed, Some(column), true, &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::SelectIndex(_, has_header) => {
+            csv_table_select_lines(&recomputed, None, has_header, &bundle_ref, &report_ref)?
         }
         CsvTableOperation::CsvToJson(_) | CsvTableOperation::JsonToCsv => {
             table_conversion_lines(&recomputed, &bundle_ref, &report_ref)?
@@ -1191,7 +1221,8 @@ fn table_conversion_span(
 
 fn csv_table_select_lines(
     report: &DocumentResult,
-    column: &str,
+    column: Option<&str>,
+    has_header: bool,
     bundle_ref: &str,
     report_ref: &str,
 ) -> Result<Vec<String>> {
@@ -1212,13 +1243,17 @@ fn csv_table_select_lines(
                 "the selected CSV column has no index",
             )
         })?;
-    let header = csv_table_find_span(
-        report,
-        "CSV_HEADER",
-        Some(0),
-        Some(column_index),
-        Some(column),
-    )?;
+    let header = if has_header {
+        Some(csv_table_find_span(
+            report,
+            "CSV_HEADER",
+            Some(0),
+            Some(column_index),
+            column,
+        )?)
+    } else {
+        None
+    };
     let selected: Vec<_> = report
         .spans
         .iter()
@@ -1230,7 +1265,7 @@ fn csv_table_select_lines(
             .zip(&values)
             .enumerate()
             .any(|(index, (span, value))| {
-                span.row != Some(index + 1)
+                span.row != Some(index + usize::from(has_header))
                     || span.column != Some(column_index)
                     || span.decoded_value.as_ref() != Some(value)
                     || span.output_start.is_none()
@@ -1242,20 +1277,37 @@ fn csv_table_select_lines(
             "the recomputed CSV selection does not match its original cell map",
         ));
     }
+    let (selection, method) = if let Some(column) = column {
+        (
+            format!(
+                "選択列: {:?} (元列番号 {})",
+                preview(column),
+                column_index + 1
+            ),
+            "指定した名前に完全一致する見出しを使い、元のデータ行順で文字列を取り出します。",
+        )
+    } else {
+        (
+            format!("選択列: 元列番号 {}", column_index + 1),
+            if has_header {
+                "先頭行を見出しとして扱い、元のデータ行順で文字列を取り出します。"
+            } else {
+                "先頭行もデータとして扱い、元の行順で文字列を取り出します。"
+            },
+        )
+    };
     let mut lines = vec![
         "前回のCSV列選択を、封印済みの元入力から再計算しました。".into(),
-        format!(
-            "選択列: {:?} (元列番号 {})",
-            preview(column),
-            column_index + 1
-        ),
-        "指定した名前に完全一致する見出しを使い、元のデータ行順で文字列を取り出します。".into(),
+        selection,
+        method.into(),
         format!("選択値数: {}", values.len()),
         format!("元資料 SHA-256: {}", report.source_sha256),
         format!("封印済みInputBundle SHA-256: {bundle_ref}"),
         format!("report artifact SHA-256: {report_ref}"),
-        format!("列見出し: {}", csv_table_span(report, header)?),
     ];
+    if let Some(header) = header {
+        lines.push(format!("列見出し: {}", csv_table_span(report, header)?));
+    }
     for (index, (span, value)) in selected.iter().zip(&values).take(PREVIEW_ROWS).enumerate() {
         lines.push(format!(
             "元行{}: 値 {:?}。{}",
@@ -2353,6 +2405,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION
             | crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
             | crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
+            | crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

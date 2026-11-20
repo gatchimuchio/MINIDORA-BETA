@@ -41,6 +41,8 @@ pub(crate) const JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v102-json-object-project-explanation";
 pub(crate) const JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v103-json-structural-comparison-explanation";
+pub(crate) const CSV_POSITIONAL_SELECTION_PARSER_VERSION: &str =
+    "declarative-ja-en-v104-csv-positional-selection";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -207,7 +209,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
-        Intent::ExplainPrevious => JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION,
+        Intent::CsvSelectIndex { .. } | Intent::ExplainPrevious => {
+            CSV_POSITIONAL_SELECTION_PARSER_VERSION
+        }
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }
@@ -1986,12 +1990,19 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
             },
         }));
     }
+    let looks_like_csv_selection_position = header.starts_with("見出しありCSVの")
+        || header.starts_with("見出しなしCSVの")
+        || (header.starts_with("CSVの第") && header.contains("列を選択"))
+        || header
+            .get(.."csv-select-index".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-select-index"));
     let looks_like_document = header.starts_with("CSVの列")
         || (header.starts_with("CSVの「")
             && header.contains("ごとに")
             && header.contains("統計量"))
         || header.starts_with("CSVを「")
         || header.starts_with("csv-select ")
+        || looks_like_csv_selection_position
         || header
             .get(..10)
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("csv-filter"))
@@ -2066,6 +2077,41 @@ fn structured_intent(text: &str) -> Result<Option<Intent>> {
                     .into(),
         }));
     };
+    if looks_like_csv_selection_position {
+        let selection = if let Some(capture) =
+            regex(r"^見出し(あり|なし)CSVの第([0-9]+)列を選択して[:：]$")?.captures(header)
+        {
+            let (_, [mode, column_number]) = capture.extract();
+            Some((mode == "あり", column_number))
+        } else {
+            regex(r"(?i)^csv-select-index[ \t]+(header|no-header)[ \t]+([0-9]+):$")?
+                .captures(header)
+                .map(|capture| {
+                    let (_, [mode, column_number]) = capture.extract();
+                    (mode.eq_ignore_ascii_case("header"), column_number)
+                })
+        };
+        let Some((has_header, column_number)) = selection else {
+            return Ok(Some(Intent::Unknown {
+                reason: "positional CSV selection requires an explicit header mode and one column number".into(),
+            }));
+        };
+        let Some(column_index) = column_number
+            .parse::<u32>()
+            .ok()
+            .and_then(|position| position.checked_sub(1))
+            .and_then(|index| usize::try_from(index).ok())
+        else {
+            return Ok(Some(Intent::Unknown {
+                reason: "CSV column number must be a positive one-based integer in range".into(),
+            }));
+        };
+        return Ok(Some(Intent::CsvSelectIndex {
+            document: document.into(),
+            column_index,
+            has_header,
+        }));
+    }
     let csv_to_json_header = match header {
         "CSVをJSONに変換して（先頭行をヘッダーとして）:" => Some(true),
         "CSVをJSONに変換して（ヘッダーなし）:" => Some(false),
@@ -6210,6 +6256,7 @@ mod structured_document_tests {
     fn document_headers_never_discard_extra_effects() {
         for source in [
             "csv-select price and send report\nprice\n10\n",
+            "CSVの第2列を選択して:\n猫,001\r\n",
             "置換「a」→「b」 そして送信して:\na",
             "CSVの列「price」を選択して:",
         ] {

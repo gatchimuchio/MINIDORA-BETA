@@ -13072,6 +13072,149 @@ fn csv_selection_explanation_preserves_named_columns_and_exact_source_cells() {
     }
 }
 
+const INDEXED_SELECTION_CSV: &str = "r0,\"001\"\r\nr1,001\r\nr2,\"猫\r\n北\"\r\nr3,\"\"\r\nr4,\r\n";
+
+#[test]
+fn csv_indexed_selection_explanation_preserves_header_mode_and_exact_cell_maps() {
+    let cells = [
+        ("r0", "\"001\"", "001"),
+        ("r1", "001", "001"),
+        ("r2", "\"猫\r\n北\"", "猫\r\n北"),
+        ("r3", "\"\"", ""),
+        ("r4", "", ""),
+    ];
+    for (header, has_header) in [
+        ("見出しなしCSVの第2列を選択して:", false),
+        ("csv-select-index header 2:", true),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\r\n{INDEXED_SELECTION_CSV}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "select-index", &request],
+        ));
+        let artifact = normal_document_artifact(
+            &scratch.0,
+            "owner",
+            &first,
+            &request,
+            INDEXED_SELECTION_CSV,
+            "CSV_SELECT",
+        );
+        let skip = usize::from(has_header);
+        let values: Vec<_> = cells[skip..].iter().map(|cell| cell.2).collect();
+        let expected_output = serde_json::to_string(&values).unwrap();
+        assert_eq!(first["text"], expected_output);
+        assert_eq!(
+            artifact["parameters"],
+            serde_json::json!({"column_index":"1","has_header":has_header.to_string(),"value_type":"STRING"})
+        );
+        let original = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(original["bundle"]["meaning"]["intent"]["column_index"], 1);
+        assert_eq!(
+            original["bundle"]["meaning"]["intent"]["has_header"],
+            has_header
+        );
+        let mut expected_spans = Vec::new();
+        let mut source_ranges = Vec::new();
+        let mut cursor = 1;
+        for (row, &(id, raw, decoded)) in cells.iter().enumerate() {
+            let prefix = if row == 0 {
+                format!("{id},")
+            } else {
+                format!("\r\n{id},")
+            };
+            let start = INDEXED_SELECTION_CSV.find(&prefix).unwrap() + prefix.len();
+            let end = start + raw.len();
+            assert_eq!(&INDEXED_SELECTION_CSV[start..end], raw);
+            source_ranges.push((start, end));
+            let is_header = has_header && row == 0;
+            let token = serde_json::to_string(decoded).unwrap();
+            let output_start = (!is_header).then_some(cursor);
+            expected_spans.push(serde_json::json!({
+                "kind":if is_header {"CSV_HEADER"} else {"CSV_SELECTED_CELL"},
+                "row":row,"column":1,"source_start":start,"source_end":end,
+                "source_text":raw,"decoded_value":decoded,"output_start":output_start,
+                "output_end":output_start.map(|at|at+token.len())
+            }));
+            if !is_header {
+                assert_eq!(&expected_output[cursor..cursor + token.len()], token);
+                cursor += token.len() + 1;
+            }
+        }
+        assert_eq!(cursor, expected_output.len());
+        assert_eq!(artifact["spans"], serde_json::json!(expected_spans));
+        let explained = assert_table_explanation(
+            &scratch.0,
+            &first,
+            &artifact,
+            "previous-csv-table-select-index",
+        );
+        let text = explained["text"].as_str().unwrap();
+        for expected in [
+            "選択列: 元列番号 2".to_string(),
+            if has_header {
+                "先頭行を見出しとして扱い"
+            } else {
+                "先頭行もデータとして扱い"
+            }
+            .to_string(),
+            format!("選択値数: {}", values.len()),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("列見出し:"))
+                .count(),
+            skip
+        );
+        assert_eq!(
+            lines.iter().filter(|line| line.starts_with("元行")).count(),
+            values.len()
+        );
+        let mut previous_line = None;
+        for (row, &(_, raw, decoded)) in cells.iter().enumerate() {
+            let marker = if has_header && row == 0 {
+                "列見出し: ".to_string()
+            } else {
+                format!("元行{}: 値 {decoded:?}。", row - skip + 1)
+            };
+            let (start, end) = source_ranges[row];
+            let expected = format!(
+                "{marker}byte[{start}..{end}) sha256={} 原文={raw:?}",
+                minidora_domain::digest(raw.as_bytes())
+            );
+            let position = lines
+                .iter()
+                .position(|line| *line == expected)
+                .unwrap_or_else(|| panic!("missing {expected:?} in {text}"));
+            if let Some(previous) = previous_line {
+                assert!(previous < position);
+            }
+            previous_line = Some(position);
+        }
+    }
+}
+
+#[test]
+fn csv_indexed_selection_rejects_invalid_position_mode_width_and_suffix() {
+    for (header, reason) in [
+        ("見出しなしCSVの第0列を選択して:", "positive"),
+        ("csv-select-index 2:", "explicit header mode"),
+        ("csv-select-index header 3:", "CSV_COLUMN"),
+        (
+            "csv-select-index no-header 2 and send:",
+            "explicit header mode",
+        ),
+    ] {
+        assert_comparison_stop(header, INDEXED_SELECTION_CSV, reason);
+    }
+}
+
 fn assert_csv_row_explanation(
     directory: &Path,
     first: &Value,
