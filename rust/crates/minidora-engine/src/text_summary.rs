@@ -1653,6 +1653,117 @@ pub(crate) struct RetainedSourceSummary {
     reports: Vec<SourceExtractiveSummaryCandidates>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SourceFollowup<'a> {
+    context: &'a ResultRecord,
+    pub(crate) source: &'a ResultRecord,
+    selected_body_index: Option<usize>,
+}
+
+impl<'a> SourceFollowup<'a> {
+    pub(crate) fn bodies(self) -> impl Iterator<Item = (usize, &'a EvidencePacket)> {
+        source_summary_bodies(self.source).filter(move |(index, _)| {
+            self.selected_body_index
+                .is_none_or(|selected| *index == selected)
+        })
+    }
+
+    pub(crate) fn dependencies(self) -> Vec<String> {
+        let mut dependencies = vec![self.context.id.clone()];
+        if self.source.id != self.context.id {
+            dependencies.push(self.source.id.clone());
+        }
+        dependencies
+    }
+}
+
+/// Resolve the exact source context used by ordinary requests and their replay.
+pub(crate) fn source_followup_context<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    context: &'a ResultRecord,
+) -> Result<Option<SourceFollowup<'a>>> {
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "the saved explanation or its source differs from the sealed context",
+        )
+    };
+    if bundle.meaning.context_result_ref.as_deref() != Some(context.id.as_str())
+        || identity(&Some(context))? != bundle.context_sha256
+        || !crate::recovery::source_context_available(store, actor, case, context)?
+    {
+        return Ok(None);
+    }
+    let direct = SourceFollowup {
+        context,
+        source: context,
+        selected_body_index: None,
+    };
+    if bundle.meaning.parser_version != crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+        || context.guarantee != Guarantee::SourceReport
+        || !context.evidence.is_empty()
+    {
+        return Ok(Some(direct));
+    }
+
+    let (_, explanation) = store
+        .get_input_bundle(actor, case, &context.input_id, context.input_version)?
+        .ok_or_else(invalid)?;
+    if !matches!(explanation.meaning.intent, Intent::ExplainPrevious)
+        || explanation.meaning.parser_version
+            != crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
+    {
+        return Ok(Some(direct));
+    }
+    let source = explanation
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| prior_results.get(id))
+        .ok_or_else(invalid)?;
+    let Some(proof) =
+        crate::search::previous_search_explanation(store, &explanation, prior_results, source)?
+    else {
+        return Ok(Some(direct));
+    };
+    let Some(selected_body_index) = proof.selected_body_index else {
+        return Ok(Some(direct));
+    };
+    let plan = context.content_plan.as_ref().ok_or_else(invalid)?;
+    if identity(&explanation.request)? != context.id
+        || store
+            .get_input_result(actor, case, &context.input_id, context.input_version)?
+            .as_ref()
+            != Some(context)
+        || context.calculation.is_some()
+        || plan.locale != explanation.request.locale
+        || plan.required_units != proof.units
+        || context.text != proof.units.join("\n")
+        || context.dependencies != proof.dependencies
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        context,
+        None,
+        "SOURCE_CONTEXT_INVALID",
+        "search candidate body explanation",
+    )?;
+    Ok(Some(SourceFollowup {
+        context,
+        source,
+        selected_body_index: Some(selected_body_index),
+    }))
+}
+
 pub(crate) fn source_summary_unit(report: &SourceExtractiveSummaryCandidates) -> String {
     format!(
         "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
@@ -1693,15 +1804,14 @@ pub(crate) fn verify_retained_source_summary(
             "the exact prior source result is not retained",
         )
     })?;
-    if prior.id != *prior_id
-        || identity(&Some(prior))? != bundle.context_sha256
-        || !crate::recovery::source_context_available(store, actor, case, prior)?
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the referenced source result does not match the sealed context",
-        ));
-    }
+    let context =
+        source_followup_context(store, bundle, prior_results, prior)?.ok_or_else(|| {
+            failure(
+                "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+                "the referenced source result does not match the sealed context",
+            )
+        })?;
+    let prior = context.source;
     if !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_MISMATCH",
@@ -1709,7 +1819,7 @@ pub(crate) fn verify_retained_source_summary(
         ));
     }
     let mut source_packets = Vec::new();
-    for (index, packet) in source_summary_bodies(prior) {
+    for (index, packet) in context.bodies() {
         let packet_bytes = canonical(packet)?;
         let packet_ref = digest(&packet_bytes);
         if store.get_bytes(actor, case, &packet_ref)? != packet_bytes {
@@ -1738,7 +1848,7 @@ pub(crate) fn verify_retained_source_summary(
         .iter()
         .map(|(index, _, reference)| (*index, reference.clone()))
         .collect();
-    let mut dependencies = vec![prior.id.clone()];
+    let mut dependencies = context.dependencies();
     dependencies.extend(
         source_packet_refs
             .iter()
@@ -1972,10 +2082,10 @@ pub(crate) fn verified_source_question_packets<'a>(
     store: &Store,
     actor: &str,
     case: &str,
-    prior: &'a ResultRecord,
+    context: SourceFollowup<'a>,
 ) -> Result<Vec<(usize, &'a EvidencePacket, String)>> {
     let mut packets = Vec::new();
-    for (index, packet) in source_summary_bodies(prior) {
+    for (index, packet) in context.bodies() {
         let encoded = canonical(packet)?;
         let packet_ref = digest(&encoded);
         if store.get_bytes(actor, case, &packet_ref)? != encoded {
@@ -2185,21 +2295,20 @@ pub(crate) fn verify_retained_source_question(
             "the exact prior source result is not retained",
         )
     })?;
-    if prior.id != *prior_id
-        || identity(&Some(prior))? != bundle.context_sha256
-        || !crate::recovery::source_context_available(store, actor, case, prior)?
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the referenced source result does not match the sealed context",
-        ));
-    }
-    let packets = verified_source_question_packets(store, actor, case, prior)?;
+    let context =
+        source_followup_context(store, bundle, prior_results, prior)?.ok_or_else(|| {
+            failure(
+                "RECOVERY_SOURCE_QUESTION_MISMATCH",
+                "the referenced source result does not match the sealed context",
+            )
+        })?;
+    let prior = context.source;
+    let packets = verified_source_question_packets(store, actor, case, context)?;
     let source_packet_refs: Vec<_> = packets
         .iter()
         .map(|(index, _, reference)| (*index, reference.clone()))
         .collect();
-    let mut dependencies = vec![prior.id.clone()];
+    let mut dependencies = context.dependencies();
     dependencies.extend(
         source_packet_refs
             .iter()
@@ -2385,7 +2494,11 @@ pub(crate) fn source_summary_packet_positions(
     packets: &[(usize, &EvidencePacket, String)],
     parser_version: &str,
 ) -> Result<Vec<usize>> {
-    if parser_version != crate::input::SOURCE_SUMMARY_PARSER_VERSION {
+    if !matches!(
+        parser_version,
+        crate::input::SOURCE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+    ) {
         return Ok((0..packets.len()).collect());
     }
     for (_, packet, reference) in packets {

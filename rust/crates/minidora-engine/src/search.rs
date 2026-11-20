@@ -741,6 +741,7 @@ pub(crate) fn verify_retained_search_listing(
 pub(crate) struct SearchExplanation {
     pub(crate) units: Vec<String>,
     pub(crate) dependencies: Vec<String>,
+    pub(crate) selected_body_index: Option<usize>,
 }
 
 pub(crate) fn previous_search_explanation(
@@ -817,6 +818,7 @@ pub(crate) fn previous_search_explanation(
         return Ok(Some(SearchExplanation {
             units: vec![previous.text.clone()],
             dependencies,
+            selected_body_index: None,
         }));
     }
 
@@ -885,6 +887,7 @@ pub(crate) fn previous_search_explanation(
     Ok(Some(SearchExplanation {
         units,
         dependencies,
+        selected_body_index: None,
     }))
 }
 
@@ -1162,12 +1165,18 @@ fn explain_candidate_body(
         return Ok(SearchExplanation {
             units: vec![previous.text.clone()],
             dependencies,
+            selected_body_index: None,
         });
     }
 
     let selected = root.selected;
     let candidate = proof.candidate;
     let body = proof.packet;
+    let selected_body_index = previous
+        .evidence
+        .iter()
+        .position(|packet| packet == &body)
+        .ok_or_else(invalid)?;
     let extracted = body.extracted_text.as_ref().ok_or_else(invalid)?;
     let mut units = vec![
         format!(
@@ -1239,6 +1248,7 @@ fn explain_candidate_body(
     Ok(SearchExplanation {
         units,
         dependencies,
+        selected_body_index: Some(selected_body_index),
     })
 }
 

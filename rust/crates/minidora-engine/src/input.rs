@@ -63,6 +63,9 @@ pub(crate) const SEARCH_LISTING_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v112-search-candidate-body-explanation";
 
+pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-en-v113-explained-search-body-source-followup";
+
 pub(crate) fn is_legacy_text_summary_explanation_version(version: &str) -> bool {
     matches!(
         version,
@@ -257,6 +260,17 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             PARSER_VERSION
         }
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
+        Intent::AskPreviousSourceQuestion { .. }
+        | Intent::SummarizePreviousSource
+        | Intent::SummarizePreviousSourceConstrained { .. }
+            if previous.is_some_and(|result| {
+                result.lifecycle == Lifecycle::Commit
+                    && result.guarantee == Guarantee::SourceReport
+                    && result.evidence.is_empty()
+            }) =>
+        {
+            EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+        }
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

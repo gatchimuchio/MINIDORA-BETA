@@ -684,7 +684,8 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
     winner_listing = json.dumps({"message": {"items": [
         {"title": ["Alternative fixture"], "URL": body_url, "DOI": "10.5555/fixture"},
     ]}}).encode()
-    selected_body = b"Exact body from the selected alternative."
+    selected_sentences = ("実測値は42です。", "予備値は73です。")
+    selected_body = "".join(selected_sentences).encode()
     fixture.failure_responses[primary_busy] = (
         "429 Too Many Requests", b"primary rate limited", "Retry-After: 120\r\n",
     )
@@ -836,6 +837,49 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
                                    case_id=case)
     assert body_explanation_replayed == body_explanation
     assert not contacts_since(body_explain_seen) and len(fixture.connects) == body_explain_starts
+
+    # Both requests are implicit follow-ups. The question must return through
+    # the summary's retained source anchor to the same direct body explanation.
+    followup_seen, followup_starts = len(fixture.events), len(fixture.connects)
+    source_ref = body["dependencies"][-1]
+    assert load(source_ref) == body_packet
+    explained_body_followups = {}
+    for kind, input_id, followup_request in (
+        ("summary", "summarize-explained-body", "前回の本文を要約して"),
+        ("question", "question-after-explained-summary", "本文では実測値について何と書かれていますか"),
+    ):
+        followup = cli("run", "--input", input_id, followup_request, case_id=case)
+        assert followup["guarantee"] == "HYPOTHESIS"
+        assert followup["evidence"] == [] and followup["receipts"] == []
+        assert followup["dependencies"][:3] == [body_explanation["id"], body["id"], source_ref]
+        assert len(followup["dependencies"]) >= 4
+        assert followup["content_plan"]["text"] == followup["text"]
+        assert followup["render"]["status"] == "RENDERED"
+        assert hashlib.sha256(followup["text"].encode()).hexdigest() == followup["render"]["actual_sha256"]
+        assert body_url in followup["text"] and selected_sentences[0] in followup["text"]
+        artifact_ref = followup["dependencies"][-1]
+        artifact = load(artifact_ref)
+        canonical_artifact = json.dumps(artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        assert (state_path / "blobs" / artifact_ref).read_bytes() == canonical_artifact
+        assert artifact["source_result_id"] == body["id"]
+        if kind == "summary":
+            assert artifact["source_packet_ref"] == source_ref
+            assert artifact["summary"]["source_text"] == body_packet["extracted_text"]
+            assert selected_sentences[1] in followup["text"]
+        else:
+            (quote,) = artifact["candidates"]
+            assert quote["source_packet_ref"] == source_ref
+            assert quote["text"] == selected_sentences[0]
+            assert selected_sentences[1] not in followup["text"]
+        followup_state = cli("inspect", case_id=case)
+        assert followup_state["result"] == followup
+        assert followup_state["bundle"]["meaning"]["parser_version"] == "declarative-ja-en-v113-explained-search-body-source-followup"
+        assert followup_state["bundle"]["meaning"]["context_result_ref"] == body_explanation["id"]
+        assert followup_state["bundle"]["request"]["context_ref"] is None
+        assert followup_state["bundle"]["request"]["permissions"]["read_hosts"] == []
+        assert cli("run", "--input", input_id, followup_request, case_id=case) == followup
+        explained_body_followups[kind] = followup
+    assert not contacts_since(followup_seen) and len(fixture.connects) == followup_starts
     blocked = cli("run", "--input", "during-retry-after", "--allow-read-host", primary,
                   "検索 wikipedia: alternate trial", case_id=case, expected_exit=2)
     assert "HTTP_RETRY_DEFERRED" in blocked["reason"] and failed["id"] in blocked["reason"]
@@ -944,6 +988,7 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
             "body_explanation": {"result": body_explanation,
                                  "replayed_exactly": body_explanation_replayed == body_explanation,
                                  "new_http_requests": 0},
+            "explained_body_followups": {**explained_body_followups, "new_http_requests": 0},
             "deferred": blocked, "cancelled_deferred": cancelled_deferred,
             "listing_explanation": {"prior": prior_listing, "result": explained,
                                     "replayed_exactly": explained_replayed == explained,

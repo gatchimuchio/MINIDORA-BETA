@@ -4024,15 +4024,15 @@ impl Engine {
                 | Intent::SummarizePreviousSourceConstrained { .. }
         ) && let Some(source) =
             previous.filter(|source| has_compute_budget || source.lifecycle == Lifecycle::Commit)
+            && let Some(prior_case) = latest.as_ref()
         {
-            match crate::recovery::source_context_available(
+            match crate::text_summary::source_followup_context(
                 &self.store,
-                actor,
-                &request.case_id,
+                &bundle,
+                &prior_case.prior_results,
                 source,
             ) {
-                Ok(true) => Some(source),
-                Ok(false) => None,
+                Ok(context) => context,
                 Err(error) => {
                     return self.stop(
                         &mut state,
@@ -4093,11 +4093,7 @@ impl Engine {
             Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
         ) {
             previous_source
-                .map(|prior| {
-                    crate::text_summary::source_summary_bodies(prior)
-                        .map(|(index, _)| index)
-                        .collect::<Vec<_>>()
-                })
+                .map(|context| context.bodies().map(|(index, _)| index).collect::<Vec<_>>())
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -4228,15 +4224,10 @@ impl Engine {
         let previous_source_question_answer =
             if let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent {
                 match previous_source.filter(|_| has_compute_budget) {
-                    Some(prior) => {
+                    Some(context) => {
+                        let prior = context.source;
                         let mut source_packets = Vec::new();
-                        for (index, packet) in
-                            prior.evidence.iter().enumerate().filter(|(_, packet)| {
-                                packet.packet_kind == "FETCHED_BODY"
-                                    && packet.failure.is_none()
-                                    && packet.extracted_text.is_some()
-                            })
-                        {
+                        for (index, packet) in context.bodies() {
                             let packet_bytes = canonical(packet)?;
                             let packet_ref = digest(&packet_bytes);
                             match self.store.get_bytes(actor, &request.case_id, &packet_ref) {
@@ -6886,7 +6877,7 @@ impl Engine {
                 result.guarantee = Guarantee::Hypothesis;
             }
             Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
-                let Some(prior) = previous_source else {
+                let Some(context) = previous_source else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -6894,6 +6885,7 @@ impl Engine {
                         "要約対象となる実際の採用済み出典結果がありません。",
                     );
                 };
+                let prior = context.source;
                 if source_followup_indices.is_empty() {
                     return self.stop(
                         &mut state,
@@ -6905,7 +6897,7 @@ impl Engine {
                 let summary_limits =
                     crate::text_summary::constrained_source_summary_limits(&bundle.meaning.intent);
                 let mut source_packets = Vec::with_capacity(source_followup_indices.len());
-                for (source_index, packet) in crate::text_summary::source_summary_bodies(prior) {
+                for (source_index, packet) in context.bodies() {
                     let packet_bytes = canonical(packet)?;
                     let packet_ref = digest(&packet_bytes);
                     let retained = match self.store.get_bytes(actor, &request.case_id, &packet_ref)
@@ -6950,7 +6942,7 @@ impl Engine {
                         "複数の出典があるため、文字数・箇条書き数の制約を適用する対象を一つに決められません。",
                     );
                 }
-                result.dependencies.push(prior.id.clone());
+                result.dependencies.extend(context.dependencies());
                 result.dependencies.extend(
                     source_packets
                         .iter()
@@ -7057,7 +7049,7 @@ impl Engine {
                 result.guarantee = Guarantee::Hypothesis;
             }
             Intent::AskPreviousSourceQuestion { .. } => {
-                let Some(prior) = previous_source else {
+                let Some(context) = previous_source else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -7065,6 +7057,7 @@ impl Engine {
                         "質問対象となる実際の採用済み出典結果がありません。",
                     );
                 };
+                let prior = context.source;
                 let Some((prior_id, source_packet_refs, answer)) = &previous_source_question_answer
                 else {
                     return self.stop(
@@ -7112,7 +7105,7 @@ impl Engine {
                     &answer_ref,
                     &answer_inputs,
                 )?;
-                result.dependencies.push(prior_id.clone());
+                result.dependencies.extend(context.dependencies());
                 result.dependencies.extend(
                     source_packet_refs
                         .iter()

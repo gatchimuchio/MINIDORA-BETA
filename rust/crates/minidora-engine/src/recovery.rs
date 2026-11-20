@@ -85,7 +85,11 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                     | Intent::FetchNextUnobservedSource
                     | Intent::Search { .. }
                     | Intent::SearchWithFallback { .. }
-            ) || bundle.meaning.parser_version == crate::input::SOURCE_SUMMARY_PARSER_VERSION
+            ) || matches!(
+                bundle.meaning.parser_version.as_str(),
+                crate::input::SOURCE_SUMMARY_PARSER_VERSION
+                    | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+            )
         }) {
             store_execution_graph(store, actor, case, &graph)?
         } else {
@@ -3405,10 +3409,7 @@ pub(crate) fn source_followup_anchor<'a>(
         .ok_or_else(mismatch)?;
     let source = state.prior_results.get(source_id).ok_or_else(mismatch)?;
     if let Some(query) = no_match_query {
-        if source.id != *source_id
-            || identity(&Some(source))? != bundle.context_sha256
-            || !source_context_available(store, actor, case, source)?
-            || state.goal_sha256.is_some()
+        if state.goal_sha256.is_some()
             || state.reason != result.reason
             || result.guarantee != Guarantee::Unknown
             || result.content_plan.is_some()
@@ -3420,8 +3421,15 @@ pub(crate) fn source_followup_anchor<'a>(
         {
             return Err(mismatch());
         }
+        let context = crate::text_summary::source_followup_context(
+            store,
+            bundle,
+            &state.prior_results,
+            source,
+        )?
+        .ok_or_else(mismatch)?;
         let packets =
-            crate::text_summary::verified_source_question_packets(store, actor, case, source)?;
+            crate::text_summary::verified_source_question_packets(store, actor, case, context)?;
         let same_stop = |error: Option<Error>| {
             let Some(error) = error else { return false };
             matches!(&error, Error::Contract { code, .. } if code == "SOURCE_QUESTION_NO_MATCH")
@@ -3431,11 +3439,19 @@ pub(crate) fn source_followup_anchor<'a>(
         // Stopped questions predate operation-tagged answer artifacts. Require
         // the full recorded diagnostic from the matching lexical version.
         if !same_stop(
-            crate::text_summary::answer_fetched_source_question_v2(&source.id, query, &packets)
-                .err(),
+            crate::text_summary::answer_fetched_source_question_v2(
+                &context.source.id,
+                query,
+                &packets,
+            )
+            .err(),
         ) && !same_stop(
-            crate::text_summary::answer_fetched_source_question_v1(&source.id, query, &packets)
-                .err(),
+            crate::text_summary::answer_fetched_source_question_v1(
+                &context.source.id,
+                query,
+                &packets,
+            )
+            .err(),
         ) {
             return Err(mismatch());
         }
@@ -3815,6 +3831,10 @@ fn inspect(
             "RECOVERY_IDENTITY_MISMATCH",
             "sealed actor/case/input differs",
         ));
+    }
+    if bundle.meaning.parser_version == crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+    {
+        verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
     }
     let goal_ref = state.goal_sha256.as_ref().ok_or_else(|| {
         failure(
