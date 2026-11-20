@@ -670,7 +670,7 @@ pub(crate) fn previous_document_explanation(
     }))
 }
 
-fn revalidate_previous_document_render(
+pub(crate) fn revalidate_previous_document_render(
     store: &crate::store::Store,
     actor: &str,
     case: &str,

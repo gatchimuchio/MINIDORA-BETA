@@ -3875,6 +3875,182 @@ fn verify_source_summary_context(
     Ok(Some(SourceSummaryExpectation { source_packet_refs }))
 }
 
+const TEXT_SUMMARY_CANDIDATE_MISMATCH: &str = "RECOVERY_TEXT_SUMMARY_CANDIDATE_MISMATCH";
+
+fn verify_registered_summary_input(store: &Store, bundle: &InputBundle) -> Result<()> {
+    let request = &bundle.request;
+    let registered = store.get_input_bundle(
+        &request.actor_id,
+        &request.case_id,
+        &request.input_id,
+        request.input_version,
+    )?;
+    if registered.as_ref().map(|(_, retained)| retained) != Some(bundle) {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "the interrupted summary request does not match its registered sealed input",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_text_summary_candidate(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let Intent::TextSummaryCandidates { document } = &meaning.intent else {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "no sealed summary input",
+        ));
+    };
+    if meaning.parser_version != crate::input::PARSER_VERSION
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || request.text.len() > request.budget.max_input_bytes
+        || plan.locale != request.locale
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0
+            && span.end == request.text.len() && span.text == request.text)
+        || !matches!(crate::input::structured_intent(&request.text)?,
+            Some(Intent::TextSummaryCandidates { document: raw }) if raw == *document)
+        || result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+    {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "the retained summary input version, raw document or result identity changed",
+        ));
+    }
+    let report = crate::text_summary::extractive_summary_candidates(document)?;
+    let bytes = canonical(&report)?;
+    let reference = digest(&bytes);
+    if bytes.len() > request.budget.max_evidence_bytes
+        || result.guarantee != Guarantee::Hypothesis
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies.as_slice() != std::slice::from_ref(&reference)
+        || result.text != report.text
+        || plan.required_units.as_slice() != std::slice::from_ref(&report.text)
+        || store
+            .get_bytes_if_present(&request.actor_id, &request.case_id, &reference)?
+            .as_deref()
+            != Some(bytes.as_slice())
+    {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "the canonical summary report or adopted candidate does not match the sealed input",
+        ));
+    }
+    Ok(reference)
+}
+
+fn verify_legacy_text_summary_explanation(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<bool> {
+    if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        || !matches!(
+            bundle.meaning.parser_version.as_str(),
+            crate::input::PARSER_VERSION
+                | crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION
+                | crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION
+                | crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION
+                | crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
+                | crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION
+                | crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+                | crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION
+                | crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
+                | crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
+                | crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION
+                | crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
+                | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
+                | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+        )
+        || result.guarantee != Guarantee::Hypothesis
+    {
+        return Ok(false);
+    }
+    let Some(previous) = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+    else {
+        return Ok(false);
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let Some((_, prior_bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        return Ok(false);
+    };
+    if !matches!(
+        prior_bundle.meaning.intent,
+        Intent::TextSummaryCandidates { .. }
+    ) {
+        return Ok(false);
+    }
+    verify_registered_summary_input(store, bundle)?;
+    let Some(prior_plan) = &previous.content_plan else {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "no retained candidate plan",
+        ));
+    };
+    if previous.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_ref() != Some(&previous.id)
+        || bundle.context_sha256 != identity(&Some(previous))?
+        || result.dependencies.as_slice() != std::slice::from_ref(&previous.id)
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || result.text != previous.text
+        || plan.required_units.as_slice() != std::slice::from_ref(&previous.text)
+    {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "the legacy explanation does not match the sealed prior candidate",
+        ));
+    }
+    let report_ref = verify_text_summary_candidate(store, &prior_bundle, previous, prior_plan)?;
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&report_ref),
+        TEXT_SUMMARY_CANDIDATE_MISMATCH,
+        "extractive summary candidates",
+    )?;
+    let compute_ref = verified_artifact(
+        store,
+        actor,
+        case,
+        &(
+            &previous.calculation,
+            &prior_plan.required_units,
+            &previous.evidence,
+            &previous.dependencies,
+        ),
+    )?;
+    if prior_plan.dependencies != [report_ref, compute_ref] {
+        return Err(failure(
+            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            "the legacy source plan is missing its exact summary report or computation",
+        ));
+    }
+    Ok(true)
+}
+
 fn verify_previous_result_summary_context(
     store: &Store,
     actor: &str,
@@ -4356,6 +4532,13 @@ fn inspect(
             .is_some_and(|explanation| {
                 explanation.report_node == crate::document::TEXT_SUMMARY_CANDIDATE_REPORT_NODE
             });
+    let direct_summary_candidate = matches!(goal.intent, Intent::TextSummaryCandidates { .. });
+    if direct_summary_candidate {
+        verify_registered_summary_input(store, bundle)?;
+        verify_text_summary_candidate(store, bundle, result, plan)?;
+    }
+    let legacy_summary_explanation =
+        verify_legacy_text_summary_explanation(store, state, bundle, result, plan)?;
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
     if plan.id != identity(&unsigned_plan)?
@@ -4380,7 +4563,9 @@ fn inspect(
             )
             && !saved_comparison_explanation
             && !saved_relation_profile_explanation
-            && !saved_summary_explanation)
+            && !saved_summary_explanation
+            && !direct_summary_candidate
+            && !legacy_summary_explanation)
     {
         return Err(failure(
             "RECOVERY_CONTENT_MISMATCH",
@@ -6666,6 +6851,128 @@ mod tests {
                 lines
                     .join("\n")
                     .contains("Photosynthesis stores light energy.")
+            );
+        }
+    }
+
+    #[test]
+    fn direct_text_summary_candidate_recovery_revalidates_report_without_resending_file() {
+        for missing_report in [false, true] {
+            let fixture = empty_fixture();
+            let body = r#"{"text":"\u732b is quiet. The moon is bright.","max_sentences":1,"max_chars":64,"required_sentence_indices":[0]}"#;
+            let input = format!("text-summary:\n{body}");
+            let mut request = RequestEnvelope::new("case", "summary", "alice", &input);
+            request.output_path = Some(fixture.target.clone());
+            request
+                .permissions
+                .write_paths
+                .insert(fixture.target.clone());
+            let mut engine = Engine::open(&fixture.state).unwrap();
+            let original = engine.execute("alice", request.clone()).unwrap();
+            assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+            assert_eq!(original.guarantee, Guarantee::Hypothesis);
+            assert!(original.text.contains("猫 is quiet."));
+            assert!(!original.text.contains("The moon is bright."));
+            assert_eq!(original.dependencies.len(), 1);
+            let report_ref = &original.dependencies[0];
+            let report = engine.store.get_bytes("alice", "case", report_ref).unwrap();
+            let artifact: serde_json::Value = serde_json::from_slice(&report).unwrap();
+            assert_eq!(
+                artifact["operation"],
+                "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4"
+            );
+            assert_eq!(artifact["coverage_verified"], false);
+            assert_eq!(digest(&report), *report_ref);
+            let bytes = fs::read(&fixture.target).unwrap();
+            assert_eq!(bytes, original.text.as_bytes());
+            let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+            let original_actions = engine.store.actions("alice", "case").unwrap();
+            assert_eq!(original_actions.len(), 1);
+            assert_eq!(original_actions[0].phase, EffectPhase::Confirmed);
+            drop(engine);
+
+            let token = retain_attempted_prefix(&fixture.state);
+            if missing_report {
+                // Remove only this report's case binding; its exact blob and
+                // the genuine adopted state/action journal remain intact.
+                let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+                assert_eq!(
+                    database
+                        .execute(
+                            "DELETE FROM case_artifact WHERE case_id=?1 AND sha256=?2",
+                            params!["case", report_ref],
+                        )
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(
+                    fs::read(fixture.state.join("blobs").join(report_ref)).unwrap(),
+                    report
+                );
+            }
+            let mut restored = Engine::open(&fixture.state).unwrap();
+            let retained = restored.latest("alice", "case").unwrap().unwrap();
+            assert_eq!(retained.lifecycle, Lifecycle::Adopted);
+            assert_eq!(retained.bundle.as_ref().unwrap().request, request);
+            assert!(matches!(
+                retained.bundle.as_ref().unwrap().meaning.intent,
+                Intent::TextSummaryCandidates { .. }
+            ));
+            assert_eq!(
+                retained.result.as_ref().unwrap().guarantee,
+                Guarantee::Hypothesis
+            );
+            assert!(retained.result.as_ref().unwrap().receipts.is_empty());
+            let attempted = restored.store.actions("alice", "case").unwrap();
+            assert_eq!(attempted.len(), 1);
+            assert_eq!(attempted[0].phase, EffectPhase::Unknown);
+            assert!(attempted[0].receipt.is_none());
+            assert_eq!(attempted[0].action_id, original_actions[0].action_id);
+            assert_eq!(attempted[0].idempotency_key, token);
+
+            let recovered = restored.reconcile("alice", "case").unwrap();
+            assert_eq!(recovered.id, original.id);
+            assert_eq!(recovered.guarantee, Guarantee::Hypothesis);
+            assert_eq!(recovered.text, original.text);
+            assert_eq!(recovered.dependencies, original.dependencies);
+            assert_eq!(recovered.content_plan, original.content_plan);
+            assert_eq!(recovered.render, original.render);
+            let actions = restored.store.actions("alice", "case").unwrap();
+            if missing_report {
+                assert_eq!(recovered.lifecycle, Lifecycle::Suspend, "{recovered:?}");
+                assert!(
+                    recovered
+                        .reason
+                        .as_deref()
+                        .unwrap()
+                        .contains("RECOVERY_TEXT_SUMMARY_CANDIDATE_MISMATCH")
+                );
+                assert!(recovered.receipts.is_empty());
+                assert_eq!(actions, attempted);
+            } else {
+                assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+                assert_eq!(recovered.receipts.len(), 1);
+                let receipt = &recovered.receipts[0];
+                assert_eq!(receipt.action_id, attempted[0].action_id);
+                assert_eq!(receipt.phase, EffectPhase::Confirmed);
+                assert_eq!(receipt.content_sha256, digest(&bytes));
+                assert_eq!(receipt.observed_bytes, Some(bytes.len() as u64));
+                assert_eq!(
+                    receipt.reason.as_deref(),
+                    Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+                );
+                let mut expected = attempted[0].clone();
+                expected.phase = EffectPhase::Confirmed;
+                expected.receipt = Some(receipt.clone());
+                assert_eq!(actions, vec![expected]);
+                assert_eq!(restored.reconcile("alice", "case").unwrap(), recovered);
+            }
+            assert_eq!(restored.execute("alice", request).unwrap(), recovered);
+            assert_eq!(restored.store.actions("alice", "case").unwrap(), actions);
+            assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+            assert_eq!(
+                fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+                modified
             );
         }
     }

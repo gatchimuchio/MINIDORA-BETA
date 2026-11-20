@@ -1866,7 +1866,7 @@ fn calculation_sequence_intent(text: &str, header: &str) -> Result<Option<Intent
 
 /// Explicit headers separate instructions from document/query data. The body is
 /// sliced from the original request, without trim, newline conversion or NFKC.
-fn structured_intent(text: &str) -> Result<Option<Intent>> {
+pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
     let first_line = text
         .split('\n')
         .next()
