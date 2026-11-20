@@ -211,6 +211,8 @@ enum CsvTableOperation<'a> {
     GroupCount(&'a str),
     GroupStatistics(&'a str, &'a str),
     Select(&'a str),
+    CsvToJson(bool),
+    JsonToCsv,
 }
 
 /// Recompute a prior CSV table operation from its immutable sealed input
@@ -226,8 +228,10 @@ pub(crate) fn previous_csv_table_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_select =
-        explanation_parser_version == crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION;
+    let explain_conversion =
+        explanation_parser_version == crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION;
+    let explain_select = explain_conversion
+        || explanation_parser_version == crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION;
     let explain_groups = explain_select
         || matches!(
             explanation_parser_version,
@@ -284,6 +288,7 @@ pub(crate) fn previous_csv_table_explanation(
                     "CSV_FILTER" | "CSV_SORT" => true,
                     "CSV_GROUP_COUNT" | "CSV_GROUP_STATISTICS" => explain_groups,
                     "CSV_SELECT" => explain_select,
+                    "CSV_TO_JSON" | "JSON_TO_CSV" => explain_conversion,
                     _ => false,
                 }
             {
@@ -295,6 +300,9 @@ pub(crate) fn previous_csv_table_explanation(
                         }
                         "CSV_SELECT" => {
                             "the prior CSV selection has no retained sealed input bundle"
+                        }
+                        "CSV_TO_JSON" | "JSON_TO_CSV" => {
+                            "the prior table conversion has no retained sealed input bundle"
                         }
                         _ => "the prior grouped CSV operation has no retained sealed input bundle",
                     },
@@ -343,6 +351,13 @@ pub(crate) fn previous_csv_table_explanation(
         Intent::CsvSelect { document, column } if explain_select => {
             (document.as_str(), CsvTableOperation::Select(column))
         }
+        Intent::CsvToJson {
+            document,
+            has_header,
+        } if explain_conversion => (document.as_str(), CsvTableOperation::CsvToJson(*has_header)),
+        Intent::JsonToCsv { document } if explain_conversion => {
+            (document.as_str(), CsvTableOperation::JsonToCsv)
+        }
         _ => return Ok(None),
     };
     let (label, input_node, report_node) = match operation {
@@ -381,6 +396,11 @@ pub(crate) fn previous_csv_table_explanation(
             "previous-csv-table-select-input",
             "previous-csv-table-select-report",
         ),
+        CsvTableOperation::CsvToJson(_) | CsvTableOperation::JsonToCsv => (
+            "conversion",
+            "previous-csv-table-conversion-input",
+            "previous-csv-table-conversion-report",
+        ),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
         return Err(failure(
@@ -401,6 +421,8 @@ pub(crate) fn previous_csv_table_explanation(
             csv_group_statistics(document, group, value)?
         }
         CsvTableOperation::Select(column) => csv_select(document, column)?,
+        CsvTableOperation::CsvToJson(has_header) => csv_to_json(document, has_header)?,
+        CsvTableOperation::JsonToCsv => json_to_csv(document)?,
     };
     let parameter = |key| recomputed.parameters.get(key).map(String::as_str);
     let parameters_match = match operation {
@@ -440,6 +462,16 @@ pub(crate) fn previous_csv_table_explanation(
             recomputed.operation == "CSV_SELECT"
                 && parameter("column_name") == Some(column)
                 && parameter("has_header") == Some("true")
+                && parameter("value_type") == Some("STRING")
+        }
+        CsvTableOperation::CsvToJson(has_header) => {
+            recomputed.operation == "CSV_TO_JSON"
+                && parameter("has_header") == Some(if has_header { "true" } else { "false" })
+                && parameter("value_type") == Some("STRING")
+        }
+        CsvTableOperation::JsonToCsv => {
+            recomputed.operation == "JSON_TO_CSV"
+                && parameter("formula_policy") == Some("REJECT_LEADING_MARKERS")
                 && parameter("value_type") == Some("STRING")
         }
     };
@@ -487,6 +519,9 @@ pub(crate) fn previous_csv_table_explanation(
         }
         CsvTableOperation::Select(column) => {
             csv_table_select_lines(&recomputed, column, &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::CsvToJson(_) | CsvTableOperation::JsonToCsv => {
+            table_conversion_lines(&recomputed, &bundle_ref, &report_ref)?
         }
     };
 
@@ -550,6 +585,146 @@ pub(crate) fn previous_csv_table_explanation(
         report_ref,
         lines,
     }))
+}
+
+fn table_conversion_lines(
+    report: &DocumentResult,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_CELLS: usize = 8;
+    let to_json = report.operation == "CSV_TO_JSON";
+    let has_header = match report.parameters.get("has_header").map(String::as_str) {
+        Some("true") => true,
+        Some("false") => false,
+        _ => {
+            return Err(failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "the table conversion has no header mode",
+            ));
+        }
+    };
+    let (title, header_kind) = if to_json {
+        ("CSV→JSON", "CSV_HEADER")
+    } else {
+        ("JSON→CSV", "JSON_HEADER")
+    };
+    let (headers, cells): (Vec<_>, Vec<_>) = report
+        .spans
+        .iter()
+        .partition(|span| span.kind == header_kind);
+    let column_count = report
+        .spans
+        .iter()
+        .filter_map(|span| span.column)
+        .max()
+        .map_or(0, |index| index + 1);
+    // CSV producer rows include the original header record. JSON data rows start at zero.
+    let header_offset = usize::from(to_json && has_header);
+    let row_count = cells
+        .iter()
+        .filter_map(|span| span.row)
+        .max()
+        .map_or(0, |row| row + 1 - header_offset);
+    let mut lines = vec![
+        format!("前回の{title}変換を、封印済みの元入力から再計算しました。"),
+        format!("ヘッダー: {}", if has_header { "あり" } else { "なし" }),
+        format!("データ行数: {row_count}、列数: {column_count}"),
+        "見出しとセルは文字列のまま保ちます。JSON PointerはJSON側の位置です。".into(),
+        format!("元資料 SHA-256: {}", report.source_sha256),
+        format!("変換結果 SHA-256: {}", report.output_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+    ];
+    for span in headers
+        .iter()
+        .take(PREVIEW_CELLS)
+        .chain(cells.iter().take(PREVIEW_CELLS))
+    {
+        let column = span.column.ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "a table conversion span has no column",
+            )
+        })?;
+        let (location, pointer) = if span.kind == header_kind {
+            (
+                format!("見出し列{}", column + 1),
+                format!("/columns/{column}"),
+            )
+        } else {
+            let row = span
+                .row
+                .and_then(|row| row.checked_sub(header_offset))
+                .ok_or_else(|| {
+                    failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "a conversion cell has no original data row",
+                    )
+                })?;
+            (
+                format!("元行{}・列{}", row + 1, column + 1),
+                format!("/rows/{row}/{column}"),
+            )
+        };
+        lines.push(format!(
+            "{location} JSON Pointer {pointer} {}",
+            table_conversion_span(report, span, to_json)?
+        ));
+    }
+    for (label, count) in [("見出し", headers.len()), ("データセル", cells.len())] {
+        if count > PREVIEW_CELLS {
+            lines.push(format!(
+                "残りの{label} {}件の対応は保存レポートに保持されています。",
+                count - PREVIEW_CELLS
+            ));
+        }
+    }
+    Ok(lines)
+}
+
+fn table_conversion_span(
+    report: &DocumentResult,
+    span: &DocumentSpan,
+    to_json: bool,
+) -> Result<String> {
+    let invalid = || {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "a table conversion range does not match the verified cell",
+        )
+    };
+    let source = report
+        .source_document
+        .get(span.source_start..span.source_end)
+        .ok_or_else(invalid)?;
+    let (start, end) = span.output_start.zip(span.output_end).ok_or_else(invalid)?;
+    let output = report.text.get(start..end).ok_or_else(invalid)?;
+    let decoded = span.decoded_value.as_deref().ok_or_else(invalid)?;
+    let (json, csv) = if to_json {
+        (output, source)
+    } else {
+        (source, output)
+    };
+    let mut csv_end = 0;
+    let csv_value = cell(csv, &mut csv_end).map_err(|_| invalid())?;
+    if source != span.source_text
+        || csv_end != csv.len()
+        || csv_value.value != decoded
+        || serde_json::from_str::<String>(json).ok().as_deref() != Some(decoded)
+    {
+        return Err(invalid());
+    }
+    Ok(format!(
+        "値 {:?}。元 byte[{}..{}) sha256={} 原文={:?} → 出力 byte[{start}..{end}) sha256={} 表記={:?}",
+        preview(decoded),
+        span.source_start,
+        span.source_end,
+        digest(source.as_bytes()),
+        preview(source),
+        digest(output.as_bytes()),
+        preview(output)
+    ))
 }
 
 fn csv_table_select_lines(
@@ -1712,6 +1887,7 @@ pub(crate) fn previous_json_table_operation_explanation(
         explanation_parser_version,
         crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
             | crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION
+            | crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

@@ -13716,6 +13716,125 @@ fn assert_conversion_fixture_spans(
 }
 
 #[test]
+fn table_conversion_explanation_pairs_original_and_output_cell_evidence() {
+    for (header, source, to_json, has_header, escaped_cat) in [
+        (
+            "CSVをJSONに変換して（先頭行をヘッダーとして）:",
+            CONVERSION_CSV,
+            true,
+            true,
+            false,
+        ),
+        ("csv-to-json no-header:", CONVERSION_CSV, true, false, false),
+        (
+            "JSONをCSVに変換して:",
+            CONVERSION_ESCAPED_JSON,
+            false,
+            true,
+            true,
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "conversion", &request],
+        ));
+        let operation = if to_json {
+            "CSV_TO_JSON"
+        } else {
+            "JSON_TO_CSV"
+        };
+        let artifact =
+            normal_document_artifact(&scratch.0, "owner", &first, &request, source, operation);
+        assert_conversion_fixture_spans(&artifact, has_header, to_json, escaped_cat);
+        let output = first["text"].as_str().unwrap();
+        if to_json {
+            let table: Value = serde_json::from_str(output).unwrap();
+            assert_eq!(
+                table,
+                serde_json::json!({
+                    "columns": if has_header { serde_json::json!(CONVERSION_VALUES[0]) } else { Value::Null },
+                    "rows": if has_header { serde_json::json!(&CONVERSION_VALUES[1..]) } else { serde_json::json!(CONVERSION_VALUES) }
+                })
+            );
+        } else {
+            assert_eq!(output, CONVERSION_CSV);
+        }
+        let explanation = assert_csv_row_explanation(&scratch.0, &first, &artifact, "conversion");
+        let text = explanation["text"].as_str().unwrap();
+        for expected in [
+            if to_json {
+                "前回のCSV→JSON変換"
+            } else {
+                "前回のJSON→CSV変換"
+            }
+            .to_string(),
+            format!("ヘッダー: {}", if has_header { "あり" } else { "なし" }),
+            format!("データ行数: {}、列数: 3", if has_header { 2 } else { 3 }),
+            format!(
+                "変換結果 SHA-256: {}",
+                minidora_domain::digest(output.as_bytes())
+            ),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        for physical_row in 0..3 {
+            let is_header = has_header && physical_row == 0;
+            for column in 0..3 {
+                let (marker, pointer) = if is_header {
+                    (
+                        format!("見出し列{}", column + 1),
+                        format!("/columns/{column}"),
+                    )
+                } else {
+                    let data_row = physical_row - usize::from(has_header);
+                    if data_row * 3 + column >= 8 {
+                        continue; // The explanation displays at most eight data cells.
+                    }
+                    (
+                        format!("元行{}・列{}", data_row + 1, column + 1),
+                        format!("/rows/{data_row}/{column}"),
+                    )
+                };
+                let line = text
+                    .lines()
+                    .find(|line| line.starts_with(&format!("{marker} ")))
+                    .unwrap_or_else(|| panic!("missing {marker:?} in {text}"));
+                assert!(line.contains(&pointer), "{line}");
+                assert!(
+                    line.contains(&format!(
+                        "値 {:?}。",
+                        CONVERSION_VALUES[physical_row][column]
+                    )),
+                    "{line}"
+                );
+                // The fixture locators use whole known rows, not report offsets
+                // or ambiguous individual quote/empty-string occurrences.
+                let (start, end) =
+                    conversion_fixture_token(source, physical_row, column, !to_json, escaped_cat);
+                let (output_start, output_end) =
+                    conversion_fixture_token(output, physical_row, column, to_json, false);
+                let source_hash = minidora_domain::digest(&source.as_bytes()[start..end]);
+                let output_hash =
+                    minidora_domain::digest(&output.as_bytes()[output_start..output_end]);
+                assert!(
+                    line.contains(&format!("元 byte[{start}..{end}) sha256={source_hash}")),
+                    "{line}"
+                );
+                assert!(
+                    line.contains(&format!(
+                        "出力 byte[{output_start}..{output_end}) sha256={output_hash}"
+                    )),
+                    "{line}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn table_conversion_csv_roundtrips_use_actual_outputs_in_both_header_modes() {
     for (has_header, headers) in [
         (
