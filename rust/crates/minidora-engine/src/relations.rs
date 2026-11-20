@@ -384,6 +384,8 @@ pub(crate) fn valid_utc_instant(value: &str) -> bool {
     (1..=days).contains(&day)
 }
 
+pub(crate) const MAX_CONDITION_EXPRESSION_NODES: usize = 64;
+
 fn expression_condition_refs(
     expression: &ConditionExpression,
     node_count: &mut usize,
@@ -395,7 +397,7 @@ fn expression_condition_refs(
             "condition node count overflow",
         )
     })?;
-    if *node_count > 64 {
+    if *node_count > MAX_CONDITION_EXPRESSION_NODES {
         return Err(failure(
             "CONDITION_COMPLEXITY_LIMIT",
             "condition expressions are limited to 64 nodes",

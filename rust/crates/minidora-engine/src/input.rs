@@ -21,6 +21,8 @@ pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
 const CONDITION_DEFINITION_PARSER_VERSION: &str = "declarative-ja-en-v92-condition-definition";
 const TIMED_CONDITION_DEFINITION_PARSER_VERSION: &str =
     "declarative-ja-en-v115-timed-condition-definition";
+const COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION: &str =
+    "declarative-ja-en-v116-composite-condition-definition";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -254,6 +256,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
+        Intent::DefineCondition { definition } if !definition.dependencies.is_empty() => {
+            COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION
+        }
         Intent::DefineCondition { definition }
             if definition.valid_from.is_some() || definition.valid_until.is_some() =>
         {
@@ -4501,6 +4506,7 @@ struct RelationQualifiers<'a> {
     scope: Option<(&'a str, usize)>,
     time: Option<(&'a str, usize)>,
     condition: Option<(&'a str, usize)>,
+    subject: Option<(&'a str, usize)>,
     valid_from: Option<(&'a str, usize)>,
     valid_until: Option<(&'a str, usize)>,
 }
@@ -4518,6 +4524,12 @@ fn relation_qualifiers(
     let mut qualifiers = RelationQualifiers::default();
     let mut body = text;
     while let Some(opened) = body.strip_prefix('[') {
+        if matches!(context, QualifierContext::ConditionDefinition)
+            && qualifiers.subject.is_some()
+            && opened.starts_with("ref=")
+        {
+            break;
+        }
         let (tag, rest) = opened.split_once(']')?;
         let (key, raw_value) = tag.split_once('=')?;
         let value = raw_value.trim();
@@ -4534,6 +4546,7 @@ fn relation_qualifiers(
             ("condition", _) if crate::relations::validate_condition_id(value).is_ok() => {
                 &mut qualifiers.condition
             }
+            ("subject", QualifierContext::ConditionDefinition) => &mut qualifiers.subject,
             ("valid_from", QualifierContext::ConditionDefinition)
                 if crate::relations::valid_utc_instant(value) =>
             {
@@ -4589,6 +4602,147 @@ fn condition_definition_payload(text: &str) -> Option<&str> {
         .map(str::trim_start)
 }
 
+const CONDITION_ROLE_ROOT: &str = "/DefineCondition/definition";
+
+struct CompositeConditionSource {
+    definition: ConditionDefinition,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+struct ConditionExpressionSource<'a> {
+    text: &'a str,
+    remaining: &'a str,
+    end: usize,
+    nodes_left: usize,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+    references: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+impl ConditionExpressionSource<'_> {
+    fn consume(&mut self, token: &str) -> bool {
+        if let Some(rest) = self.remaining.trim_start().strip_prefix(token) {
+            self.remaining = rest;
+            return true;
+        }
+        false
+    }
+
+    fn expression(&mut self, role: &str) -> Option<ConditionExpression> {
+        self.nodes_left = self.nodes_left.checked_sub(1)?;
+        self.remaining = self.remaining.trim_start();
+        let start = self.end - self.remaining.len();
+        if let Some(reference) = self.remaining.strip_prefix("[ref=") {
+            let (raw, rest) = reference.split_once(']')?;
+            let condition_id = raw.trim();
+            if raw.contains('[') || crate::relations::validate_condition_id(condition_id).is_err() {
+                return None;
+            }
+            let id_start = self.end - reference.trim_start().len();
+            let id_span = source_span_at(self.text, id_start, id_start + condition_id.len())?;
+            self.roles
+                .insert(format!("{role}/condition_id"), vec![id_span.clone()]);
+            self.references
+                .entry(condition_id.into())
+                .or_default()
+                .push(id_span);
+            self.remaining = rest;
+            return Some(ConditionExpression::ConditionRef {
+                condition_id: condition_id.into(),
+            });
+        }
+        let operator = ["AND", "OR", "NOT"]
+            .into_iter()
+            .find(|operator| self.consume(operator))?;
+        if !self.consume("(") {
+            return None;
+        }
+        let span = source_span_at(self.text, start, start + operator.len())?;
+        self.roles.insert(format!("{role}/kind"), vec![span]);
+        let expression = if operator == "NOT" {
+            ConditionExpression::Not {
+                operand: Box::new(self.expression(&format!("{role}/operand"))?),
+            }
+        } else {
+            let mut operands = vec![self.expression(&format!("{role}/operands/0"))?];
+            while self.consume(",") {
+                operands.push(self.expression(&format!("{role}/operands/{}", operands.len()))?);
+            }
+            if operator == "AND" {
+                ConditionExpression::And { operands }
+            } else {
+                ConditionExpression::Or { operands }
+            }
+        };
+        self.consume(")").then_some(expression)
+    }
+}
+
+fn composite_condition_source(
+    text: &str,
+    body: &str,
+    body_offset: usize,
+    qualifier_offset: usize,
+    qualifiers: &RelationQualifiers<'_>,
+) -> Option<CompositeConditionSource> {
+    let (subject, _) = qualifiers.subject?;
+    let (condition_id, _) = qualifiers.condition?;
+    if singular_previous_subject(subject)
+        || unresolved_relation_subject(subject)
+        || starts_quoted_source(subject)
+    {
+        return None;
+    }
+    let mut source = ConditionExpressionSource {
+        text,
+        remaining: body,
+        end: body_offset + body.len(),
+        nodes_left: crate::relations::MAX_CONDITION_EXPRESSION_NODES,
+        roles: BTreeMap::new(),
+        references: BTreeMap::new(),
+    };
+    let expression = source.expression(&format!("{CONDITION_ROLE_ROOT}/expression"))?;
+    if !source.remaining.trim().is_empty() {
+        return None;
+    }
+    let definition = ConditionDefinition {
+        condition_id: condition_id.into(),
+        subject: subject.into(),
+        scope: qualifiers
+            .scope
+            .map_or("default", |(scope, _)| scope)
+            .into(),
+        expression,
+        valid_from: qualifiers.valid_from.map(|(value, _)| value.into()),
+        valid_until: qualifiers.valid_until.map(|(value, _)| value.into()),
+        dependencies: source.references.keys().cloned().collect(),
+    };
+    crate::relations::validate_condition_definition(&definition).ok()?;
+    for (field, qualifier) in [
+        ("condition_id", qualifiers.condition),
+        ("subject", qualifiers.subject),
+        ("scope", qualifiers.scope),
+        ("valid_from", qualifiers.valid_from),
+        ("valid_until", qualifiers.valid_until),
+    ] {
+        if let Some((value, offset)) = qualifier {
+            let start = qualifier_offset + offset;
+            let span = source_span_at(text, start, start + value.len())?;
+            source
+                .roles
+                .insert(format!("{CONDITION_ROLE_ROOT}/{field}"), vec![span]);
+        }
+    }
+    for (index, spans) in source.references.into_values().enumerate() {
+        source
+            .roles
+            .insert(format!("{CONDITION_ROLE_ROOT}/dependencies/{index}"), spans);
+    }
+    Some(CompositeConditionSource {
+        definition,
+        roles: source.roles,
+    })
+}
+
 fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
     let Some(payload) = condition_definition_payload(terminal_trim(text)) else {
         return Ok(None);
@@ -4608,6 +4762,17 @@ fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
     else {
         return Ok(Some(unsupported()));
     };
+    if qualifiers.subject.is_some() {
+        return Ok(Some(
+            composite_condition_source(payload, body, statement.len() - body.len(), 0, &qualifiers)
+                .map_or_else(
+                    || Intent::Unknown {
+                        reason: "複合条件は [subject=...] と [ref=条件ID]、AND(...), OR(...), NOT(...) で指定してください。".into(),
+                    },
+                    |source| Intent::DefineCondition { definition: source.definition },
+                ),
+        ));
+    }
     let Some((condition_id, _)) = qualifiers.condition else {
         return Ok(Some(unsupported()));
     };
@@ -4690,6 +4855,24 @@ fn condition_definition_source_roles(
             "condition validity bounds do not match the original declaration",
         ));
     }
+    let offset = text.len() - text.trim_start().len() + source.len() - payload.len();
+    if qualifiers.subject.is_some() {
+        let composed = composite_condition_source(
+            text,
+            body,
+            offset + statement.len() - body.len(),
+            offset,
+            &qualifiers,
+        )
+        .filter(|source| &source.definition == definition)
+        .ok_or_else(|| {
+            failure(
+                "CONDITION_SOURCE_SPAN",
+                "compound condition roles do not match the original declaration",
+            )
+        })?;
+        return Ok(composed.roles);
+    }
     let (atom, negative, expression_role) = match &definition.expression {
         ConditionExpression::Not { operand } => (operand.as_ref(), true, "expression/operand"),
         atom => (atom, false, "expression"),
@@ -4709,7 +4892,6 @@ fn condition_definition_source_roles(
         temporal_scope: None,
         condition_refs: [definition.condition_id.clone()].into(),
     };
-    let offset = text.len() - text.trim_start().len() + source.len() - payload.len();
     let roles = japanese_qualified_source_roles(
         text,
         body,
@@ -4733,7 +4915,7 @@ fn condition_definition_source_roles(
                 "/predicate" | "/object" => format!("{expression_role}{role}"),
                 _ => role.trim_start_matches('/').to_owned(),
             };
-            (format!("/DefineCondition/definition/{role}"), spans)
+            (format!("{CONDITION_ROLE_ROOT}/{role}"), spans)
         })
         .collect())
 }
@@ -4741,6 +4923,136 @@ fn condition_definition_source_roles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composite_condition_seals_expression_and_original_utf8_roles() {
+        let text = "　条件定義： [valid_from=2026-11-20T00:00:00Z][scope=実験室][condition=監視][subject=ユリ] AND([ref= 校正 ], OR([ref=点検], NOT([ref=停止])), [ref=校正])。　";
+        let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION
+        );
+        let Intent::DefineCondition { definition } = &bundle.meaning.intent else {
+            panic!("{:?}", bundle.meaning.intent);
+        };
+        assert_eq!(definition.subject, "ユリ");
+        assert_eq!(definition.scope, "実験室");
+        assert_eq!(
+            definition.valid_from.as_deref(),
+            Some("2026-11-20T00:00:00Z")
+        );
+        assert_eq!(
+            definition.dependencies,
+            ["校正".into(), "点検".into(), "停止".into()].into()
+        );
+        let reference = |condition_id: &str| ConditionExpression::ConditionRef {
+            condition_id: condition_id.into(),
+        };
+        assert_eq!(
+            definition.expression,
+            ConditionExpression::And {
+                operands: vec![
+                    reference("校正"),
+                    ConditionExpression::Or {
+                        operands: vec![
+                            reference("点検"),
+                            ConditionExpression::Not {
+                                operand: Box::new(reference("停止"))
+                            },
+                        ],
+                    },
+                    reference("校正"),
+                ],
+            }
+        );
+        for (role, value, offset) in [
+            ("subject", "ユリ", text.find("ユリ").unwrap()),
+            ("expression/kind", "AND", text.find("AND").unwrap()),
+            ("expression/operands/1/kind", "OR", text.find("OR").unwrap()),
+            (
+                "expression/operands/1/operands/1/kind",
+                "NOT",
+                text.find("NOT").unwrap(),
+            ),
+            (
+                "expression/operands/2/condition_id",
+                "校正",
+                text.rfind("校正").unwrap(),
+            ),
+        ] {
+            assert_eq!(
+                bundle.meaning.source_roles[&format!("{CONDITION_ROLE_ROOT}/{role}")],
+                vec![SourceSpan {
+                    start: offset,
+                    end: offset + value.len(),
+                    text: value.into()
+                }]
+            );
+        }
+        let duplicate = definition
+            .dependencies
+            .iter()
+            .position(|id| id == "校正")
+            .unwrap();
+        let spans = &bundle.meaning.source_roles
+            [&format!("{CONDITION_ROLE_ROOT}/dependencies/{duplicate}")];
+        assert_eq!(
+            spans.iter().map(|span| span.start).collect::<Vec<_>>(),
+            vec![text.find("校正").unwrap(), text.rfind("校正").unwrap()]
+        );
+    }
+
+    #[test]
+    fn composite_condition_requires_complete_bounded_expression() {
+        let declaration =
+            |expression: &str| format!("条件定義: [condition=監視][subject=ユリ] {expression}");
+        let deep = format!("{}[ref=校正]{}", "NOT(".repeat(64), ")".repeat(64));
+        let wide = format!("OR({})", ["[ref=校正]"; 17].join(","));
+        for expression in [
+            "AND()",
+            "OR([ref=校正])",
+            "NOT([ref=校正], [ref=点検])",
+            "AND([ref=校正],)",
+            "OR([ref=校正], [ref=点検]) 追加",
+            "AND([ref=校正] [ref=点検])",
+            "NOT([ref= ])",
+            "NOT([ref=[校正])",
+            "「NOT([ref=校正])」",
+            &deep,
+            &wide,
+        ] {
+            assert!(
+                matches!(
+                    interpret(&declaration(expression)).unwrap(),
+                    Intent::Unknown { .. }
+                ),
+                "{expression}"
+            );
+        }
+        for text in [
+            "条件定義: [condition=監視] AND([ref=校正], [ref=点検])",
+            "条件定義: [condition=監視][subject=ユリ] NOT([ref=校正])？",
+            "条件定義: [condition=監視][subject=それ] NOT([ref=校正])",
+            "[subject=ユリ] ユリは校正済み",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+        let widest = format!("OR({})", ["[ref=校正]"; 16].join(","));
+        let deepest = format!("{}[ref=校正]{}", "NOT(".repeat(63), ")".repeat(63));
+        for expression in ["[ref=校正]", &widest, &deepest] {
+            assert!(
+                matches!(
+                    interpret(&declaration(expression)).unwrap(),
+                    Intent::DefineCondition { .. }
+                ),
+                "{expression}"
+            );
+        }
+    }
+
     #[test]
     fn why_questions_parse_only_one_supported_relation() {
         for text in [

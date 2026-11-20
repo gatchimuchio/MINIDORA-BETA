@@ -2914,6 +2914,144 @@ fn timed_condition_definition_from_ordinary_input_respects_half_open_interval() 
 }
 
 #[test]
+fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let condition_ids: Vec<_> = [
+        "条件定義: [scope=実験室][condition=校正] ユリは校正済み",
+        "条件定義: [scope=実験室][condition=点検] ユリは点検済み",
+        "条件定義: [scope=実験室][condition=停止] ユリは停止中",
+    ]
+    .into_iter()
+    .map(|text| {
+        let result = record(&execute(&scratch.0, actor, &[text]));
+        result["dependencies"][0].as_str().unwrap().to_owned()
+    })
+    .collect();
+    for text in [
+        "[scope=実験室]ユリは校正済み",
+        "[scope=実験室]ユリは停止中ではない",
+        "[scope=実験室][condition=監視]ユリは観測可能",
+    ] {
+        record(&execute(&scratch.0, actor, &[text]));
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let before = store.load_memory(actor).unwrap();
+    let missing = [
+        "--input",
+        "missing-child",
+        "条件定義: [scope=実験室][condition=監視][subject=ユリ] AND([ref=校正], [ref=未登録])",
+    ];
+    let stop = stopped(&execute(&scratch.0, actor, &missing), 2, "SUSPEND");
+    assert!(
+        stop["reason"]
+            .as_str()
+            .unwrap()
+            .contains("UNKNOWN_CONDITION_DEPENDENCY")
+    );
+    assert!(stop["render"].is_null());
+    assert!(stop["receipts"].as_array().unwrap().is_empty());
+    assert_eq!(store.load_memory(actor).unwrap(), before);
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+
+    let definition = "条件定義: [scope=実験室][condition=監視][subject=ユリ] AND([ref=校正], OR([ref=点検], NOT([ref=停止])))";
+    let registered = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "compound", definition],
+    ));
+    let condition_record = registered["dependencies"][0].as_str().unwrap();
+    let memory = store.load_memory(actor).unwrap();
+    let parent = memory
+        .conditions
+        .iter()
+        .find(|condition| condition.id == condition_record)
+        .unwrap();
+    let mut expected = condition_ids.clone();
+    expected.sort();
+    assert_eq!(parent.dependencies, expected);
+    assert_eq!(
+        parent.definition.dependencies,
+        ["停止".into(), "校正".into(), "点検".into()].into()
+    );
+    assert_eq!(parent.source_input, registered["id"]);
+
+    let question = "なぜ[scope=実験室][condition=監視]ユリは観測可能ですか";
+    let limited = stopped(
+        &execute(&scratch.0, actor, &["--input", "budget-stop", question]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT")
+    );
+    assert!(limited["render"].is_null());
+    let actual = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "with-compound", "--max-actions", "128", question],
+    ));
+    let proof = assert_why_generation(&scratch.0, actor, "normal-route", &actual);
+    assert!(
+        proof["relation_meaning_plan"]["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unit| unit["meaning"]["evaluation"]["status"] == "TRUE")
+    );
+    for id in condition_ids
+        .iter()
+        .map(String::as_str)
+        .chain([condition_record])
+    {
+        assert!(
+            actual["dependencies"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == id)
+        );
+    }
+
+    record(&execute(
+        &scratch.0,
+        actor,
+        &[&format!("invalidate {}", condition_ids[2])],
+    ));
+    let stop_after = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &["--input", "after-invalidation", question],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        stop_after["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONDITION_UNKNOWN")
+    );
+    assert!(stop_after["render"].is_null());
+    let updated = store.load_memory(actor).unwrap();
+    assert_eq!(updated.conditions.len(), memory.conditions.len());
+    for condition in &updated.conditions {
+        assert_eq!(
+            condition.valid,
+            condition.id != condition_record && condition.id != condition_ids[2]
+        );
+    }
+    assert_eq!(
+        stopped(&execute(&scratch.0, actor, &missing), 2, "SUSPEND"),
+        stop
+    );
+}
+
+#[test]
 fn declared_rule_transfers_to_new_subject_in_new_case_with_bounded_lineage() {
     let scratch = Scratch::new();
     let rule = record(&execute_in_case(
