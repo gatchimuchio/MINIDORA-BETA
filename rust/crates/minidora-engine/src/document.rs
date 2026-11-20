@@ -2,11 +2,13 @@
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
 use crate::ports::{JsonKind, JsonNode, json_node_at_pointer, strict_json_document};
+use crate::text_editing::{LocatedTextEdit, locate_explicit_replacement};
 use minidora_domain::{
-    Guarantee, Intent, Lifecycle, Result, ResultRecord, canonical, digest, failure,
+    Guarantee, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, canonical, digest, failure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 const MAX_DOCUMENT_BYTES: usize = 256_000;
 const MAX_RESULT_BYTES: usize = 256_000;
@@ -223,14 +225,24 @@ pub(crate) fn previous_document_explanation(
     actor: &str,
     case: &str,
     previous: &ResultRecord,
-    max_evidence_bytes: usize,
+    budget: &ResourceBudget,
     explanation_parser_version: &str,
+    started: Instant,
 ) -> Result<Option<PriorDocumentExplanation>> {
-    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+    if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
     }
-    let explain_csv_select_index =
-        explanation_parser_version == crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION;
+    let explain_text_location =
+        explanation_parser_version == crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION;
+    if explain_text_location && previous.guarantee == Guarantee::UserPremise {
+        return previous_text_location_explanation(store, actor, case, previous, budget, started);
+    }
+    if previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let max_evidence_bytes = budget.max_evidence_bytes;
+    let explain_csv_select_index = explain_text_location
+        || explanation_parser_version == crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION;
     let explain_json_comparison = explain_csv_select_index
         || explanation_parser_version
             == crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION;
@@ -691,6 +703,152 @@ fn revalidate_previous_document_render(
         }
     }
     Ok(render_ref)
+}
+
+fn previous_text_location_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    budget: &ResourceBudget,
+    started: Instant,
+) -> Result<Option<PriorDocumentExplanation>> {
+    const CODE: &str = "TEXT_LOCATION_CONTEXT_INVALID";
+    let Some((bundle_ref, bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        // A text document may itself contain JSON. Recognize a prior location
+        // result here only when its displayed report bytes also name its last dependency.
+        if let Some((report_ref, ancestors)) = previous.dependencies.split_last()
+            && !ancestors.is_empty()
+            && *report_ref == digest(previous.text.as_bytes())
+            && serde_json::from_str::<LocatedTextEdit>(&previous.text)
+                .is_ok_and(|report| report.consumed_artifacts.as_slice() == ancestors)
+        {
+            return Err(failure(
+                CODE,
+                "the prior text location has no retained sealed input",
+            ));
+        }
+        return Ok(None);
+    };
+    let Intent::LocateTextReplacement { document } = &bundle.meaning.intent else {
+        return Ok(None);
+    };
+    if bundle_ref != digest(&canonical(&bundle)?) {
+        return Err(failure(
+            CODE,
+            "the prior text-location input bundle hash changed",
+        ));
+    }
+    let report = locate_explicit_replacement(
+        document,
+        |reference| {
+            store
+                .get_bytes_if_present(actor, case, reference)?
+                .ok_or_else(|| failure(CODE, "a prior text-location base artifact is missing"))
+        },
+        started,
+        budget.deadline_ms,
+    )?;
+    let report_bytes = canonical(&report)?;
+    let report_ref = digest(&report_bytes);
+    if previous.dependencies.split_last()
+        != Some((&report_ref, report.consumed_artifacts.as_slice()))
+        || previous.text.as_bytes() != report_bytes
+        || store
+            .get_bytes_if_present(actor, case, &report_ref)?
+            .as_deref()
+            != Some(report_bytes.as_slice())
+    {
+        return Err(failure(
+            CODE,
+            "the prior text location no longer matches its retained report",
+        ));
+    }
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&report_ref),
+        CODE,
+        "text location",
+    )?;
+
+    let location = &report.location;
+    let [patch] = report.proposed_edit.edits.as_slice() else {
+        return Err(failure(
+            CODE,
+            "the verified text location has no unique proposal",
+        ));
+    };
+    let json_token = |label, start, end, expected: &str| {
+        let token = document
+            .get(start..end)
+            .filter(|text| {
+                serde_json::from_str::<String>(text).is_ok_and(|value| value == expected)
+            })
+            .ok_or_else(|| {
+                failure(
+                    CODE,
+                    "a prior text-location JSON token differs from its source",
+                )
+            })?;
+        Ok::<_, minidora_domain::Error>(format!(
+            "依頼JSONの{label} byte[{start}..{end}) sha256={} 原文={:?}",
+            digest(token.as_bytes()),
+            preview(token),
+        ))
+    };
+    let lines = vec![
+        "前回の置換箇所の特定を、保存済みの対象本文と依頼JSONから再確認しました。".into(),
+        "指定された文字列と完全に一致する箇所は1件で、保護範囲との重なりはありません。".into(),
+        format!("対象本文の成果物 SHA-256: {}", report.base_artifact),
+        format!("対象本文 SHA-256: {}", report.base_output_sha256),
+        format!("依頼JSON SHA-256: {}", report.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!(
+            "対象本文 byte[{}..{}) sha256={} 原文={:?}",
+            location.start,
+            location.end,
+            digest(location.text.as_bytes()),
+            preview(&location.text),
+        ),
+        json_token(
+            "検索語",
+            location.search_json_start,
+            location.search_json_end,
+            &location.text,
+        )?,
+        json_token(
+            "置換語",
+            location.replacement_json_start,
+            location.replacement_json_end,
+            &patch.replacement,
+        )?,
+        format!(
+            "置換案: {:?} → {:?}",
+            preview(&patch.expected),
+            preview(&patch.replacement)
+        ),
+        "適用するには、別途 `text-edit:` で置換案を指定します。そのときに適用条件を検査します。"
+            .into(),
+    ];
+    if lines.join("\n").len() > budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the text location explanation exceeds the request evidence budget",
+        ));
+    }
+    Ok(Some(PriorDocumentExplanation {
+        input_node: "previous-text-location-input",
+        report_node: "previous-text-location-report",
+        bundle_ref,
+        report_ref,
+        lines,
+    }))
 }
 
 fn previous_json_value_explanation(
@@ -2406,6 +2564,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
             | crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
             | crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION
+            | crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [

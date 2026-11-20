@@ -13235,20 +13235,39 @@ fn assert_table_explanation(
     artifact: &Value,
     node_prefix: &str,
 ) -> Value {
+    let report_ref = minidora_domain::digest(&minidora_domain::canonical(artifact).unwrap());
+    assert_eq!(first["dependencies"], serde_json::json!([report_ref]));
+    assert_document_explanation(
+        directory,
+        first,
+        artifact,
+        node_prefix,
+        "COMPUTED",
+        "元資料",
+    )
+}
+
+fn assert_document_explanation(
+    directory: &Path,
+    first: &Value,
+    artifact: &Value,
+    node_prefix: &str,
+    guarantee: &str,
+    source_label: &str,
+) -> Value {
     let original = inspect_normal_case(directory, "owner");
     assert_eq!(original["result"], *first);
     let input_bytes = minidora_domain::canonical(&original["bundle"]).unwrap();
     let input_ref = minidora_domain::digest(&input_bytes);
     let report_bytes = minidora_domain::canonical(artifact).unwrap();
     let report_ref = minidora_domain::digest(&report_bytes);
-    assert_eq!(first["dependencies"], serde_json::json!([report_ref]));
     let explanation = record(&execute(
         directory,
         "owner",
         &["--input", "explain", "詳しく説明して"],
     ));
     assert_eq!(explanation["lifecycle"], "COMMIT");
-    assert_eq!(explanation["guarantee"], "COMPUTED");
+    assert_eq!(explanation["guarantee"], guarantee);
     assert_ne!(explanation["text"], first["text"]);
     assert_eq!(explanation["content_plan"]["text"], explanation["text"]);
     assert_eq!(explanation["render"]["status"], "RENDERED");
@@ -13256,7 +13275,7 @@ fn assert_table_explanation(
     let text = explanation["text"].as_str().unwrap();
     for expected in [
         format!(
-            "元資料 SHA-256: {}",
+            "{source_label} SHA-256: {}",
             artifact["source_sha256"].as_str().unwrap()
         ),
         format!("封印済みInputBundle SHA-256: {input_ref}"),
@@ -16182,6 +16201,156 @@ fn text_location_route_proposes_one_unicode_patch_and_requires_explicit_apply() 
     let edited = assert_text_document_artifact(&scratch.0, &applied, &apply);
     assert_eq!(edited["changes"][0]["old_start"], "猫 ".len());
     assert_eq!(edited["changes"][0]["expected"], "Draft");
+}
+
+#[test]
+fn text_location_explanation_preserves_escaped_request_tokens_before_explicit_apply() {
+    let scratch = Scratch::new();
+    let original = "前🙂 猫 Draft を確認";
+    let search = "猫 Draft";
+    let replacement = "犬 Final";
+    let imported_request = format!(
+        "text-import:\n{}",
+        serde_json::json!({"text":original,"protected":[],"max_chars":64})
+    );
+    let imported = record(&execute(&scratch.0, "owner", &[&imported_request]));
+    let base = assert_text_document_artifact(&scratch.0, &imported, &imported_request);
+    assert_eq!(base["text"], original);
+    let base_ref = imported["dependencies"][0].as_str().unwrap();
+    let raw_search = r#""\u732b Draft""#;
+    let raw_replacement = r#""\u72ac Final""#;
+    let locate = text_locate_request(
+        "文章の置換箇所を特定して:",
+        base_ref,
+        original,
+        search,
+        replacement,
+    )
+    .replacen(&serde_json::to_string(search).unwrap(), raw_search, 1)
+    .replacen(
+        &serde_json::to_string(replacement).unwrap(),
+        raw_replacement,
+        1,
+    );
+    let body = locate.split_once('\n').unwrap().1;
+    assert_eq!(body.matches(raw_search).count(), 1);
+    assert_eq!(body.matches(raw_replacement).count(), 1);
+    let search_start = body.find(raw_search).unwrap();
+    let replacement_start = body.find(raw_replacement).unwrap();
+    let start = "前🙂 ".len();
+    let end = start + search.len();
+    assert_eq!(&original[start..end], search);
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "locate-escaped", &locate],
+    ));
+    assert_eq!(first["lifecycle"], "COMMIT");
+    assert_eq!(first["guarantee"], "USER_PREMISE");
+    assert_eq!(first["receipts"], serde_json::json!([]));
+    assert_eq!(first["content_plan"]["text"], first["text"]);
+    assert_eq!(first["render"]["status"], "RENDERED");
+    let report: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+    let report_bytes = minidora_domain::canonical(&report).unwrap();
+    let report_ref = minidora_domain::digest(&report_bytes);
+    assert_eq!(first["text"].as_str().unwrap().as_bytes(), report_bytes);
+    assert_eq!(first["render"]["actual_sha256"], report_ref);
+    assert_eq!(
+        first["dependencies"],
+        serde_json::json!([base_ref, report_ref])
+    );
+    assert_eq!(report["operation"], "TEXT_EDIT_LOCATE_UNIQUE_LITERAL_V1");
+    assert_eq!(report["source_document"], body);
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(body.as_bytes())
+    );
+    assert_eq!(report["base_artifact"], base_ref);
+    assert_eq!(
+        report["base_output_sha256"],
+        minidora_domain::digest(original.as_bytes())
+    );
+    assert_eq!(report["consumed_artifacts"], serde_json::json!([base_ref]));
+    assert_eq!(
+        report["location"],
+        serde_json::json!({
+            "artifact_sha256":base_ref,"start":start,"end":end,"text":search,
+            "search_json_start":search_start,"search_json_end":search_start+raw_search.len(),
+            "replacement_json_start":replacement_start,"replacement_json_end":replacement_start+raw_replacement.len()
+        })
+    );
+    let proposal = &report["proposed_edit"];
+    assert_eq!(proposal["base_artifact"], base_ref);
+    assert_eq!(
+        proposal["expected_text_sha256"],
+        minidora_domain::digest(original.as_bytes())
+    );
+    assert_eq!(
+        proposal["edits"],
+        serde_json::json!([{
+            "id":"located-change","start":start,"end":end,"expected":search,
+            "replacement":replacement,"reason":"explicitly requested literal replacement"
+        }])
+    );
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], locate);
+    assert_eq!(saved["bundle"]["meaning"]["intent"]["document"], body);
+    let explained = assert_document_explanation(
+        &scratch.0,
+        &first,
+        &report,
+        "previous-text-location",
+        "USER_PREMISE",
+        "依頼JSON",
+    );
+    let text = explained["text"].as_str().unwrap();
+    for expected in [
+        "前回の置換箇所の特定".to_string(),
+        format!("対象本文の成果物 SHA-256: {base_ref}"),
+        format!(
+            "対象本文 SHA-256: {}",
+            minidora_domain::digest(original.as_bytes())
+        ),
+        format!("置換案: {search:?} → {replacement:?}"),
+        "適用するには、別途".to_string(),
+    ] {
+        assert!(text.contains(&expected), "missing {expected:?} in {text}");
+    }
+    for (label, at, raw) in [
+        ("対象本文", start, search),
+        ("依頼JSONの検索語", search_start, raw_search),
+        ("依頼JSONの置換語", replacement_start, raw_replacement),
+    ] {
+        let expected = format!(
+            "{label} byte[{at}..{}) sha256={} 原文={raw:?}",
+            at + raw.len(),
+            minidora_domain::digest(raw.as_bytes())
+        );
+        assert!(
+            text.lines().any(|line| line == expected),
+            "missing {expected:?} in {text}"
+        );
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(
+        sequence_artifact(&store, &Value::String(base_ref.into())),
+        base
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    let apply = format!("text-edit:\n{proposal}");
+    let applied = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "apply-after-explanation", &apply],
+    ));
+    assert_eq!(applied["text"], "前🙂 犬 Final を確認");
+    let edited = assert_text_document_artifact(&scratch.0, &applied, &apply);
+    assert_eq!(edited["changes"][0]["old_start"], start);
+    assert_eq!(edited["changes"][0]["old_end"], end);
+    assert_eq!(edited["changes"][0]["expected"], search);
+    assert_eq!(edited["changes"][0]["replacement"], replacement);
+    assert_eq!(applied["receipts"], serde_json::json!([]));
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
 }
 
 #[test]

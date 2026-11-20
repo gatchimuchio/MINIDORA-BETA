@@ -4173,8 +4173,9 @@ impl Engine {
                             actor,
                             &request.case_id,
                             prior,
-                            request.budget.max_evidence_bytes,
+                            &request.budget,
                             &bundle.meaning.parser_version,
+                            started,
                         ) {
                             Ok(value) => value,
                             Err(error) => {

@@ -4462,8 +4462,9 @@ fn inspect(
                     actor,
                     case,
                     previous,
-                    goal.budget.max_evidence_bytes,
+                    &goal.budget,
                     &bundle.meaning.parser_version,
+                    Instant::now(),
                 )
             })
             .transpose()?
