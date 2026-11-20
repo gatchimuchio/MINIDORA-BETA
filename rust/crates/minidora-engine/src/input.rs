@@ -57,6 +57,9 @@ pub(crate) const SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const SOURCE_QUESTION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v110-source-question-explanation";
 
+pub(crate) const SEARCH_LISTING_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v111-search-listing-explanation";
+
 pub(crate) fn is_legacy_text_summary_explanation_version(version: &str) -> bool {
     matches!(
         version,
@@ -250,7 +253,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         {
             PARSER_VERSION
         }
-        Intent::ExplainPrevious => SOURCE_QUESTION_EXPLANATION_PARSER_VERSION,
+        Intent::ExplainPrevious => SEARCH_LISTING_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

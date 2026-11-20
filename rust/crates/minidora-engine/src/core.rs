@@ -5907,6 +5907,24 @@ impl Engine {
                         "説明対象となる実際の採用済み成果がありません。",
                     );
                 };
+                let listing_explanation = match search::previous_search_listing_explanation(
+                    &self.store,
+                    &bundle,
+                    prior,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SEARCH_LISTING_EXPLANATION_CONTEXT_INVALID",
+                            &error.to_string(),
+                        );
+                    }
+                };
                 let summary_explanation = match crate::text_summary::previous_summary_explanation(
                     &self.store,
                     &bundle,
@@ -6676,6 +6694,10 @@ impl Engine {
                             return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                         }
                     }
+                } else if let Some(explanation) = listing_explanation {
+                    units.extend(explanation.units);
+                    result.dependencies.extend(explanation.dependencies);
+                    result.guarantee = Guarantee::SourceReport;
                 } else if let Some(explanation) = summary_explanation {
                     units.extend(explanation.units);
                     result.dependencies.extend(explanation.dependencies);

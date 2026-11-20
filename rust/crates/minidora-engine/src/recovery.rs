@@ -2581,98 +2581,6 @@ fn verify_result_memory_provenance(
     Ok(())
 }
 
-fn verify_search_listing(
-    store: &Store,
-    actor: &str,
-    case: &str,
-    result: &ResultRecord,
-    plan: &ContentPlan,
-    goal: &GoalContract,
-) -> Result<Option<String>> {
-    let Some(search_plan) = search::search_plan(&goal.intent)? else {
-        return Ok(None);
-    };
-    let invalid = || {
-        failure(
-            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "the retained searches or adopted report differ from the original search order",
-        )
-    };
-    let count = result.dependencies.len();
-    if count == 0
-        || count > 1 + usize::from(search_plan.fallback.is_some())
-        || count != result.evidence.len()
-        || result.calculation.is_some()
-        || result.guarantee != Guarantee::SourceReport
-    {
-        return Err(invalid());
-    }
-    let mut failed = None;
-    let mut raw_bytes = 0usize;
-    let mut starts = 0usize;
-    for (index, (reference, packet)) in result.dependencies.iter().zip(&result.evidence).enumerate()
-    {
-        let bytes = store.get_bytes(actor, case, reference)?;
-        let observation: search::SearchObservation = serde_json::from_slice(&bytes)?;
-        let expected_provider = if index == 0 {
-            Some(search_plan.primary)
-        } else {
-            search_plan.fallback
-        };
-        if expected_provider != Some(observation.provider)
-            || search_plan.query != observation.query
-            || observation.listing != *packet
-            || canonical(&observation)? != bytes
-        {
-            return Err(invalid());
-        }
-        raw_bytes = raw_bytes
-            .checked_add(packet.raw_body.len())
-            .ok_or_else(invalid)?;
-        starts = starts
-            .checked_add(packet.redirect_chain.len())
-            .ok_or_else(invalid)?;
-        if raw_bytes > goal.budget.max_evidence_bytes
-            || (search_plan.fallback.is_some()
-                && (packet.redirect_chain.len() > crate::ports::MAX_HTTP_STARTS_PER_SOURCE
-                    || starts + 3 + usize::from(goal.output_path.is_some())
-                        > goal.budget.max_actions as usize))
-        {
-            return Err(invalid());
-        }
-        if index + 1 < count {
-            if !search::allows_fallback(&observation) {
-                return Err(invalid());
-            }
-            search::validate_failed_observation(&observation, Some(&goal.permissions))?;
-            failed = Some(observation);
-            continue;
-        }
-        search::validate_stored_observation(&observation, Some(&goal.permissions))?;
-        if plan.required_units
-            != search::selected_listing_lines(
-                &observation,
-                failed.as_ref(),
-                search_plan.fallback.is_some(),
-            )
-        {
-            return Err(invalid());
-        }
-        let evidence = if search_plan.fallback.is_some() {
-            verified_artifact(
-                store,
-                actor,
-                case,
-                &(search::SEARCH_SELECTION_KIND, &result.dependencies),
-            )?
-        } else {
-            reference.clone()
-        };
-        return Ok(Some(evidence));
-    }
-    Err(invalid())
-}
-
 fn verify_search_candidate_context(
     store: &Store,
     actor: &str,
@@ -3716,7 +3624,7 @@ fn verify_source_summary_context(
 
 const TEXT_SUMMARY_CANDIDATE_MISMATCH: &str = "RECOVERY_TEXT_SUMMARY_CANDIDATE_MISMATCH";
 
-fn verify_registered_summary_input(store: &Store, bundle: &InputBundle, code: &str) -> Result<()> {
+fn verify_registered_input(store: &Store, bundle: &InputBundle, code: &str) -> Result<()> {
     let request = &bundle.request;
     let registered = store.get_input_bundle(
         &request.actor_id,
@@ -3727,7 +3635,7 @@ fn verify_registered_summary_input(store: &Store, bundle: &InputBundle, code: &s
     if registered.as_ref().map(|(_, retained)| retained) != Some(bundle) {
         return Err(failure(
             code,
-            "the interrupted summary request does not match its registered sealed input",
+            "the interrupted request does not match its registered sealed input",
         ));
     }
     Ok(())
@@ -3823,7 +3731,7 @@ fn verify_legacy_text_summary_explanation(
     ) {
         return Ok(false);
     }
-    verify_registered_summary_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
+    verify_registered_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
     let Some(prior_plan) = &previous.content_plan else {
         return Err(failure(
             TEXT_SUMMARY_CANDIDATE_MISMATCH,
@@ -4148,7 +4056,7 @@ fn inspect(
             });
     let direct_summary_candidate = matches!(goal.intent, Intent::TextSummaryCandidates { .. });
     if direct_summary_candidate {
-        verify_registered_summary_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
+        verify_registered_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
         verify_text_summary_candidate(store, bundle, result, plan)?;
     }
     let legacy_summary_explanation =
@@ -4176,7 +4084,7 @@ fn inspect(
     };
     if let Some(explanation) = &retained_summary_explanation {
         const CODE: &str = "RECOVERY_RESULT_SUMMARY_EXPLANATION_MISMATCH";
-        verify_registered_summary_input(store, bundle, CODE)?;
+        verify_registered_input(store, bundle, CODE)?;
         if result.dependencies != explanation.dependencies
             || plan.required_units != explanation.units
             || result.text != explanation.units.join("\n")
@@ -4187,6 +4095,32 @@ fn inspect(
                 CODE,
                 "the adopted explanation differs from the sealed result-summary context",
             ));
+        }
+    }
+    if matches!(goal.intent, Intent::ExplainPrevious) && result.guarantee == Guarantee::SourceReport
+    {
+        const CODE: &str = "RECOVERY_SEARCH_LISTING_EXPLANATION_MISMATCH";
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(|| failure(CODE, "the sealed prior source result is not retained"))?;
+        if let Some(explanation) =
+            search::previous_search_listing_explanation(store, bundle, previous)?
+        {
+            verify_registered_input(store, bundle, CODE)?;
+            if result.dependencies != explanation.dependencies
+                || plan.required_units != explanation.units
+                || result.text != explanation.units.join("\n")
+                || result.calculation.is_some()
+                || !result.evidence.is_empty()
+            {
+                return Err(failure(
+                    CODE,
+                    "the adopted listing explanation differs from the original search context",
+                ));
+            }
         }
     }
     let mut unsigned_plan = plan.clone();
@@ -5019,7 +4953,8 @@ fn inspect(
     }
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
-    let search_listing = verify_search_listing(store, actor, case, result, plan, &goal)?;
+    let search_listing = search::verify_retained_search_listing(store, bundle, result, plan)?
+        .map(|proof| proof.proof_ref);
     // Older sealed search goals used a compute-only graph. They still
     // require the original listing to reproduce the adopted content.
     let search_requires_listing = matches!(goal.intent, Intent::SearchWithFallback { .. })

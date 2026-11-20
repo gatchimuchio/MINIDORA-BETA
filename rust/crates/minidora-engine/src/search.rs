@@ -4,10 +4,10 @@
 //! snippets/abstracts are not promoted to article text. This module executes a
 //! Core-selected provider; it neither chooses goals nor grants read authority.
 
-use crate::ports;
+use crate::{ports, store::Store};
 use minidora_domain::{
-    CaseRevision, EvidencePacket, Intent, Lifecycle, Permissions, ResourceBudget, Result,
-    ResultRecord, canonical, digest, failure, identity,
+    CaseRevision, ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle,
+    Permissions, ResourceBudget, Result, ResultRecord, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -622,6 +622,254 @@ pub(crate) fn validate_stored_observation(
         ));
     }
     Ok(())
+}
+
+pub(crate) struct RetainedSearchListing {
+    pub(crate) proof_ref: String,
+    selected: SearchObservation,
+    rejected_primary: Option<SearchObservation>,
+}
+
+/// Replay the original list selection against its sealed providers, permissions and budget.
+pub(crate) fn verify_retained_search_listing(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<RetainedSearchListing>> {
+    let Some(search_plan) = search_plan(&bundle.meaning.intent)? else {
+        return Ok(None);
+    };
+    let invalid = || {
+        failure(
+            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+            "the retained searches or adopted report differ from the original search order",
+        )
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let count = result.dependencies.len();
+    if count == 0
+        || count > 1 + usize::from(search_plan.fallback.is_some())
+        || count != result.evidence.len()
+        || result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || plan.guarantee != result.guarantee
+        || plan.locale != request.locale
+        || result.text != plan.text
+        || result.text != plan.required_units.join("\n")
+        || result.calculation.is_some()
+        || result.guarantee != Guarantee::SourceReport
+    {
+        return Err(invalid());
+    }
+    let mut failed = None;
+    let mut raw_bytes = 0usize;
+    let mut starts = 0usize;
+    for (index, (reference, packet)) in result.dependencies.iter().zip(&result.evidence).enumerate()
+    {
+        let bytes = store.get_bytes(actor, case, reference)?;
+        let observation: SearchObservation = serde_json::from_slice(&bytes)?;
+        let expected_provider = if index == 0 {
+            Some(search_plan.primary)
+        } else {
+            search_plan.fallback
+        };
+        if expected_provider != Some(observation.provider)
+            || search_plan.query != observation.query
+            || observation.listing != *packet
+            || canonical(&observation)? != bytes
+        {
+            return Err(invalid());
+        }
+        raw_bytes = raw_bytes
+            .checked_add(packet.raw_body.len())
+            .ok_or_else(invalid)?;
+        starts = starts
+            .checked_add(packet.redirect_chain.len())
+            .ok_or_else(invalid)?;
+        if raw_bytes > request.budget.max_evidence_bytes
+            || (search_plan.fallback.is_some()
+                && (packet.redirect_chain.len() > crate::ports::MAX_HTTP_STARTS_PER_SOURCE
+                    || starts + 3 + usize::from(request.output_path.is_some())
+                        > request.budget.max_actions as usize))
+        {
+            return Err(invalid());
+        }
+        if index + 1 < count {
+            if !allows_fallback(&observation) {
+                return Err(invalid());
+            }
+            validate_failed_observation(&observation, Some(&request.permissions))?;
+            failed = Some(observation);
+            continue;
+        }
+        validate_stored_observation(&observation, Some(&request.permissions))?;
+        if plan.required_units
+            != selected_listing_lines(
+                &observation,
+                failed.as_ref(),
+                search_plan.fallback.is_some(),
+            )
+        {
+            return Err(invalid());
+        }
+        let evidence = if search_plan.fallback.is_some() {
+            let selection = canonical(&(SEARCH_SELECTION_KIND, &result.dependencies))?;
+            let reference = digest(&selection);
+            if store.get_bytes(actor, case, &reference)? != selection {
+                return Err(invalid());
+            }
+            reference
+        } else {
+            reference.clone()
+        };
+        return Ok(Some(RetainedSearchListing {
+            proof_ref: evidence,
+            selected: observation,
+            rejected_primary: failed,
+        }));
+    }
+    Err(invalid())
+}
+
+pub(crate) struct SearchListingExplanation {
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+}
+
+pub(crate) fn previous_search_listing_explanation(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+) -> Result<Option<SearchListingExplanation>> {
+    if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        || previous.guarantee != Guarantee::SourceReport
+    {
+        return Ok(None);
+    }
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let invalid = || {
+        failure(
+            "SEARCH_LISTING_EXPLANATION_CONTEXT_INVALID",
+            "the explanation does not match the retained original search listing",
+        )
+    };
+    let Some((_, original)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        if previous
+            .evidence
+            .iter()
+            .any(|packet| packet.packet_kind == "SEARCH_LIST")
+        {
+            return Err(invalid());
+        }
+        return Ok(None);
+    };
+    if !matches!(
+        original.meaning.intent,
+        Intent::Search { .. } | Intent::SearchWithFallback { .. }
+    ) {
+        return Ok(None);
+    }
+    if previous.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        || bundle.context_sha256 != identity(&Some(previous))?
+    {
+        return Err(invalid());
+    }
+    let plan = previous.content_plan.as_ref().ok_or_else(invalid)?;
+    let proof =
+        verify_retained_search_listing(store, &original, previous, plan)?.ok_or_else(invalid)?;
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        None,
+        "SEARCH_LISTING_EXPLANATION_CONTEXT_INVALID",
+        "search listing",
+    )?;
+
+    let mut dependencies = vec![previous.id.clone()];
+    if bundle.meaning.parser_version != crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION {
+        return Ok(Some(SearchListingExplanation {
+            units: vec![previous.text.clone()],
+            dependencies,
+        }));
+    }
+
+    let selected = proof.selected;
+    let listing = &selected.listing;
+    let mut units = vec![
+        format!("前回の検索一覧の根拠（検索結果ID: {}）。", previous.id),
+        format!("検索語: {:?}", selected.query),
+    ];
+    if let Some(failed) = proof.rejected_primary {
+        units.push(format!(
+            "最初の検索先: {} / HTTP {} / {} / 一覧packet ID: {}",
+            failed.provider.provider_id(),
+            failed.listing.http_status,
+            failed
+                .listing
+                .failure
+                .as_deref()
+                .unwrap_or("SEARCH_LIST_FETCH_FAILED"),
+            failed.listing.id
+        ));
+        units.push("元の依頼で指定された代替検索先の一覧を採用しました。".into());
+    } else {
+        units.push("元の依頼で最初に指定された検索先の一覧を採用しました。".into());
+    }
+    units.extend([
+        format!(
+            "採用した検索先: {} / 観測モード: {} / 観測時刻（Unix ms）: {}",
+            selected.provider.provider_id(),
+            listing.mode,
+            listing.observed_at_unix_ms
+        ),
+        format!(
+            "一覧取得URL: {} / 最終URL: {}",
+            listing.request_uri, listing.final_uri
+        ),
+        format!(
+            "一覧packet ID: {} / 原応答SHA-256: {} / 読み取り方式: {}",
+            listing.id, listing.raw_sha256, listing.parser_version
+        ),
+        format!("選択記録SHA-256: {}", proof.proof_ref),
+    ]);
+    if selected.candidates.is_empty() {
+        units.push("検索候補がありません。".into());
+    }
+    for candidate in selected.candidates {
+        units.push(format!(
+            "掲載順位 {} / 題名: {:?} / URL: {} / 候補ID: {}",
+            candidate.rank, candidate.title, candidate.uri, candidate.id
+        ));
+    }
+    for rejected in selected.rejected {
+        units.push(format!(
+            "掲載順位 {} は除外 / 理由: {}",
+            rejected.rank, rejected.reason
+        ));
+    }
+    units.push("掲載順位は検索先の元の位置です。候補本文は未取得です。一覧からは本文の内容や事実性、検索の網羅性を確認できません。".into());
+    if units.join("\n").len() > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the search listing explanation exceeds its evidence budget",
+        ));
+    }
+    dependencies.extend(previous.dependencies.iter().cloned());
+    Ok(Some(SearchListingExplanation {
+        units,
+        dependencies,
+    }))
 }
 
 pub(crate) fn previous_observation(

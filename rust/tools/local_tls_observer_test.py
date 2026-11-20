@@ -826,8 +826,84 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
     assert running["result"]["evidence"][0]["id"] in cancelled_deferred["reason"]
     assert cancelled_deferred["evidence"] == []
     assert not contacts_since(seen) and len(fixture.connects) == starts and not fixture.errors
+
+    # Explain an independent retained listing, leaving the candidate-body case
+    # above on its original continuation path. Rank 1 is rejected metadata, so
+    # the accepted candidate must retain the provider's original rank 2.
+    explanation_case = "explicit-fallback-explanation"
+    explanation_query = "alternate explanation"
+    explanation_request = f"検索 wikipedia -> crossref: {explanation_query}"
+    explanation_primary = wiki + "q=alternate+explanation&limit=5"
+    explanation_alternative = crossref + "query=alternate+explanation&rows=5"
+    unexplored_url = f"https://{fallback}/not-fetched-explanation"
+    fixture.failure_responses[explanation_primary] = (
+        "429 Too Many Requests", b"explanation primary rate limited", "Retry-After: 120\r\n",
+    )
+    fixture.responses[explanation_alternative] = (
+        json.dumps({"message": {"items": [
+            {"title": ["Rejected insecure fixture"],
+             "URL": f"http://{fallback}/must-not-be-read", "DOI": "10.5555/rejected"},
+            {"title": ["Explained alternative fixture"],
+             "URL": unexplored_url, "DOI": "10.5555/explained"},
+        ]}}).encode(),
+        "application/json",
+    )
+    seen, starts = len(fixture.events), len(fixture.connects)
+    prior_listing = cli("run", "--input", "lookup", *grants, "--max-actions", "5",
+                        explanation_request, case_id=explanation_case)
+    rejected_primary, accepted_listing = prior_listing["evidence"]
+    assert rejected_primary["http_status"] == 429
+    assert rejected_primary["failure"] == "HTTP_RATE_LIMITED"
+    assert accepted_listing["packet_kind"] == "SEARCH_LIST" and accepted_listing["failure"] is None
+    assert all(packet["packet_kind"] == "SEARCH_LIST" and packet["extracted_text"] is None
+               for packet in prior_listing["evidence"])
+    rejected_ref, accepted_ref = prior_listing["dependencies"]
+    assert load(rejected_ref)["listing"] == rejected_primary
+    observation = load(accepted_ref)
+    assert observation["query"] == explanation_query
+    assert observation["listing"] == accepted_listing
+    assert [candidate["rank"] for candidate in observation["candidates"]] == [2]
+    assert [candidate["rank"] for candidate in observation["rejected"]] == [1]
+    assert contacts_since(seen) == [
+        (primary, explanation_primary), (fallback, explanation_alternative),
+    ]
+    assert len(fixture.connects) == starts + 2
+
+    explain_seen, explain_starts = len(fixture.events), len(fixture.connects)
+    explained = cli("run", "--input", "explain-listing", "詳しく説明して",
+                    case_id=explanation_case)
+    assert explained["guarantee"] == "SOURCE_REPORT" and explained["receipts"] == []
+    assert explained["dependencies"] == [prior_listing["id"], *prior_listing["dependencies"]]
+    assert explained["content_plan"]["text"] == explained["text"]
+    assert explained["render"]["status"] == "RENDERED"
+    assert hashlib.sha256(explained["text"].encode()).hexdigest() == explained["render"]["actual_sha256"]
+    for expected in (
+        "前回の検索一覧の根拠", "検索語: ", explanation_query,
+        "最初の検索先: wikipedia-ja-rest-search-v1", "HTTP 429", "HTTP_RATE_LIMITED",
+        "採用した検索先: crossref-works-search-v1", "掲載順位 2", "掲載順位 1 は除外",
+        "Explained alternative fixture", unexplored_url, "候補本文は未取得です",
+        prior_listing["id"], rejected_primary["id"], accepted_listing["id"],
+        accepted_listing["raw_sha256"],
+    ):
+        assert expected in explained["text"], (expected, explained["text"])
+    assert all(packet["packet_kind"] != "FETCHED_BODY" for packet in explained["evidence"])
+    inspected = cli("inspect", case_id=explanation_case)
+    assert inspected["result"] == explained
+    assert inspected["bundle"]["request"]["text"] == "詳しく説明して"
+    assert inspected["bundle"]["meaning"]["parser_version"] == "declarative-ja-en-v111-search-listing-explanation"
+    assert inspected["bundle"]["meaning"]["context_result_ref"] == prior_listing["id"]
+    listing_replayed = cli("run", "--input", "lookup", *grants, "--max-actions", "5",
+                          explanation_request, case_id=explanation_case)
+    explained_replayed = cli("run", "--input", "explain-listing", "詳しく説明して",
+                             case_id=explanation_case)
+    assert listing_replayed == prior_listing and explained_replayed == explained
+    assert not contacts_since(explain_seen) and len(fixture.connects) == explain_starts
+    assert not fixture.errors, fixture.errors
     return {"cases": cases, "file": selected, "recovered": recovered, "body": body,
-            "deferred": blocked, "cancelled_deferred": cancelled_deferred}
+            "deferred": blocked, "cancelled_deferred": cancelled_deferred,
+            "listing_explanation": {"prior": prior_listing, "result": explained,
+                                    "replayed_exactly": explained_replayed == explained,
+                                    "new_http_requests": 0}}
 
 
 def check_interrupted_retrieval(cli, command_line, environment, fixture: Fixture, state_path: Path) -> dict:

@@ -1821,6 +1821,7 @@ fn previous_source_summary_explanation(
             version,
             crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
                 | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
+                | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
         )
     {
         return Ok(None);
@@ -2010,7 +2011,13 @@ fn previous_source_question_explanation(
         crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
             | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
     ) || crate::input::is_legacy_text_summary_explanation_version(version);
-    if !legacy && version != crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION {
+    if !legacy
+        && !matches!(
+            version,
+            crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
+                | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+        )
+    {
         return Ok(None);
     }
     let Some(proof) = verify_retained_source_question(
