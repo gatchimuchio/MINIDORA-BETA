@@ -795,6 +795,47 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
                "1件目の本文を取得して", case_id=case)
     assert body["evidence"][0] == listing and len(body["evidence"]) == 2
     assert bytes(body["evidence"][1]["raw_body"]) == selected_body
+    candidate = load(selected_ref)["candidates"][0]
+    body_packet = body["evidence"][1]
+    assert body_packet["packet_kind"] == "FETCHED_BODY" and body_packet["failure"] is None
+    assert body_packet["request_uri"] == candidate["uri"] == body_url
+    assert body_packet["final_uri"] == body_url
+    extracted_sha256 = hashlib.sha256(body_packet["extracted_text"].encode()).hexdigest()
+    body_explain_seen, body_explain_starts = len(fixture.events), len(fixture.connects)
+    body_explanation = cli("run", "--input", "explain-selected-body", "詳しく説明して", case_id=case)
+    assert body_explanation["guarantee"] == "SOURCE_REPORT"
+    assert body_explanation["evidence"] == [] and body_explanation["receipts"] == []
+    expected_dependencies = [body["id"], *body["dependencies"]]
+    for reference in (selected["id"], *selected["dependencies"], selection_ref):
+        if reference not in expected_dependencies:
+            expected_dependencies.append(reference)
+    assert body_explanation["dependencies"] == expected_dependencies
+    assert body_explanation["content_plan"]["text"] == body_explanation["text"]
+    assert body_explanation["render"]["status"] == "RENDERED"
+    assert hashlib.sha256(body_explanation["text"].encode()).hexdigest() == body_explanation["render"]["actual_sha256"]
+    for expected in (
+        "前回の検索候補本文の取得根拠", body["id"],
+        f"元の検索結果ID: {selected['id']}", "検索語: ", "alternate trial",
+        "採用した検索先: crossref-works-search-v1", f"掲載順位 {candidate['rank']}",
+        candidate["title"], f"候補ID: {candidate['id']}", f"候補URL: {candidate['uri']}",
+        f"本文要求URL: {body_packet['request_uri']}", f"本文最終URL: {body_packet['final_uri']}",
+        f"本文packet ID: {body_packet['id']}", f"一覧packet ID: {listing['id']}",
+        f"原本文SHA-256: {body_packet['raw_sha256']}", f"抽出本文SHA-256: {extracted_sha256}",
+        f"原文バイト数: {len(body_packet['raw_body'])}", f"選択記録SHA-256: {selection_ref}",
+        "最初の検索先: wikipedia-ja-rest-search-v1", "HTTP 429", "HTTP_RATE_LIMITED", failed["id"],
+        "一覧と本文は別々の取得記録です。本文の事実性は未検証です。",
+    ):
+        assert expected in body_explanation["text"], (expected, body_explanation["text"])
+    assert "候補本文は未取得です" not in body_explanation["text"]
+    body_explanation_state = cli("inspect", case_id=case)
+    assert body_explanation_state["result"] == body_explanation
+    assert body_explanation_state["bundle"]["meaning"]["parser_version"] == "declarative-ja-en-v112-search-candidate-body-explanation"
+    assert body_explanation_state["bundle"]["meaning"]["context_result_ref"] == body["id"]
+    assert body_explanation_state["bundle"]["request"]["text"] == "詳しく説明して"
+    body_explanation_replayed = cli("run", "--input", "explain-selected-body", "詳しく説明して",
+                                   case_id=case)
+    assert body_explanation_replayed == body_explanation
+    assert not contacts_since(body_explain_seen) and len(fixture.connects) == body_explain_starts
     blocked = cli("run", "--input", "during-retry-after", "--allow-read-host", primary,
                   "検索 wikipedia: alternate trial", case_id=case, expected_exit=2)
     assert "HTTP_RETRY_DEFERRED" in blocked["reason"] and failed["id"] in blocked["reason"]
@@ -890,7 +931,7 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
     inspected = cli("inspect", case_id=explanation_case)
     assert inspected["result"] == explained
     assert inspected["bundle"]["request"]["text"] == "詳しく説明して"
-    assert inspected["bundle"]["meaning"]["parser_version"] == "declarative-ja-en-v111-search-listing-explanation"
+    assert inspected["bundle"]["meaning"]["parser_version"] == "declarative-ja-en-v112-search-candidate-body-explanation"
     assert inspected["bundle"]["meaning"]["context_result_ref"] == prior_listing["id"]
     listing_replayed = cli("run", "--input", "lookup", *grants, "--max-actions", "5",
                           explanation_request, case_id=explanation_case)
@@ -900,6 +941,9 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
     assert not contacts_since(explain_seen) and len(fixture.connects) == explain_starts
     assert not fixture.errors, fixture.errors
     return {"cases": cases, "file": selected, "recovered": recovered, "body": body,
+            "body_explanation": {"result": body_explanation,
+                                 "replayed_exactly": body_explanation_replayed == body_explanation,
+                                 "new_http_requests": 0},
             "deferred": blocked, "cancelled_deferred": cancelled_deferred,
             "listing_explanation": {"prior": prior_listing, "result": explained,
                                     "replayed_exactly": explained_replayed == explained,

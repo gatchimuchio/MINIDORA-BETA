@@ -11,13 +11,14 @@ use minidora_domain::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use url::{Host, Url};
 
 const SEARCH_ROWS: usize = 5;
 const MAX_RETAINED_BODY_PACKETS: usize = crate::text_summary::MAX_QUESTION_SOURCE_PACKETS;
 pub(crate) const SEARCH_LISTING_NODE: &str = "search-listing";
 pub(crate) const SEARCH_SELECTION_KIND: &str = "search-listing-selection-v1";
+pub(crate) const SEARCH_CANDIDATE_LISTING_NODE: &str = "search-candidate-listing";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -626,6 +627,7 @@ pub(crate) fn validate_stored_observation(
 
 pub(crate) struct RetainedSearchListing {
     pub(crate) proof_ref: String,
+    selected_ref: String,
     selected: SearchObservation,
     rejected_primary: Option<SearchObservation>,
 }
@@ -728,6 +730,7 @@ pub(crate) fn verify_retained_search_listing(
         };
         return Ok(Some(RetainedSearchListing {
             proof_ref: evidence,
+            selected_ref: reference.clone(),
             selected: observation,
             rejected_primary: failed,
         }));
@@ -735,16 +738,17 @@ pub(crate) fn verify_retained_search_listing(
     Err(invalid())
 }
 
-pub(crate) struct SearchListingExplanation {
+pub(crate) struct SearchExplanation {
     pub(crate) units: Vec<String>,
     pub(crate) dependencies: Vec<String>,
 }
 
-pub(crate) fn previous_search_listing_explanation(
+pub(crate) fn previous_search_explanation(
     store: &Store,
     bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
     previous: &ResultRecord,
-) -> Result<Option<SearchListingExplanation>> {
+) -> Result<Option<SearchExplanation>> {
     if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
         || previous.guarantee != Guarantee::SourceReport
     {
@@ -766,23 +770,31 @@ pub(crate) fn previous_search_listing_explanation(
             .evidence
             .iter()
             .any(|packet| packet.packet_kind == "SEARCH_LIST")
+            || previous.dependencies.first().is_some_and(|reference| {
+                prior_results.contains_key(reference)
+                    && previous
+                        .evidence
+                        .iter()
+                        .any(|packet| packet.packet_kind == "FETCHED_BODY")
+            })
         {
             return Err(invalid());
         }
         return Ok(None);
     };
-    if !matches!(
-        original.meaning.intent,
-        Intent::Search { .. } | Intent::SearchWithFallback { .. }
-    ) {
-        return Ok(None);
+    match original.meaning.intent {
+        Intent::Search { .. } | Intent::SearchWithFallback { .. } => {}
+        Intent::FetchPreviousSearchCandidate { rank } => {
+            return explain_candidate_body(store, bundle, prior_results, previous, &original, rank)
+                .map(Some);
+        }
+        _ => return Ok(None),
     }
-    if previous.lifecycle != Lifecycle::Commit
-        || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
-        || bundle.context_sha256 != identity(&Some(previous))?
-    {
-        return Err(invalid());
-    }
+    validate_search_predecessor(
+        bundle,
+        previous,
+        "SEARCH_LISTING_EXPLANATION_CONTEXT_INVALID",
+    )?;
     let plan = previous.content_plan.as_ref().ok_or_else(invalid)?;
     let proof =
         verify_retained_search_listing(store, &original, previous, plan)?.ok_or_else(invalid)?;
@@ -797,8 +809,12 @@ pub(crate) fn previous_search_listing_explanation(
     )?;
 
     let mut dependencies = vec![previous.id.clone()];
-    if bundle.meaning.parser_version != crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION {
-        return Ok(Some(SearchListingExplanation {
+    if !matches!(
+        bundle.meaning.parser_version.as_str(),
+        crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+            | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
+    ) {
+        return Ok(Some(SearchExplanation {
             units: vec![previous.text.clone()],
             dependencies,
         }));
@@ -866,10 +882,364 @@ pub(crate) fn previous_search_listing_explanation(
         ));
     }
     dependencies.extend(previous.dependencies.iter().cloned());
-    Ok(Some(SearchListingExplanation {
+    Ok(Some(SearchExplanation {
         units,
         dependencies,
     }))
+}
+
+fn validate_search_predecessor(
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    code: &str,
+) -> Result<()> {
+    if previous.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        || bundle.context_sha256 != identity(&Some(previous))?
+    {
+        return Err(failure(
+            code,
+            "the retained predecessor differs from the original input",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) struct RetainedSearchCandidateBody {
+    search_ref: String,
+    retains_listing: bool,
+    pub(crate) body_id: String,
+    pub(crate) body_ref: String,
+    candidate: SearchCandidate,
+    packet: EvidencePacket,
+}
+
+impl RetainedSearchCandidateBody {
+    pub(crate) fn listing_ref(&self) -> Option<&String> {
+        self.retains_listing.then_some(&self.search_ref)
+    }
+}
+
+/// Verify the selected body by its dependency, even if an equal packet is
+/// already among the carried bodies and was not appended to the evidence list.
+pub(crate) fn verify_retained_candidate_body(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    retains_listing: bool,
+) -> Result<RetainedSearchCandidateBody> {
+    const CODE: &str = "RECOVERY_SEARCH_CONTEXT_MISMATCH";
+    let invalid = || {
+        failure(
+            CODE,
+            "the selected candidate, body or displayed source report differs",
+        )
+    };
+    let Intent::FetchPreviousSearchCandidate { rank } = bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    validate_search_predecessor(bundle, previous, CODE)?;
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let (search_ref, observation) =
+        previous_observation(store, actor, case, previous)?.ok_or_else(invalid)?;
+    let candidate = observation
+        .candidates
+        .iter()
+        .find(|candidate| candidate.rank == rank)
+        .ok_or_else(invalid)?;
+    let body_ref = result.dependencies.last().ok_or_else(invalid)?;
+    let packet_bytes = store.get_bytes(actor, case, body_ref)?;
+    let packet: EvidencePacket = serde_json::from_slice(&packet_bytes)?;
+    ports::validate_successful_packet(&packet, &request.permissions)?;
+    if packet.request_uri != candidate_body_uri(candidate)?
+        || packet.raw_body.len() > request.budget.max_evidence_bytes
+        || canonical(&packet)? != packet_bytes
+    {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "the fetched packet differs from the selected candidate or original budget",
+        ));
+    }
+
+    let mut expected_dependencies = vec![previous.id.clone(), search_ref.clone()];
+    let mut expected_evidence = if retains_listing {
+        let carried = carry_forward_candidate_evidence(previous, &observation)?;
+        validate_next_candidate_body_capacity(&carried)?;
+        for prior in carried
+            .iter()
+            .filter(|packet| packet.packet_kind == "FETCHED_BODY")
+        {
+            let bytes = canonical(prior)?;
+            let reference = digest(&bytes);
+            if store.get_bytes(actor, case, &reference)? != bytes {
+                return Err(invalid());
+            }
+            expected_dependencies.push(reference);
+        }
+        carried
+    } else {
+        Vec::new()
+    };
+    expected_dependencies.push(body_ref.clone());
+    if !expected_evidence.contains(&packet) {
+        expected_evidence.push(packet.clone());
+    }
+    if result.evidence != expected_evidence {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "the retained listing or body packets differ from the original result",
+        ));
+    }
+    if result.dependencies != expected_dependencies
+        || result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.calculation.is_some()
+        || result.guarantee != Guarantee::SourceReport
+        || plan.guarantee != result.guarantee
+        || plan.locale != request.locale
+        || plan.required_units != candidate_body_lines(candidate, &packet)
+        || plan.text != result.text
+        || plan.required_units.join("\n") != result.text
+    {
+        return Err(invalid());
+    }
+    Ok(RetainedSearchCandidateBody {
+        search_ref,
+        retains_listing,
+        body_id: format!("search-candidate-body-{rank}"),
+        body_ref: body_ref.clone(),
+        candidate: candidate.clone(),
+        packet,
+    })
+}
+
+fn committed_search_result<'a>(
+    store: &Store,
+    request: &minidora_domain::RequestEnvelope,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    mut current: &'a ResultRecord,
+    selected_ref: &str,
+    code: &str,
+) -> Result<(&'a ResultRecord, RetainedSearchListing)> {
+    let invalid = || {
+        failure(
+            code,
+            "the selected observation cannot be traced to its original search",
+        )
+    };
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(current.id.as_str()) {
+            return Err(invalid());
+        }
+        let (_, bundle) = store
+            .get_input_bundle(
+                &request.actor_id,
+                &request.case_id,
+                &current.input_id,
+                current.input_version,
+            )?
+            .ok_or_else(invalid)?;
+        if let Intent::FetchPreviousSearchCandidate { .. } = bundle.meaning.intent {
+            let parent = bundle
+                .meaning
+                .context_result_ref
+                .as_ref()
+                .and_then(|reference| prior_results.get(reference))
+                .ok_or_else(invalid)?;
+            if current.dependencies.first() != Some(&parent.id)
+                || current.dependencies.get(1).map(String::as_str) != Some(selected_ref)
+                || identity(&bundle.request)? != current.id
+            {
+                return Err(invalid());
+            }
+            validate_search_predecessor(&bundle, parent, code)?;
+            current = parent;
+            continue;
+        }
+        let plan = current.content_plan.as_ref().ok_or_else(invalid)?;
+        let root =
+            verify_retained_search_listing(store, &bundle, current, plan)?.ok_or_else(invalid)?;
+        if root.selected_ref != selected_ref {
+            return Err(invalid());
+        }
+        return Ok((current, root));
+    }
+}
+
+fn explain_candidate_body(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    original: &InputBundle,
+    rank: u32,
+) -> Result<SearchExplanation> {
+    const CODE: &str = "SEARCH_CANDIDATE_BODY_EXPLANATION_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "the original search candidate or saved body cannot be verified",
+        )
+    };
+    validate_search_predecessor(bundle, previous, CODE)?;
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let preceding = original
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|reference| prior_results.get(reference))
+        .ok_or_else(invalid)?;
+    let plan = previous.content_plan.as_ref().ok_or_else(invalid)?;
+    let graph_ref = previous.execution_graph_ref.as_ref().ok_or_else(invalid)?;
+    let graph: Value = serde_json::from_slice(&store.get_bytes(actor, case, graph_ref)?)?;
+    let nodes = graph[0].as_array().ok_or_else(invalid)?;
+    let retains_listing = nodes
+        .iter()
+        .any(|node| node["id"] == SEARCH_CANDIDATE_LISTING_NODE);
+    let proof = verify_retained_candidate_body(
+        store,
+        original,
+        preceding,
+        previous,
+        plan,
+        retains_listing,
+    )?;
+    let allowed_starts = (original.request.budget.max_actions as usize)
+        .checked_sub(nodes.len().saturating_sub(1))
+        .ok_or_else(invalid)?;
+    let listing_dependency = if retains_listing {
+        serde_json::json!({ SEARCH_CANDIDATE_LISTING_NODE: proof.search_ref })
+    } else {
+        serde_json::json!({})
+    };
+    if proof.packet.redirect_chain.len() > allowed_starts
+        || graph[1][&proof.body_id].as_str() != Some(&proof.body_ref)
+        || graph[1][SEARCH_CANDIDATE_LISTING_NODE].as_str()
+            != retains_listing.then_some(proof.search_ref.as_str())
+        || graph[5][&proof.body_id] != listing_dependency
+        || graph[5]["compute"] != serde_json::json!({ (&proof.body_id): proof.body_ref })
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&proof.body_ref),
+        CODE,
+        "search candidate body",
+    )?;
+    let (root_result, root) = committed_search_result(
+        store,
+        request,
+        prior_results,
+        preceding,
+        &proof.search_ref,
+        CODE,
+    )?;
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        root_result,
+        Some(&root.selected_ref),
+        CODE,
+        "original search listing",
+    )?;
+    let mut dependencies = vec![previous.id.clone()];
+    if bundle.meaning.parser_version
+        != crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
+    {
+        return Ok(SearchExplanation {
+            units: vec![previous.text.clone()],
+            dependencies,
+        });
+    }
+
+    let selected = root.selected;
+    let candidate = proof.candidate;
+    let body = proof.packet;
+    let extracted = body.extracted_text.as_ref().ok_or_else(invalid)?;
+    let mut units = vec![
+        format!(
+            "前回の検索候補本文の取得根拠（取得結果ID: {}）。",
+            previous.id
+        ),
+        format!(
+            "元の検索結果ID: {} / 検索語: {:?}",
+            root_result.id, selected.query
+        ),
+        format!(
+            "採用した検索先: {} / 一覧packet ID: {} / 選択記録SHA-256: {}",
+            selected.provider.provider_id(),
+            selected.listing.id,
+            root.proof_ref
+        ),
+        format!(
+            "掲載順位 {rank} / 題名: {:?} / 候補ID: {} / 候補URL: {}",
+            candidate.title, candidate.id, candidate.uri
+        ),
+        format!(
+            "本文要求URL: {} / 本文最終URL: {}",
+            body.request_uri, body.final_uri
+        ),
+        format!(
+            "本文packet ID: {} / 取得モード: {} / HTTP {} / 取得時刻（Unix ms）: {}",
+            body.id, body.mode, body.http_status, body.observed_at_unix_ms
+        ),
+        format!(
+            "原本文SHA-256: {} / 原文バイト数: {} / 抽出本文SHA-256: {} / 読み取り方式: {}",
+            body.raw_sha256,
+            body.raw_body.len(),
+            digest(extracted.as_bytes()),
+            body.parser_version
+        ),
+    ];
+    if let Some(failed) = root.rejected_primary {
+        units.push(format!(
+            "最初の検索先: {} / HTTP {} / {} / 一覧packet ID: {}",
+            failed.provider.provider_id(),
+            failed.listing.http_status,
+            failed
+                .listing
+                .failure
+                .as_deref()
+                .unwrap_or("SEARCH_LIST_FETCH_FAILED"),
+            failed.listing.id
+        ));
+    }
+    if body.redirect_chain.len() > 1 {
+        units.push(format!("本文取得経路: {}", body.redirect_chain.join(" → ")));
+    }
+    units.push("一覧と本文は別々の取得記録です。本文の事実性は未検証です。".into());
+    if units.join("\n").len() > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the candidate body explanation exceeds its evidence budget",
+        ));
+    }
+    dependencies.extend(previous.dependencies.iter().cloned());
+    for reference in std::iter::once(&root_result.id)
+        .chain(&root_result.dependencies)
+        .chain(std::iter::once(&root.proof_ref))
+    {
+        if !dependencies.contains(reference) {
+            dependencies.push(reference.clone());
+        }
+    }
+    Ok(SearchExplanation {
+        units,
+        dependencies,
+    })
 }
 
 pub(crate) fn previous_observation(

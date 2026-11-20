@@ -1822,6 +1822,7 @@ fn previous_source_summary_explanation(
             crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
                 | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
                 | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+                | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
         )
     {
         return Ok(None);
@@ -2016,6 +2017,7 @@ fn previous_source_question_explanation(
             version,
             crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
                 | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+                | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
         )
     {
         return Ok(None);

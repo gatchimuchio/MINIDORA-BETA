@@ -234,12 +234,6 @@ pub(crate) fn close_cancelled_file_preparations(store: &Store, state: &CaseRevis
 
 type Inspected = (ActionRecord, DeliveryReceipt, Scheduler, String);
 
-struct SearchCandidateExpectation {
-    listing_ref: Option<String>,
-    body_id: String,
-    body_ref: String,
-}
-
 struct PreviousTextEditExpectation {
     source_content_ref: String,
     source_render_ref: String,
@@ -2581,123 +2575,6 @@ fn verify_result_memory_provenance(
     Ok(())
 }
 
-fn verify_search_candidate_context(
-    store: &Store,
-    actor: &str,
-    state: &CaseRevision,
-    result: &ResultRecord,
-    plan: &ContentPlan,
-    goal: &GoalContract,
-    nodes: &[GoalNode],
-) -> Result<Option<SearchCandidateExpectation>> {
-    let Intent::FetchPreviousSearchCandidate { rank } = &goal.intent else {
-        return Ok(None);
-    };
-    let rank = *rank;
-    let case = &state.case_id;
-    let bundle = state
-        .bundle
-        .as_ref()
-        .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
-    let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
-        failure(
-            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "candidate-body result has no sealed prior-search reference",
-        )
-    })?;
-    let previous = state.prior_results.get(previous_id).ok_or_else(|| {
-        failure(
-            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "the original search result is no longer retained",
-        )
-    })?;
-    if previous.id != *previous_id
-        || previous.lifecycle != Lifecycle::Commit
-        || identity(&Some(previous))? != bundle.context_sha256
-    {
-        return Err(failure(
-            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "the referenced search result is not the same committed result",
-        ));
-    }
-    let (search_ref, observation) =
-        crate::search::previous_observation(store, actor, case, previous)?.ok_or_else(|| {
-            failure(
-                "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-                "the original live search report is no longer available unchanged",
-            )
-        })?;
-    let candidate = observation
-        .candidates
-        .iter()
-        .find(|candidate| candidate.rank == rank)
-        .ok_or_else(|| {
-            failure(
-                "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-                "the selected candidate no longer appears at its original rank",
-            )
-        })?;
-    let body_ref = result.dependencies.last().ok_or_else(|| {
-        failure(
-            "RECOVERY_EVIDENCE_MISMATCH",
-            "the selected candidate body reference is missing",
-        )
-    })?;
-    let packet_bytes = store.get_bytes(actor, case, body_ref)?;
-    let packet: EvidencePacket = serde_json::from_slice(&packet_bytes)?;
-    let expected_uri = crate::search::candidate_body_uri(candidate)?;
-    crate::ports::validate_successful_packet(&packet, &goal.permissions)?;
-    if packet.request_uri != expected_uri
-        || packet.raw_body.len() > goal.budget.max_evidence_bytes
-        || canonical(&packet)? != packet_bytes
-    {
-        return Err(failure(
-            "RECOVERY_EVIDENCE_MISMATCH",
-            "the fetched packet differs from the selected candidate or original budget",
-        ));
-    }
-    // The sealed graph selects the packet format. Its full topology is
-    // checked before any recovery observation.
-    let retains_listing = nodes
-        .iter()
-        .any(|node| node.id == "search-candidate-listing");
-    let mut expected_dependencies = vec![previous.id.clone(), search_ref.clone()];
-    let mut expected_evidence = if retains_listing {
-        let carried = crate::search::carry_forward_candidate_evidence(previous, &observation)?;
-        crate::search::validate_next_candidate_body_capacity(&carried)?;
-        for prior in carried.iter().filter(|p| p.packet_kind == "FETCHED_BODY") {
-            expected_dependencies.push(verified_artifact(store, actor, case, prior)?);
-        }
-        carried
-    } else {
-        Vec::new()
-    };
-    expected_dependencies.push(body_ref.clone());
-    if !expected_evidence.contains(&packet) {
-        expected_evidence.push(packet.clone());
-    }
-    if result.evidence != expected_evidence {
-        return Err(failure(
-            "RECOVERY_EVIDENCE_MISMATCH",
-            "the retained search listing or candidate body packets differ from the original result",
-        ));
-    }
-    if result.dependencies != expected_dependencies
-        || plan.required_units != crate::search::candidate_body_lines(candidate, &packet)
-        || result.guarantee != Guarantee::SourceReport
-    {
-        return Err(failure(
-            "RECOVERY_SEARCH_CONTEXT_MISMATCH",
-            "the candidate, retrieved body or displayed source report differs from the adopted result",
-        ));
-    }
-    Ok(Some(SearchCandidateExpectation {
-        listing_ref: retains_listing.then_some(search_ref),
-        body_id: format!("search-candidate-body-{rank}"),
-        body_ref: body_ref.clone(),
-    }))
-}
-
 /// Confirm that a retained result can supply bodies to a source question or summary.
 pub(crate) fn source_context_available(
     store: &Store,
@@ -4099,7 +3976,7 @@ fn inspect(
     }
     if matches!(goal.intent, Intent::ExplainPrevious) && result.guarantee == Guarantee::SourceReport
     {
-        const CODE: &str = "RECOVERY_SEARCH_LISTING_EXPLANATION_MISMATCH";
+        const CODE: &str = "RECOVERY_SEARCH_EXPLANATION_MISMATCH";
         let previous = bundle
             .meaning
             .context_result_ref
@@ -4107,7 +3984,7 @@ fn inspect(
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(|| failure(CODE, "the sealed prior source result is not retained"))?;
         if let Some(explanation) =
-            search::previous_search_listing_explanation(store, bundle, previous)?
+            search::previous_search_explanation(store, bundle, &state.prior_results, previous)?
         {
             verify_registered_input(store, bundle, CODE)?;
             if result.dependencies != explanation.dependencies
@@ -4118,7 +3995,7 @@ fn inspect(
             {
                 return Err(failure(
                     CODE,
-                    "the adopted listing explanation differs from the original search context",
+                    "the adopted explanation differs from the original search context",
                 ));
             }
         }
@@ -4961,8 +4838,32 @@ fn inspect(
         || nodes
             .iter()
             .any(|node| node.id == search::SEARCH_LISTING_NODE);
-    let search_candidate =
-        verify_search_candidate_context(store, actor, state, result, plan, &goal, &nodes)?;
+    let search_candidate = if matches!(goal.intent, Intent::FetchPreviousSearchCandidate { .. }) {
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_SEARCH_CONTEXT_MISMATCH",
+                    "the original search predecessor is no longer retained",
+                )
+            })?;
+        let retains_listing = nodes
+            .iter()
+            .any(|node| node.id == search::SEARCH_CANDIDATE_LISTING_NODE);
+        Some(search::verify_retained_candidate_body(
+            store,
+            bundle,
+            previous,
+            result,
+            plan,
+            retains_listing,
+        )?)
+    } else {
+        None
+    };
     let mut expected_nodes = Vec::new();
     let mut sources = Vec::new();
     let direct_continuation = if matches!(goal.intent, Intent::FetchNextUnobservedSource) {
@@ -5054,8 +4955,8 @@ fn inspect(
         }
     } else if let Some(candidate) = &search_candidate {
         let mut requires = Vec::new();
-        if candidate.listing_ref.is_some() {
-            let id = "search-candidate-listing".to_string();
+        if candidate.listing_ref().is_some() {
+            let id = search::SEARCH_CANDIDATE_LISTING_NODE.to_string();
             expected_nodes.push(GoalNode {
                 id: id.clone(),
                 kind: GoalNodeKind::Evidence,
@@ -5293,8 +5194,8 @@ fn inspect(
         }
     } else if let Some(candidate) = &search_candidate {
         let mut requires = BTreeMap::new();
-        if let Some(reference) = &candidate.listing_ref {
-            let id = "search-candidate-listing".to_string();
+        if let Some(reference) = candidate.listing_ref() {
+            let id = search::SEARCH_CANDIDATE_LISTING_NODE.to_string();
             graph.observe(&id, reference, &BTreeMap::new())?;
             requires.insert(id, reference.clone());
         }

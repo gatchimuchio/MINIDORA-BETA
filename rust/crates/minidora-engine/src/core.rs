@@ -4552,7 +4552,7 @@ impl Engine {
             });
         }
         if let Intent::FetchPreviousSearchCandidate { rank } = &bundle.meaning.intent {
-            let listing_id = "search-candidate-listing".to_string();
+            let listing_id = search::SEARCH_CANDIDATE_LISTING_NODE.to_string();
             let id = format!("search-candidate-body-{rank}");
             compute_requires.push(id.clone());
             nodes.push(GoalNode {
@@ -5788,7 +5788,7 @@ impl Engine {
                 if !graph
                     .ready()
                     .iter()
-                    .any(|ready| ready == "search-candidate-listing")
+                    .any(|ready| ready == search::SEARCH_CANDIDATE_LISTING_NODE)
                 {
                     return self.stop(
                         &mut state,
@@ -5797,7 +5797,11 @@ impl Engine {
                         "検索候補の本文取得に必要な検索一覧が未観測です。",
                     );
                 }
-                graph.observe("search-candidate-listing", &search_ref, &BTreeMap::new())?;
+                graph.observe(
+                    search::SEARCH_CANDIDATE_LISTING_NODE,
+                    &search_ref,
+                    &BTreeMap::new(),
+                )?;
                 let body_id = format!("search-candidate-body-{rank}");
                 if !graph.ready().iter().any(|ready| ready == &body_id) {
                     return self.stop(
@@ -5892,7 +5896,7 @@ impl Engine {
                 graph.observe(
                     &body_id,
                     &body_ref,
-                    &BTreeMap::from([("search-candidate-listing".into(), search_ref)]),
+                    &BTreeMap::from([(search::SEARCH_CANDIDATE_LISTING_NODE.into(), search_ref)]),
                 )?;
                 units.extend(crate::search::candidate_body_lines(candidate, &packet));
                 result.guarantee = Guarantee::SourceReport;
@@ -5907,9 +5911,10 @@ impl Engine {
                         "説明対象となる実際の採用済み成果がありません。",
                     );
                 };
-                let listing_explanation = match search::previous_search_listing_explanation(
+                let search_explanation = match search::previous_search_explanation(
                     &self.store,
                     &bundle,
+                    &state.prior_results,
                     prior,
                 ) {
                     Ok(value) => value,
@@ -5920,7 +5925,7 @@ impl Engine {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
-                            "SEARCH_LISTING_EXPLANATION_CONTEXT_INVALID",
+                            "SEARCH_EXPLANATION_CONTEXT_INVALID",
                             &error.to_string(),
                         );
                     }
@@ -6694,7 +6699,7 @@ impl Engine {
                             return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                         }
                     }
-                } else if let Some(explanation) = listing_explanation {
+                } else if let Some(explanation) = search_explanation {
                     units.extend(explanation.units);
                     result.dependencies.extend(explanation.dependencies);
                     result.guarantee = Guarantee::SourceReport;

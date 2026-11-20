@@ -8727,7 +8727,7 @@ fn natural_source_question_consumes_the_actual_prior_fetched_body() {
     assert_eq!(explained_saved["result"], explanation);
     assert_eq!(
         explained_saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v111-search-listing-explanation"
+        "declarative-ja-en-v112-search-candidate-body-explanation"
     );
     assert_eq!(
         explained_saved["bundle"]["meaning"]["context_result_ref"],
@@ -9371,7 +9371,7 @@ fn constrained_previous_source_summary_binds_one_actual_packet_and_stops_on_ambi
     assert_eq!(explained_saved["result"], explanation);
     assert_eq!(
         explained_saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v111-search-listing-explanation"
+        "declarative-ja-en-v112-search-candidate-body-explanation"
     );
     assert_eq!(
         explained_saved["bundle"]["meaning"]["context_result_ref"],
@@ -16234,7 +16234,7 @@ fn text_summary_candidate_explanation_preserves_required_rank_and_escaped_source
         assert_eq!(saved["bundle"]["request"]["input_id"], "explain");
         assert_eq!(
             saved["bundle"]["meaning"]["parser_version"],
-            "declarative-ja-en-v111-search-listing-explanation"
+            "declarative-ja-en-v112-search-candidate-body-explanation"
         );
         assert_eq!(
             saved["bundle"]["meaning"]["context_result_ref"],

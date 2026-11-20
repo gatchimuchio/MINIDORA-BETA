@@ -247,6 +247,7 @@ pub(crate) fn previous_document_explanation(
             | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
             | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
             | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+            | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
     );
     let explain_text_document = matches!(
         explanation_parser_version,
@@ -257,6 +258,7 @@ pub(crate) fn previous_document_explanation(
             | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
             | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
             | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+            | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
     );
     if (explain_text_document && previous.guarantee == Guarantee::UserPremise)
         || (explain_summary && previous.guarantee == Guarantee::Hypothesis)
@@ -757,6 +759,7 @@ fn previous_text_document_explanation(
             | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
             | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
             | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+            | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
     ) && previous.guarantee == Guarantee::Hypothesis;
     let explain_composition = matches!(
         explanation_parser_version,
@@ -765,6 +768,7 @@ fn previous_text_document_explanation(
             | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
             | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
             | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+            | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
     );
     let explain_text_edit = explain_composition
         || explanation_parser_version == crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION;
@@ -3009,6 +3013,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
             | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
             | crate::input::SEARCH_LISTING_EXPLANATION_PARSER_VERSION
+            | crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [
