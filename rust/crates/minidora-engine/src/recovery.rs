@@ -3354,18 +3354,23 @@ fn first_hop_wait_matches(
 pub(crate) fn source_followup_anchor<'a>(
     store: &Store,
     state: &'a CaseRevision,
+    allow_explanation: bool,
 ) -> Result<Option<&'a ResultRecord>> {
     let (Some(bundle), Some(result)) = (&state.bundle, &state.result) else {
         return Ok(None);
     };
-    let committed = state.lifecycle == Lifecycle::Commit
-        && result.lifecycle == Lifecycle::Commit
+    let committed = state.lifecycle == Lifecycle::Commit && result.lifecycle == Lifecycle::Commit;
+    let source_followup = committed
         && matches!(
             bundle.meaning.intent,
             Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
         );
+    let explanation = allow_explanation
+        && committed
+        && result.guarantee == Guarantee::Hypothesis
+        && matches!(bundle.meaning.intent, Intent::ExplainPrevious);
     let no_match_query = match &bundle.meaning.intent {
         Intent::AskPreviousSourceQuestion { query }
             if state.lifecycle == Lifecycle::Suspend
@@ -3381,7 +3386,7 @@ pub(crate) fn source_followup_anchor<'a>(
         }
         _ => None,
     };
-    if !committed && no_match_query.is_none() {
+    if !source_followup && !explanation && no_match_query.is_none() {
         return Ok(None);
     }
 
@@ -3476,6 +3481,47 @@ pub(crate) fn source_followup_anchor<'a>(
         || plan.guarantee != result.guarantee
     {
         return Err(mismatch());
+    }
+
+    if explanation {
+        let Some(proof) = crate::text_summary::previous_summary_explanation(
+            store,
+            bundle,
+            &state.prior_results,
+            source,
+        )?
+        else {
+            return Ok(None);
+        };
+        let Some(anchor_id) = proof.source_context_ref else {
+            return Ok(None);
+        };
+        if store
+            .get_input_result(actor, case, &result.input_id, result.input_version)?
+            .as_ref()
+            != Some(result)
+            || result.calculation.is_some()
+            || !result.evidence.is_empty()
+            || result.dependencies != proof.dependencies
+            || !plan.dependencies.starts_with(&proof.dependencies)
+            || plan.required_units != proof.units
+            || result.text != proof.units.join("\n")
+        {
+            return Err(mismatch());
+        }
+        crate::document::revalidate_previous_document_render(
+            store,
+            actor,
+            case,
+            result,
+            None,
+            "SOURCE_CONTEXT_INVALID",
+            "retrieved source explanation",
+        )?;
+        // Reuse the exact context used to derive the original answer. For a
+        // selected candidate this is its v113 explanation, not the full fetch history.
+        let anchor = state.prior_results.get(&anchor_id).ok_or_else(mismatch)?;
+        return Ok(Some(anchor));
     }
 
     if matches!(goal.intent, Intent::AskPreviousSourceQuestion { .. }) {

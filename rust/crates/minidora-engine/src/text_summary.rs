@@ -1303,6 +1303,7 @@ pub(crate) fn verify_retained_previous_result_summary(
 pub(crate) struct PreviousResultSummaryExplanation {
     pub(crate) units: Vec<String>,
     pub(crate) dependencies: Vec<String>,
+    pub(crate) source_context_ref: Option<String>,
 }
 
 pub(crate) fn previous_summary_explanation(
@@ -1469,6 +1470,7 @@ pub(crate) fn previous_summary_explanation(
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
+        source_context_ref: None,
     }))
 }
 
@@ -1980,6 +1982,7 @@ fn previous_source_summary_explanation(
         return Ok(Some(PreviousResultSummaryExplanation {
             units: vec![summary_result.text.clone()],
             dependencies,
+            source_context_ref: None,
         }));
     }
 
@@ -2047,6 +2050,7 @@ fn previous_source_summary_explanation(
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
+        source_context_ref: summary_bundle.meaning.context_result_ref.clone(),
     }))
 }
 
@@ -2174,6 +2178,7 @@ fn previous_source_question_explanation(
         return Ok(Some(PreviousResultSummaryExplanation {
             units: vec![question_result.text.clone()],
             dependencies,
+            source_context_ref: None,
         }));
     }
 
@@ -2266,6 +2271,7 @@ fn previous_source_question_explanation(
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
+        source_context_ref: question_bundle.meaning.context_result_ref.clone(),
     }))
 }
 

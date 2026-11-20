@@ -3973,8 +3973,11 @@ impl Engine {
                 _ => return Ok(bundle),
             };
             let context = if has_compute_budget
-                && let Some(source) =
-                    crate::recovery::source_followup_anchor(&self.store, prior_case)?
+                && let Some(source) = crate::recovery::source_followup_anchor(
+                    &self.store,
+                    prior_case,
+                    requested_rank.is_none(),
+                )?
                 && (requested_rank.is_none()
                     || source
                         .evidence

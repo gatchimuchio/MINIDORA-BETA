@@ -838,8 +838,8 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
     assert body_explanation_replayed == body_explanation
     assert not contacts_since(body_explain_seen) and len(fixture.connects) == body_explain_starts
 
-    # Both requests are implicit follow-ups. The question must return through
-    # the summary's retained source anchor to the same direct body explanation.
+    # Implicit source requests must return through the summaries, questions and
+    # their rich explanations to the same direct body explanation.
     followup_seen, followup_starts = len(fixture.events), len(fixture.connects)
     source_ref = body["dependencies"][-1]
     assert load(source_ref) == body_packet
@@ -847,6 +847,7 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
     for kind, input_id, followup_request in (
         ("summary", "summarize-explained-body", "前回の本文を要約して"),
         ("question", "question-after-explained-summary", "本文では実測値について何と書かれていますか"),
+        ("resummary", "summarize-after-question-detail", "前回の本文を要約して"),
     ):
         followup = cli("run", "--input", input_id, followup_request, case_id=case)
         assert followup["guarantee"] == "HYPOTHESIS"
@@ -862,7 +863,7 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
         canonical_artifact = json.dumps(artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         assert (state_path / "blobs" / artifact_ref).read_bytes() == canonical_artifact
         assert artifact["source_result_id"] == body["id"]
-        if kind == "summary":
+        if kind != "question":
             assert artifact["source_packet_ref"] == source_ref
             assert artifact["summary"]["source_text"] == body_packet["extracted_text"]
             assert selected_sentences[1] in followup["text"]
@@ -879,6 +880,47 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
         assert followup_state["bundle"]["request"]["permissions"]["read_hosts"] == []
         assert cli("run", "--input", input_id, followup_request, case_id=case) == followup
         explained_body_followups[kind] = followup
+        if kind in ("summary", "question"):
+            detail_input = f"explain-{input_id}"
+            detail = cli("run", "--input", detail_input, "詳しく説明して", case_id=case)
+            assert detail["guarantee"] == "HYPOTHESIS"
+            assert detail["evidence"] == [] and detail["receipts"] == []
+            assert detail["dependencies"] == [followup["id"], *followup["dependencies"]]
+            assert detail["text"] != followup["text"]
+            assert detail["content_plan"]["text"] == detail["text"]
+            assert detail["render"]["status"] == "RENDERED"
+            assert hashlib.sha256(detail["text"].encode()).hexdigest() == detail["render"]["actual_sha256"]
+            for expected in (
+                followup["id"], body["id"], body_packet["id"], source_ref, body_url,
+                f"原本文SHA-256: {body_packet['raw_sha256']}",
+                f"抽出本文SHA-256: {extracted_sha256}", selected_sentences[0],
+            ):
+                assert expected in detail["text"], (expected, detail["text"])
+            if kind == "summary":
+                assert "前回の取得資料要約の根拠" in detail["text"]
+                assert "要約の網羅性・意味・条件保持・事実性は未検証です。" in detail["text"]
+                for sentence in artifact["summary"]["sentences"]:
+                    assert sentence["text"] in detail["text"]
+                    assert f"抽出本文byte {sentence['source_start']}..{sentence['source_end']}" in detail["text"]
+            else:
+                assert "前回の資料質問の根拠" in detail["text"]
+                assert "照合語: 実測値" in detail["text"]
+                assert artifact_ref in detail["text"]
+                assert "回答の意味・網羅性・資料の信頼性と事実性は未検証です。" in detail["text"]
+                (candidate_quote,) = artifact["candidates"]
+                span_start, span_end = candidate_quote["source_start"], candidate_quote["source_end"]
+                raw_quote = body_packet["extracted_text"].encode()[span_start:span_end]
+                assert raw_quote.decode() == candidate_quote["text"]
+                assert hashlib.sha256(raw_quote).hexdigest() == candidate_quote["source_span_sha256"]
+                assert f"抽出本文byte[{span_start}..{span_end})" in detail["text"]
+                assert f"範囲SHA-256: {candidate_quote['source_span_sha256']}" in detail["text"]
+            detail_state = cli("inspect", case_id=case)
+            assert detail_state["result"] == detail
+            assert detail_state["bundle"]["meaning"]["context_result_ref"] == followup["id"]
+            assert detail_state["bundle"]["request"]["context_ref"] is None
+            assert detail_state["bundle"]["request"]["permissions"]["read_hosts"] == []
+            assert cli("run", "--input", detail_input, "詳しく説明して", case_id=case) == detail
+            explained_body_followups[f"{kind}_explanation"] = detail
     assert not contacts_since(followup_seen) and len(fixture.connects) == followup_starts
     blocked = cli("run", "--input", "during-retry-after", "--allow-read-host", primary,
                   "検索 wikipedia: alternate trial", case_id=case, expected_exit=2)
