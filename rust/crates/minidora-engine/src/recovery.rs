@@ -4450,14 +4450,14 @@ fn inspect(
         } else {
             None
         };
-    let previous_csv_table_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
+    let previous_document_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         bundle
             .meaning
             .context_result_ref
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .map(|previous| {
-                crate::document::previous_csv_table_explanation(
+                crate::document::previous_document_explanation(
                     store,
                     actor,
                     case,
@@ -4918,7 +4918,7 @@ fn inspect(
             ));
         }
     }
-    if let Some(explanation) = &previous_csv_table_explanation {
+    if let Some(explanation) = &previous_document_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
                 "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
@@ -5344,7 +5344,7 @@ fn inspect(
         });
         sources.push(report_id);
     }
-    if let Some(explanation) = &previous_csv_table_explanation {
+    if let Some(explanation) = &previous_document_explanation {
         let input_id = explanation.input_node.to_string();
         let report_id = explanation.report_node.to_string();
         expected_nodes.push(GoalNode {
@@ -5596,7 +5596,7 @@ fn inspect(
         )?;
         source_refs.insert(report_id, report_ref.clone());
     }
-    if let Some(explanation) = &previous_csv_table_explanation {
+    if let Some(explanation) = &previous_document_explanation {
         graph.observe(
             explanation.input_node,
             &explanation.bundle_ref,

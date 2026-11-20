@@ -4164,11 +4164,11 @@ impl Engine {
             } else {
                 None
             };
-        let previous_csv_table_explanation =
+        let previous_document_explanation =
             if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
                     Some(prior) => {
-                        match crate::document::previous_csv_table_explanation(
+                        match crate::document::previous_document_explanation(
                             &self.store,
                             actor,
                             &request.case_id,
@@ -4613,7 +4613,7 @@ impl Engine {
             });
             compute_requires.push(report_id);
         }
-        if let Some(explanation) = &previous_csv_table_explanation {
+        if let Some(explanation) = &previous_document_explanation {
             let input_id = explanation.input_node.to_string();
             let report_id = explanation.report_node.to_string();
             nodes.push(GoalNode {
@@ -6984,7 +6984,7 @@ impl Engine {
                         report_ref.clone(),
                     ]);
                     result.guarantee = prior.guarantee.clone();
-                } else if let Some(explanation) = &previous_csv_table_explanation {
+                } else if let Some(explanation) = &previous_document_explanation {
                     graph.observe(
                         explanation.input_node,
                         &explanation.bundle_ref,

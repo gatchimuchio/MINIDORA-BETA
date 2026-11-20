@@ -1286,7 +1286,7 @@ impl<'a> JsonParser<'a> {
 
 /// Select exact original JSON bytes. No floating point conversion, duplicate
 /// key overwrite, implicit missing value, or document rewrite is performed.
-fn json_node_at_pointer<'a>(root: &'a JsonNode, pointer: &str) -> Result<&'a JsonNode> {
+pub(crate) fn json_node_at_pointer<'a>(root: &'a JsonNode, pointer: &str) -> Result<&'a JsonNode> {
     if !pointer.is_empty() && !pointer.starts_with('/') {
         return Err(failure(
             "INVALID_JSON_POINTER",

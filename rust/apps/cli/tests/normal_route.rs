@@ -10003,6 +10003,116 @@ fn basic_document_json_pointer_preserves_body_and_large_raw_lexemes() {
 }
 
 #[test]
+fn json_pointer_explanation_binds_original_raw_value_to_sealed_input_and_render() {
+    for (header, pointer, raw, kind) in [
+        ("json-pointer", "/a~1b/~0key/1", "1e400", "number"),
+        ("JsOn-PoInTeR", "/a~1b/~0key/2", r#""\u732b""#, "string"),
+        ("json-pointer", "", BASIC_POINTER_JSON.trim(), "object"),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header} {pointer}\r\n{BASIC_POINTER_JSON}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "json-pointer", &request],
+        ));
+        basic_raw_result(&scratch.0, &first, &request, Some(BASIC_POINTER_JSON));
+        assert_eq!(first["text"], raw);
+        assert_eq!(first["dependencies"], serde_json::json!([]));
+        let original = inspect_normal_case(&scratch.0, "owner");
+        let input_ref =
+            minidora_domain::digest(&minidora_domain::canonical(&original["bundle"]).unwrap());
+        let render_bytes = minidora_domain::canonical(&first["render"]).unwrap();
+        let render_ref = minidora_domain::digest(&render_bytes);
+        let explained = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "explain", "詳しく説明して"],
+        ));
+        basic_raw_result(&scratch.0, &explained, "詳しく説明して", None);
+        assert_ne!(explained["text"], first["text"]);
+        assert_eq!(explained["receipts"], serde_json::json!([]));
+        assert_eq!(
+            explained["dependencies"],
+            serde_json::json!([first["id"], input_ref, render_ref])
+        );
+        let text = explained["text"].as_str().unwrap();
+        let start = BASIC_POINTER_JSON.find(raw).unwrap();
+        let raw_ref = minidora_domain::digest(raw.as_bytes());
+        for expected in [
+            "前回のJSON Pointer抽出".to_string(),
+            format!("JSON Pointer: {pointer:?}"),
+            format!("型: {kind}"),
+            format!("抽出値（原文）: {raw:?}"),
+            format!("元 byte[{start}..{}) sha256={raw_ref}", start + raw.len()),
+            format!(
+                "元資料 SHA-256: {}",
+                minidora_domain::digest(BASIC_POINTER_JSON.as_bytes())
+            ),
+            format!("封印済みInputBundle SHA-256: {input_ref}"),
+            format!("抽出結果 SHA-256: {raw_ref}"),
+            format!("描画記録 SHA-256: {render_ref}"),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        assert_eq!(
+            store
+                .get_bytes("owner", "normal-route", &render_ref)
+                .unwrap(),
+            render_bytes
+        );
+        assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+        let graph = sequence_artifact(&store, &explained["execution_graph_ref"]);
+        let nodes = graph[0].as_array().unwrap();
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node["id"] == "previous-json-pointer-input"
+                    && node["kind"] == "EVIDENCE"
+                    && node["requires"] == serde_json::json!([]))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node["id"] == "previous-json-pointer-render"
+                    && node["kind"] == "COMPUTED_VALUE"
+                    && node["requires"] == serde_json::json!(["previous-json-pointer-input"]))
+        );
+        assert!(nodes.iter().any(|node| {
+            node["id"] == "compute"
+                && node["requires"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("previous-json-pointer-render"))
+        }));
+        assert_eq!(graph[1]["previous-json-pointer-input"], input_ref);
+        assert_eq!(graph[1]["previous-json-pointer-render"], render_ref);
+        assert_eq!(
+            graph[5]["previous-json-pointer-render"],
+            serde_json::json!({"previous-json-pointer-input":input_ref})
+        );
+        assert_eq!(
+            graph[5]["compute"]["previous-json-pointer-render"],
+            render_ref
+        );
+        let replayed = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "json-pointer", &request],
+        ));
+        assert_eq!(replayed, first);
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(
+            saved["bundle"]["meaning"]["context_result_ref"],
+            first["id"]
+        );
+        assert_eq!(saved["prior_results"][first["id"].as_str().unwrap()], first);
+        assert_eq!(saved["result"], explained);
+    }
+}
+
+#[test]
 fn csv_statistics_followup_explains_revalidated_source_cells() {
     let scratch = Scratch::new();
     let source = "label,value\r\na,0.1\r\nb,0.2\r\nc,0.3\r\n";
@@ -10334,6 +10444,68 @@ fn basic_document_json_statistics_preserve_selected_array_and_number_lexemes() {
             let result = record(&execute(&scratch.0, "owner", &[&request]));
             let report = normal_row_report(&scratch.0, "owner", &result, &request, source);
             assert_basic_json_statistics(&report, source, pointer, singleton);
+        }
+    }
+}
+
+#[test]
+fn json_statistics_explanation_preserves_exact_math_and_selected_number_sources() {
+    let nested = format!(" \r\n{{\"前\":\"猫\",\"a/b\":{{\"~key\":{BASIC_NUMERIC_ARRAY}}}}} \t");
+    for (source, pointer, header) in [
+        (
+            nested.as_str(),
+            "/a~1b/~0key",
+            "JSONの配列「/a~1b/~0key」の統計量を計算して:",
+        ),
+        (BASIC_NUMERIC_ARRAY, "", "json-statistics \"\""),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "json-statistics", &request],
+        ));
+        let report = normal_row_report(&scratch.0, "owner", &first, &request, source);
+        assert_basic_json_statistics(&report, source, pointer, false);
+        let explained =
+            assert_table_explanation(&scratch.0, &first, &report, "previous-json-statistics");
+        let text = explained["text"].as_str().unwrap();
+        for expected in [
+            "前回のJSON統計".to_string(),
+            format!("JSON Pointer: {pointer:?}"),
+            "件数: 4、合計: 7/2、平均: 7/8".to_string(),
+            "母分散: 987/1600、標本分散: 329/400".to_string(),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        let array_start = source.find(BASIC_NUMERIC_ARRAY).unwrap();
+        let array_line = text.lines().find(|line| line.contains("元の配列")).unwrap();
+        assert!(
+            array_line.contains(&format!(
+                "元 byte[{array_start}..{}) sha256={}",
+                array_start + BASIC_NUMERIC_ARRAY.len(),
+                minidora_domain::digest(BASIC_NUMERIC_ARRAY.as_bytes())
+            )),
+            "{array_line}"
+        );
+        let mut cursor = array_start + 1;
+        for (index, (raw, normalized)) in
+            [("1.20", "6/5"), ("-0", "0"), ("3e-1", "3/10"), ("2", "2")]
+                .into_iter()
+                .enumerate()
+        {
+            let start = cursor + source[cursor..].find(raw).unwrap();
+            let end = start + raw.len();
+            let expected = format!(
+                "要素{index} JSON Pointer {pointer}/{index}。数値表記: {raw:?}、厳密値: {normalized}。元 byte[{start}..{end}) sha256={}",
+                minidora_domain::digest(raw.as_bytes())
+            );
+            assert!(
+                text.lines().any(|line| line.contains(&expected)),
+                "missing {expected:?} in {text}"
+            );
+            cursor = end;
         }
     }
 }

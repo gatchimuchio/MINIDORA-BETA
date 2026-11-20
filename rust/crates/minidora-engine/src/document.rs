@@ -1,7 +1,7 @@
 //! Source-preserving explicit document operations. CSV uses RFC 4180 record and
 //! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
 //! evaluation occurs. Editing applies only literal nonoverlapping replacements.
-use crate::ports::{JsonKind, JsonNode, strict_json_document};
+use crate::ports::{JsonKind, JsonNode, json_node_at_pointer, strict_json_document};
 use minidora_domain::{
     Guarantee, Intent, Lifecycle, Result, ResultRecord, canonical, digest, failure,
 };
@@ -194,7 +194,7 @@ enum CsvTableComparisonChange {
     RowAdded { key: String, row: Vec<String> },
 }
 
-pub(crate) struct CsvTableExplanation {
+pub(crate) struct PriorDocumentExplanation {
     pub(crate) input_node: &'static str,
     pub(crate) report_node: &'static str,
     pub(crate) bundle_ref: String,
@@ -215,21 +215,23 @@ enum CsvTableOperation<'a> {
     JsonToCsv,
 }
 
-/// Recompute a prior CSV table operation from its immutable sealed input
+/// Recompute a prior document operation from its immutable sealed input
 /// before explaining its exact result and source ranges.
-pub(crate) fn previous_csv_table_explanation(
+pub(crate) fn previous_document_explanation(
     store: &crate::store::Store,
     actor: &str,
     case: &str,
     previous: &ResultRecord,
     max_evidence_bytes: usize,
     explanation_parser_version: &str,
-) -> Result<Option<CsvTableExplanation>> {
+) -> Result<Option<PriorDocumentExplanation>> {
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_conversion =
-        explanation_parser_version == crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION;
+    let explain_json_value =
+        explanation_parser_version == crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION;
+    let explain_conversion = explain_json_value
+        || explanation_parser_version == crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION;
     let explain_select = explain_conversion
         || explanation_parser_version == crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION;
     let explain_groups = explain_select
@@ -308,9 +310,36 @@ pub(crate) fn previous_csv_table_explanation(
                     },
                 ));
             }
+            if explain_json_value
+                && let [dependency] = previous.dependencies.as_slice()
+                && let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)?
+                && serde_json::from_slice::<crate::ports::JsonStatisticsReport>(&bytes).is_ok()
+            {
+                return Err(failure(
+                    "JSON_VALUE_CONTEXT_INVALID",
+                    "the prior JSON statistics have no retained sealed input bundle",
+                ));
+            }
             return Ok(None);
         }
     };
+    if explain_json_value
+        && matches!(
+            bundle.meaning.intent,
+            Intent::JsonPointer { .. } | Intent::JsonStatistics { .. }
+        )
+    {
+        return previous_json_value_explanation(
+            store,
+            actor,
+            case,
+            previous,
+            &bundle,
+            bundle_ref,
+            max_evidence_bytes,
+        )
+        .map(Some);
+    }
     let (document, operation) = match &bundle.meaning.intent {
         Intent::CsvCompare {
             document,
@@ -525,12 +554,45 @@ pub(crate) fn previous_csv_table_explanation(
         }
     };
 
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&report_ref),
+        "CSV_TABLE_CONTEXT_INVALID",
+        &format!("CSV {label}"),
+    )?;
+    if lines.join("\n").len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            format!("the exact CSV table {label} explanation exceeds the request evidence budget"),
+        ));
+    }
+    Ok(Some(PriorDocumentExplanation {
+        input_node,
+        report_node,
+        bundle_ref,
+        report_ref,
+        lines,
+    }))
+}
+
+fn revalidate_previous_document_render(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    required_report: Option<&str>,
+    error_code: &str,
+    label: &str,
+) -> Result<String> {
     let (Some(prior_plan), Some(prior_render)) =
         (previous.content_plan.as_ref(), previous.render.as_ref())
     else {
         return Err(failure(
-            "CSV_TABLE_CONTEXT_INVALID",
-            format!("the prior CSV {label} has no retained content plan or render observation"),
+            error_code,
+            format!("the prior {label} has no retained content plan or render observation"),
         ));
     };
     let mut unsigned_plan = prior_plan.clone();
@@ -538,53 +600,238 @@ pub(crate) fn previous_csv_table_explanation(
     if prior_plan.id != minidora_domain::identity(&unsigned_plan)?
         || prior_plan.text != previous.text
         || prior_plan.guarantee != previous.guarantee
-        || !prior_plan.dependencies.contains(&report_ref)
+        || required_report.is_some_and(|report| {
+            !prior_plan
+                .dependencies
+                .iter()
+                .any(|dependency| dependency == report)
+        })
         || !crate::core::validate_render(prior_plan, prior_render)
     {
         return Err(failure(
-            "CSV_TABLE_CONTEXT_INVALID",
-            format!("the prior CSV {label} content plan or rendered output is invalid"),
+            error_code,
+            format!("the prior {label} content plan or rendered output is invalid"),
         ));
     }
     let prior_plan_bytes = canonical(prior_plan)?;
     let prior_render_bytes = canonical(prior_render)?;
+    let render_ref = digest(&prior_render_bytes);
     for (artifact_ref, artifact_bytes, artifact_label) in [
         (digest(&prior_plan_bytes), prior_plan_bytes, "content plan"),
-        (
-            digest(&prior_render_bytes),
-            prior_render_bytes,
-            "render observation",
-        ),
+        (render_ref.clone(), prior_render_bytes, "render observation"),
     ] {
         match store.get_bytes_if_present(actor, case, &artifact_ref)? {
             Some(stored) if stored == artifact_bytes => {}
             Some(_) => {
                 return Err(failure(
-                    "CSV_TABLE_CONTEXT_INVALID",
-                    format!("the prior CSV {label} {artifact_label} artifact changed"),
+                    error_code,
+                    format!("the prior {label} {artifact_label} artifact changed"),
                 ));
             }
             None => {
                 return Err(failure(
-                    "CSV_TABLE_CONTEXT_INVALID",
-                    format!("the prior CSV {label} {artifact_label} artifact is missing"),
+                    error_code,
+                    format!("the prior {label} {artifact_label} artifact is missing"),
                 ));
             }
         }
     }
+    Ok(render_ref)
+}
+
+fn previous_json_value_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    bundle: &minidora_domain::InputBundle,
+    bundle_ref: String,
+    max_evidence_bytes: usize,
+) -> Result<PriorDocumentExplanation> {
+    const CODE: &str = "JSON_VALUE_CONTEXT_INVALID";
+    if bundle_ref != digest(&canonical(bundle)?) {
+        return Err(failure(CODE, "the sealed JSON input bundle hash changed"));
+    }
+    let (input_node, report_node, document, report_ref, mut lines) = match &bundle.meaning.intent {
+        Intent::JsonPointer { document, pointer } => {
+            let root = strict_json_document(document)?;
+            let node = json_node_at_pointer(&root, pointer)?;
+            let raw = &document[node.span.clone()];
+            if !previous.dependencies.is_empty() || previous.text != raw {
+                return Err(failure(
+                    CODE,
+                    "the prior JSON Pointer result differs from the original value",
+                ));
+            }
+            let render_ref = revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                previous,
+                None,
+                CODE,
+                "JSON Pointer extraction",
+            )?;
+            let kind = match node.kind {
+                JsonKind::Number => "number",
+                JsonKind::Array(_) => "array",
+                JsonKind::Object(_) => "object",
+                JsonKind::Scalar if raw.starts_with('"') => "string",
+                JsonKind::Scalar if raw == "null" => "null",
+                JsonKind::Scalar => "boolean",
+            };
+            let lines = vec![
+                "前回のJSON Pointer抽出を、封印済みの元入力から再確認しました。".into(),
+                format!("JSON Pointer: {:?}", preview(pointer)),
+                format!("型: {kind}"),
+                format!("抽出値（原文）: {:?}", preview(raw)),
+                json_value_range(raw, node.span.start, node.span.end),
+                format!("抽出結果 SHA-256: {}", digest(raw.as_bytes())),
+                format!("描画記録 SHA-256: {render_ref}"),
+            ];
+            (
+                "previous-json-pointer-input",
+                "previous-json-pointer-render",
+                document,
+                render_ref,
+                lines,
+            )
+        }
+        Intent::JsonStatistics { document, pointer } => {
+            let report = crate::ports::json_pointer_statistics(document, pointer)?;
+            let bytes = canonical(&report)?;
+            let report_ref = digest(&bytes);
+            if previous.dependencies != [report_ref.clone()]
+                || previous.text != serde_json::to_string_pretty(&report)?
+                || store
+                    .get_bytes_if_present(actor, case, &report_ref)?
+                    .as_deref()
+                    != Some(bytes.as_slice())
+            {
+                return Err(failure(
+                    CODE,
+                    "the prior JSON statistics no longer match the retained report",
+                ));
+            }
+            revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                previous,
+                Some(&report_ref),
+                CODE,
+                "JSON statistics",
+            )?;
+            let lines = json_statistics_lines(document, &report, &report_ref)?;
+            (
+                "previous-json-statistics-input",
+                "previous-json-statistics-report",
+                document,
+                report_ref,
+                lines,
+            )
+        }
+        _ => unreachable!("only sealed JSON value operations use this explanation"),
+    };
+    lines.splice(
+        1..1,
+        [
+            format!("元資料 SHA-256: {}", digest(document.as_bytes())),
+            format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        ],
+    );
     if lines.join("\n").len() > max_evidence_bytes {
         return Err(failure(
             "RESOURCE_LIMIT",
-            format!("the exact CSV table {label} explanation exceeds the request evidence budget"),
+            "the JSON value explanation exceeds the request evidence budget",
         ));
     }
-    Ok(Some(CsvTableExplanation {
+    Ok(PriorDocumentExplanation {
         input_node,
         report_node,
         bundle_ref,
         report_ref,
         lines,
-    }))
+    })
+}
+
+fn json_value_range(raw: &str, start: usize, end: usize) -> String {
+    format!("元 byte[{start}..{end}) sha256={}", digest(raw.as_bytes()))
+}
+
+fn json_statistics_lines(
+    document: &str,
+    report: &crate::ports::JsonStatisticsReport,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_VALUES: usize = 8;
+    let invalid = || {
+        failure(
+            "JSON_VALUE_CONTEXT_INVALID",
+            "the JSON statistics source ranges do not match the selected values",
+        )
+    };
+    let (array, observations) = report.spans.split_first().ok_or_else(invalid)?;
+    let stats = &report.statistics;
+    if array.kind != "JSON_ARRAY"
+        || observations.len() != stats.count
+        || stats.normalized_values.len() != stats.count
+    {
+        return Err(invalid());
+    }
+    let range = |span: &crate::ports::JsonSourceSpan| {
+        document
+            .get(span.source_start..span.source_end)
+            .filter(|raw| *raw == span.source_text)
+            .map(|raw| json_value_range(raw, span.source_start, span.source_end))
+            .ok_or_else(invalid)
+    };
+    let mut lines = vec![
+        "前回のJSON統計を、封印済みの元入力から再計算しました。".into(),
+        format!("JSON Pointer: {:?}", preview(&report.pointer)),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!("元の配列 {}", range(array)?),
+        format!(
+            "件数: {}、合計: {}、平均: {}",
+            stats.count, stats.sum, stats.mean
+        ),
+        format!(
+            "中央値: {}、最小: {}、最大: {}",
+            stats.median, stats.min, stats.max
+        ),
+        format!(
+            "母分散: {}、標本分散: {}",
+            stats.population_variance,
+            stats
+                .sample_variance
+                .as_deref()
+                .unwrap_or("算出不可（1件）")
+        ),
+    ];
+    for (index, (span, normalized)) in observations
+        .iter()
+        .zip(&stats.normalized_values)
+        .take(PREVIEW_VALUES)
+        .enumerate()
+    {
+        if span.kind != "JSON_NUMBER" || span.array_index != Some(index) {
+            return Err(invalid());
+        }
+        lines.push(format!(
+            "要素{index} JSON Pointer {}/{}。数値表記: {:?}、厳密値: {normalized}。{}",
+            preview(&report.pointer),
+            index,
+            preview(&span.source_text),
+            range(span)?
+        ));
+    }
+    if observations.len() > PREVIEW_VALUES {
+        lines.push(format!(
+            "残りの数値 {}件は保存レポートに保持されています。",
+            observations.len() - PREVIEW_VALUES
+        ));
+    }
+    Ok(lines)
 }
 
 fn table_conversion_lines(
@@ -1888,6 +2135,7 @@ pub(crate) fn previous_json_table_operation_explanation(
         crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
             | crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION
             | crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+            | crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [
