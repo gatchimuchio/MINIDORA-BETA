@@ -12259,6 +12259,252 @@ fn table_row_json_filter_and_sort_preserve_exact_values_and_source_ranges() {
 }
 
 #[test]
+fn csv_row_explanation_filter_replays_exact_predicate_and_empty_selection() {
+    let source = "id,状態,順位\r\n\"猫,甲\",\"open\"\"x\",2\r\n犬,\"Open\"\"x\",10\r\n鳥,\"open\"\"x \",2\r\n魚,\"open\"\"x\",10\r\n";
+    for query in ["open\"x", "missing"] {
+        let scratch = Scratch::new();
+        let request = format!(
+            "csv-filter \"状態\" equals {}:\n{source}",
+            serde_json::to_string(query).unwrap()
+        );
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "filter", &request],
+        ));
+        let artifact =
+            normal_document_artifact(&scratch.0, "owner", &first, &request, source, "CSV_FILTER");
+        let matched = query == "open\"x";
+        let rows = if matched {
+            serde_json::json!([["猫,甲", "open\"x", "2"], ["魚", "open\"x", "10"]])
+        } else {
+            serde_json::json!([])
+        };
+        let table: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            table,
+            serde_json::json!({"columns":["id","状態","順位"],"rows":rows})
+        );
+        assert_eq!(artifact["parameters"]["equals"], query);
+        let explanation = assert_csv_row_explanation(&scratch.0, &first, &artifact, "filter");
+        let text = explanation["text"].as_str().unwrap();
+        assert!(text.contains("前回のCSV表絞り込み"), "{text}");
+        assert!(text.contains(&format!("{query:?}")), "{text}");
+        assert!(
+            text.contains(if matched {
+                "一致行: 2、不一致行: 2"
+            } else {
+                "一致行: 0、不一致行: 4"
+            }),
+            "{text}"
+        );
+        let predicate_spans: Vec<_> = artifact["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|span| span["kind"] == "CSV_FILTER_DECISION")
+            .collect();
+        assert_eq!(predicate_spans.len(), 4);
+        for (row, value) in [
+            (1, "open\"x"),
+            (2, "Open\"x"),
+            (3, "open\"x "),
+            (4, "open\"x"),
+        ] {
+            let span = predicate_spans
+                .iter()
+                .find(|span| span["row"] == row)
+                .unwrap();
+            assert_eq!(span["column"], 1);
+            assert_eq!(span["decoded_value"], value);
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            let raw = &source[start..end];
+            assert_eq!(span["source_text"], raw);
+            let marker = format!(
+                "元行{row}: {}",
+                if value == query {
+                    "一致"
+                } else {
+                    "不一致"
+                }
+            );
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&marker))
+                .unwrap_or_else(|| panic!("missing {marker:?} in {text}"));
+            assert!(line.contains(&format!("byte[{start}..{end})")), "{line}");
+            assert!(
+                line.contains(&format!(
+                    "sha256={}",
+                    minidora_domain::digest(raw.as_bytes())
+                )),
+                "{line}"
+            );
+        }
+        if matched {
+            assert!(text.contains("出力行1 ← 元行1"), "{text}");
+            assert!(text.contains("出力行2 ← 元行4"), "{text}");
+        } else {
+            assert!(!text.contains("出力行1 ←"), "{text}");
+        }
+    }
+}
+
+#[test]
+fn csv_row_explanation_sort_replays_string_order_and_stable_ties() {
+    for (direction, label, order) in [
+        ("ascending", "昇順", &[4usize, 1, 3, 0, 2, 5][..]),
+        ("descending", "降順", &[0usize, 2, 5, 1, 3, 4][..]),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("csv-sort \"順位\" {direction}:\n{ROW_CSV}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "sort", &request],
+        ));
+        let artifact =
+            normal_document_artifact(&scratch.0, "owner", &first, &request, ROW_CSV, "CSV_SORT");
+        assert_csv_row_maps(&artifact, order, None);
+        let explanation = assert_csv_row_explanation(&scratch.0, &first, &artifact, "sort");
+        let text = explanation["text"].as_str().unwrap();
+        for expected in ["前回のCSV表並べ替え", label, "同じ値の行は元の順序"] {
+            assert!(text.contains(expected), "missing {expected:?} in {text}");
+        }
+        for (output_row, source_row) in order.iter().enumerate() {
+            let marker = format!("出力行{} ← 元行{}", output_row + 1, source_row + 1);
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&marker))
+                .unwrap_or_else(|| panic!("missing {marker:?} in {text}"));
+            let span = artifact["spans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|span| {
+                    span["kind"] == "CSV_SORT_CELL"
+                        && span["row"] == source_row + 1
+                        && span["column"] == 2
+                })
+                .unwrap();
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            assert!(
+                line.contains(&format!("{:?}", ROW_VALUES[source_row + 1][2])),
+                "{line}"
+            );
+            assert!(line.contains(&format!("byte[{start}..{end})")), "{line}");
+            assert!(
+                line.contains(&format!(
+                    "sha256={}",
+                    minidora_domain::digest(&ROW_CSV.as_bytes()[start..end])
+                )),
+                "{line}"
+            );
+        }
+    }
+}
+
+fn assert_csv_row_explanation(
+    directory: &Path,
+    first: &Value,
+    artifact: &Value,
+    operation: &str,
+) -> Value {
+    let original = inspect_normal_case(directory, "owner");
+    assert_eq!(original["result"], *first);
+    let input_bytes = minidora_domain::canonical(&original["bundle"]).unwrap();
+    let input_ref = minidora_domain::digest(&input_bytes);
+    let report_bytes = minidora_domain::canonical(artifact).unwrap();
+    let report_ref = minidora_domain::digest(&report_bytes);
+    assert_eq!(first["dependencies"], serde_json::json!([report_ref]));
+    let explanation = record(&execute(
+        directory,
+        "owner",
+        &["--input", "explain", "詳しく説明して"],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "COMPUTED");
+    assert_ne!(explanation["text"], first["text"]);
+    assert_eq!(explanation["content_plan"]["text"], explanation["text"]);
+    assert_eq!(explanation["render"]["status"], "RENDERED");
+    assert_eq!(explanation["receipts"], serde_json::json!([]));
+    let text = explanation["text"].as_str().unwrap();
+    for expected in [
+        format!(
+            "元資料 SHA-256: {}",
+            artifact["source_sha256"].as_str().unwrap()
+        ),
+        format!("封印済みInputBundle SHA-256: {input_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+    ] {
+        assert!(text.contains(&expected), "missing {expected:?} in {text}");
+    }
+    assert_eq!(
+        explanation["dependencies"],
+        serde_json::json!([first["id"], input_ref, report_ref])
+    );
+    assert_eq!(
+        explanation["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    assert_eq!(
+        store
+            .get_bytes("owner", "normal-route", &report_ref)
+            .unwrap(),
+        report_bytes
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    let graph = sequence_artifact(&store, &explanation["execution_graph_ref"]);
+    let input_id = format!("previous-csv-table-{operation}-input");
+    let report_id = format!("previous-csv-table-{operation}-report");
+    let nodes = graph[0].as_array().unwrap();
+    assert!(nodes.iter().any(|node| node["id"] == input_id
+        && node["kind"] == "EVIDENCE"
+        && node["requires"] == serde_json::json!([])));
+    assert!(nodes.iter().any(|node| node["id"] == report_id
+        && node["kind"] == "COMPUTED_VALUE"
+        && node["requires"] == serde_json::json!([input_id])));
+    assert!(nodes.iter().any(|node| {
+        node["id"] == "compute"
+            && node["requires"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String(report_id.clone()))
+    }));
+    assert_eq!(graph[1][&input_id], input_ref);
+    assert_eq!(graph[1][&report_id], report_ref);
+    assert_eq!(
+        graph[5][&report_id],
+        serde_json::json!({input_id:input_ref})
+    );
+    assert_eq!(graph[5]["compute"][&report_id], report_ref);
+    let replayed = record(&execute(
+        directory,
+        "owner",
+        &[
+            "--input",
+            first["input_id"].as_str().unwrap(),
+            original["bundle"]["request"]["text"].as_str().unwrap(),
+        ],
+    ));
+    assert_eq!(replayed, *first);
+    let revision = inspect_normal_case(directory, "owner");
+    assert_eq!(
+        revision["bundle"]["meaning"]["context_result_ref"],
+        first["id"]
+    );
+    assert_eq!(
+        revision["prior_results"][first["id"].as_str().unwrap()],
+        *first
+    );
+    assert_eq!(revision["result"], explanation);
+    explanation
+}
+
+#[test]
 fn json_table_transform_explanations_replay_the_sealed_input_and_report() {
     for (input_id, request, source, marker) in [
         (

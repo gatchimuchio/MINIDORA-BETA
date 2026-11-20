@@ -206,10 +206,12 @@ pub(crate) struct CsvTableExplanation {
 enum CsvTableOperation<'a> {
     Compare(&'a str),
     Join(&'a str, &'a str),
+    Filter(&'a str, &'a str),
+    Sort(&'a str, bool),
 }
 
 /// Recompute a prior CSV table operation from its immutable sealed input
-/// before explaining its exact result and two-sided source ranges.
+/// before explaining its exact result and source ranges.
 pub(crate) fn previous_csv_table_explanation(
     store: &crate::store::Store,
     actor: &str,
@@ -221,8 +223,10 @@ pub(crate) fn previous_csv_table_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_join =
-        explanation_parser_version == crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION;
+    let explain_rows =
+        explanation_parser_version == crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION;
+    let explain_join = explain_rows
+        || explanation_parser_version == crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION;
 
     let (bundle_ref, bundle) =
         match store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)? {
@@ -258,6 +262,17 @@ pub(crate) fn previous_csv_table_explanation(
                         "the prior CSV inner join has no retained sealed input bundle",
                     ));
                 }
+                if explain_rows
+                    && let [dependency] = previous.dependencies.as_slice()
+                    && let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)?
+                    && let Ok(report) = serde_json::from_slice::<DocumentResult>(&bytes)
+                    && matches!(report.operation.as_str(), "CSV_FILTER" | "CSV_SORT")
+                {
+                    return Err(failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "the prior CSV row operation has no retained sealed input bundle",
+                    ));
+                }
                 return Ok(None);
             }
         };
@@ -274,6 +289,19 @@ pub(crate) fn previous_csv_table_explanation(
             document.as_str(),
             CsvTableOperation::Join(left_key_column, right_key_column),
         ),
+        Intent::CsvFilter {
+            document,
+            column,
+            equals,
+        } if explain_rows => (document.as_str(), CsvTableOperation::Filter(column, equals)),
+        Intent::CsvSort {
+            document,
+            column,
+            descending,
+        } if explain_rows => (
+            document.as_str(),
+            CsvTableOperation::Sort(column, *descending),
+        ),
         _ => return Ok(None),
     };
     let (label, input_node, report_node) = match operation {
@@ -286,6 +314,16 @@ pub(crate) fn previous_csv_table_explanation(
             "inner join",
             "previous-csv-table-inner-join-input",
             "previous-csv-table-inner-join-report",
+        ),
+        CsvTableOperation::Filter(_, _) => (
+            "filter",
+            "previous-csv-table-filter-input",
+            "previous-csv-table-filter-report",
+        ),
+        CsvTableOperation::Sort(_, _) => (
+            "sort",
+            "previous-csv-table-sort-input",
+            "previous-csv-table-sort-report",
         ),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
@@ -300,24 +338,34 @@ pub(crate) fn previous_csv_table_explanation(
         CsvTableOperation::Join(left_key, right_key) => {
             csv_inner_join(document, left_key, right_key)?
         }
+        CsvTableOperation::Filter(column, equals) => csv_filter(document, column, equals)?,
+        CsvTableOperation::Sort(column, descending) => csv_sort(document, column, descending)?,
     };
+    let parameter = |key| recomputed.parameters.get(key).map(String::as_str);
     let parameters_match = match operation {
         CsvTableOperation::Compare(key_column) => {
             recomputed.operation == "CSV_TABLE_COMPARE"
-                && recomputed.parameters.get("key_column").map(String::as_str) == Some(key_column)
+                && parameter("key_column") == Some(key_column)
         }
         CsvTableOperation::Join(left_key, right_key) => {
             recomputed.operation == "CSV_INNER_JOIN"
-                && recomputed
-                    .parameters
-                    .get("left_key_column")
-                    .map(String::as_str)
-                    == Some(left_key)
-                && recomputed
-                    .parameters
-                    .get("right_key_column")
-                    .map(String::as_str)
-                    == Some(right_key)
+                && parameter("left_key_column") == Some(left_key)
+                && parameter("right_key_column") == Some(right_key)
+        }
+        CsvTableOperation::Filter(column, equals) => {
+            recomputed.operation == "CSV_FILTER"
+                && parameter("column_name") == Some(column)
+                && parameter("equals") == Some(equals)
+        }
+        CsvTableOperation::Sort(column, descending) => {
+            recomputed.operation == "CSV_SORT"
+                && parameter("column_name") == Some(column)
+                && parameter("sort_order")
+                    == Some(if descending {
+                        "descending"
+                    } else {
+                        "ascending"
+                    })
         }
     };
     let report_bytes = canonical(&recomputed)?;
@@ -352,6 +400,9 @@ pub(crate) fn previous_csv_table_explanation(
         }
         CsvTableOperation::Join(left_key, right_key) => {
             csv_table_join_lines(&recomputed, left_key, right_key, &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::Filter(column, _) | CsvTableOperation::Sort(column, _) => {
+            csv_table_rows_lines(&recomputed, column, &bundle_ref, &report_ref)?
         }
     };
 
@@ -415,6 +466,156 @@ pub(crate) fn previous_csv_table_explanation(
         report_ref,
         lines,
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CsvTableRowsText {
+    columns: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
+
+fn csv_table_rows_lines(
+    report: &DocumentResult,
+    column: &str,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_ROWS: usize = 8;
+    let typed: CsvTableRowsText = serde_json::from_str(&report.text).map_err(|_| {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed CSV table has an unsupported shape",
+        )
+    })?;
+    let column_index = typed
+        .columns
+        .iter()
+        .position(|name| name == column)
+        .ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "the selected CSV column is missing",
+            )
+        })?;
+    let header = csv_table_find_span(
+        report,
+        &format!("{}_HEADER", report.operation),
+        Some(0),
+        Some(column_index),
+        Some(column),
+    )?;
+    let cell_kind = format!("{}_CELL", report.operation);
+    // The producer emits cells in output order and stores each original row number.
+    let output_keys: Vec<_> = report
+        .spans
+        .iter()
+        .filter(|span| span.kind == cell_kind && span.column == Some(column_index))
+        .collect();
+    if output_keys.len() != typed.rows.len()
+        || output_keys.iter().zip(&typed.rows).any(|(span, row)| {
+            span.row.is_none_or(|source_row| source_row == 0)
+                || span.output_start.is_none()
+                || span.output_end.is_none()
+                || row.len() != typed.columns.len()
+                || span.decoded_value.as_deref() != row.get(column_index).map(String::as_str)
+        })
+    {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed CSV output rows do not correspond to their source cells",
+        ));
+    }
+
+    let mut lines = if let Some(equals) = report.parameters.get("equals") {
+        let decisions: Vec<_> = report
+            .spans
+            .iter()
+            .filter(|span| span.kind == "CSV_FILTER_DECISION")
+            .collect();
+        let matched_rows = decisions
+            .iter()
+            .filter(|span| span.decoded_value.as_ref() == Some(equals))
+            .map(|span| span.row);
+        if !matched_rows.eq(output_keys.iter().map(|span| span.row)) {
+            return Err(failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "the CSV filter decisions do not select the reported source rows",
+            ));
+        }
+        let mut lines = vec![
+            "前回のCSV表絞り込みを、封印済みの元入力から再計算しました。".into(),
+            format!(
+                "条件: {:?} 列のデコード後の文字列が {:?} と完全一致する行を、元の順序で残します。",
+                preview(column),
+                preview(equals)
+            ),
+            format!(
+                "一致行: {}、不一致行: {}",
+                output_keys.len(),
+                decisions.len() - output_keys.len()
+            ),
+        ];
+        for (index, span) in decisions.iter().take(PREVIEW_ROWS).enumerate() {
+            let decision = if span.decoded_value.as_ref() == Some(equals) {
+                "一致"
+            } else {
+                "不一致"
+            };
+            lines.push(format!(
+                "元行{}: {decision}。{}",
+                index + 1,
+                csv_table_span(report, span)?
+            ));
+        }
+        if decisions.len() > PREVIEW_ROWS {
+            lines.push(format!(
+                "残りの判定 {}行は保存artifactに保持されています。",
+                decisions.len() - PREVIEW_ROWS
+            ));
+        }
+        lines
+    } else {
+        let direction = match report.parameters.get("sort_order").map(String::as_str) {
+            Some("ascending") => "昇順",
+            Some("descending") => "降順",
+            _ => {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "the recomputed CSV sort direction is missing or invalid",
+                ));
+            }
+        };
+        vec![
+            "前回のCSV表並べ替えを、封印済みの元入力から再計算しました。".into(),
+            format!(
+                "並べ替え: {:?} 列のデコード後の値をUnicodeの符号位置順で比較した{direction}です。数値に見える値も文字列として比較します。同じ値の行は元の順序を保ちます。",
+                preview(column)
+            ),
+            format!("出力行数: {}", output_keys.len()),
+        ]
+    };
+    lines.extend([
+        format!("元資料 SHA-256: {}", report.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!("対象列の見出し: {}", csv_table_span(report, header)?),
+    ]);
+    for (index, span) in output_keys.iter().take(PREVIEW_ROWS).enumerate() {
+        lines.push(format!(
+            "出力行{} ← 元行{}。{}",
+            index + 1,
+            span.row.expect("validated source row"),
+            csv_table_span(report, span)?
+        ));
+    }
+    if output_keys.len() > PREVIEW_ROWS {
+        lines.push(format!(
+            "残りの出力行 {}行の元セルは保存artifactに保持されています。",
+            output_keys.len() - PREVIEW_ROWS
+        ));
+    }
+    Ok(lines)
 }
 
 fn csv_table_comparison_lines(
