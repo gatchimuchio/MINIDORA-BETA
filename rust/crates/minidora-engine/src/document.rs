@@ -208,6 +208,8 @@ enum CsvTableOperation<'a> {
     Join(&'a str, &'a str),
     Filter(&'a str, &'a str),
     Sort(&'a str, bool),
+    GroupCount(&'a str),
+    GroupStatistics(&'a str, &'a str),
 }
 
 /// Recompute a prior CSV table operation from its immutable sealed input
@@ -223,8 +225,10 @@ pub(crate) fn previous_csv_table_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_rows =
-        explanation_parser_version == crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION;
+    let explain_groups =
+        explanation_parser_version == crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION;
+    let explain_rows = explain_groups
+        || explanation_parser_version == crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION;
     let explain_join = explain_rows
         || explanation_parser_version == crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION;
 
@@ -266,11 +270,19 @@ pub(crate) fn previous_csv_table_explanation(
                     && let [dependency] = previous.dependencies.as_slice()
                     && let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)?
                     && let Ok(report) = serde_json::from_slice::<DocumentResult>(&bytes)
-                    && matches!(report.operation.as_str(), "CSV_FILTER" | "CSV_SORT")
+                    && match report.operation.as_str() {
+                        "CSV_FILTER" | "CSV_SORT" => true,
+                        "CSV_GROUP_COUNT" | "CSV_GROUP_STATISTICS" => explain_groups,
+                        _ => false,
+                    }
                 {
                     return Err(failure(
                         "CSV_TABLE_CONTEXT_INVALID",
-                        "the prior CSV row operation has no retained sealed input bundle",
+                        if matches!(report.operation.as_str(), "CSV_FILTER" | "CSV_SORT") {
+                            "the prior CSV row operation has no retained sealed input bundle"
+                        } else {
+                            "the prior grouped CSV operation has no retained sealed input bundle"
+                        },
                     ));
                 }
                 return Ok(None);
@@ -302,6 +314,17 @@ pub(crate) fn previous_csv_table_explanation(
             document.as_str(),
             CsvTableOperation::Sort(column, *descending),
         ),
+        Intent::CsvGroupCount { document, column } if explain_groups => {
+            (document.as_str(), CsvTableOperation::GroupCount(column))
+        }
+        Intent::CsvGroupStatistics {
+            document,
+            group_column,
+            value_column,
+        } if explain_groups => (
+            document.as_str(),
+            CsvTableOperation::GroupStatistics(group_column, value_column),
+        ),
         _ => return Ok(None),
     };
     let (label, input_node, report_node) = match operation {
@@ -325,6 +348,16 @@ pub(crate) fn previous_csv_table_explanation(
             "previous-csv-table-sort-input",
             "previous-csv-table-sort-report",
         ),
+        CsvTableOperation::GroupCount(_) => (
+            "group count",
+            "previous-csv-table-group-count-input",
+            "previous-csv-table-group-count-report",
+        ),
+        CsvTableOperation::GroupStatistics(_, _) => (
+            "group statistics",
+            "previous-csv-table-group-statistics-input",
+            "previous-csv-table-group-statistics-report",
+        ),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
         return Err(failure(
@@ -340,6 +373,10 @@ pub(crate) fn previous_csv_table_explanation(
         }
         CsvTableOperation::Filter(column, equals) => csv_filter(document, column, equals)?,
         CsvTableOperation::Sort(column, descending) => csv_sort(document, column, descending)?,
+        CsvTableOperation::GroupCount(column) => csv_group_count(document, column)?,
+        CsvTableOperation::GroupStatistics(group, value) => {
+            csv_group_statistics(document, group, value)?
+        }
     };
     let parameter = |key| recomputed.parameters.get(key).map(String::as_str);
     let parameters_match = match operation {
@@ -366,6 +403,14 @@ pub(crate) fn previous_csv_table_explanation(
                     } else {
                         "ascending"
                     })
+        }
+        CsvTableOperation::GroupCount(column) => {
+            recomputed.operation == "CSV_GROUP_COUNT" && parameter("column_name") == Some(column)
+        }
+        CsvTableOperation::GroupStatistics(group, value) => {
+            recomputed.operation == "CSV_GROUP_STATISTICS"
+                && parameter("group_column") == Some(group)
+                && parameter("value_column") == Some(value)
         }
     };
     let report_bytes = canonical(&recomputed)?;
@@ -403,6 +448,12 @@ pub(crate) fn previous_csv_table_explanation(
         }
         CsvTableOperation::Filter(column, _) | CsvTableOperation::Sort(column, _) => {
             csv_table_rows_lines(&recomputed, column, &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::GroupCount(column) => {
+            csv_table_group_lines(&recomputed, column, None, &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::GroupStatistics(group, value) => {
+            csv_table_group_lines(&recomputed, group, Some(value), &bundle_ref, &report_ref)?
         }
     };
 
@@ -613,6 +664,184 @@ fn csv_table_rows_lines(
         lines.push(format!(
             "残りの出力行 {}行の元セルは保存artifactに保持されています。",
             output_keys.len() - PREVIEW_ROWS
+        ));
+    }
+    Ok(lines)
+}
+
+#[derive(Deserialize)]
+struct CsvGroupedTableText {
+    groups: Vec<CsvGroupText>,
+}
+
+#[derive(Deserialize)]
+struct CsvGroupText {
+    value: String,
+    count: Option<usize>,
+    source_record_numbers: Option<Vec<usize>>,
+    statistics: Option<crate::math::Statistics>,
+}
+
+fn csv_table_group_lines(
+    report: &DocumentResult,
+    group_column: &str,
+    value_column: Option<&str>,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_GROUPS: usize = 8;
+    const PREVIEW_MEMBERS: usize = 4;
+    let typed: CsvGroupedTableText = serde_json::from_str(&report.text).map_err(|_| {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed grouped CSV table has an unsupported shape",
+        )
+    })?;
+    let mut members_by_key = BTreeMap::<&str, Vec<&DocumentSpan>>::new();
+    let mut value_spans = BTreeMap::new();
+    for span in &report.spans {
+        match span.kind.as_str() {
+            "CSV_GROUP_MEMBER" => {
+                let key = span.decoded_value.as_deref().ok_or_else(|| {
+                    failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "a CSV group key has no decoded value",
+                    )
+                })?;
+                members_by_key.entry(key).or_default().push(span);
+            }
+            "CSV_GROUP_STATISTIC_VALUE" => {
+                value_spans.insert(span.row, span);
+            }
+            _ => {}
+        }
+    }
+    let title = if value_column.is_some() {
+        "前回のCSVグループ統計"
+    } else {
+        "前回のCSVグループ件数"
+    };
+    let header_kind = if value_column.is_some() {
+        "CSV_GROUP_COLUMN_HEADER"
+    } else {
+        "CSV_GROUP_COLUMN"
+    };
+    let header = csv_table_find_span(report, header_kind, Some(0), None, Some(group_column))?;
+    let row_count: usize = members_by_key.values().map(Vec::len).sum();
+    let mut lines = vec![
+        format!("{title}を、封印済みの元入力から再計算しました。"),
+        format!(
+            "グループ列: {:?}。デコード後の文字列が完全一致する行をまとめ、グループを初出順に示します。",
+            preview(group_column)
+        ),
+        format!("行数: {row_count}、グループ数: {}", typed.groups.len()),
+        format!("元資料 SHA-256: {}", report.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!("グループ列の見出し: {}", csv_table_span(report, header)?),
+    ];
+    if let Some(column) = value_column {
+        let header = csv_table_find_span(
+            report,
+            "CSV_GROUP_VALUE_HEADER",
+            Some(0),
+            None,
+            Some(column),
+        )?;
+        lines.push(format!(
+            "計測列: {:?}。単位付きの値はグループ内で単位をそろえ、合計を件数で割って平均を求めます。{}",
+            preview(column),
+            csv_table_span(report, header)?
+        ));
+    }
+
+    for (index, group) in typed.groups.iter().take(PREVIEW_GROUPS).enumerate() {
+        let members = members_by_key.get(group.value.as_str()).ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "a reported CSV group has no source members",
+            )
+        })?;
+        let prefix = format!(
+            "グループ{} {:?}。件数: {}",
+            index + 1,
+            preview(&group.value),
+            members.len()
+        );
+        match (&group.statistics, &group.source_record_numbers) {
+            (None, None) if value_column.is_none() && group.count == Some(members.len()) => {
+                lines.push(prefix);
+            }
+            (Some(stats), Some(rows))
+                if value_column.is_some()
+                    && stats.count == members.len()
+                    && stats.normalized_values.len() == members.len()
+                    && rows
+                        .iter()
+                        .copied()
+                        .map(Some)
+                        .eq(members.iter().map(|span| span.row)) =>
+            {
+                lines.push(format!(
+                    "{prefix}、合計: {}、平均: {}、単位: {}。中央値: {}、最小: {}、最大: {}。",
+                    stats.sum,
+                    stats.mean,
+                    stats.unit.as_deref().unwrap_or("なし"),
+                    stats.median,
+                    stats.min,
+                    stats.max
+                ));
+                lines.push(format!(
+                    "母分散: {}、標本分散: {}、分散の単位: {}。",
+                    stats.population_variance,
+                    stats
+                        .sample_variance
+                        .as_deref()
+                        .unwrap_or("算出不可（1件）"),
+                    stats.variance_unit.as_deref().unwrap_or("なし")
+                ));
+            }
+            _ => {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "a reported CSV group disagrees with the retained source members",
+                ));
+            }
+        }
+        for (member_index, member) in members.iter().take(PREVIEW_MEMBERS).enumerate() {
+            let row = member.row.filter(|row| *row != 0).ok_or_else(|| {
+                failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "a CSV group member has no original row",
+                )
+            })?;
+            let mut line = format!("元行{row} キー {}", csv_table_span(report, member)?);
+            if let Some(stats) = &group.statistics {
+                let value = value_spans.get(&Some(row)).ok_or_else(|| {
+                    failure(
+                        "CSV_TABLE_CONTEXT_INVALID",
+                        "a CSV group member has no measured source cell",
+                    )
+                })?;
+                line.push_str(&format!(
+                    "。計測セル {}。集計に使った値: {}",
+                    csv_table_span(report, value)?,
+                    stats.normalized_values[member_index]
+                ));
+            }
+            lines.push(line);
+        }
+        if members.len() > PREVIEW_MEMBERS {
+            lines.push(format!(
+                "このグループの残り {}行は保存artifactに保持されています。",
+                members.len() - PREVIEW_MEMBERS
+            ));
+        }
+    }
+    if typed.groups.len() > PREVIEW_GROUPS {
+        lines.push(format!(
+            "残り {}グループは保存artifactに保持されています。",
+            typed.groups.len() - PREVIEW_GROUPS
         ));
     }
     Ok(lines)

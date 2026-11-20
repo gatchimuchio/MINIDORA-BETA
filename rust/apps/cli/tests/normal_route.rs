@@ -12406,6 +12406,160 @@ fn csv_row_explanation_sort_replays_string_order_and_stable_ties() {
     }
 }
 
+#[test]
+fn csv_group_explanation_count_preserves_first_seen_members_and_empty_table() {
+    for (source, groups, rows) in [
+        (
+            "id,分類\r\n1,\"猫,北\"\r\n2,犬\r\n3,\"猫,北\"\r\n",
+            serde_json::json!([{"value":"猫,北","count":2},{"value":"犬","count":1}]),
+            3,
+        ),
+        (
+            "id,分類\r\n2,犬\r\n1,\"猫,北\"\r\n3,\"猫,北\"\r\n",
+            serde_json::json!([{"value":"犬","count":1},{"value":"猫,北","count":2}]),
+            3,
+        ),
+        ("id,分類\r\n", serde_json::json!([]), 0),
+    ] {
+        let scratch = Scratch::new();
+        let request = format!("CSVを列「分類」で件数集計して:\n{source}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "count", &request],
+        ));
+        let artifact = normal_document_artifact(
+            &scratch.0,
+            "owner",
+            &first,
+            &request,
+            source,
+            "CSV_GROUP_COUNT",
+        );
+        let report: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+        assert_eq!(report["group_by"], "分類");
+        assert_eq!(report["groups"], groups);
+        assert_eq!(artifact["parameters"]["row_count"], rows.to_string());
+        let explanation = assert_csv_row_explanation(&scratch.0, &first, &artifact, "group-count");
+        let text = explanation["text"].as_str().unwrap();
+        for expected in [
+            "前回のCSVグループ件数".to_string(),
+            "初出順".to_string(),
+            format!("行数: {rows}"),
+            format!("グループ数: {}", groups.as_array().unwrap().len()),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        for (index, group) in groups.as_array().unwrap().iter().enumerate() {
+            let expected = format!(
+                "グループ{} {:?}。件数: {}",
+                index + 1,
+                group["value"].as_str().unwrap(),
+                group["count"]
+            );
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        assert_csv_group_explanation_sources(text, &artifact, &["CSV_GROUP_MEMBER"]);
+    }
+}
+
+#[test]
+fn csv_group_explanation_statistics_preserves_exact_units_and_source_cells() {
+    let source = "地域,測定\r\n\"北,陸\",1 km\r\n南,1 s\r\n\"北,陸\",500 m\r\n南,2 s\r\n";
+    let request = format!("CSVの「地域」ごとに「測定」の統計量を計算して:\n{source}");
+    let scratch = Scratch::new();
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "group-statistics", &request],
+    ));
+    let artifact = normal_document_artifact(
+        &scratch.0,
+        "owner",
+        &first,
+        &request,
+        source,
+        "CSV_GROUP_STATISTICS",
+    );
+    let report: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+    assert_eq!(report["group_column"], "地域");
+    assert_eq!(report["value_column"], "測定");
+    let groups = report["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    for (index, key, rows, normalized, sum, mean, unit) in [
+        (0, "北,陸", [1, 3], ["1000", "500"], "1500", "750", "m"),
+        (1, "南", [2, 4], ["1", "2"], "3", "3/2", "s"),
+    ] {
+        assert_eq!(groups[index]["value"], key);
+        assert_eq!(
+            groups[index]["source_record_numbers"],
+            serde_json::json!(rows)
+        );
+        let stats = &groups[index]["statistics"];
+        assert_eq!(stats["count"], 2);
+        assert_eq!(stats["normalized_values"], serde_json::json!(normalized));
+        assert_eq!(stats["sum"], sum);
+        assert_eq!(stats["mean"], mean);
+        assert_eq!(stats["unit"], unit);
+    }
+    let explanation = assert_csv_row_explanation(&scratch.0, &first, &artifact, "group-statistics");
+    let text = explanation["text"].as_str().unwrap();
+    for expected in [
+        "前回のCSVグループ統計",
+        "初出順",
+        "行数: 4",
+        "グループ数: 2",
+        "グループ1 \"北,陸\"。件数: 2、合計: 1500、平均: 750、単位: m",
+        "グループ2 \"南\"。件数: 2、合計: 3、平均: 3/2、単位: s",
+        "計測セル",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in {text}");
+    }
+    assert_csv_group_explanation_sources(
+        text,
+        &artifact,
+        &["CSV_GROUP_MEMBER", "CSV_GROUP_STATISTIC_VALUE"],
+    );
+}
+
+fn assert_csv_group_explanation_sources(text: &str, artifact: &Value, kinds: &[&str]) {
+    let source = artifact["source_document"].as_str().unwrap();
+    let row_count = artifact["parameters"]["row_count"]
+        .as_str()
+        .unwrap()
+        .parse::<usize>()
+        .unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for span in artifact["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|span| kinds.contains(&span["kind"].as_str().unwrap()))
+    {
+        let row = span["row"].as_u64().unwrap() as usize;
+        assert!((1..=row_count).contains(&row));
+        assert!(seen.insert((row, span["kind"].as_str().unwrap())));
+        let start = span["source_start"].as_u64().unwrap() as usize;
+        let end = span["source_end"].as_u64().unwrap() as usize;
+        let raw = &source[start..end];
+        assert_eq!(span["source_text"], raw);
+        let marker = format!("元行{row} キー");
+        let line = text
+            .lines()
+            .find(|line| line.contains(&marker))
+            .unwrap_or_else(|| panic!("missing {marker:?} in {text}"));
+        assert!(line.contains(&format!("byte[{start}..{end})")), "{line}");
+        assert!(
+            line.contains(&format!(
+                "sha256={}",
+                minidora_domain::digest(raw.as_bytes())
+            )),
+            "{line}"
+        );
+    }
+    assert_eq!(seen.len(), row_count * kinds.len());
+}
+
 fn assert_csv_row_explanation(
     directory: &Path,
     first: &Value,
