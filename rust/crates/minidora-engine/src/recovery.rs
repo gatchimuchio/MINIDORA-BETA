@@ -240,11 +240,6 @@ struct SearchCandidateExpectation {
     body_ref: String,
 }
 
-struct SourceQuestionExpectation {
-    source_packet_refs: Vec<(usize, String)>,
-    answer_ref: String,
-}
-
 struct PreviousTextEditExpectation {
     source_content_ref: String,
     source_render_ref: String,
@@ -252,42 +247,6 @@ struct PreviousTextEditExpectation {
 }
 
 type JsonGroupMeanRecovery = (String, String, String, String, Vec<u8>, Vec<String>);
-
-fn recompute_source_question_artifact(
-    operation: &str,
-    source_result_id: &str,
-    query: &str,
-    packets: &[(usize, &EvidencePacket, String)],
-) -> Result<(Vec<u8>, Vec<String>)> {
-    match operation {
-        "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1" => {
-            let answer = crate::text_summary::answer_fetched_source_question_v1(
-                source_result_id,
-                query,
-                packets,
-            )?;
-            Ok((
-                canonical(&answer)?,
-                crate::text_summary::source_question_answer_lines_v1(&answer),
-            ))
-        }
-        "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2" => {
-            let answer = crate::text_summary::answer_fetched_source_question_v2(
-                source_result_id,
-                query,
-                packets,
-            )?;
-            Ok((
-                canonical(&answer)?,
-                crate::text_summary::source_question_answer_lines_v2(&answer),
-            ))
-        }
-        _ => Err(failure(
-            "RECOVERY_SOURCE_QUESTION_VERSION",
-            "the retained source-question artifact uses an unsupported derivation version",
-        )),
-    }
-}
 
 fn verify_saved_previous_relation_query_context(
     store: &Store,
@@ -3676,7 +3635,8 @@ pub(crate) fn source_followup_anchor<'a>(
         {
             return Err(mismatch());
         }
-        let packets = verified_source_question_packets(store, actor, case, source)?;
+        let packets =
+            crate::text_summary::verified_source_question_packets(store, actor, case, source)?;
         let same_stop = |error: Option<Error>| {
             let Some(error) = error else { return false };
             matches!(&error, Error::Contract { code, .. } if code == "SOURCE_QUESTION_NO_MATCH")
@@ -3940,32 +3900,6 @@ fn verify_previous_result_summary_context(
     )
 }
 
-fn verified_source_question_packets<'a>(
-    store: &Store,
-    actor: &str,
-    case: &str,
-    prior: &'a ResultRecord,
-) -> Result<Vec<(usize, &'a EvidencePacket, String)>> {
-    let mut packets = Vec::new();
-    for (index, packet) in prior.evidence.iter().enumerate().filter(|(_, packet)| {
-        packet.packet_kind == "FETCHED_BODY"
-            && packet.failure.is_none()
-            && packet.retry_after.is_none()
-            && packet.extracted_text.is_some()
-    }) {
-        let encoded = canonical(packet)?;
-        let packet_ref = digest(&encoded);
-        if store.get_bytes(actor, case, &packet_ref)? != encoded {
-            return Err(failure(
-                "RECOVERY_SOURCE_QUESTION_PACKET_MISMATCH",
-                "the original fetched-body packet differs from its retained artifact",
-            ));
-        }
-        packets.push((index, packet, packet_ref));
-    }
-    Ok(packets)
-}
-
 fn verify_source_question_context(
     store: &Store,
     actor: &str,
@@ -3974,104 +3908,22 @@ fn verify_source_question_context(
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
-) -> Result<Option<SourceQuestionExpectation>> {
-    let Intent::AskPreviousSourceQuestion { query } = &goal.intent else {
+) -> Result<Option<crate::text_summary::RetainedSourceQuestion>> {
+    if !matches!(goal.intent, Intent::AskPreviousSourceQuestion { .. }) {
         return Ok(None);
-    };
+    }
     let bundle = state
         .bundle
         .as_ref()
+        .filter(|bundle| bundle.request.actor_id == actor && bundle.request.case_id == case)
         .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
-    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
-        failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "source question has no sealed prior-result reference",
-        )
-    })?;
-    let prior = state.prior_results.get(prior_id).ok_or_else(|| {
-        failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the exact prior source result is not retained",
-        )
-    })?;
-    if prior.id != *prior_id
-        || identity(&Some(prior))? != bundle.context_sha256
-        || !source_context_available(store, actor, case, prior)?
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the referenced source result does not match the sealed context",
-        ));
-    }
-    let packets = verified_source_question_packets(store, actor, case, prior)?;
-    let source_packet_refs: Vec<_> = packets
-        .iter()
-        .map(|(index, _, reference)| (*index, reference.clone()))
-        .collect();
-    let mut dependencies = vec![prior.id.clone()];
-    dependencies.extend(
-        source_packet_refs
-            .iter()
-            .map(|(_, reference)| reference.clone()),
-    );
-    let answer_ref = result.dependencies.last().ok_or_else(|| {
-        failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the committed source question has no answer artifact reference",
-        )
-    })?;
-    let stored_answer = store.get_bytes(actor, case, answer_ref)?;
-    if digest(&stored_answer) != *answer_ref {
-        return Err(failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the retained source-question answer artifact digest is invalid",
-        ));
-    }
-    let answer_record: serde_json::Value = serde_json::from_slice(&stored_answer)?;
-    let operation = answer_record
-        .get("operation")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            failure(
-                "RECOVERY_SOURCE_QUESTION_VERSION",
-                "the retained source-question artifact has no derivation version",
-            )
-        })?;
-    let (encoded, mut expected_units) =
-        recompute_source_question_artifact(operation, &prior.id, query, &packets)?;
-    if let Some(stop) = crate::text_summary::partial_retrieval_stop(prior) {
-        expected_units.insert(0, stop.notice().into());
-    }
-    if digest(&encoded) != *answer_ref || stored_answer != encoded {
-        return Err(failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the retained answer artifact differs from its versioned source-derived reconstruction",
-        ));
-    }
-    let output_bytes = expected_units.join("\n").len();
-    if encoded.len() > goal.budget.max_evidence_bytes
-        || output_bytes > goal.budget.max_evidence_bytes
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "the retained answer artifact or output exceeds its exact source-derived identity",
-        ));
-    }
-    dependencies.push(answer_ref.clone());
-    if !result.evidence.is_empty()
-        || dependencies != result.dependencies
-        || expected_units != plan.required_units
-        || result.guarantee != Guarantee::Hypothesis
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_QUESTION_MISMATCH",
-            "source packet dependencies, answer candidates or guarantee differ from the adopted result",
-        ));
-    }
-    Ok(Some(SourceQuestionExpectation {
-        source_packet_refs,
-        answer_ref: answer_ref.clone(),
-    }))
+    crate::text_summary::verify_retained_source_question(
+        store,
+        bundle,
+        &state.prior_results,
+        result,
+        plan,
+    )
 }
 
 fn verify_previous_text_edit_context(
@@ -6637,7 +6489,7 @@ mod tests {
             "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1",
             "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2",
         ] {
-            let (bytes, lines) = recompute_source_question_artifact(
+            let (bytes, lines) = crate::text_summary::recompute_source_question_artifact(
                 operation,
                 &"a".repeat(64),
                 "photosynthesis",
@@ -6895,17 +6747,18 @@ mod tests {
         .unwrap();
         let expected_bytes = canonical(&answer).unwrap();
         let expected_lines = crate::text_summary::source_question_answer_lines_v1(&answer);
-        let (replayed_bytes, replayed_lines) = recompute_source_question_artifact(
-            "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1",
-            &"a".repeat(64),
-            "photosynthesis",
-            &packets,
-        )
-        .unwrap();
+        let (replayed_bytes, replayed_lines) =
+            crate::text_summary::recompute_source_question_artifact(
+                "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1",
+                &"a".repeat(64),
+                "photosynthesis",
+                &packets,
+            )
+            .unwrap();
         assert_eq!(replayed_bytes, expected_bytes);
         assert_eq!(replayed_lines, expected_lines);
         assert!(
-            recompute_source_question_artifact(
+            crate::text_summary::recompute_source_question_artifact(
                 "SOURCE_QUESTION_UNKNOWN_V9",
                 &"a".repeat(64),
                 "photosynthesis",

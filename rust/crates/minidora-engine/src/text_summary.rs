@@ -1324,10 +1324,13 @@ pub(crate) fn previous_summary_explanation(
     else {
         if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER)
             || prior.text.contains("\n出典packet: ")
+            || prior
+                .text
+                .contains("質問語句と一致する原文候補を抽出しました。")
         {
             return Err(failure(
                 "MISSING_RESULT_SUMMARY_CONTEXT",
-                "the prior summary has no retained sealed request",
+                "the prior summary or source answer has no retained sealed request",
             ));
         }
         return Ok(None);
@@ -1336,7 +1339,12 @@ pub(crate) fn previous_summary_explanation(
         summary_bundle.meaning.intent,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
     );
+    let is_source_question = matches!(
+        summary_bundle.meaning.intent,
+        Intent::AskPreviousSourceQuestion { .. }
+    );
     if !is_source_summary
+        && !is_source_question
         && !matches!(
             summary_bundle.meaning.intent,
             Intent::SummarizePreviousResult { .. }
@@ -1350,7 +1358,7 @@ pub(crate) fn previous_summary_explanation(
     {
         return Err(failure(
             "MISSING_RESULT_SUMMARY_CONTEXT",
-            "the explanation does not seal the expected committed summary",
+            "the explanation does not seal the expected committed summary or source answer",
         ));
     }
     let plan = prior.content_plan.as_ref().ok_or_else(|| {
@@ -1359,6 +1367,16 @@ pub(crate) fn previous_summary_explanation(
             "the summary has no retained content plan",
         )
     })?;
+    if is_source_question {
+        return previous_source_question_explanation(
+            store,
+            bundle,
+            &summary_bundle,
+            prior_results,
+            prior,
+            plan,
+        );
+    }
     if is_source_summary {
         return previous_source_summary_explanation(
             store,
@@ -1798,7 +1816,13 @@ fn previous_source_summary_explanation(
     let version = explanation.meaning.parser_version.as_str();
     let legacy = version == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
         || crate::input::is_legacy_text_summary_explanation_version(version);
-    if !legacy && version != crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION {
+    if !legacy
+        && !matches!(
+            version,
+            crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
+                | crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION
+        )
+    {
         return Ok(None);
     }
     let Some(proof) =
@@ -1911,6 +1935,336 @@ fn previous_source_summary_explanation(
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
+    }))
+}
+
+pub(crate) fn recompute_source_question_artifact(
+    operation: &str,
+    source_result_id: &str,
+    query: &str,
+    packets: &[(usize, &EvidencePacket, String)],
+) -> Result<(Vec<u8>, Vec<String>)> {
+    match operation {
+        "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1" => {
+            let answer = answer_fetched_source_question_v1(source_result_id, query, packets)?;
+            Ok((
+                canonical(&answer)?,
+                source_question_answer_lines_v1(&answer),
+            ))
+        }
+        "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2" => {
+            let answer = answer_fetched_source_question_v2(source_result_id, query, packets)?;
+            Ok((
+                canonical(&answer)?,
+                source_question_answer_lines_v2(&answer),
+            ))
+        }
+        _ => Err(failure(
+            "RECOVERY_SOURCE_QUESTION_VERSION",
+            "the retained source-question artifact uses an unsupported derivation version",
+        )),
+    }
+}
+
+pub(crate) fn verified_source_question_packets<'a>(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &'a ResultRecord,
+) -> Result<Vec<(usize, &'a EvidencePacket, String)>> {
+    let mut packets = Vec::new();
+    for (index, packet) in source_summary_bodies(prior) {
+        let encoded = canonical(packet)?;
+        let packet_ref = digest(&encoded);
+        if store.get_bytes(actor, case, &packet_ref)? != encoded {
+            return Err(failure(
+                "RECOVERY_SOURCE_QUESTION_PACKET_MISMATCH",
+                "the original fetched-body packet differs from its retained artifact",
+            ));
+        }
+        packets.push((index, packet, packet_ref));
+    }
+    Ok(packets)
+}
+
+pub(crate) struct RetainedSourceQuestion {
+    pub(crate) source_packet_refs: Vec<(usize, String)>,
+    pub(crate) answer_ref: String,
+    source_result_id: String,
+    partial_notice: Option<&'static str>,
+    operation: String,
+    answer_record: serde_json::Value,
+}
+
+fn previous_source_question_explanation(
+    store: &Store,
+    explanation: &InputBundle,
+    question_bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    question_result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<PreviousResultSummaryExplanation>> {
+    let version = explanation.meaning.parser_version.as_str();
+    let legacy = matches!(
+        version,
+        crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+            | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
+    ) || crate::input::is_legacy_text_summary_explanation_version(version);
+    if !legacy && version != crate::input::SOURCE_QUESTION_EXPLANATION_PARSER_VERSION {
+        return Ok(None);
+    }
+    let Some(proof) = verify_retained_source_question(
+        store,
+        question_bundle,
+        prior_results,
+        question_result,
+        plan,
+    )?
+    else {
+        return Ok(None);
+    };
+    let request = &explanation.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        question_result,
+        Some(&proof.answer_ref),
+        "SOURCE_QUESTION_OUTPUT_UNAVAILABLE",
+        "retrieved source answer",
+    )?;
+    let invalid = || {
+        failure(
+            "SOURCE_QUESTION_CONTEXT_INVALID",
+            "the original question evidence or retrieval input is missing or changed",
+        )
+    };
+    let source = prior_results
+        .get(&proof.source_result_id)
+        .ok_or_else(invalid)?;
+    let (_, source_bundle) = store
+        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
+        .ok_or_else(invalid)?;
+    if source.id != identity(&source_bundle.request)? {
+        return Err(invalid());
+    }
+    let mut dependencies = vec![question_result.id.clone()];
+    if legacy {
+        return Ok(Some(PreviousResultSummaryExplanation {
+            units: vec![question_result.text.clone()],
+            dependencies,
+        }));
+    }
+
+    let (topic, terms, candidates, matched, scope) =
+        if proof.operation == "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1" {
+            let answer: SourceQuestionAnswer = serde_json::from_value(proof.answer_record)?;
+            (
+                answer.question_topic,
+                answer.query_terms,
+                answer.candidates,
+                answer.matched_sentence_count,
+                format!("保存済み本文packet {}件の全件", answer.source_packet_count),
+            )
+        } else {
+            let answer: SourceQuestionAnswerV2 = serde_json::from_value(proof.answer_record)?;
+            (
+                answer.question_topic,
+                answer.query_terms,
+                answer.candidates,
+                answer.matched_sentence_count,
+                format!(
+                    "保存済み本文packet {}件。最終URLごとの採用版 {}件、旧本文版 {}件。",
+                    answer.source_packet_count,
+                    answer.active_source_count,
+                    answer.superseded_version_count
+                ),
+            )
+        };
+    let mut units = vec![format!(
+        "前回の資料質問の根拠（質問結果ID: {}、取得結果ID: {}）。",
+        question_result.id, proof.source_result_id,
+    )];
+    if let Some(notice) = proof.partial_notice {
+        units.push(notice.into());
+    }
+    units.extend([
+        format!("照合対象: {:?}", topic),
+        format!("照合語: {}", terms.join("、")),
+        format!("照合範囲: {scope}"),
+        format!("回答レポート: {} / SHA-256: {}", proof.operation, proof.answer_ref),
+        format!("一致した{matched}文から{}候補を採用。一致した語の種類が多い文を優先し、同数のときは資料と抽出位置の順で並べました。", candidates.len()),
+    ]);
+    for candidate in candidates {
+        let packet = proof
+            .source_packet_refs
+            .iter()
+            .find(|(_, reference)| reference == &candidate.source_packet_ref)
+            .and_then(|(index, _)| source.evidence.get(*index))
+            .ok_or_else(invalid)?;
+        let mut chars = candidate.text.chars();
+        let mut preview: String = chars.by_ref().take(128).collect();
+        if chars.next().is_some() {
+            preview.push('…');
+        }
+        units.extend([
+            format!(
+                "候補{} / 一致語: {} / 取得モード: {} / 出典: {}",
+                candidate.rank,
+                candidate.matched_query_terms.join("、"),
+                candidate.source_mode,
+                candidate.source_final_uri
+            ),
+            format!(
+                "  packet ID: {} / SHA-256: {} / 取得時刻（Unix ms）: {} / 抽出器: {}",
+                candidate.source_packet_id,
+                candidate.source_packet_ref,
+                packet.observed_at_unix_ms,
+                packet.parser_version
+            ),
+            format!(
+                "  原本文SHA-256: {} / 抽出本文SHA-256: {}",
+                candidate.raw_body_sha256, candidate.extracted_text_sha256
+            ),
+            format!(
+                "  抽出本文byte[{}..{}) / 範囲SHA-256: {} / 原文候補: {:?}",
+                candidate.source_start, candidate.source_end, candidate.source_span_sha256, preview
+            ),
+        ]);
+    }
+    units.push(
+        "語句の一致を確認しました。回答の意味・網羅性・資料の信頼性と事実性は未検証です。".into(),
+    );
+    if units.join("\n").len() > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the source-question explanation exceeds its evidence budget",
+        ));
+    }
+    dependencies.extend(question_result.dependencies.iter().cloned());
+    Ok(Some(PreviousResultSummaryExplanation {
+        units,
+        dependencies,
+    }))
+}
+
+/// Replay the recorded lexical answer version against the original scoped packets.
+pub(crate) fn verify_retained_source_question(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<RetainedSourceQuestion>> {
+    let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent else {
+        return Ok(None);
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "source question has no sealed prior-result reference",
+        )
+    })?;
+    let prior = prior_results.get(prior_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the exact prior source result is not retained",
+        )
+    })?;
+    if prior.id != *prior_id
+        || identity(&Some(prior))? != bundle.context_sha256
+        || !crate::recovery::source_context_available(store, actor, case, prior)?
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the referenced source result does not match the sealed context",
+        ));
+    }
+    let packets = verified_source_question_packets(store, actor, case, prior)?;
+    let source_packet_refs: Vec<_> = packets
+        .iter()
+        .map(|(index, _, reference)| (*index, reference.clone()))
+        .collect();
+    let mut dependencies = vec![prior.id.clone()];
+    dependencies.extend(
+        source_packet_refs
+            .iter()
+            .map(|(_, reference)| reference.clone()),
+    );
+    let answer_ref = result.dependencies.last().ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the committed source question has no answer artifact reference",
+        )
+    })?;
+    let stored_answer = store.get_bytes(actor, case, answer_ref)?;
+    if digest(&stored_answer) != *answer_ref {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the retained source-question answer artifact digest is invalid",
+        ));
+    }
+    let answer_record: serde_json::Value = serde_json::from_slice(&stored_answer)?;
+    let operation = answer_record
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_SOURCE_QUESTION_VERSION",
+                "the retained source-question artifact has no derivation version",
+            )
+        })?;
+    let (encoded, mut expected_units) =
+        recompute_source_question_artifact(operation, &prior.id, query, &packets)?;
+    if let Some(stop) = partial_retrieval_stop(prior) {
+        expected_units.insert(0, stop.notice().into());
+    }
+    if digest(&encoded) != *answer_ref || stored_answer != encoded {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the retained answer artifact differs from its versioned source-derived reconstruction",
+        ));
+    }
+    let output_bytes = expected_units.join("\n").len();
+    if encoded.len() > request.budget.max_evidence_bytes
+        || output_bytes > request.budget.max_evidence_bytes
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "the retained answer artifact or output exceeds its exact source-derived identity",
+        ));
+    }
+    dependencies.push(answer_ref.clone());
+    if result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.calculation.is_some()
+        || result.text != plan.text
+        || result.text != expected_units.join("\n")
+        || plan.guarantee != result.guarantee
+        || plan.locale != request.locale
+        || !result.evidence.is_empty()
+        || dependencies != result.dependencies
+        || expected_units != plan.required_units
+        || result.guarantee != Guarantee::Hypothesis
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_QUESTION_MISMATCH",
+            "source packet dependencies, answer candidates or guarantee differ from the adopted result",
+        ));
+    }
+    Ok(Some(RetainedSourceQuestion {
+        source_packet_refs,
+        answer_ref: answer_ref.clone(),
+        source_result_id: prior.id.clone(),
+        partial_notice: partial_retrieval_stop(prior).map(PartialRetrievalStop::notice),
+        operation: operation.into(),
+        answer_record,
     }))
 }
 

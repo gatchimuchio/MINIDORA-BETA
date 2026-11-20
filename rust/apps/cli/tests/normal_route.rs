@@ -8606,12 +8606,30 @@ fn natural_source_question_consumes_the_actual_prior_fetched_body() {
     assert_eq!(typed["source_versions"][0]["active_packet_ref"], packet_ref);
     assert_eq!(typed["candidates"][0]["source_packet_ref"], packet_ref);
     assert_eq!(typed["candidates"][0]["source_mode"], "FIXTURE");
-    let span_start = typed["candidates"][0]["source_start"].as_u64().unwrap() as usize;
-    let span_end = typed["candidates"][0]["source_end"].as_u64().unwrap() as usize;
-    assert_eq!(
-        &source_text[span_start..span_end],
-        typed["candidates"][0]["text"].as_str().unwrap()
-    );
+    let expected_candidates = [
+        (29, 64, "Photosynthesis stores light energy."),
+        (65, 107, "Plants use photosynthesis in their leaves."),
+    ];
+    let candidates = typed["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), expected_candidates.len());
+    for (index, (candidate, &(start, end, raw))) in
+        candidates.iter().zip(&expected_candidates).enumerate()
+    {
+        assert_eq!(&source_text[start..end], raw);
+        assert_eq!(candidate["rank"], index + 1);
+        assert_eq!(candidate["source_packet_ref"], packet_ref);
+        assert_eq!(candidate["source_start"], start);
+        assert_eq!(candidate["source_end"], end);
+        assert_eq!(candidate["text"], raw);
+        assert_eq!(
+            candidate["source_span_sha256"],
+            minidora_domain::digest(raw.as_bytes())
+        );
+        assert_eq!(
+            candidate["matched_query_terms"],
+            serde_json::json!(["photosynthesis"])
+        );
+    }
     assert!(
         answer["text"]
             .as_str()
@@ -8639,6 +8657,102 @@ fn natural_source_question_consumes_the_actual_prior_fetched_body() {
             .contains("previous-source-question-answer")
     );
     assert!(graph.to_string().contains(&packet_ref));
+
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    let original_actions = store.actions("owner", "normal-route").unwrap();
+    assert_eq!(original_actions.len(), 1);
+    assert_eq!(
+        original_actions[0].phase,
+        minidora_domain::EffectPhase::Confirmed
+    );
+    let modified = std::fs::metadata(&output_path).unwrap().modified().unwrap();
+    let explanation_args = ["--input", "source-question-explain", "詳しく説明して"];
+    let explanation = record(&execute(&scratch.0, "owner", &explanation_args));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    assert_eq!(explanation["content_plan"]["guarantee"], "HYPOTHESIS");
+    assert_eq!(explanation["content_plan"]["text"], explanation["text"]);
+    assert_eq!(explanation["receipts"], serde_json::json!([]));
+    let mut expected_dependencies = vec![answer["id"].clone()];
+    expected_dependencies.extend_from_slice(dependencies);
+    assert_eq!(
+        explanation["dependencies"],
+        Value::Array(expected_dependencies)
+    );
+    let explanation_text = explanation["text"].as_str().unwrap();
+    assert!(
+        explanation_text.starts_with("前回の資料質問の根拠"),
+        "{explanation_text}"
+    );
+    assert_eq!(
+        explanation["render"]["actual_sha256"],
+        minidora_domain::digest(explanation_text.as_bytes())
+    );
+    let lines: Vec<_> = explanation_text.lines().collect();
+    assert!(
+        lines.contains(&"照合語: photosynthesis"),
+        "{explanation_text}"
+    );
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with("候補")).count(),
+        2
+    );
+    let mut previous_heading = None;
+    for (index, &(start, end, raw)) in expected_candidates.iter().enumerate() {
+        let heading = format!(
+            "候補{} / 一致語: photosynthesis / 取得モード: FIXTURE / 出典: https://example.test/article",
+            index + 1
+        );
+        let position = lines
+            .iter()
+            .position(|line| *line == heading)
+            .unwrap_or_else(|| panic!("missing {heading:?} in {explanation_text}"));
+        if let Some(previous) = previous_heading {
+            assert!(previous < position);
+        }
+        previous_heading = Some(position);
+        assert_eq!(
+            lines[position + 3],
+            format!(
+                "  抽出本文byte[{start}..{end}) / 範囲SHA-256: {} / 原文候補: {raw:?}",
+                minidora_domain::digest(raw.as_bytes())
+            )
+        );
+    }
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &explanation_args)),
+        explanation
+    );
+    let explained_saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(explained_saved["result"], explanation);
+    assert_eq!(
+        explained_saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v110-source-question-explanation"
+    );
+    assert_eq!(
+        explained_saved["bundle"]["meaning"]["context_result_ref"],
+        answer["id"]
+    );
+    assert_eq!(
+        explained_saved["prior_results"][answer["id"].as_str().unwrap()],
+        answer
+    );
+    assert_eq!(
+        explained_saved["prior_results"][&source_result_id],
+        saved["prior_results"][&source_result_id]
+    );
+    assert_eq!(
+        store.actions("owner", "normal-route").unwrap(),
+        original_actions
+    );
+    assert_eq!(
+        std::fs::read(&output_path).unwrap(),
+        answer["text"].as_str().unwrap().as_bytes()
+    );
+    assert_eq!(
+        std::fs::metadata(&output_path).unwrap().modified().unwrap(),
+        modified
+    );
 }
 
 #[test]
@@ -9257,7 +9371,7 @@ fn constrained_previous_source_summary_binds_one_actual_packet_and_stops_on_ambi
     assert_eq!(explained_saved["result"], explanation);
     assert_eq!(
         explained_saved["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v109-source-summary-explanation"
+        "declarative-ja-en-v110-source-question-explanation"
     );
     assert_eq!(
         explained_saved["bundle"]["meaning"]["context_result_ref"],
@@ -16120,7 +16234,7 @@ fn text_summary_candidate_explanation_preserves_required_rank_and_escaped_source
         assert_eq!(saved["bundle"]["request"]["input_id"], "explain");
         assert_eq!(
             saved["bundle"]["meaning"]["parser_version"],
-            "declarative-ja-en-v109-source-summary-explanation"
+            "declarative-ja-en-v110-source-question-explanation"
         );
         assert_eq!(
             saved["bundle"]["meaning"]["context_result_ref"],
