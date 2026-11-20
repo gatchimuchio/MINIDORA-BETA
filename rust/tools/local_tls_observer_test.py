@@ -922,6 +922,70 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
             assert cli("run", "--input", detail_input, "詳しく説明して", case_id=case) == detail
             explained_body_followups[f"{kind}_explanation"] = detail
     assert not contacts_since(followup_seen) and len(fixture.connects) == followup_starts
+
+    # An explicit retained explanation must win over an unrelated latest turn.
+    # The second request targets a rich explanation of the new v114 summary.
+    explicit_seen, explicit_starts = len(fixture.events), len(fixture.connects)
+    chosen_detail = explained_body_followups["question_explanation"]
+    explicit_source_followups = {}
+    for kind, input_id, followup_request, unrelated_request in (
+        ("summary", "explicit-question-detail-summary", "前回の本文を要約して", "2+3"),
+        ("question", "explicit-new-summary-detail-question", "本文では予備値について何と書かれていますか", "3+4"),
+    ):
+        unrelated = cli("run", "--input", f"unrelated-before-{input_id}", unrelated_request, case_id=case)
+        assert unrelated["guarantee"] == "COMPUTED" and unrelated["id"] != chosen_detail["id"]
+        assert cli("inspect", case_id=case)["result"] == unrelated
+        arguments = ("--input", input_id, "--context", chosen_detail["id"], followup_request)
+        explicit = cli("run", *arguments, case_id=case)
+        assert explicit["guarantee"] == "HYPOTHESIS"
+        assert explicit["evidence"] == [] and explicit["receipts"] == []
+        assert explicit["dependencies"][:3] == [chosen_detail["id"], body["id"], source_ref]
+        assert unrelated["id"] not in explicit["dependencies"]
+        assert len(explicit["dependencies"]) >= 4
+        assert explicit["content_plan"]["text"] == explicit["text"]
+        assert explicit["render"]["status"] == "RENDERED"
+        assert hashlib.sha256(explicit["text"].encode()).hexdigest() == explicit["render"]["actual_sha256"]
+        explicit_report_ref = explicit["dependencies"][-1]
+        explicit_report = load(explicit_report_ref)
+        assert explicit_report["source_result_id"] == body["id"]
+        canonical_report = json.dumps(explicit_report, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        assert (state_path / "blobs" / explicit_report_ref).read_bytes() == canonical_report
+        if kind == "summary":
+            assert explicit_report["source_packet_ref"] == source_ref
+            assert explicit_report["summary"]["source_text"] == body_packet["extracted_text"]
+            assert all(sentence in explicit["text"] for sentence in selected_sentences)
+        else:
+            (quote,) = explicit_report["candidates"]
+            assert quote["source_packet_ref"] == source_ref
+            assert quote["text"] == selected_sentences[1] and selected_sentences[1] in explicit["text"]
+            assert selected_sentences[0] not in explicit["text"]
+        explicit_state = cli("inspect", case_id=case)
+        assert explicit_state["result"] == explicit
+        assert explicit_state["bundle"]["request"]["context_ref"] == chosen_detail["id"]
+        assert explicit_state["bundle"]["meaning"]["context_result_ref"] == chosen_detail["id"]
+        assert explicit_state["bundle"]["meaning"]["parser_version"] == "declarative-ja-en-v114-explicit-source-explanation-followup"
+        assert explicit_state["bundle"]["request"]["permissions"]["read_hosts"] == []
+        assert cli("run", *arguments, case_id=case) == explicit
+        explicit_source_followups[kind] = explicit
+        if kind == "summary":
+            detail_input = "explain-explicit-source-summary"
+            new_detail = cli("run", "--input", detail_input, "詳しく説明して", case_id=case)
+            assert new_detail["guarantee"] == "HYPOTHESIS"
+            assert new_detail["evidence"] == [] and new_detail["receipts"] == []
+            assert new_detail["dependencies"] == [explicit["id"], *explicit["dependencies"]]
+            assert "前回の取得資料要約の根拠" in new_detail["text"]
+            for reference in (explicit["id"], body["id"], body_packet["id"], source_ref):
+                assert reference in new_detail["text"]
+            assert new_detail["content_plan"]["text"] == new_detail["text"]
+            assert new_detail["render"]["status"] == "RENDERED"
+            assert hashlib.sha256(new_detail["text"].encode()).hexdigest() == new_detail["render"]["actual_sha256"]
+            detail_state = cli("inspect", case_id=case)
+            assert detail_state["result"] == new_detail
+            assert detail_state["bundle"]["meaning"]["context_result_ref"] == explicit["id"]
+            assert cli("run", "--input", detail_input, "詳しく説明して", case_id=case) == new_detail
+            explicit_source_followups["summary_explanation"] = new_detail
+            chosen_detail = new_detail
+    assert not contacts_since(explicit_seen) and len(fixture.connects) == explicit_starts
     blocked = cli("run", "--input", "during-retry-after", "--allow-read-host", primary,
                   "検索 wikipedia: alternate trial", case_id=case, expected_exit=2)
     assert "HTTP_RETRY_DEFERRED" in blocked["reason"] and failed["id"] in blocked["reason"]
@@ -1031,6 +1095,7 @@ def check_ordered_search(cli, fixture: Fixture, state_path: Path, directory: Pat
                                  "replayed_exactly": body_explanation_replayed == body_explanation,
                                  "new_http_requests": 0},
             "explained_body_followups": {**explained_body_followups, "new_http_requests": 0},
+            "explicit_source_followups": {**explicit_source_followups, "new_http_requests": 0},
             "deferred": blocked, "cancelled_deferred": cancelled_deferred,
             "listing_explanation": {"prior": prior_listing, "result": explained,
                                     "replayed_exactly": explained_replayed == explained,

@@ -27,6 +27,7 @@ Options:
   --db DIRECTORY             Durable state directory (default .minidora-rust-state)
   --case ID                  Case identity (default default)
   --input ID                 Explicit durable input identity; omit for next revision
+  --context RESULT_ID        Reference an exact prior result in the same case (run only)
   --version N                Input version (default 1)
   --actor ID                 Trusted local frontend identity
   --json                     Print the full result or case revision as JSON
@@ -89,6 +90,7 @@ struct Options {
     db: PathBuf,
     case_id: String,
     input_id: Option<String>,
+    context_ref: Option<String>,
     input_version: u64,
     actor: String,
     json: bool,
@@ -130,6 +132,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         db: ".minidora-rust-state".into(),
         case_id: "default".into(),
         input_id: None,
+        context_ref: None,
         input_version: 1,
         actor: default_actor(),
         json: false,
@@ -194,6 +197,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
             }
             "--case" => options.case_id = next_value(&mut args, &arg)?,
             "--input" => options.input_id = Some(next_value(&mut args, &arg)?),
+            "--context" => options.context_ref = Some(next_value(&mut args, &arg)?),
             "--version" => options.input_version = number(next_value(&mut args, &arg)?, &arg)?,
             "--actor" => options.actor = next_value(&mut args, &arg)?,
             "--json" => options.json = true,
@@ -245,6 +249,13 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     }
     if options.mode != Mode::Run && !options.text.is_empty() {
         return Err("only run accepts request text".into());
+    }
+    if let Some(context) = &options.context_ref
+        && (options.mode != Mode::Run || context.trim().is_empty())
+    {
+        return Err(
+            "--context requires a nonempty result identity and is only accepted by run".into(),
+        );
     }
     if !options.bind.ip().is_loopback() {
         return Err("serve requires a loopback bind address".into());
@@ -393,6 +404,7 @@ fn run(options: Options) -> Result<u8, String> {
     };
     let mut request = RequestEnvelope::new(&options.case_id, &input_id, &options.actor, &text);
     request.input_version = options.input_version;
+    request.context_ref = options.context_ref;
     request.permissions.read_hosts = options.read_hosts;
     request.permissions.write_paths = options.write_paths;
     request.output_path = options.output;

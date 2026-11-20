@@ -89,6 +89,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                 bundle.meaning.parser_version.as_str(),
                 crate::input::SOURCE_SUMMARY_PARSER_VERSION
                     | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+                    | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
             )
         }) {
             store_execution_graph(store, actor, case, &graph)?
@@ -3460,7 +3461,11 @@ pub(crate) fn source_followup_anchor<'a>(
         ) {
             return Err(mismatch());
         }
-        return Ok(Some(source));
+        return Ok(Some(if allow_explanation {
+            context.base_context
+        } else {
+            source
+        }));
     }
     let goal_ref = state.goal_sha256.as_ref().ok_or_else(mismatch)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
@@ -3493,43 +3498,30 @@ pub(crate) fn source_followup_anchor<'a>(
         else {
             return Ok(None);
         };
-        let Some(anchor_id) = proof.source_context_ref else {
+        let Some(anchor_id) = proof.source_context_ref.as_ref() else {
             return Ok(None);
         };
-        if store
-            .get_input_result(actor, case, &result.input_id, result.input_version)?
-            .as_ref()
-            != Some(result)
-            || result.calculation.is_some()
-            || !result.evidence.is_empty()
-            || result.dependencies != proof.dependencies
-            || !plan.dependencies.starts_with(&proof.dependencies)
-            || plan.required_units != proof.units
-            || result.text != proof.units.join("\n")
-        {
-            return Err(mismatch());
-        }
-        crate::document::revalidate_previous_document_render(
-            store,
-            actor,
-            case,
-            result,
-            None,
-            "SOURCE_CONTEXT_INVALID",
-            "retrieved source explanation",
-        )?;
-        // Reuse the exact context used to derive the original answer. For a
-        // selected candidate this is its v113 explanation, not the full fetch history.
-        let anchor = state.prior_results.get(&anchor_id).ok_or_else(mismatch)?;
+        crate::text_summary::verify_source_explanation_result(store, bundle, result, &proof)?;
+        // Keep the already verified source scope as the next implicit context.
+        let anchor = state.prior_results.get(anchor_id).ok_or_else(mismatch)?;
         return Ok(Some(anchor));
     }
 
-    if matches!(goal.intent, Intent::AskPreviousSourceQuestion { .. }) {
-        verify_source_question_context(store, actor, case, state, result, plan, &goal)?;
+    let anchor_id = if matches!(goal.intent, Intent::AskPreviousSourceQuestion { .. }) {
+        verify_source_question_context(store, actor, case, state, result, plan, &goal)?
+            .map(|proof| proof.source_context_ref)
+            .ok_or_else(mismatch)?
     } else {
-        verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
-    }
-    Ok(Some(source))
+        verify_source_summary_context(store, actor, case, state, result, plan, &goal)?
+            .map(|proof| proof.source_context_ref)
+            .ok_or_else(mismatch)?
+    };
+    let anchor = if allow_explanation {
+        state.prior_results.get(&anchor_id).ok_or_else(mismatch)?
+    } else {
+        source
+    };
+    Ok(Some(anchor))
 }
 
 fn verify_source_summary_context(
@@ -3558,6 +3550,7 @@ fn verify_source_summary_context(
         &state.prior_results,
         result,
         plan,
+        None,
     )
 }
 
@@ -3770,6 +3763,7 @@ fn verify_source_question_context(
         &state.prior_results,
         result,
         plan,
+        None,
     )
 }
 
@@ -3878,8 +3872,11 @@ fn inspect(
             "sealed actor/case/input differs",
         ));
     }
-    if bundle.meaning.parser_version == crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
-    {
+    if matches!(
+        bundle.meaning.parser_version.as_str(),
+        crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+    ) {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
     }
     let goal_ref = state.goal_sha256.as_ref().ok_or_else(|| {

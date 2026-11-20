@@ -7,7 +7,7 @@ use minidora_domain::{
     canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 const MAX_REQUEST_BYTES: usize = 256_000;
@@ -1306,6 +1306,51 @@ pub(crate) struct PreviousResultSummaryExplanation {
     pub(crate) source_context_ref: Option<String>,
 }
 
+pub(crate) fn verify_source_explanation_result(
+    store: &Store,
+    input: &InputBundle,
+    result: &ResultRecord,
+    proof: &PreviousResultSummaryExplanation,
+) -> Result<()> {
+    let request = &input.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "the retained source explanation differs from its verified derivation",
+        )
+    };
+    let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
+    if result.lifecycle != Lifecycle::Commit
+        || result.guarantee != Guarantee::Hypothesis
+        || identity(request)? != result.id
+        || store
+            .get_input_result(actor, case, &result.input_id, result.input_version)?
+            .as_ref()
+            != Some(result)
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.locale != request.locale
+        || plan.required_units != proof.units
+        || result.text != proof.units.join("\n")
+        || result.dependencies != proof.dependencies
+        || !plan.dependencies.starts_with(&proof.dependencies)
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        result,
+        None,
+        "SOURCE_CONTEXT_INVALID",
+        "retrieved source explanation",
+    )?;
+    Ok(())
+}
+
 pub(crate) fn previous_summary_explanation(
     store: &Store,
     bundle: &InputBundle,
@@ -1376,6 +1421,7 @@ pub(crate) fn previous_summary_explanation(
             prior_results,
             prior,
             plan,
+            None,
         );
     }
     if is_source_summary {
@@ -1386,6 +1432,7 @@ pub(crate) fn previous_summary_explanation(
             prior_results,
             prior,
             plan,
+            None,
         );
     }
     let Some(proof) = verify_retained_previous_result_summary(
@@ -1650,6 +1697,7 @@ fn select_source_versions(
 
 pub(crate) struct RetainedSourceSummary {
     pub(crate) source_packet_refs: Vec<(usize, String)>,
+    pub(crate) source_context_ref: String,
     source_result_id: String,
     partial_notice: Option<&'static str>,
     reports: Vec<SourceExtractiveSummaryCandidates>,
@@ -1658,11 +1706,21 @@ pub(crate) struct RetainedSourceSummary {
 #[derive(Clone, Copy)]
 pub(crate) struct SourceFollowup<'a> {
     context: &'a ResultRecord,
+    pub(crate) base_context: &'a ResultRecord,
     pub(crate) source: &'a ResultRecord,
     selected_body_index: Option<usize>,
 }
 
 impl<'a> SourceFollowup<'a> {
+    fn direct(context: &'a ResultRecord) -> Self {
+        Self {
+            context,
+            base_context: context,
+            source: context,
+            selected_body_index: None,
+        }
+    }
+
     pub(crate) fn bodies(self) -> impl Iterator<Item = (usize, &'a EvidencePacket)> {
         source_summary_bodies(self.source).filter(move |(index, _)| {
             self.selected_body_index
@@ -1679,8 +1737,162 @@ impl<'a> SourceFollowup<'a> {
     }
 }
 
+fn source_followup_for_replay<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    prior: &'a ResultRecord,
+    resolved: Option<SourceFollowup<'a>>,
+) -> Result<Option<SourceFollowup<'a>>> {
+    if let Some(scope) = resolved {
+        return Ok((scope.context == prior
+            && bundle.meaning.context_result_ref.as_deref() == Some(prior.id.as_str())
+            && identity(&Some(prior))? == bundle.context_sha256)
+            .then_some(scope));
+    }
+    source_followup_context(store, bundle, prior_results, prior)
+}
+
+struct SourceExplanationStep<'a> {
+    detail: &'a ResultRecord,
+    detail_input: InputBundle,
+    derivation: &'a ResultRecord,
+    derivation_input: InputBundle,
+}
+
+fn explicit_explanation_source<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    context: &'a ResultRecord,
+) -> Result<Option<SourceFollowup<'a>>> {
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let invalid = || {
+        failure(
+            "SOURCE_CONTEXT_INVALID",
+            "the explicitly referenced source explanation or its derivation differs from the retained proof",
+        )
+    };
+    let referent = |input: &InputBundle| {
+        input
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|reference| prior_results.get(reference))
+            .ok_or_else(invalid)
+    };
+    let registered = |result: &ResultRecord| {
+        store
+            .get_input_bundle(actor, case, &result.input_id, result.input_version)?
+            .map(|(_, input)| input)
+            .ok_or_else(invalid)
+    };
+    let mut steps: Vec<SourceExplanationStep<'a>> = Vec::new();
+    let mut visited = BTreeSet::new();
+    // Resolve the original scope once, then verify each derived display from
+    // oldest to newest. Explicit follow-ups can form a long linear history.
+    let mut scope = loop {
+        let (input, detail) = match steps.last() {
+            Some(step) => (&step.derivation_input, referent(&step.derivation_input)?),
+            None => (bundle, context),
+        };
+        if input.meaning.parser_version
+            != crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        {
+            break direct_source_followup(store, input, prior_results, detail)?
+                .ok_or_else(invalid)?;
+        }
+        if input.request.context_ref.as_deref() != Some(detail.id.as_str())
+            || input.meaning.context_result_ref.as_deref() != Some(detail.id.as_str())
+            || input.context_sha256 != identity(&Some(detail))?
+            || detail.lifecycle != Lifecycle::Commit
+            || detail.guarantee != Guarantee::Hypothesis
+            || !detail.evidence.is_empty()
+            || !visited.insert(detail.id.as_str())
+        {
+            return Err(invalid());
+        }
+        let detail_input = registered(detail)?;
+        if !matches!(detail_input.meaning.intent, Intent::ExplainPrevious) {
+            break SourceFollowup::direct(detail);
+        }
+        let derivation = referent(&detail_input)?;
+        let derivation_input = registered(derivation)?;
+        if !matches!(
+            derivation_input.meaning.intent,
+            Intent::AskPreviousSourceQuestion { .. }
+                | Intent::SummarizePreviousSource
+                | Intent::SummarizePreviousSourceConstrained { .. }
+        ) {
+            break SourceFollowup::direct(detail);
+        }
+        if detail_input.meaning.context_result_ref.as_deref() != Some(derivation.id.as_str())
+            || detail_input.context_sha256 != identity(&Some(derivation))?
+            || derivation.lifecycle != Lifecycle::Commit
+        {
+            return Err(invalid());
+        }
+        steps.push(SourceExplanationStep {
+            detail,
+            detail_input,
+            derivation,
+            derivation_input,
+        });
+    };
+
+    for step in steps.iter().rev() {
+        let derivation_plan = step.derivation.content_plan.as_ref().ok_or_else(invalid)?;
+        let proof = if matches!(
+            step.derivation_input.meaning.intent,
+            Intent::AskPreviousSourceQuestion { .. }
+        ) {
+            previous_source_question_explanation(
+                store,
+                &step.detail_input,
+                &step.derivation_input,
+                prior_results,
+                step.derivation,
+                derivation_plan,
+                Some(scope),
+            )?
+        } else {
+            previous_source_summary_explanation(
+                store,
+                &step.detail_input,
+                &step.derivation_input,
+                prior_results,
+                step.derivation,
+                derivation_plan,
+                Some(scope),
+            )?
+        };
+        let Some(proof) = proof.filter(|proof| proof.source_context_ref.is_some()) else {
+            scope = SourceFollowup::direct(step.detail);
+            continue;
+        };
+        verify_source_explanation_result(store, &step.detail_input, step.detail, &proof)?;
+        scope.context = step.detail;
+    }
+    Ok(Some(scope))
+}
+
 /// Resolve the exact source context used by ordinary requests and their replay.
 pub(crate) fn source_followup_context<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    context: &'a ResultRecord,
+) -> Result<Option<SourceFollowup<'a>>> {
+    if bundle.meaning.parser_version
+        == crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+    {
+        return explicit_explanation_source(store, bundle, prior_results, context);
+    }
+    direct_source_followup(store, bundle, prior_results, context)
+}
+
+fn direct_source_followup<'a>(
     store: &Store,
     bundle: &InputBundle,
     prior_results: &'a BTreeMap<String, ResultRecord>,
@@ -1701,11 +1913,7 @@ pub(crate) fn source_followup_context<'a>(
     {
         return Ok(None);
     }
-    let direct = SourceFollowup {
-        context,
-        source: context,
-        selected_body_index: None,
-    };
+    let direct = SourceFollowup::direct(context);
     if bundle.meaning.parser_version != crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
         || context.guarantee != Guarantee::SourceReport
         || !context.evidence.is_empty()
@@ -1761,6 +1969,7 @@ pub(crate) fn source_followup_context<'a>(
     )?;
     Ok(Some(SourceFollowup {
         context,
+        base_context: context,
         source,
         selected_body_index: Some(selected_body_index),
     }))
@@ -1777,12 +1986,13 @@ pub(crate) fn source_summary_unit(report: &SourceExtractiveSummaryCandidates) ->
 }
 
 /// Verify the saved summary using the original source, limits and parser version.
-pub(crate) fn verify_retained_source_summary(
+pub(crate) fn verify_retained_source_summary<'a>(
     store: &Store,
     bundle: &InputBundle,
-    prior_results: &BTreeMap<String, ResultRecord>,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
     result: &ResultRecord,
     plan: &ContentPlan,
+    resolved: Option<SourceFollowup<'a>>,
 ) -> Result<Option<RetainedSourceSummary>> {
     if !matches!(
         bundle.meaning.intent,
@@ -1806,8 +2016,8 @@ pub(crate) fn verify_retained_source_summary(
             "the exact prior source result is not retained",
         )
     })?;
-    let context =
-        source_followup_context(store, bundle, prior_results, prior)?.ok_or_else(|| {
+    let context = source_followup_for_replay(store, bundle, prior_results, prior, resolved)?
+        .ok_or_else(|| {
             failure(
                 "RECOVERY_SOURCE_CONTEXT_MISMATCH",
                 "the referenced source result does not match the sealed context",
@@ -1911,19 +2121,21 @@ pub(crate) fn verify_retained_source_summary(
     }
     Ok(Some(RetainedSourceSummary {
         source_packet_refs,
+        source_context_ref: context.base_context.id.clone(),
         source_result_id: prior.id.clone(),
         partial_notice: partial_retrieval_stop(prior).map(PartialRetrievalStop::notice),
         reports,
     }))
 }
 
-fn previous_source_summary_explanation(
+fn previous_source_summary_explanation<'a>(
     store: &Store,
     explanation: &InputBundle,
     summary_bundle: &InputBundle,
-    prior_results: &BTreeMap<String, ResultRecord>,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
     summary_result: &ResultRecord,
     plan: &ContentPlan,
+    resolved: Option<SourceFollowup<'a>>,
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let version = explanation.meaning.parser_version.as_str();
     let legacy = version == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
@@ -1939,8 +2151,14 @@ fn previous_source_summary_explanation(
     {
         return Ok(None);
     }
-    let Some(proof) =
-        verify_retained_source_summary(store, summary_bundle, prior_results, summary_result, plan)?
+    let Some(proof) = verify_retained_source_summary(
+        store,
+        summary_bundle,
+        prior_results,
+        summary_result,
+        plan,
+        resolved,
+    )?
     else {
         return Ok(None);
     };
@@ -2050,7 +2268,7 @@ fn previous_source_summary_explanation(
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
-        source_context_ref: summary_bundle.meaning.context_result_ref.clone(),
+        source_context_ref: Some(proof.source_context_ref),
     }))
 }
 
@@ -2105,6 +2323,7 @@ pub(crate) fn verified_source_question_packets<'a>(
 
 pub(crate) struct RetainedSourceQuestion {
     pub(crate) source_packet_refs: Vec<(usize, String)>,
+    pub(crate) source_context_ref: String,
     pub(crate) answer_ref: String,
     source_result_id: String,
     partial_notice: Option<&'static str>,
@@ -2112,13 +2331,14 @@ pub(crate) struct RetainedSourceQuestion {
     answer_record: serde_json::Value,
 }
 
-fn previous_source_question_explanation(
+fn previous_source_question_explanation<'a>(
     store: &Store,
     explanation: &InputBundle,
     question_bundle: &InputBundle,
-    prior_results: &BTreeMap<String, ResultRecord>,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
     question_result: &ResultRecord,
     plan: &ContentPlan,
+    resolved: Option<SourceFollowup<'a>>,
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let version = explanation.meaning.parser_version.as_str();
     let legacy = matches!(
@@ -2142,6 +2362,7 @@ fn previous_source_question_explanation(
         prior_results,
         question_result,
         plan,
+        resolved,
     )?
     else {
         return Ok(None);
@@ -2271,17 +2492,18 @@ fn previous_source_question_explanation(
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
-        source_context_ref: question_bundle.meaning.context_result_ref.clone(),
+        source_context_ref: Some(proof.source_context_ref),
     }))
 }
 
 /// Replay the recorded lexical answer version against the original scoped packets.
-pub(crate) fn verify_retained_source_question(
+pub(crate) fn verify_retained_source_question<'a>(
     store: &Store,
     bundle: &InputBundle,
-    prior_results: &BTreeMap<String, ResultRecord>,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
     result: &ResultRecord,
     plan: &ContentPlan,
+    resolved: Option<SourceFollowup<'a>>,
 ) -> Result<Option<RetainedSourceQuestion>> {
     let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent else {
         return Ok(None);
@@ -2301,8 +2523,8 @@ pub(crate) fn verify_retained_source_question(
             "the exact prior source result is not retained",
         )
     })?;
-    let context =
-        source_followup_context(store, bundle, prior_results, prior)?.ok_or_else(|| {
+    let context = source_followup_for_replay(store, bundle, prior_results, prior, resolved)?
+        .ok_or_else(|| {
             failure(
                 "RECOVERY_SOURCE_QUESTION_MISMATCH",
                 "the referenced source result does not match the sealed context",
@@ -2384,6 +2606,7 @@ pub(crate) fn verify_retained_source_question(
     }
     Ok(Some(RetainedSourceQuestion {
         source_packet_refs,
+        source_context_ref: context.base_context.id.clone(),
         answer_ref: answer_ref.clone(),
         source_result_id: prior.id.clone(),
         partial_notice: partial_retrieval_stop(prior).map(PartialRetrievalStop::notice),
@@ -2504,6 +2727,7 @@ pub(crate) fn source_summary_packet_positions(
         parser_version,
         crate::input::SOURCE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
         return Ok((0..packets.len()).collect());
     }
