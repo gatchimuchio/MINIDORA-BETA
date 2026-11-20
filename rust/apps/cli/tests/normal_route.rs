@@ -12560,6 +12560,116 @@ fn assert_csv_group_explanation_sources(text: &str, artifact: &Value, kinds: &[&
     assert_eq!(seen.len(), row_count * kinds.len());
 }
 
+#[test]
+fn csv_selection_explanation_preserves_named_columns_and_exact_source_cells() {
+    let numeric_name = BASIC_SELECTION_CSV.replacen("\"値 名前\"", "0", 1);
+    for (header, source, name, raw_header, empty) in [
+        (
+            "CSVの列「値 名前」を選択して:",
+            BASIC_SELECTION_CSV,
+            "値 名前",
+            "\"値 名前\"",
+            false,
+        ),
+        (
+            "csv-select \"値 名前\"",
+            BASIC_SELECTION_CSV,
+            "値 名前",
+            "\"値 名前\"",
+            false,
+        ),
+        ("csv-select \"0\"", numeric_name.as_str(), "0", "0", false),
+        (
+            "CSVの列「値 名前」を選択して:",
+            "id,\"値 名前\"\r\n",
+            "値 名前",
+            "\"値 名前\"",
+            true,
+        ),
+    ] {
+        let mut raw = vec![raw_header];
+        let mut decoded = vec![name];
+        if !empty {
+            raw.extend([
+                "\"猫,北\"",
+                "\"犬\r\n南\"",
+                "\"\"",
+                "",
+                "9007199254740993",
+                "\"say \"\"hi\"\"\"",
+            ]);
+            decoded.extend([
+                "猫,北",
+                "犬\r\n南",
+                "",
+                "",
+                "9007199254740993",
+                "say \"hi\"",
+            ]);
+        }
+        let scratch = Scratch::new();
+        let request = format!("{header}\n{source}");
+        let first = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", "select", &request],
+        ));
+        let artifact =
+            normal_document_artifact(&scratch.0, "owner", &first, &request, source, "CSV_SELECT");
+        assert_basic_csv_maps(&artifact, source, &raw, &decoded, true);
+        assert_eq!(artifact["parameters"]["column_name"], name);
+        assert_eq!(artifact["parameters"]["column_index"], "1");
+        assert_eq!(artifact["parameters"]["has_header"], "true");
+        let selected: Value = serde_json::from_str(first["text"].as_str().unwrap()).unwrap();
+        assert_eq!(selected, serde_json::json!(&decoded[1..]));
+        let explanation = assert_csv_row_explanation(&scratch.0, &first, &artifact, "select");
+        let text = explanation["text"].as_str().unwrap();
+        for expected in [
+            "前回のCSV列選択".to_string(),
+            format!("選択列: {name:?} (元列番号 2)"),
+            format!("選択値数: {}", decoded.len() - 1),
+        ] {
+            assert!(text.contains(&expected), "missing {expected:?} in {text}");
+        }
+        // Fixed raw tokens plus unique record IDs bind each source row and
+        // zero-width empty independently of the saved artifact's span metadata.
+        for row in 0..raw.len() {
+            let id = if row == 0 {
+                "id".to_string()
+            } else {
+                char::from(b'a' + (row - 1) as u8).to_string()
+            };
+            let fragment = if row == 0 {
+                format!("{id},{}", raw[row])
+            } else {
+                format!("\r\n{id},{}", raw[row])
+            };
+            let start = source.find(&fragment).unwrap() + usize::from(row > 0) * 2 + id.len() + 1;
+            let end = start + raw[row].len();
+            let marker = if row == 0 {
+                "列見出し: ".to_string()
+            } else {
+                format!("元行{row}: 値 {:?}。", decoded[row])
+            };
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&marker))
+                .unwrap_or_else(|| panic!("missing {marker:?} in {text}"));
+            assert!(line.contains(&format!("byte[{start}..{end})")), "{line}");
+            assert!(
+                line.contains(&format!(
+                    "sha256={}",
+                    minidora_domain::digest(raw[row].as_bytes())
+                )),
+                "{line}"
+            );
+        }
+        if empty {
+            assert!(!text.contains("元行1:"), "{text}");
+        }
+    }
+}
+
 fn assert_csv_row_explanation(
     directory: &Path,
     first: &Value,

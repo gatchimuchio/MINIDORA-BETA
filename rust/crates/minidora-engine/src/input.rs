@@ -31,6 +31,8 @@ pub(crate) const CSV_GROUP_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v97-csv-group-explanation";
 pub(crate) const JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v98-json-group-count-explanation";
+pub(crate) const CSV_SELECT_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v99-csv-select-explanation";
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -197,7 +199,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
-        Intent::ExplainPrevious => JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION,
+        Intent::ExplainPrevious => CSV_SELECT_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

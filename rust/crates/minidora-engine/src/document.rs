@@ -210,6 +210,7 @@ enum CsvTableOperation<'a> {
     Sort(&'a str, bool),
     GroupCount(&'a str),
     GroupStatistics(&'a str, &'a str),
+    Select(&'a str),
 }
 
 /// Recompute a prior CSV table operation from its immutable sealed input
@@ -225,72 +226,83 @@ pub(crate) fn previous_csv_table_explanation(
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
     }
-    let explain_groups = matches!(
-        explanation_parser_version,
-        crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION
-            | crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
-    );
+    let explain_select =
+        explanation_parser_version == crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION;
+    let explain_groups = explain_select
+        || matches!(
+            explanation_parser_version,
+            crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION
+                | crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
+        );
     let explain_rows = explain_groups
         || explanation_parser_version == crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION;
     let explain_join = explain_rows
         || explanation_parser_version == crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION;
 
-    let (bundle_ref, bundle) =
-        match store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)? {
-            Some(value) => value,
-            None => {
-                let looks_like_report = serde_json::from_str::<serde_json::Value>(&previous.text)
-                    .ok()
-                    .and_then(|value| {
-                        value.as_object().and_then(|object| {
-                            (object.len() == 2
-                                && object
-                                    .get("key_column")
-                                    .and_then(serde_json::Value::as_str)
-                                    .is_some()
-                                && object
-                                    .get("changes")
-                                    .and_then(serde_json::Value::as_array)
-                                    .is_some())
-                            .then_some(())
-                        })
+    let (bundle_ref, bundle) = match store.get_input_bundle(
+        actor,
+        case,
+        &previous.input_id,
+        previous.input_version,
+    )? {
+        Some(value) => value,
+        None => {
+            let looks_like_report = serde_json::from_str::<serde_json::Value>(&previous.text)
+                .ok()
+                .and_then(|value| {
+                    value.as_object().and_then(|object| {
+                        (object.len() == 2
+                            && object
+                                .get("key_column")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some()
+                            && object
+                                .get("changes")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some())
+                        .then_some(())
                     })
-                    .is_some();
-                if looks_like_report {
-                    return Err(failure(
-                        "CSV_TABLE_CONTEXT_INVALID",
-                        "the prior CSV comparison has no retained sealed input bundle",
-                    ));
-                }
-                if explain_join && serde_json::from_str::<CsvTableJoinText>(&previous.text).is_ok()
-                {
-                    return Err(failure(
-                        "CSV_TABLE_CONTEXT_INVALID",
-                        "the prior CSV inner join has no retained sealed input bundle",
-                    ));
-                }
-                if explain_rows
-                    && let [dependency] = previous.dependencies.as_slice()
-                    && let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)?
-                    && let Ok(report) = serde_json::from_slice::<DocumentResult>(&bytes)
-                    && match report.operation.as_str() {
-                        "CSV_FILTER" | "CSV_SORT" => true,
-                        "CSV_GROUP_COUNT" | "CSV_GROUP_STATISTICS" => explain_groups,
-                        _ => false,
-                    }
-                {
-                    return Err(failure(
-                        "CSV_TABLE_CONTEXT_INVALID",
-                        if matches!(report.operation.as_str(), "CSV_FILTER" | "CSV_SORT") {
-                            "the prior CSV row operation has no retained sealed input bundle"
-                        } else {
-                            "the prior grouped CSV operation has no retained sealed input bundle"
-                        },
-                    ));
-                }
-                return Ok(None);
+                })
+                .is_some();
+            if looks_like_report {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "the prior CSV comparison has no retained sealed input bundle",
+                ));
             }
-        };
+            if explain_join && serde_json::from_str::<CsvTableJoinText>(&previous.text).is_ok() {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    "the prior CSV inner join has no retained sealed input bundle",
+                ));
+            }
+            if explain_rows
+                && let [dependency] = previous.dependencies.as_slice()
+                && let Some(bytes) = store.get_bytes_if_present(actor, case, dependency)?
+                && let Ok(report) = serde_json::from_slice::<DocumentResult>(&bytes)
+                && match report.operation.as_str() {
+                    "CSV_FILTER" | "CSV_SORT" => true,
+                    "CSV_GROUP_COUNT" | "CSV_GROUP_STATISTICS" => explain_groups,
+                    "CSV_SELECT" => explain_select,
+                    _ => false,
+                }
+            {
+                return Err(failure(
+                    "CSV_TABLE_CONTEXT_INVALID",
+                    match report.operation.as_str() {
+                        "CSV_FILTER" | "CSV_SORT" => {
+                            "the prior CSV row operation has no retained sealed input bundle"
+                        }
+                        "CSV_SELECT" => {
+                            "the prior CSV selection has no retained sealed input bundle"
+                        }
+                        _ => "the prior grouped CSV operation has no retained sealed input bundle",
+                    },
+                ));
+            }
+            return Ok(None);
+        }
+    };
     let (document, operation) = match &bundle.meaning.intent {
         Intent::CsvCompare {
             document,
@@ -328,6 +340,9 @@ pub(crate) fn previous_csv_table_explanation(
             document.as_str(),
             CsvTableOperation::GroupStatistics(group_column, value_column),
         ),
+        Intent::CsvSelect { document, column } if explain_select => {
+            (document.as_str(), CsvTableOperation::Select(column))
+        }
         _ => return Ok(None),
     };
     let (label, input_node, report_node) = match operation {
@@ -361,6 +376,11 @@ pub(crate) fn previous_csv_table_explanation(
             "previous-csv-table-group-statistics-input",
             "previous-csv-table-group-statistics-report",
         ),
+        CsvTableOperation::Select(_) => (
+            "selection",
+            "previous-csv-table-select-input",
+            "previous-csv-table-select-report",
+        ),
     };
     if bundle_ref != digest(&canonical(&bundle)?) {
         return Err(failure(
@@ -380,6 +400,7 @@ pub(crate) fn previous_csv_table_explanation(
         CsvTableOperation::GroupStatistics(group, value) => {
             csv_group_statistics(document, group, value)?
         }
+        CsvTableOperation::Select(column) => csv_select(document, column)?,
     };
     let parameter = |key| recomputed.parameters.get(key).map(String::as_str);
     let parameters_match = match operation {
@@ -414,6 +435,12 @@ pub(crate) fn previous_csv_table_explanation(
             recomputed.operation == "CSV_GROUP_STATISTICS"
                 && parameter("group_column") == Some(group)
                 && parameter("value_column") == Some(value)
+        }
+        CsvTableOperation::Select(column) => {
+            recomputed.operation == "CSV_SELECT"
+                && parameter("column_name") == Some(column)
+                && parameter("has_header") == Some("true")
+                && parameter("value_type") == Some("STRING")
         }
     };
     let report_bytes = canonical(&recomputed)?;
@@ -457,6 +484,9 @@ pub(crate) fn previous_csv_table_explanation(
         }
         CsvTableOperation::GroupStatistics(group, value) => {
             csv_table_group_lines(&recomputed, group, Some(value), &bundle_ref, &report_ref)?
+        }
+        CsvTableOperation::Select(column) => {
+            csv_table_select_lines(&recomputed, column, &bundle_ref, &report_ref)?
         }
     };
 
@@ -520,6 +550,90 @@ pub(crate) fn previous_csv_table_explanation(
         report_ref,
         lines,
     }))
+}
+
+fn csv_table_select_lines(
+    report: &DocumentResult,
+    column: &str,
+    bundle_ref: &str,
+    report_ref: &str,
+) -> Result<Vec<String>> {
+    const PREVIEW_ROWS: usize = 8;
+    let values: Vec<String> = serde_json::from_str(&report.text).map_err(|_| {
+        failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed CSV selection is not a string array",
+        )
+    })?;
+    let column_index = report
+        .parameters
+        .get("column_index")
+        .and_then(|index| index.parse::<usize>().ok())
+        .ok_or_else(|| {
+            failure(
+                "CSV_TABLE_CONTEXT_INVALID",
+                "the selected CSV column has no index",
+            )
+        })?;
+    let header = csv_table_find_span(
+        report,
+        "CSV_HEADER",
+        Some(0),
+        Some(column_index),
+        Some(column),
+    )?;
+    let selected: Vec<_> = report
+        .spans
+        .iter()
+        .filter(|span| span.kind == "CSV_SELECTED_CELL")
+        .collect();
+    if selected.len() != values.len()
+        || selected
+            .iter()
+            .zip(&values)
+            .enumerate()
+            .any(|(index, (span, value))| {
+                span.row != Some(index + 1)
+                    || span.column != Some(column_index)
+                    || span.decoded_value.as_ref() != Some(value)
+                    || span.output_start.is_none()
+                    || span.output_end.is_none()
+            })
+    {
+        return Err(failure(
+            "CSV_TABLE_CONTEXT_INVALID",
+            "the recomputed CSV selection does not match its original cell map",
+        ));
+    }
+    let mut lines = vec![
+        "前回のCSV列選択を、封印済みの元入力から再計算しました。".into(),
+        format!(
+            "選択列: {:?} (元列番号 {})",
+            preview(column),
+            column_index + 1
+        ),
+        "指定した名前に完全一致する見出しを使い、元のデータ行順で文字列を取り出します。".into(),
+        format!("選択値数: {}", values.len()),
+        format!("元資料 SHA-256: {}", report.source_sha256),
+        format!("封印済みInputBundle SHA-256: {bundle_ref}"),
+        format!("report artifact SHA-256: {report_ref}"),
+        format!("列見出し: {}", csv_table_span(report, header)?),
+    ];
+    for (index, (span, value)) in selected.iter().zip(&values).take(PREVIEW_ROWS).enumerate() {
+        lines.push(format!(
+            "元行{}: 値 {:?}。{}",
+            index + 1,
+            preview(value),
+            csv_table_span(report, span)?
+        ));
+    }
+    if values.len() > PREVIEW_ROWS {
+        lines.push(format!(
+            "残りの選択値 {}件は保存レポートに保持されています。",
+            values.len() - PREVIEW_ROWS
+        ));
+    }
+    Ok(lines)
 }
 
 #[derive(Deserialize)]
@@ -1594,23 +1708,24 @@ pub(crate) fn previous_json_table_operation_explanation(
         "select"
     } else if value.get("selected_column_indices").is_some() {
         "project"
-    } else if explanation_parser_version
-        == crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
-        && value.as_object().is_some_and(|object| {
-            object.len() == 7
-                && [
-                    "source_sha256",
-                    "group_by",
-                    "group_by_source",
-                    "group_by_index",
-                    "row_count",
-                    "groups",
-                    "guarantee",
-                ]
-                .iter()
-                .all(|field| object.contains_key(*field))
-        })
-    {
+    } else if matches!(
+        explanation_parser_version,
+        crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
+            | crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION
+    ) && value.as_object().is_some_and(|object| {
+        object.len() == 7
+            && [
+                "source_sha256",
+                "group_by",
+                "group_by_source",
+                "group_by_index",
+                "row_count",
+                "groups",
+                "guarantee",
+            ]
+            .iter()
+            .all(|field| object.contains_key(*field))
+    }) {
         "group_count"
     } else {
         return Ok(None);
