@@ -15,7 +15,7 @@ use crate::{
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
     search,
-    store::Store,
+    store::{Store, VerifiedCaseHistory},
 };
 use minidora_domain::*;
 use std::{
@@ -2586,6 +2586,7 @@ pub(crate) fn source_context_available(
     actor: &str,
     case: &str,
     source: &ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<bool> {
     if source.lifecycle == Lifecycle::Commit {
         return Ok(true);
@@ -2593,7 +2594,13 @@ pub(crate) fn source_context_available(
     let Some(stop) = crate::text_summary::partial_retrieval_stop(source) else {
         return Ok(false);
     };
-    Ok(verified_partial_retrieval(store, actor, case, source, &stop)?.is_some())
+    let verify = |history: &VerifiedCaseHistory<'_>| {
+        Ok(verified_partial_retrieval(store, actor, case, source, &stop, Some(history))?.is_some())
+    };
+    match history {
+        Some(history) => verify(history),
+        None => store.with_verified_case_history(actor, case, verify),
+    }
 }
 
 fn verified_partial_retrieval(
@@ -2602,6 +2609,7 @@ fn verified_partial_retrieval(
     case: &str,
     source: &ResultRecord,
     stop: &crate::text_summary::PartialRetrievalStop<'_>,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<Option<InputBundle>> {
     use crate::text_summary::{FirstHopStop, PartialRetrievalStop};
 
@@ -2611,9 +2619,11 @@ fn verified_partial_retrieval(
             "The partial retrieval differs from its original input or retained packets",
         )
     };
-    let (_, bundle) = store
-        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
-        .ok_or_else(invalid)?;
+    let (_, bundle) = match history {
+        Some(history) => history.input_bundle(&source.input_id, source.input_version),
+        None => store.get_input_bundle(actor, case, &source.input_id, source.input_version),
+    }?
+    .ok_or_else(invalid)?;
     let Intent::Retrieve { urls, .. } = &bundle.meaning.intent else {
         return Ok(None);
     };
@@ -2636,9 +2646,11 @@ fn verified_partial_retrieval(
     }
 
     if let PartialRetrievalStop::BeforeFirstHop(first_hop) = stop {
-        let original = store
-            .load_suspended_result_revision(actor, case, source)?
-            .ok_or_else(invalid)?;
+        let original = match history {
+            Some(history) => history.suspended_result_revision(source),
+            None => store.load_suspended_result_revision(actor, case, source),
+        }?
+        .ok_or_else(invalid)?;
         let goal_ref = original.goal_sha256.as_deref().ok_or_else(invalid)?;
         if original.bundle.as_ref() != Some(&bundle)
             || original.input_fingerprint.as_ref() != Some(&source.id)
@@ -2684,9 +2696,11 @@ fn verified_partial_retrieval(
                 return Err(invalid());
             }
         }
-    } else if store
-        .get_input_result(actor, case, &source.input_id, source.input_version)?
-        .as_ref()
+    } else if match history {
+        Some(history) => history.input_result(&source.input_id, source.input_version),
+        None => store.get_input_result(actor, case, &source.input_id, source.input_version),
+    }?
+    .as_ref()
         != Some(source)
     {
         return Err(invalid());
@@ -2839,7 +2853,7 @@ pub(crate) fn next_direct_retrieval<'a>(
             Err(invalid())
         };
     };
-    let Some(original) = verified_partial_retrieval(store, actor, case, root, &stop)? else {
+    let Some(original) = verified_partial_retrieval(store, actor, case, root, &stop, None)? else {
         return if steps.is_empty() {
             Ok(None)
         } else {

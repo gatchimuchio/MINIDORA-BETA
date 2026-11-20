@@ -131,6 +131,16 @@ impl VerifiedCaseHistory<'_> {
         self.store
             .read_input_result(self.connection, self.case, input, version)
     }
+
+    pub(crate) fn suspended_result_revision(
+        &self,
+        result: &ResultRecord,
+    ) -> Result<Option<CaseRevision>> {
+        self.store
+            .read_suspended_result_revision(self.connection, self.case, result, || {
+                self.input_result(&result.input_id, result.input_version)
+            })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1520,15 +1530,22 @@ impl Store {
         case: &str,
         result: &ResultRecord,
     ) -> Result<Option<CaseRevision>> {
-        if result.lifecycle != Lifecycle::Suspend
-            || self
-                .get_input_result(actor, case, &result.input_id, result.input_version)?
-                .as_ref()
-                != Some(result)
-        {
+        self.read_suspended_result_revision(&self.connection, case, result, || {
+            self.get_input_result(actor, case, &result.input_id, result.input_version)
+        })
+    }
+
+    fn read_suspended_result_revision(
+        &self,
+        connection: &Connection,
+        case: &str,
+        result: &ResultRecord,
+        read_result: impl FnOnce() -> Result<Option<ResultRecord>>,
+    ) -> Result<Option<CaseRevision>> {
+        if result.lifecycle != Lifecycle::Suspend || read_result()?.as_ref() != Some(result) {
             return Ok(None);
         }
-        let mut statement = sql(self.connection.prepare(
+        let mut statement = sql(connection.prepare(
             "SELECT state_sha256 FROM case_revision WHERE case_id=?1 AND lifecycle='SUSPEND' ORDER BY revision",
         ))?;
         let rows = sql(statement.query_map([case], |row| row.get::<_, String>(0)))?;
@@ -2741,21 +2758,36 @@ mod tests {
                 .unwrap(),
             Some(original_result.clone())
         );
+        assert_eq!(
+            store
+                .load_suspended_result_revision("alice", "case-a", &original_result)
+                .unwrap(),
+            Some(original_revision.clone())
+        );
+        let mut wrong_result = original_result.clone();
+        wrong_result
+            .text
+            .push_str(" changed without a new identity");
         let writer = Store::open(&directory.0).unwrap();
         let mut new_request = request.clone();
         new_request.input_version = 2;
         new_request.text = "3+4".into();
 
-        let (new_bundle, new_result) = store
+        let (new_revision, new_bundle, new_result) = store
             .with_verified_case_history("alice", "case-a", |history| {
                 assert_eq!(history.input_bundle("input-a", 1)?, expected_original);
                 assert_eq!(
                     history.input_result("input-a", 1)?,
                     Some(original_result.clone())
                 );
+                assert_eq!(
+                    history.suspended_result_revision(&original_result)?,
+                    Some(original_revision.clone())
+                );
+                assert!(history.suspended_result_revision(&wrong_result)?.is_none());
                 assert!(history.input_bundle("input-a", 2)?.is_none());
                 assert!(history.input_result("input-a", 2)?.is_none());
-                let (_, bundle, result) =
+                let (revision, bundle, result) =
                     append_stopped_input(&writer, &new_request, Some(&original_revision));
                 assert_eq!(
                     writer.get_input_bundle("alice", "case-a", "input-a", 2)?,
@@ -2765,20 +2797,38 @@ mod tests {
                     writer.get_input_result("alice", "case-a", "input-a", 2)?,
                     Some(result.clone())
                 );
+                assert_eq!(
+                    writer.load_suspended_result_revision("alice", "case-a", &result)?,
+                    Some(revision.clone())
+                );
                 assert!(history.input_bundle("input-a", 2)?.is_none());
                 assert!(history.input_result("input-a", 2)?.is_none());
+                assert!(history.suspended_result_revision(&result)?.is_none());
                 assert_eq!(history.input_bundle("input-a", 1)?, expected_original);
                 assert_eq!(
                     history.input_result("input-a", 1)?,
                     Some(original_result.clone())
                 );
-                Ok((bundle, result))
+                assert_eq!(
+                    history.suspended_result_revision(&original_result)?,
+                    Some(original_revision.clone())
+                );
+                Ok((revision, bundle, result))
             })
             .unwrap();
 
         store
             .with_verified_case_history("alice", "case-a", |history| {
                 assert_eq!(history.input_bundle("input-a", 1)?, expected_original);
+                assert_eq!(
+                    history.suspended_result_revision(&original_result)?,
+                    Some(original_revision)
+                );
+                assert_eq!(
+                    history.suspended_result_revision(&new_result)?,
+                    Some(new_revision)
+                );
+                assert!(history.suspended_result_revision(&wrong_result)?.is_none());
                 assert_eq!(history.input_result("input-a", 1)?, Some(original_result));
                 assert_eq!(
                     history.input_bundle("input-a", 2)?,

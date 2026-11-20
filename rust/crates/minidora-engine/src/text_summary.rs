@@ -1914,7 +1914,7 @@ fn direct_source_followup<'a>(
     let case = &request.case_id;
     if bundle.meaning.context_result_ref.as_deref() != Some(context.id.as_str())
         || identity(&Some(context))? != bundle.context_sha256
-        || !crate::recovery::source_context_available(store, actor, case, context)?
+        || !crate::recovery::source_context_available(store, actor, case, context, history)?
     {
         return Ok(None);
     }
