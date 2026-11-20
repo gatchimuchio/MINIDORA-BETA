@@ -1288,7 +1288,7 @@ pub(crate) fn previous_observation(
     previous_observation_with_history(store, actor, case, previous, None)
 }
 
-fn previous_observation_with_history(
+pub(crate) fn previous_observation_with_history(
     store: &crate::store::Store,
     actor: &str,
     case: &str,

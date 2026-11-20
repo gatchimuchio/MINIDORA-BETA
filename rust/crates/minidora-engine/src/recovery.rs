@@ -2662,7 +2662,14 @@ fn verified_partial_retrieval(
         let next_uri = &urls[observed];
         match first_hop {
             FirstHopStop::Wait(detail) => {
-                if !first_hop_wait_matches(store, &original, permissions, next_uri, detail)? {
+                if !first_hop_wait_matches(
+                    store,
+                    &original,
+                    permissions,
+                    next_uri,
+                    detail,
+                    history,
+                )? {
                     return Err(invalid());
                 }
             }
@@ -2760,10 +2767,28 @@ pub(crate) fn next_direct_retrieval<'a>(
     bundle: &InputBundle,
     previous: Option<&'a ResultRecord>,
     prior_results: &BTreeMap<String, ResultRecord>,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<Option<DirectContinuation<'a>>> {
     let Some(source) = previous else {
         return Ok(None);
     };
+    let resolve = |history: &VerifiedCaseHistory<'_>| {
+        next_direct_retrieval_in_history(store, actor, bundle, source, prior_results, history)
+    };
+    match history {
+        Some(history) => resolve(history),
+        None => store.with_verified_case_history(actor, &bundle.request.case_id, resolve),
+    }
+}
+
+fn next_direct_retrieval_in_history<'a>(
+    store: &Store,
+    actor: &str,
+    bundle: &InputBundle,
+    source: &'a ResultRecord,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    history: &VerifiedCaseHistory<'_>,
+) -> Result<Option<DirectContinuation<'a>>> {
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
@@ -2786,8 +2811,8 @@ pub(crate) fn next_direct_retrieval<'a>(
         if !visited.insert(&root.id) {
             return Err(invalid());
         }
-        let (_, sealed) = store
-            .get_input_bundle(actor, case, &root.input_id, root.input_version)?
+        let (_, sealed) = history
+            .input_bundle(&root.input_id, root.input_version)?
             .ok_or_else(invalid)?;
         if !matches!(sealed.meaning.intent, Intent::FetchNextUnobservedSource) {
             return if steps.is_empty() {
@@ -2820,8 +2845,7 @@ pub(crate) fn next_direct_retrieval<'a>(
             .and_then(|id| prior_results.get(id))
             .ok_or_else(invalid)?;
         let legacy_versions = if let Some(version) = legacy_version {
-            let Some(parent_version) = version.saved_parent_version(store, actor, case, parent)?
-            else {
+            let Some(parent_version) = version.saved_parent_version(history, parent)? else {
                 // These producers also wrote this reason for ordinary terminal histories.
                 return without_legacy_lineage();
             };
@@ -2833,8 +2857,8 @@ pub(crate) fn next_direct_retrieval<'a>(
             return Err(invalid());
         }
         if root.lifecycle == Lifecycle::Commit
-            && store
-                .get_input_result(actor, case, &root.input_id, root.input_version)?
+            && history
+                .input_result(&root.input_id, root.input_version)?
                 .as_ref()
                 != Some(root)
         {
@@ -2853,7 +2877,9 @@ pub(crate) fn next_direct_retrieval<'a>(
             Err(invalid())
         };
     };
-    let Some(original) = verified_partial_retrieval(store, actor, case, root, &stop, None)? else {
+    let Some(original) =
+        verified_partial_retrieval(store, actor, case, root, &stop, Some(history))?
+    else {
         return if steps.is_empty() {
             Ok(None)
         } else {
@@ -2890,7 +2916,7 @@ pub(crate) fn next_direct_retrieval<'a>(
                     return Ok(None);
                 }
             }
-            verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop)?;
+            verify_direct_preconnection_stop(store, &sealed, result, parent, uri, stop, history)?;
             // This request observed no URL, so the pending slot has not moved.
             continue;
         }
@@ -2976,9 +3002,7 @@ impl LegacyNoPendingVersion {
 
     fn saved_parent_version(
         self,
-        store: &Store,
-        actor: &str,
-        case: &str,
+        history: &VerifiedCaseHistory<'_>,
         parent: &ResultRecord,
     ) -> Result<Option<Self>> {
         let parent_is_stop = matches!(
@@ -2989,8 +3013,8 @@ impl LegacyNoPendingVersion {
         {
             return Ok(None);
         }
-        Ok(store
-            .get_input_bundle(actor, case, &parent.input_id, parent.input_version)?
+        Ok(history
+            .input_bundle(&parent.input_id, parent.input_version)?
             .and_then(|(_, bundle)| Self::from_bundle(&bundle))
             .filter(|parent_version| {
                 !matches!(self, Self::V1) || matches!(parent_version, Self::V1)
@@ -3099,6 +3123,7 @@ fn verify_direct_preconnection_stop(
     parent: &ResultRecord,
     uri: Option<&str>,
     stop: DirectPreconnectionStop<'_>,
+    history: &VerifiedCaseHistory<'_>,
 ) -> Result<()> {
     let invalid = || {
         failure(
@@ -3125,8 +3150,8 @@ fn verify_direct_preconnection_stop(
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let stopped = store
-        .load_suspended_result_revision(actor, case, result)?
+    let stopped = history
+        .suspended_result_revision(result)?
         .ok_or_else(invalid)?;
     if stopped.bundle.as_ref() != Some(bundle)
         || stopped.input_fingerprint.as_ref() != Some(&result.id)
@@ -3199,7 +3224,14 @@ fn verify_direct_preconnection_stop(
             // independently checks the current host wait.
             has_compute
                 && sufficient_actions
-                && first_hop_wait_matches(store, &stopped, &request.permissions, uri, detail)?
+                && first_hop_wait_matches(
+                    store,
+                    &stopped,
+                    &request.permissions,
+                    uri,
+                    detail,
+                    Some(history),
+                )?
         }
         DirectPreconnectionStop::LegacyNoPending => unreachable!("checked above"),
     };
@@ -3300,6 +3332,7 @@ fn first_hop_wait_matches(
     permissions: &Permissions,
     next_uri: &str,
     detail: &str,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<bool> {
     let url = crate::ports::approved_url(next_uri, permissions)?;
     let host = url.host_str().expect("approved domain");
@@ -3358,7 +3391,7 @@ fn first_hop_wait_matches(
                         .is_some_and(|due| due > retry.received_at_unix_ms)
                 })
         }) {
-            crate::core::verify_retained_retry_source(store, original, result, packet)?;
+            crate::core::verify_retained_retry_source(store, original, result, packet, history)?;
             return Ok(true);
         }
     }
@@ -4957,7 +4990,7 @@ fn inspect(
             .as_ref()
             .and_then(|id| state.prior_results.get(id));
         let continuation =
-            next_direct_retrieval(store, actor, bundle, previous, &state.prior_results)?
+            next_direct_retrieval(store, actor, bundle, previous, &state.prior_results, None)?
                 .ok_or_else(invalid)?;
         let packet = verify_direct_continuation_body(
             continuation.source,

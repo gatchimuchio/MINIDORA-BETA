@@ -3,7 +3,7 @@ use crate::{
     input, language, output, ports,
     recovery::PREVIOUS_DIRECT_RETRIEVAL_NODE,
     relations, search,
-    store::{MemoryIndexSnapshot, Store},
+    store::{MemoryIndexSnapshot, Store, VerifiedCaseHistory},
 };
 use minidora_domain::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -4060,6 +4060,7 @@ impl Engine {
                     &bundle,
                     previous,
                     &state.prior_results,
+                    None,
                 ) {
                     Ok(Some(continuation)) => Some(continuation),
                     Ok(None) => {
@@ -4854,7 +4855,7 @@ impl Engine {
                         continue;
                     }
                     budget.restore_retry_after(packet, &goal.permissions, || {
-                        verify_retained_retry_source(store, state, result, packet)
+                        verify_retained_retry_source(store, state, result, packet, None)
                     })?;
                 }
             }
@@ -10239,12 +10240,22 @@ pub(crate) fn verify_retained_retry_source(
     state: &CaseRevision,
     result: &ResultRecord,
     packet: &EvidencePacket,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<()> {
     let invalid = || {
         failure(
             "RETRY_AFTER_SOURCE_INVALID",
             "Saved Retry-After does not match the case's observed failure artifact",
         )
+    };
+    let read_input = || match history {
+        Some(history) => history.input_bundle(&result.input_id, result.input_version),
+        None => store.get_input_bundle(
+            &state.actor_id,
+            &state.case_id,
+            &result.input_id,
+            result.input_version,
+        ),
     };
     let requested = url::Url::parse(&packet.request_uri).map_err(|_| invalid())?;
     if packet.raw_sha256 != digest(&packet.raw_body)
@@ -10267,14 +10278,7 @@ pub(crate) fn verify_retained_retry_source(
         }
         search::validate_failed_observation(&observation, None)?;
         if result.lifecycle == Lifecycle::Cancel {
-            let (_, bundle) = store
-                .get_input_bundle(
-                    &state.actor_id,
-                    &state.case_id,
-                    &result.input_id,
-                    result.input_version,
-                )?
-                .ok_or_else(invalid)?;
+            let (_, bundle) = read_input()?.ok_or_else(invalid)?;
             let plan = search::search_plan(&bundle.meaning.intent)?.ok_or_else(invalid)?;
             if identity(&bundle.request)? != result.id
                 || plan.fallback.is_none()
@@ -10289,8 +10293,14 @@ pub(crate) fn verify_retained_retry_source(
             search::validate_failed_observation(&observation, Some(&bundle.request.permissions))?;
         }
         if result.lifecycle == Lifecycle::Commit
-            && search::previous_observation(store, &state.actor_id, &state.case_id, result)?
-                .is_none()
+            && search::previous_observation_with_history(
+                store,
+                &state.actor_id,
+                &state.case_id,
+                result,
+                history,
+            )?
+            .is_none()
         {
             return Err(invalid());
         }
@@ -10308,14 +10318,7 @@ pub(crate) fn verify_retained_retry_source(
             return Err(invalid());
         }
         if result.lifecycle == Lifecycle::Cancel {
-            let (_, bundle) = store
-                .get_input_bundle(
-                    &state.actor_id,
-                    &state.case_id,
-                    &result.input_id,
-                    result.input_version,
-                )?
-                .ok_or_else(invalid)?;
+            let (_, bundle) = read_input()?.ok_or_else(invalid)?;
             let continuation;
             let (urls, dependencies) = match &bundle.meaning.intent {
                 Intent::Retrieve { urls, .. } => (urls.as_slice(), result.dependencies.as_slice()),
@@ -10331,6 +10334,7 @@ pub(crate) fn verify_retained_retry_source(
                         &bundle,
                         previous,
                         &state.prior_results,
+                        history,
                     )?
                     .ok_or_else(invalid)?;
                     let Some((reference, dependencies)) = result.dependencies.split_first() else {
