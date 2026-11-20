@@ -9200,6 +9200,79 @@ fn constrained_previous_source_summary_binds_one_actual_packet_and_stops_on_ambi
     assert_eq!(report["summary"]["selected_character_count"], 6);
     assert_eq!(report["summary"]["coverage_verified"], false);
 
+    const LABEL: &str = "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
+    let summary_body = format!("{LABEL}\n- Short.");
+    let output_start = LABEL.len() + "\n- ".len();
+    let output_end = summary_body.len();
+    assert_eq!(&source_text[23..29], "Short.");
+    assert_eq!(&summary_body[output_start..output_end], "Short.");
+    assert_eq!(report["summary"]["text"], summary_body);
+    let sentence = &report["summary"]["sentences"][0];
+    assert_eq!(report["summary"]["sentences"].as_array().unwrap().len(), 1);
+    assert_eq!(sentence["sentence_index"], 1);
+    assert_eq!(sentence["selection_rank"], 1);
+    assert_eq!(sentence["source_start"], 23);
+    assert_eq!(sentence["source_end"], 29);
+    assert_eq!(sentence["output_start"], output_start);
+    assert_eq!(sentence["output_end"], output_end);
+    assert_eq!(sentence["text"], "Short.");
+    let explanation_args = ["--input", "source-summary-explain", "詳しく説明して"];
+    let explanation = record(&execute(&scratch.0, "owner", &explanation_args));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    assert_eq!(explanation["content_plan"]["guarantee"], "HYPOTHESIS");
+    assert_eq!(explanation["content_plan"]["text"], explanation["text"]);
+    assert_eq!(explanation["receipts"], serde_json::json!([]));
+    let mut dependencies = vec![result["id"].clone()];
+    dependencies.extend_from_slice(result["dependencies"].as_array().unwrap());
+    assert_eq!(explanation["dependencies"], Value::Array(dependencies));
+    let text = explanation["text"].as_str().unwrap();
+    assert!(text.starts_with("前回の取得資料要約の根拠"), "{text}");
+    for expected in [
+        "取得モード: FIXTURE / 取得時刻（Unix ms）: 1".to_string(),
+        "候補文2件、選択1件、未選択1件。文数上限2、文字数上限10。".to_string(),
+        format!(
+            "原本文SHA-256: {}",
+            minidora_domain::digest(source_text.as_bytes())
+        ),
+        format!(
+            "抽出本文SHA-256: {}",
+            minidora_domain::digest(source_text.as_bytes())
+        ),
+        format!(
+            "選択文2（順位1、抽出本文byte 23..29、要約本文byte {output_start}..{output_end}）: {:?}",
+            "Short."
+        ),
+    ] {
+        assert!(
+            text.lines().any(|line| line == expected),
+            "missing {expected:?} in {text}"
+        );
+    }
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &explanation_args)),
+        explanation
+    );
+    let explained_saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(explained_saved["result"], explanation);
+    assert_eq!(
+        explained_saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v109-source-summary-explanation"
+    );
+    assert_eq!(
+        explained_saved["bundle"]["meaning"]["context_result_ref"],
+        result["id"]
+    );
+    assert_eq!(
+        explained_saved["prior_results"][result["id"].as_str().unwrap()],
+        result
+    );
+    assert_eq!(
+        explained_saved["prior_results"][&prior_id],
+        saved["prior_results"][&prior_id]
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
     let ambiguous = Scratch::new();
     seed_fetched_source_case_with_sources(
         &ambiguous.0,
@@ -16047,7 +16120,7 @@ fn text_summary_candidate_explanation_preserves_required_rank_and_escaped_source
         assert_eq!(saved["bundle"]["request"]["input_id"], "explain");
         assert_eq!(
             saved["bundle"]["meaning"]["parser_version"],
-            "declarative-ja-en-v108-text-summary-candidate-explanation"
+            "declarative-ja-en-v109-source-summary-explanation"
         );
         assert_eq!(
             saved["bundle"]["meaning"]["context_result_ref"],

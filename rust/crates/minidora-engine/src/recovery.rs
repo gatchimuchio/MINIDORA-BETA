@@ -240,10 +240,6 @@ struct SearchCandidateExpectation {
     body_ref: String,
 }
 
-struct SourceSummaryExpectation {
-    source_packet_refs: Vec<(usize, String)>,
-}
-
 struct SourceQuestionExpectation {
     source_packet_refs: Vec<(usize, String)>,
     answer_ref: String,
@@ -3737,136 +3733,25 @@ fn verify_source_summary_context(
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
-) -> Result<Option<SourceSummaryExpectation>> {
+) -> Result<Option<crate::text_summary::RetainedSourceSummary>> {
     if !matches!(
         goal.intent,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
     ) {
         return Ok(None);
     }
-    let summary_limits = crate::text_summary::constrained_source_summary_limits(&goal.intent);
     let bundle = state
         .bundle
         .as_ref()
+        .filter(|bundle| bundle.request.actor_id == actor && bundle.request.case_id == case)
         .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
-    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
-        failure(
-            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "source summary has no sealed prior-result reference",
-        )
-    })?;
-    let prior = state.prior_results.get(prior_id).ok_or_else(|| {
-        failure(
-            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the exact prior source result is not retained",
-        )
-    })?;
-    if prior.id != *prior_id
-        || identity(&Some(prior))? != bundle.context_sha256
-        || !source_context_available(store, actor, case, prior)?
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the referenced source result does not match the sealed context",
-        ));
-    }
-    if !result.evidence.is_empty() {
-        return Err(failure(
-            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the derived result added undeclared evidence",
-        ));
-    }
-    let mut source_packets = Vec::new();
-    for (index, packet) in crate::text_summary::source_summary_bodies(prior) {
-        let packet_bytes = canonical(packet)?;
-        let packet_ref = digest(&packet_bytes);
-        if store.get_bytes(actor, case, &packet_ref)? != packet_bytes {
-            return Err(failure(
-                "RECOVERY_SOURCE_PACKET_MISMATCH",
-                "the original source packet blob differs from its retained record",
-            ));
-        }
-        source_packets.push((index, packet, packet_ref));
-    }
-    if source_packets.is_empty() {
-        return Err(failure(
-            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-            "the prior result lacks fetched bodies",
-        ));
-    }
-    let active_positions = crate::text_summary::source_summary_packet_positions(
-        &source_packets,
-        &bundle.meaning.parser_version,
-    )?;
-    if summary_limits.is_some() && active_positions.len() != 1 {
-        return Err(failure(
-            "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
-            "the constrained source summary requires exactly one selected source",
-        ));
-    }
-    let source_packet_refs: Vec<_> = source_packets
-        .iter()
-        .map(|(index, _, reference)| (*index, reference.clone()))
-        .collect();
-    let mut dependencies = vec![prior.id.clone()];
-    dependencies.extend(
-        source_packet_refs
-            .iter()
-            .map(|(_, reference)| reference.clone()),
-    );
-    let mut units = Vec::new();
-    let mut report_bytes = 0usize;
-    if let Some(stop) = crate::text_summary::partial_retrieval_stop(prior) {
-        units.push(stop.notice().into());
-    }
-    for position in active_positions {
-        let (_, packet, packet_ref) = &source_packets[position];
-        let report = match summary_limits {
-            Some((max_sentences, max_chars)) => {
-                crate::text_summary::summarize_fetched_source_with_limits(
-                    &prior.id,
-                    packet,
-                    packet_ref,
-                    max_sentences,
-                    max_chars,
-                )?
-            }
-            None => crate::text_summary::summarize_fetched_source(&prior.id, packet, packet_ref)?,
-        };
-        let encoded = canonical(&report)?;
-        report_bytes = report_bytes.saturating_add(encoded.len());
-        if report_bytes > goal.budget.max_evidence_bytes {
-            return Err(failure(
-                "RECOVERY_SOURCE_SUMMARY_LIMIT",
-                "the retained source summary exceeds the original evidence budget",
-            ));
-        }
-        let report_ref = digest(&encoded);
-        if store.get_bytes(actor, case, &report_ref)? != encoded {
-            return Err(failure(
-                "RECOVERY_SOURCE_SUMMARY_MISMATCH",
-                "the retained source summary artifact differs from the exact source packet",
-            ));
-        }
-        dependencies.push(report_ref);
-        units.push(format!(
-            "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
-            report.source_final_uri,
-            report.source_packet_id,
-            report.raw_body_sha256,
-            report.summary.text
-        ));
-    }
-    if dependencies != result.dependencies
-        || units != plan.required_units
-        || result.guarantee != Guarantee::Hypothesis
-    {
-        return Err(failure(
-            "RECOVERY_SOURCE_SUMMARY_MISMATCH",
-            "source dependencies or displayed candidate units differ from Core's retained derivation",
-        ));
-    }
-    Ok(Some(SourceSummaryExpectation { source_packet_refs }))
+    crate::text_summary::verify_retained_source_summary(
+        store,
+        bundle,
+        &state.prior_results,
+        result,
+        plan,
+    )
 }
 
 const TEXT_SUMMARY_CANDIDATE_MISMATCH: &str = "RECOVERY_TEXT_SUMMARY_CANDIDATE_MISMATCH";
@@ -3951,23 +3836,7 @@ fn verify_legacy_text_summary_explanation(
     plan: &ContentPlan,
 ) -> Result<bool> {
     if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
-        || !matches!(
-            bundle.meaning.parser_version.as_str(),
-            crate::input::PARSER_VERSION
-                | crate::input::CSV_JOIN_EXPLANATION_PARSER_VERSION
-                | crate::input::CSV_ROW_EXPLANATION_PARSER_VERSION
-                | crate::input::CSV_GROUP_EXPLANATION_PARSER_VERSION
-                | crate::input::JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
-                | crate::input::CSV_SELECT_EXPLANATION_PARSER_VERSION
-                | crate::input::TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
-                | crate::input::JSON_VALUE_EXPLANATION_PARSER_VERSION
-                | crate::input::JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
-                | crate::input::JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
-                | crate::input::CSV_POSITIONAL_SELECTION_PARSER_VERSION
-                | crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
-                | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
-                | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
-        )
+        || !crate::input::is_legacy_text_summary_explanation_version(&bundle.meaning.parser_version)
         || result.guarantee != Guarantee::Hypothesis
     {
         return Ok(false);
@@ -4432,7 +4301,7 @@ fn inspect(
     }
     let legacy_summary_explanation =
         verify_legacy_text_summary_explanation(store, state, bundle, result, plan)?;
-    let retained_result_summary_explanation = if matches!(goal.intent, Intent::ExplainPrevious)
+    let retained_summary_explanation = if matches!(goal.intent, Intent::ExplainPrevious)
         && result.guarantee == Guarantee::Hypothesis
     {
         bundle
@@ -4441,7 +4310,7 @@ fn inspect(
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .map(|prior| {
-                crate::text_summary::previous_result_summary_explanation(
+                crate::text_summary::previous_summary_explanation(
                     store,
                     bundle,
                     &state.prior_results,
@@ -4453,7 +4322,7 @@ fn inspect(
     } else {
         None
     };
-    if let Some(explanation) = &retained_result_summary_explanation {
+    if let Some(explanation) = &retained_summary_explanation {
         const CODE: &str = "RECOVERY_RESULT_SUMMARY_EXPLANATION_MISMATCH";
         verify_registered_summary_input(store, bundle, CODE)?;
         if result.dependencies != explanation.dependencies
@@ -4495,7 +4364,7 @@ fn inspect(
             && !saved_summary_explanation
             && !direct_summary_candidate
             && !legacy_summary_explanation
-            && retained_result_summary_explanation.is_none())
+            && retained_summary_explanation.is_none())
     {
         return Err(failure(
             "RECOVERY_CONTENT_MISMATCH",

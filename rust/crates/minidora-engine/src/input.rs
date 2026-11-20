@@ -51,6 +51,29 @@ pub(crate) const TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v107-text-composition-explanation";
 pub(crate) const TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v108-text-summary-candidate-explanation";
+pub(crate) const SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v109-source-summary-explanation";
+
+pub(crate) fn is_legacy_text_summary_explanation_version(version: &str) -> bool {
+    matches!(
+        version,
+        PARSER_VERSION
+            | CSV_JOIN_EXPLANATION_PARSER_VERSION
+            | CSV_ROW_EXPLANATION_PARSER_VERSION
+            | CSV_GROUP_EXPLANATION_PARSER_VERSION
+            | JSON_GROUP_COUNT_EXPLANATION_PARSER_VERSION
+            | CSV_SELECT_EXPLANATION_PARSER_VERSION
+            | TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+            | JSON_VALUE_EXPLANATION_PARSER_VERSION
+            | JSON_OBJECT_PROJECT_EXPLANATION_PARSER_VERSION
+            | JSON_STRUCTURAL_COMPARISON_EXPLANATION_PARSER_VERSION
+            | CSV_POSITIONAL_SELECTION_PARSER_VERSION
+            | TEXT_LOCATION_EXPLANATION_PARSER_VERSION
+            | TEXT_EDIT_EXPLANATION_PARSER_VERSION
+            | TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+    )
+}
+
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
 const QUOTATION_OPENERS: [char; 15] = [
     '「', '『', '"', '\'', '“', '‘', '〈', '《', '＂', '＇', '﹁', '﹃', '〝', '｢', '«',
@@ -224,7 +247,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         {
             PARSER_VERSION
         }
-        Intent::ExplainPrevious => TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION,
+        Intent::ExplainPrevious => SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }

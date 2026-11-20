@@ -1305,7 +1305,7 @@ pub(crate) struct PreviousResultSummaryExplanation {
     pub(crate) dependencies: Vec<String>,
 }
 
-pub(crate) fn previous_result_summary_explanation(
+pub(crate) fn previous_summary_explanation(
     store: &Store,
     bundle: &InputBundle,
     prior_results: &BTreeMap<String, ResultRecord>,
@@ -1322,7 +1322,9 @@ pub(crate) fn previous_result_summary_explanation(
     let Some((_, summary_bundle)) =
         store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
     else {
-        if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER) {
+        if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER)
+            || prior.text.contains("\n出典packet: ")
+        {
             return Err(failure(
                 "MISSING_RESULT_SUMMARY_CONTEXT",
                 "the prior summary has no retained sealed request",
@@ -1330,10 +1332,16 @@ pub(crate) fn previous_result_summary_explanation(
         }
         return Ok(None);
     };
-    if !matches!(
+    let is_source_summary = matches!(
         summary_bundle.meaning.intent,
-        Intent::SummarizePreviousResult { .. }
-    ) {
+        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+    );
+    if !is_source_summary
+        && !matches!(
+            summary_bundle.meaning.intent,
+            Intent::SummarizePreviousResult { .. }
+        )
+    {
         return Ok(None);
     }
     if prior.lifecycle != Lifecycle::Commit
@@ -1351,6 +1359,16 @@ pub(crate) fn previous_result_summary_explanation(
             "the summary has no retained content plan",
         )
     })?;
+    if is_source_summary {
+        return previous_source_summary_explanation(
+            store,
+            bundle,
+            &summary_bundle,
+            prior_results,
+            prior,
+            plan,
+        );
+    }
     let Some(proof) = verify_retained_previous_result_summary(
         store,
         &summary_bundle,
@@ -1608,6 +1626,292 @@ fn select_source_versions(
         source_versions,
         superseded_version_count,
     })
+}
+
+pub(crate) struct RetainedSourceSummary {
+    pub(crate) source_packet_refs: Vec<(usize, String)>,
+    source_result_id: String,
+    partial_notice: Option<&'static str>,
+    reports: Vec<SourceExtractiveSummaryCandidates>,
+}
+
+pub(crate) fn source_summary_unit(report: &SourceExtractiveSummaryCandidates) -> String {
+    format!(
+        "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
+        report.source_final_uri,
+        report.source_packet_id,
+        report.raw_body_sha256,
+        report.summary.text,
+    )
+}
+
+/// Verify the saved summary using the original source, limits and parser version.
+pub(crate) fn verify_retained_source_summary(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<RetainedSourceSummary>> {
+    if !matches!(
+        bundle.meaning.intent,
+        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+    ) {
+        return Ok(None);
+    }
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let summary_limits = constrained_source_summary_limits(&bundle.meaning.intent);
+    let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "source summary has no sealed prior-result reference",
+        )
+    })?;
+    let prior = prior_results.get(prior_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the exact prior source result is not retained",
+        )
+    })?;
+    if prior.id != *prior_id
+        || identity(&Some(prior))? != bundle.context_sha256
+        || !crate::recovery::source_context_available(store, actor, case, prior)?
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the referenced source result does not match the sealed context",
+        ));
+    }
+    if !result.evidence.is_empty() {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the derived result added undeclared evidence",
+        ));
+    }
+    let mut source_packets = Vec::new();
+    for (index, packet) in source_summary_bodies(prior) {
+        let packet_bytes = canonical(packet)?;
+        let packet_ref = digest(&packet_bytes);
+        if store.get_bytes(actor, case, &packet_ref)? != packet_bytes {
+            return Err(failure(
+                "RECOVERY_SOURCE_PACKET_MISMATCH",
+                "the original source packet blob differs from its retained record",
+            ));
+        }
+        source_packets.push((index, packet, packet_ref));
+    }
+    if source_packets.is_empty() {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the prior result lacks fetched bodies",
+        ));
+    }
+    let active_positions =
+        source_summary_packet_positions(&source_packets, &bundle.meaning.parser_version)?;
+    if summary_limits.is_some() && active_positions.len() != 1 {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
+            "the constrained source summary requires exactly one selected source",
+        ));
+    }
+    let source_packet_refs: Vec<_> = source_packets
+        .iter()
+        .map(|(index, _, reference)| (*index, reference.clone()))
+        .collect();
+    let mut dependencies = vec![prior.id.clone()];
+    dependencies.extend(
+        source_packet_refs
+            .iter()
+            .map(|(_, reference)| reference.clone()),
+    );
+    let mut units = Vec::new();
+    let mut report_bytes = 0usize;
+    let mut reports = Vec::new();
+    if let Some(stop) = partial_retrieval_stop(prior) {
+        units.push(stop.notice().into());
+    }
+    for position in active_positions {
+        let (_, packet, packet_ref) = &source_packets[position];
+        let report = match summary_limits {
+            Some((max_sentences, max_chars)) => summarize_fetched_source_with_limits(
+                &prior.id,
+                packet,
+                packet_ref,
+                max_sentences,
+                max_chars,
+            )?,
+            None => summarize_fetched_source(&prior.id, packet, packet_ref)?,
+        };
+        let encoded = canonical(&report)?;
+        report_bytes = report_bytes.saturating_add(encoded.len());
+        if report_bytes > request.budget.max_evidence_bytes {
+            return Err(failure(
+                "RECOVERY_SOURCE_SUMMARY_LIMIT",
+                "the retained source summary exceeds the original evidence budget",
+            ));
+        }
+        let report_ref = digest(&encoded);
+        if store.get_bytes(actor, case, &report_ref)? != encoded {
+            return Err(failure(
+                "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+                "the retained source summary artifact differs from the exact source packet",
+            ));
+        }
+        dependencies.push(report_ref);
+        units.push(source_summary_unit(&report));
+        reports.push(report);
+    }
+    if result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.calculation.is_some()
+        || dependencies != result.dependencies
+        || units != plan.required_units
+        || units.join("\n") != result.text
+        || plan.text != result.text
+        || result.guarantee != Guarantee::Hypothesis
+        || plan.guarantee != result.guarantee
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+            "source dependencies or displayed candidate units differ from Core's retained derivation",
+        ));
+    }
+    Ok(Some(RetainedSourceSummary {
+        source_packet_refs,
+        source_result_id: prior.id.clone(),
+        partial_notice: partial_retrieval_stop(prior).map(PartialRetrievalStop::notice),
+        reports,
+    }))
+}
+
+fn previous_source_summary_explanation(
+    store: &Store,
+    explanation: &InputBundle,
+    summary_bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    summary_result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<PreviousResultSummaryExplanation>> {
+    let version = explanation.meaning.parser_version.as_str();
+    let legacy = version == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+        || crate::input::is_legacy_text_summary_explanation_version(version);
+    if !legacy && version != crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION {
+        return Ok(None);
+    }
+    let Some(proof) =
+        verify_retained_source_summary(store, summary_bundle, prior_results, summary_result, plan)?
+    else {
+        return Ok(None);
+    };
+    let request = &explanation.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        summary_result,
+        None,
+        "SOURCE_SUMMARY_OUTPUT_UNAVAILABLE",
+        "retrieved source summary",
+    )?;
+    let source = prior_results.get(&proof.source_result_id).ok_or_else(|| {
+        failure(
+            "SOURCE_SUMMARY_CONTEXT_INVALID",
+            "the original retrieval result is missing",
+        )
+    })?;
+    let (_, source_bundle) = store
+        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
+        .ok_or_else(|| {
+            failure(
+                "SOURCE_SUMMARY_CONTEXT_INVALID",
+                "the original retrieval request is missing",
+            )
+        })?;
+    if source.id != identity(&source_bundle.request)? {
+        return Err(failure(
+            "SOURCE_SUMMARY_CONTEXT_INVALID",
+            "the retrieval result does not match the original request",
+        ));
+    }
+    let mut dependencies = vec![summary_result.id.clone()];
+    if legacy {
+        // The old explanation only displayed the already adopted summary.
+        return Ok(Some(PreviousResultSummaryExplanation {
+            units: vec![summary_result.text.clone()],
+            dependencies,
+        }));
+    }
+
+    let mut units = vec![format!(
+        "前回の取得資料要約の根拠（要約結果ID: {}、取得結果ID: {}）。",
+        summary_result.id, proof.source_result_id,
+    )];
+    if let Some(notice) = proof.partial_notice {
+        units.push(notice.into());
+    }
+    for (index, report) in proof.reports.iter().enumerate() {
+        let summary = &report.summary;
+        units.extend([
+            format!("出典{}: {}", index + 1, report.source_final_uri),
+            format!("取得URL: {}", report.source_request_uri),
+            format!(
+                "取得モード: {} / 取得時刻（Unix ms）: {}",
+                report.source_mode, report.observed_at_unix_ms
+            ),
+            format!(
+                "出典packet ID: {} / SHA-256: {}",
+                report.source_packet_id, report.source_packet_ref
+            ),
+            format!("原本文SHA-256: {}", report.raw_body_sha256),
+            format!("抽出本文SHA-256: {}", report.extracted_text_sha256),
+            format!(
+                "抽出器: {}。ライセンス情報: 未記録。",
+                report.parser_version
+            ),
+            format!(
+                "候補文{}件、選択{}件、未選択{}件。文数上限{}、文字数上限{}。",
+                summary.sentence_count,
+                summary.sentences.len(),
+                summary.omitted_sentence_indices.len(),
+                summary.max_sentences,
+                summary.max_chars
+            ),
+        ]);
+        for sentence in &summary.sentences {
+            let mut chars = sentence.text.chars();
+            let mut preview: String = chars.by_ref().take(128).collect();
+            if chars.next().is_some() {
+                preview.push('…');
+            }
+            units.push(format!(
+                "選択文{}（順位{}、抽出本文byte {}..{}、要約本文byte {}..{}）: {:?}",
+                sentence.sentence_index + 1,
+                sentence.selection_rank,
+                sentence.source_start,
+                sentence.source_end,
+                sentence.output_start,
+                sentence.output_end,
+                preview,
+            ));
+        }
+    }
+    units.push("要約の網羅性・意味・条件保持・事実性は未検証です。".into());
+    if units.join("\n").len() > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the source-summary explanation exceeds its evidence budget",
+        ));
+    }
+    dependencies.extend(summary_result.dependencies.iter().cloned());
+    Ok(Some(PreviousResultSummaryExplanation {
+        units,
+        dependencies,
+    }))
 }
 
 pub(crate) fn source_summary_bodies(

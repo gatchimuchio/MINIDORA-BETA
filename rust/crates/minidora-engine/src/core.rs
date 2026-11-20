@@ -5907,33 +5907,32 @@ impl Engine {
                         "説明対象となる実際の採用済み成果がありません。",
                     );
                 };
-                let result_summary_explanation =
-                    match crate::text_summary::previous_result_summary_explanation(
-                        &self.store,
-                        &bundle,
-                        &state.prior_results,
-                        prior,
-                    ) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            let code = match &error {
-                                Error::Contract { code, .. } => {
-                                    code.strip_prefix("RECOVERY_").unwrap_or(code)
-                                }
-                                _ => "RESULT_SUMMARY_ARTIFACT_INVALID",
-                            };
-                            let lifecycle = if code == "RESULT_SUMMARY_SOURCE_INTEGRITY" {
-                                Lifecycle::Fail
-                            } else {
-                                Lifecycle::Suspend
-                            };
-                            let message = match &error {
-                                Error::Contract { message, .. } => message.clone(),
-                                _ => error.to_string(),
-                            };
-                            return self.stop(&mut state, lifecycle, code, &message);
-                        }
-                    };
+                let summary_explanation = match crate::text_summary::previous_summary_explanation(
+                    &self.store,
+                    &bundle,
+                    &state.prior_results,
+                    prior,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => {
+                                code.strip_prefix("RECOVERY_").unwrap_or(code)
+                            }
+                            _ => "RESULT_SUMMARY_ARTIFACT_INVALID",
+                        };
+                        let lifecycle = if code == "RESULT_SUMMARY_SOURCE_INTEGRITY" {
+                            Lifecycle::Fail
+                        } else {
+                            Lifecycle::Suspend
+                        };
+                        let message = match &error {
+                            Error::Contract { message, .. } => message.clone(),
+                            _ => error.to_string(),
+                        };
+                        return self.stop(&mut state, lifecycle, code, &message);
+                    }
+                };
                 let prior_relation = if prior.calculation.is_none() {
                     previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
                 } else {
@@ -6677,7 +6676,7 @@ impl Engine {
                             return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                         }
                     }
-                } else if let Some(explanation) = result_summary_explanation {
+                } else if let Some(explanation) = summary_explanation {
                     units.extend(explanation.units);
                     result.dependencies.extend(explanation.dependencies);
                     result.guarantee = Guarantee::Hypothesis;
@@ -6973,13 +6972,7 @@ impl Engine {
                             "出典付き要約artifactが要求の証拠予算を超えました。",
                         );
                     }
-                    units.push(format!(
-                        "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
-                        source_report.source_final_uri,
-                        source_report.source_packet_id,
-                        source_report.raw_body_sha256,
-                        source_report.summary.text
-                    ));
+                    units.push(crate::text_summary::source_summary_unit(&source_report));
                     source_reports.push(encoded);
                 }
                 for encoded in source_reports {

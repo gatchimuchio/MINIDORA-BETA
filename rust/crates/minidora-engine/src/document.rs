@@ -241,14 +241,18 @@ pub(crate) fn previous_document_explanation(
     if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
     }
-    let explain_summary = explanation_parser_version
-        == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION;
+    let explain_summary = matches!(
+        explanation_parser_version,
+        crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+            | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
+    );
     let explain_text_document = matches!(
         explanation_parser_version,
         crate::input::TEXT_LOCATION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+            | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
     );
     if (explain_text_document && previous.guarantee == Guarantee::UserPremise)
         || (explain_summary && previous.guarantee == Guarantee::Hypothesis)
@@ -743,13 +747,16 @@ fn previous_text_document_explanation(
     const LOCATION_INVALID: &str = "TEXT_LOCATION_CONTEXT_INVALID";
     const EDIT_INVALID: &str = "TEXT_EDIT_CONTEXT_INVALID";
     const COMPOSITION_INVALID: &str = "TEXT_COMPOSITION_CONTEXT_INVALID";
-    let explain_summary = explanation_parser_version
-        == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
-        && previous.guarantee == Guarantee::Hypothesis;
+    let explain_summary = matches!(
+        explanation_parser_version,
+        crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+            | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
+    ) && previous.guarantee == Guarantee::Hypothesis;
     let explain_composition = matches!(
         explanation_parser_version,
         crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+            | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
     );
     let explain_text_edit = explain_composition
         || explanation_parser_version == crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION;
@@ -2991,6 +2998,7 @@ pub(crate) fn previous_json_table_operation_explanation(
             | crate::input::TEXT_EDIT_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
             | crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
+            | crate::input::SOURCE_SUMMARY_EXPLANATION_PARSER_VERSION
     ) && value.as_object().is_some_and(|object| {
         object.len() == 7
             && [
