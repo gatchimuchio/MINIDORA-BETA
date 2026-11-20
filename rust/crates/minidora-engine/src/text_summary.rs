@@ -1,8 +1,10 @@
 //! Deterministic extractive sentence candidates with exact source spans.
 //! This ranks supplied sentences; it does not verify summary coverage or meaning.
 use crate::ports::{JsonKind, strict_json_document};
+use crate::store::Store;
 use minidora_domain::{
-    EvidencePacket, Intent, Lifecycle, Result, ResultRecord, canonical, digest, failure,
+    ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, Result, ResultRecord,
+    canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -1132,6 +1134,306 @@ pub(crate) fn previous_result_summary_unit(
         "{PREVIOUS_RESULT_SUMMARY_HEADER}（結果ID: {source_result_id}）。\n{}",
         summary.text
     )
+}
+
+pub(crate) struct RetainedPreviousResultSummary {
+    pub(crate) content_ref: String,
+    pub(crate) render_ref: String,
+    pub(crate) summary_ref: String,
+    artifact: PreviousResultSummaryArtifact,
+    artifact_bytes: usize,
+}
+
+/// Recompute the saved report from the original summary request and the exact
+/// result that was sealed as its source.
+pub(crate) fn verify_retained_previous_result_summary(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<RetainedPreviousResultSummary>> {
+    let Intent::SummarizePreviousResult {
+        max_sentences,
+        max_chars,
+    } = &bundle.meaning.intent
+    else {
+        return Ok(None);
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let source_result_id = bundle
+        .meaning
+        .context_result_ref
+        .as_deref()
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+                "summary has no sealed prior-result reference",
+            )
+        })?;
+    let source = prior_results.get(source_result_id).ok_or_else(|| {
+        failure(
+            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+            "exact source result is not retained",
+        )
+    })?;
+    if source.id != source_result_id || source.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+            "summary source is not the same committed prior result",
+        ));
+    }
+    let (Some(source_plan), Some(source_render)) = (&source.content_plan, &source.render) else {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_SOURCE_UNAVAILABLE",
+            "source result has no retained content plan or render",
+        ));
+    };
+    let mut unsigned_plan = source_plan.clone();
+    unsigned_plan.id.clear();
+    if source_plan.id != identity(&unsigned_plan)?
+        || source.text != source_plan.text
+        || !crate::core::validate_render(source_plan, source_render)
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY",
+            "the retained source result does not match its content plan and render",
+        ));
+    }
+    let content_bytes = canonical(source_plan)?;
+    let content_ref = digest(&content_bytes);
+    let render_bytes = canonical(source_render)?;
+    let render_ref = digest(&render_bytes);
+    for (reference, expected) in [(&content_ref, &content_bytes), (&render_ref, &render_bytes)] {
+        let stored = store
+            .get_bytes_if_present(actor, case, reference)?
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_RESULT_SUMMARY_SOURCE_UNAVAILABLE",
+                    "the source output artifact is missing from this case",
+                )
+            })?;
+        if &stored != expected {
+            return Err(failure(
+                "RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY",
+                "the source content or render artifact differs from the retained result",
+            ));
+        }
+    }
+    if bundle.context_sha256 != identity(&Some(source))? {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
+            "the summary input did not seal the exact source result",
+        ));
+    }
+    let artifact = summarize_previous_result_with_limits(
+        &result.id,
+        &source.id,
+        &source_plan.id,
+        &source_render.actual_sha256,
+        &source.text,
+        max_sentences.unwrap_or(3),
+        *max_chars,
+    )?;
+    if artifact.summary.sentence_count > request.budget.max_actions as usize {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_LIMIT",
+            "the source sentence scan exceeds the original action budget",
+        ));
+    }
+    let output_unit = previous_result_summary_unit(&source.id, &artifact.summary);
+    let artifact_bytes = canonical(&artifact)?;
+    if artifact_bytes.len().saturating_add(output_unit.len()) > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_LIMIT",
+            "the retained summary exceeds the original evidence budget",
+        ));
+    }
+    let summary_ref = digest(&artifact_bytes);
+    let retained = store
+        .get_bytes_if_present(actor, case, &summary_ref)?
+        .ok_or_else(|| {
+            failure(
+                "RESULT_SUMMARY_ARTIFACT_UNAVAILABLE",
+                "the recomputed summary has no retained report in this case",
+            )
+        })?;
+    if retained != artifact_bytes {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the retained summary artifact differs from the original result text",
+        ));
+    }
+    let mut expected_dependencies = vec![
+        summary_ref.clone(),
+        source.id.clone(),
+        content_ref.clone(),
+        render_ref.clone(),
+    ];
+    expected_dependencies.extend(source.dependencies.iter().cloned());
+    if result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.guarantee != Guarantee::Hypothesis
+        || plan.guarantee != result.guarantee
+        || plan.locale != request.locale
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != expected_dependencies
+        || result.text != output_unit
+        || plan.text != output_unit
+        || plan.required_units != [output_unit]
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the summary result, source dependencies, or displayed unit differs from the recomputed report",
+        ));
+    }
+    Ok(Some(RetainedPreviousResultSummary {
+        content_ref,
+        render_ref,
+        summary_ref,
+        artifact,
+        artifact_bytes: artifact_bytes.len(),
+    }))
+}
+
+pub(crate) struct PreviousResultSummaryExplanation {
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+}
+
+pub(crate) fn previous_result_summary_explanation(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    prior: &ResultRecord,
+) -> Result<Option<PreviousResultSummaryExplanation>> {
+    if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        || prior.guarantee != Guarantee::Hypothesis
+    {
+        return Ok(None);
+    }
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let Some((_, summary_bundle)) =
+        store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
+    else {
+        if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER) {
+            return Err(failure(
+                "MISSING_RESULT_SUMMARY_CONTEXT",
+                "the prior summary has no retained sealed request",
+            ));
+        }
+        return Ok(None);
+    };
+    if !matches!(
+        summary_bundle.meaning.intent,
+        Intent::SummarizePreviousResult { .. }
+    ) {
+        return Ok(None);
+    }
+    if prior.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str())
+        || bundle.context_sha256 != identity(&Some(prior))?
+    {
+        return Err(failure(
+            "MISSING_RESULT_SUMMARY_CONTEXT",
+            "the explanation does not seal the expected committed summary",
+        ));
+    }
+    let plan = prior.content_plan.as_ref().ok_or_else(|| {
+        failure(
+            "RESULT_SUMMARY_OUTPUT_UNAVAILABLE",
+            "the summary has no retained content plan",
+        )
+    })?;
+    let Some(proof) = verify_retained_previous_result_summary(
+        store,
+        &summary_bundle,
+        prior_results,
+        prior,
+        plan,
+    )?
+    else {
+        return Ok(None);
+    };
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        prior,
+        Some(&proof.summary_ref),
+        "RESULT_SUMMARY_OUTPUT_UNAVAILABLE",
+        "previous result summary",
+    )?;
+
+    let artifact = proof.artifact;
+    let source = prior_results
+        .get(&artifact.source_result_id)
+        .ok_or_else(|| {
+            failure(
+                "RESULT_SUMMARY_SOURCE_UNAVAILABLE",
+                "the source result is not retained",
+            )
+        })?;
+    let (_, source_bundle) = store
+        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
+        .ok_or_else(|| {
+            failure(
+                "RESULT_SUMMARY_SOURCE_UNAVAILABLE",
+                "the source has no retained sealed request",
+            )
+        })?;
+    if source.id != identity(&source_bundle.request)? {
+        return Err(failure(
+            "RESULT_SUMMARY_SOURCE_INTEGRITY",
+            "the source result differs from its sealed request",
+        ));
+    }
+    let summary = artifact.summary;
+    let budget = &request.budget;
+    if proof.artifact_bytes > budget.max_evidence_bytes
+        || summary.sentence_count > budget.max_actions as usize
+    {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the retained summary exceeds the explanation budget",
+        ));
+    }
+    let mut units = vec![format!(
+        "前回結果の要約説明（要約結果ID: {}; 元結果ID: {}）。元結果は当時の採用本文です。この説明は現在の事実性を再判定するものではありません。",
+        prior.id, artifact.source_result_id,
+    )];
+    for sentence in &summary.sentences {
+        units.push(format!(
+            "選択文{}（選択順位{}、元結果byte {}..{}）: {}",
+            sentence.sentence_index,
+            sentence.selection_rank,
+            sentence.source_start,
+            sentence.source_end,
+            sentence.text,
+        ));
+    }
+    units.push(format!(
+        "候補文{}件のうち{}件を抽出しました。残り{}件は今回の選択に含まれていません。要約の網羅性・意味・条件保持は未検証です。",
+        summary.sentence_count, summary.sentences.len(), summary.omitted_sentence_indices.len(),
+    ));
+    if units.join("\n").len() > budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "the explanation exceeds its evidence budget",
+        ));
+    }
+    let mut dependencies = vec![prior.id.clone()];
+    dependencies.extend(prior.dependencies.iter().cloned());
+    Ok(Some(PreviousResultSummaryExplanation {
+        units,
+        dependencies,
+    }))
 }
 
 /// Build a source-linked extractive candidate set from an already retained

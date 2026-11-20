@@ -5907,6 +5907,33 @@ impl Engine {
                         "説明対象となる実際の採用済み成果がありません。",
                     );
                 };
+                let result_summary_explanation =
+                    match crate::text_summary::previous_result_summary_explanation(
+                        &self.store,
+                        &bundle,
+                        &state.prior_results,
+                        prior,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => {
+                                    code.strip_prefix("RECOVERY_").unwrap_or(code)
+                                }
+                                _ => "RESULT_SUMMARY_ARTIFACT_INVALID",
+                            };
+                            let lifecycle = if code == "RESULT_SUMMARY_SOURCE_INTEGRITY" {
+                                Lifecycle::Fail
+                            } else {
+                                Lifecycle::Suspend
+                            };
+                            let message = match &error {
+                                Error::Contract { message, .. } => message.clone(),
+                                _ => error.to_string(),
+                            };
+                            return self.stop(&mut state, lifecycle, code, &message);
+                        }
+                    };
                 let prior_relation = if prior.calculation.is_none() {
                     previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
                 } else {
@@ -6650,322 +6677,9 @@ impl Engine {
                             return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                         }
                     }
-                } else if prior
-                    .text
-                    .starts_with(crate::text_summary::PREVIOUS_RESULT_SUMMARY_HEADER)
-                {
-                    if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "MISSING_RESULT_SUMMARY_CONTEXT",
-                            "説明対象として固定された直前の要約結果がありません。",
-                        );
-                    }
-                    let Some(report_ref) = prior.dependencies.first().cloned() else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_ARTIFACT_UNAVAILABLE",
-                            "前回要約に再検証可能なartifactがありません。",
-                        );
-                    };
-                    let Some(report_bytes) =
-                        self.store
-                            .get_bytes_if_present(actor, &request.case_id, &report_ref)?
-                    else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_ARTIFACT_UNAVAILABLE",
-                            "前回要約artifactを同一ケースから取得できません。",
-                        );
-                    };
-                    if report_bytes.len() > request.budget.max_evidence_bytes {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESOURCE_LIMIT",
-                            "前回要約artifactが今回の証拠予算を超えています。",
-                        );
-                    }
-                    let artifact = match serde_json::from_slice::<
-                        crate::text_summary::PreviousResultSummaryArtifact,
-                    >(&report_bytes)
-                    {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "RESULT_SUMMARY_ARTIFACT_INVALID",
-                                "前回要約artifactの形式を検証できません。",
-                            );
-                        }
-                    };
-                    let (Some(summary_plan), Some(summary_render)) =
-                        (&prior.content_plan, &prior.render)
-                    else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_OUTPUT_UNAVAILABLE",
-                            "前回要約の採用ContentPlanまたは実表示記録がありません。",
-                        );
-                    };
-                    let summary_unit = crate::text_summary::previous_result_summary_unit(
-                        &artifact.source_result_id,
-                        &artifact.summary,
-                    );
-                    let mut unsigned_summary_plan = summary_plan.clone();
-                    unsigned_summary_plan.id.clear();
-                    if canonical(&artifact)? != report_bytes
-                        || artifact.kind != crate::text_summary::PREVIOUS_RESULT_SUMMARY_KIND
-                        || artifact.summary_result_id != prior.id
-                        || prior.lifecycle != Lifecycle::Commit
-                        || !prior.evidence.is_empty()
-                        || summary_plan.id != identity(&unsigned_summary_plan)?
-                        || summary_plan.text != prior.text
-                        || summary_plan.guarantee != Guarantee::Hypothesis
-                        || prior.guarantee != Guarantee::Hypothesis
-                        || summary_plan.required_units != [summary_unit.clone()]
-                        || prior.text != summary_unit
-                        || digest(summary_unit.as_bytes()) != artifact.summary_unit_sha256
-                        || !validate_render(summary_plan, summary_render)
-                        || prior.dependencies.first() != Some(&report_ref)
-                    {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_ARTIFACT_INVALID",
-                            "前回要約結果とartifactの同一性が一致しません。",
-                        );
-                    }
-                    let summary_content_bytes = canonical(summary_plan)?;
-                    let summary_content_ref = digest(&summary_content_bytes);
-                    let summary_render_bytes = canonical(summary_render)?;
-                    let summary_render_ref = digest(&summary_render_bytes);
-                    for (reference, expected) in [
-                        (
-                            summary_content_ref.as_str(),
-                            summary_content_bytes.as_slice(),
-                        ),
-                        (summary_render_ref.as_str(), summary_render_bytes.as_slice()),
-                    ] {
-                        match self
-                            .store
-                            .get_bytes_if_present(actor, &request.case_id, reference)?
-                        {
-                            Some(stored) if stored == expected => {}
-                            Some(_) => {
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Fail,
-                                    "RESULT_SUMMARY_OUTPUT_INTEGRITY",
-                                    "前回要約のContentPlanまたはrender artifactが保存済み実体と一致しません。",
-                                );
-                            }
-                            None => {
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Suspend,
-                                    "RESULT_SUMMARY_OUTPUT_UNAVAILABLE",
-                                    "前回要約のContentPlanまたはrender artifactを同一ケースから取得できません。",
-                                );
-                            }
-                        }
-                    }
-                    let Some(source_result) =
-                        state.prior_results.get(&artifact.source_result_id).cloned()
-                    else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_SOURCE_UNAVAILABLE",
-                            "要約元となった直前結果の履歴を取得できません。",
-                        );
-                    };
-                    let (Some(source_plan), Some(source_render)) =
-                        (&source_result.content_plan, &source_result.render)
-                    else {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_SOURCE_UNAVAILABLE",
-                            "要約元の確定本文または実表示記録がありません。",
-                        );
-                    };
-                    if source_result.lifecycle != Lifecycle::Commit
-                        || source_result.id != artifact.source_result_id
-                        || source_result.text != source_plan.text
-                        || !validate_render(source_plan, source_render)
-                    {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Fail,
-                            "RESULT_SUMMARY_SOURCE_INTEGRITY",
-                            "要約元の採用本文と実表示記録が一致しません。",
-                        );
-                    }
-                    let mut unsigned_source_plan = source_plan.clone();
-                    unsigned_source_plan.id.clear();
-                    if source_plan.id != identity(&unsigned_source_plan)? {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Fail,
-                            "RESULT_SUMMARY_SOURCE_INTEGRITY",
-                            "要約元ContentPlanの識別子を再検証できません。",
-                        );
-                    }
-                    let source_content_bytes = canonical(source_plan)?;
-                    let source_content_ref = digest(&source_content_bytes);
-                    let source_render_bytes = canonical(source_render)?;
-                    let source_render_ref = digest(&source_render_bytes);
-                    for (reference, expected) in [
-                        (source_content_ref.as_str(), source_content_bytes.as_slice()),
-                        (source_render_ref.as_str(), source_render_bytes.as_slice()),
-                    ] {
-                        match self
-                            .store
-                            .get_bytes_if_present(actor, &request.case_id, reference)?
-                        {
-                            Some(stored) if stored == expected => {}
-                            Some(_) => {
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Fail,
-                                    "RESULT_SUMMARY_SOURCE_INTEGRITY",
-                                    "要約元のContentPlanまたはrender artifactが保存済み実体と一致しません。",
-                                );
-                            }
-                            None => {
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Suspend,
-                                    "RESULT_SUMMARY_SOURCE_UNAVAILABLE",
-                                    "要約元のContentPlanまたはrender artifactを同一ケースから取得できません。",
-                                );
-                            }
-                        }
-                    }
-                    let source_text_sha256 = digest(source_result.text.as_bytes());
-                    if source_plan.id != artifact.source_content_plan_id
-                        || source_render.actual_sha256 != artifact.source_render_sha256
-                        || source_text_sha256 != artifact.source_text_sha256
-                        || artifact.summary.source_text != source_result.text
-                        || artifact.summary.source_text_sha256 != source_text_sha256
-                        || artifact.summary.output_sha256
-                            != digest(artifact.summary.text.as_bytes())
-                    {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_SOURCE_CHANGED",
-                            "要約artifactと元結果の本文・ContentPlan・表示記録が一致しません。",
-                        );
-                    }
-                    if artifact.summary.sentence_count
-                        > usize::try_from(request.budget.max_actions).unwrap_or(usize::MAX)
-                    {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESOURCE_LIMIT",
-                            "要約選択を再検証する推論予算が不足しています。",
-                        );
-                    }
-                    let recomputed = match crate::text_summary::extractive_summary_candidates(
-                        &artifact.summary.source_document,
-                    ) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "RESULT_SUMMARY_RECOMPUTATION_FAILED",
-                                "保存済み要約条件から同じ候補を再生成できません。",
-                            );
-                        }
-                    };
-                    if recomputed != artifact.summary {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_RECOMPUTATION_CHANGED",
-                            "保存済みの抽出要約候補を同じ本文・条件から再現できません。",
-                        );
-                    }
-                    let mut explanation = vec![format!(
-                        "前回結果の要約説明（要約結果ID: {}; 元結果ID: {}）。元結果は当時の採用本文です。この説明は現在の事実性を再判定するものではありません。",
-                        prior.id, source_result.id
-                    )];
-                    for sentence in &artifact.summary.sentences {
-                        let source_span = source_result
-                            .text
-                            .get(sentence.source_start..sentence.source_end);
-                        let output_span = artifact
-                            .summary
-                            .text
-                            .get(sentence.output_start..sentence.output_end);
-                        if source_span != Some(sentence.text.as_str())
-                            || output_span != Some(sentence.text.as_str())
-                        {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "RESULT_SUMMARY_SPAN_INVALID",
-                                "選択文の元結果byte範囲または要約出力範囲が一致しません。",
-                            );
-                        }
-                        explanation.push(format!(
-                            "選択文{}（選択順位{}、元結果byte {}..{}）: {}",
-                            sentence.sentence_index,
-                            sentence.selection_rank,
-                            sentence.source_start,
-                            sentence.source_end,
-                            sentence.text
-                        ));
-                    }
-                    explanation.push(format!(
-                        "候補文{}件のうち{}件を抽出しました。残り{}件は今回の選択に含まれていません。要約の網羅性・意味・条件保持は未検証です。",
-                        artifact.summary.sentence_count,
-                        artifact.summary.sentences.len(),
-                        artifact
-                            .summary
-                            .sentence_count
-                            .saturating_sub(artifact.summary.sentences.len())
-                    ));
-                    let mut expected_dependencies = BTreeSet::from([
-                        report_ref.clone(),
-                        source_result.id.clone(),
-                        source_content_ref,
-                        source_render_ref,
-                    ]);
-                    expected_dependencies.extend(source_result.dependencies.iter().cloned());
-                    if prior.dependencies.len() != expected_dependencies.len()
-                        || prior.dependencies.iter().cloned().collect::<BTreeSet<_>>()
-                            != expected_dependencies
-                    {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESULT_SUMMARY_ARTIFACT_INVALID",
-                            "要約元の結果依存関係がartifactと一致しません。",
-                        );
-                    }
-                    if explanation.join("\n").len() > request.budget.max_evidence_bytes {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "RESOURCE_LIMIT",
-                            "要約の出典説明が今回の証拠予算を超えています。",
-                        );
-                    }
-                    units.extend(explanation);
-                    result.dependencies.push(prior.id.clone());
-                    result
-                        .dependencies
-                        .extend(prior.dependencies.iter().cloned());
+                } else if let Some(explanation) = result_summary_explanation {
+                    units.extend(explanation.units);
+                    result.dependencies.extend(explanation.dependencies);
                     result.guarantee = Guarantee::Hypothesis;
                 } else if let Some((report_ref, explanation)) =
                     crate::code_generation::previous_code_explanation(

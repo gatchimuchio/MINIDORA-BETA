@@ -244,12 +244,6 @@ struct SourceSummaryExpectation {
     source_packet_refs: Vec<(usize, String)>,
 }
 
-struct PreviousResultSummaryExpectation {
-    content_ref: String,
-    render_ref: String,
-    summary_ref: String,
-}
-
 struct SourceQuestionExpectation {
     source_packet_refs: Vec<(usize, String)>,
     answer_ref: String,
@@ -3877,7 +3871,7 @@ fn verify_source_summary_context(
 
 const TEXT_SUMMARY_CANDIDATE_MISMATCH: &str = "RECOVERY_TEXT_SUMMARY_CANDIDATE_MISMATCH";
 
-fn verify_registered_summary_input(store: &Store, bundle: &InputBundle) -> Result<()> {
+fn verify_registered_summary_input(store: &Store, bundle: &InputBundle, code: &str) -> Result<()> {
     let request = &bundle.request;
     let registered = store.get_input_bundle(
         &request.actor_id,
@@ -3887,7 +3881,7 @@ fn verify_registered_summary_input(store: &Store, bundle: &InputBundle) -> Resul
     )?;
     if registered.as_ref().map(|(_, retained)| retained) != Some(bundle) {
         return Err(failure(
-            TEXT_SUMMARY_CANDIDATE_MISMATCH,
+            code,
             "the interrupted summary request does not match its registered sealed input",
         ));
     }
@@ -4000,7 +3994,7 @@ fn verify_legacy_text_summary_explanation(
     ) {
         return Ok(false);
     }
-    verify_registered_summary_input(store, bundle)?;
+    verify_registered_summary_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
     let Some(prior_plan) = &previous.content_plan else {
         return Err(failure(
             TEXT_SUMMARY_CANDIDATE_MISMATCH,
@@ -4059,123 +4053,22 @@ fn verify_previous_result_summary_context(
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
-) -> Result<Option<PreviousResultSummaryExpectation>> {
-    let Intent::SummarizePreviousResult {
-        max_sentences,
-        max_chars,
-    } = &goal.intent
-    else {
+) -> Result<Option<crate::text_summary::RetainedPreviousResultSummary>> {
+    if !matches!(goal.intent, Intent::SummarizePreviousResult { .. }) {
         return Ok(None);
-    };
+    }
     let bundle = state
         .bundle
         .as_ref()
+        .filter(|bundle| bundle.request.actor_id == actor && bundle.request.case_id == case)
         .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
-    let source_result_id = bundle
-        .meaning
-        .context_result_ref
-        .as_deref()
-        .ok_or_else(|| {
-            failure(
-                "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
-                "summary has no sealed prior-result reference",
-            )
-        })?;
-    let source = state.prior_results.get(source_result_id).ok_or_else(|| {
-        failure(
-            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
-            "exact source result is not retained",
-        )
-    })?;
-    if source.id != source_result_id || source.lifecycle != Lifecycle::Commit {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_CONTEXT_MISMATCH",
-            "summary source is not the same committed prior result",
-        ));
-    }
-    let (Some(source_plan), Some(source_render)) = (&source.content_plan, &source.render) else {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_SOURCE_UNAVAILABLE",
-            "source result has no retained content plan or render",
-        ));
-    };
-    let mut unsigned_plan = source_plan.clone();
-    unsigned_plan.id.clear();
-    if source_plan.id != identity(&unsigned_plan)?
-        || source.text != source_plan.text
-        || !crate::core::validate_render(source_plan, source_render)
-    {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY",
-            "the retained source result does not match its content plan and render",
-        ));
-    }
-    let content_bytes = canonical(source_plan)?;
-    let content_ref = digest(&content_bytes);
-    let render_bytes = canonical(source_render)?;
-    let render_ref = digest(&render_bytes);
-    if store.get_bytes(actor, case, &content_ref)? != content_bytes
-        || store.get_bytes(actor, case, &render_ref)? != render_bytes
-    {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_SOURCE_INTEGRITY",
-            "the source content or render artifact differs from the retained result",
-        ));
-    }
-    let artifact = crate::text_summary::summarize_previous_result_with_limits(
-        &result.id,
-        &source.id,
-        &source_plan.id,
-        &source_render.actual_sha256,
-        &source.text,
-        max_sentences.unwrap_or(3),
-        *max_chars,
-    )?;
-    if artifact.summary.sentence_count > goal.budget.max_actions as usize {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_LIMIT",
-            "the source sentence scan exceeds the original action budget",
-        ));
-    }
-    let output_unit =
-        crate::text_summary::previous_result_summary_unit(&source.id, &artifact.summary);
-    let artifact_bytes = canonical(&artifact)?;
-    if artifact_bytes.len().saturating_add(output_unit.len()) > goal.budget.max_evidence_bytes {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_LIMIT",
-            "the retained summary exceeds the original evidence budget",
-        ));
-    }
-    let summary_ref = digest(&artifact_bytes);
-    if store.get_bytes(actor, case, &summary_ref)? != artifact_bytes {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_MISMATCH",
-            "the retained summary artifact differs from the original result text",
-        ));
-    }
-    let mut expected_dependencies = vec![
-        summary_ref.clone(),
-        source.id.clone(),
-        content_ref.clone(),
-        render_ref.clone(),
-    ];
-    expected_dependencies.extend(source.dependencies.iter().cloned());
-    if result.id != artifact.summary_result_id
-        || result.guarantee != Guarantee::Hypothesis
-        || !result.evidence.is_empty()
-        || result.dependencies != expected_dependencies
-        || plan.required_units != [output_unit]
-    {
-        return Err(failure(
-            "RECOVERY_RESULT_SUMMARY_MISMATCH",
-            "the summary result, source dependencies, or displayed unit differs from the recomputed report",
-        ));
-    }
-    Ok(Some(PreviousResultSummaryExpectation {
-        content_ref,
-        render_ref,
-        summary_ref,
-    }))
+    crate::text_summary::verify_retained_previous_result_summary(
+        store,
+        bundle,
+        &state.prior_results,
+        result,
+        plan,
+    )
 }
 
 fn verified_source_question_packets<'a>(
@@ -4534,11 +4427,47 @@ fn inspect(
             });
     let direct_summary_candidate = matches!(goal.intent, Intent::TextSummaryCandidates { .. });
     if direct_summary_candidate {
-        verify_registered_summary_input(store, bundle)?;
+        verify_registered_summary_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
         verify_text_summary_candidate(store, bundle, result, plan)?;
     }
     let legacy_summary_explanation =
         verify_legacy_text_summary_explanation(store, state, bundle, result, plan)?;
+    let retained_result_summary_explanation = if matches!(goal.intent, Intent::ExplainPrevious)
+        && result.guarantee == Guarantee::Hypothesis
+    {
+        bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .map(|prior| {
+                crate::text_summary::previous_result_summary_explanation(
+                    store,
+                    bundle,
+                    &state.prior_results,
+                    prior,
+                )
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    if let Some(explanation) = &retained_result_summary_explanation {
+        const CODE: &str = "RECOVERY_RESULT_SUMMARY_EXPLANATION_MISMATCH";
+        verify_registered_summary_input(store, bundle, CODE)?;
+        if result.dependencies != explanation.dependencies
+            || plan.required_units != explanation.units
+            || result.text != explanation.units.join("\n")
+            || result.calculation.is_some()
+            || !result.evidence.is_empty()
+        {
+            return Err(failure(
+                CODE,
+                "the adopted explanation differs from the sealed result-summary context",
+            ));
+        }
+    }
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
     if plan.id != identity(&unsigned_plan)?
@@ -4565,7 +4494,8 @@ fn inspect(
             && !saved_relation_profile_explanation
             && !saved_summary_explanation
             && !direct_summary_candidate
-            && !legacy_summary_explanation)
+            && !legacy_summary_explanation
+            && retained_result_summary_explanation.is_none())
     {
         return Err(failure(
             "RECOVERY_CONTENT_MISMATCH",

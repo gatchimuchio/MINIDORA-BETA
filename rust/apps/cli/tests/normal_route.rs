@@ -6938,6 +6938,8 @@ fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans()
         actor,
         &["--input", "summary-common", "ココとミケの共通点は何ですか"],
     ));
+    assert_eq!(comparison["lifecycle"], "COMMIT");
+    assert_eq!(comparison["guarantee"], "USER_PREMISE");
     let output_path = scratch.0.join("previous-result-summary.txt");
     let summary = record(&execute(
         &scratch.0,
@@ -6967,6 +6969,7 @@ fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans()
     );
     assert_eq!(std::fs::read_to_string(&output_path).unwrap(), summary_text);
     assert_eq!(summary["receipts"][0]["phase"], "CONFIRMED");
+    let summary_modified = std::fs::metadata(&output_path).unwrap().modified().unwrap();
     let summary_dependencies = summary["dependencies"].as_array().unwrap();
     assert_eq!(summary_dependencies[0].as_str().unwrap().len(), 64);
     for dependency in
@@ -6978,11 +6981,17 @@ fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans()
         assert!(summary_dependencies.contains(premise));
     }
 
-    let explanation = record(&execute(
-        &scratch.0,
-        actor,
-        &["--input", "summary-explain", "詳しく説明して"],
-    ));
+    let explanation_path = scratch.0.join("previous-result-summary-explanation.txt");
+    let explanation_args = [
+        "--input",
+        "summary-explain",
+        "--output",
+        explanation_path.to_str().unwrap(),
+        "--allow-write",
+        explanation_path.to_str().unwrap(),
+        "詳しく説明して",
+    ];
+    let explanation = record(&execute(&scratch.0, actor, &explanation_args));
     assert_eq!(explanation["lifecycle"], "COMMIT");
     assert_eq!(explanation["guarantee"], "HYPOTHESIS");
     let explanation_text = explanation["text"].as_str().unwrap();
@@ -6991,16 +7000,65 @@ fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans()
     assert!(explanation_text.contains("選択文"));
     assert!(explanation_text.contains("元結果byte"));
     assert!(explanation_text.contains("要約の網羅性・意味・条件保持は未検証"));
-    for dependency in summary_dependencies {
-        assert!(
-            explanation["dependencies"]
-                .as_array()
-                .unwrap()
-                .contains(dependency),
-            "summary explanation lost source dependency {dependency}"
+    let mut expected_dependencies = vec![summary["id"].clone()];
+    expected_dependencies.extend_from_slice(summary_dependencies);
+    assert_eq!(
+        explanation["dependencies"],
+        Value::Array(expected_dependencies)
+    );
+    for (result, path) in [(&summary, &output_path), (&explanation, &explanation_path)] {
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(bytes, result["text"].as_str().unwrap().as_bytes());
+        assert_eq!(result["content_plan"]["text"], result["text"]);
+        assert_eq!(result["content_plan"]["guarantee"], "HYPOTHESIS");
+        let hash = minidora_domain::digest(&bytes);
+        assert_eq!(result["render"]["actual_sha256"], hash);
+        assert_eq!(result["receipts"].as_array().unwrap().len(), 1);
+        let receipt = &result["receipts"][0];
+        assert_eq!(receipt["phase"], "CONFIRMED");
+        assert_eq!(receipt["target"], path.to_str().unwrap());
+        assert_eq!(receipt["content_sha256"], hash);
+        assert_eq!(receipt["observed_bytes"], bytes.len());
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let actions = store.actions(actor, "normal-route").unwrap();
+    assert_eq!(actions.len(), 2);
+    assert_ne!(actions[0].action_id, actions[1].action_id);
+    assert!(actions.iter().all(|action| {
+        action.phase == minidora_domain::EffectPhase::Confirmed
+            && [&summary, &explanation].iter().any(|result| {
+                result["receipts"][0]["action_id"] == action.action_id
+                    && result["receipts"][0]["target"] == action.target
+            })
+    }));
+    let explanation_modified = std::fs::metadata(&explanation_path)
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(
+        record(&execute(&scratch.0, actor, &explanation_args)),
+        explanation
+    );
+    assert_eq!(store.actions(actor, "normal-route").unwrap(), actions);
+    for (path, result, modified) in [
+        (&output_path, &summary, summary_modified),
+        (&explanation_path, &explanation, explanation_modified),
+    ] {
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            result["text"].as_str().unwrap().as_bytes()
+        );
+        assert_eq!(
+            std::fs::metadata(path).unwrap().modified().unwrap(),
+            modified
         );
     }
     let saved = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(saved["result"], explanation);
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        summary["id"]
+    );
     assert_eq!(
         saved["prior_results"][comparison["id"].as_str().unwrap()],
         comparison
@@ -7024,6 +7082,57 @@ fn previous_result_summary_reuses_the_exact_output_and_explains_selected_spans()
             .as_str()
             .unwrap()
             .starts_with("MISSING_ACTUAL_RESULT:")
+    );
+}
+
+#[test]
+fn imported_text_with_a_result_summary_heading_keeps_its_user_premise_explanation() {
+    let scratch = Scratch::new();
+    let actor = "imported-summary-heading-owner";
+    let text = "前回結果からの抽出候補（一般の文章）。\nこれは取り込んだ本文です。";
+    let request = format!(
+        "text-import:\n{}",
+        serde_json::json!({"text": text, "protected": [], "max_chars": 128})
+    );
+    let imported = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "import-heading", &request],
+    ));
+    assert_eq!(imported["lifecycle"], "COMMIT");
+    assert_eq!(imported["guarantee"], "USER_PREMISE");
+    assert_eq!(imported["text"], text);
+    let explanation_args = ["--input", "explain-import-heading", "詳しく説明して"];
+    let explanation = record(&execute(&scratch.0, actor, &explanation_args));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "USER_PREMISE");
+    assert_eq!(explanation["text"], text);
+    assert_eq!(explanation["content_plan"]["guarantee"], "USER_PREMISE");
+    assert_eq!(
+        explanation["dependencies"],
+        serde_json::json!([imported["id"]])
+    );
+    assert_eq!(explanation["receipts"], serde_json::json!([]));
+    assert_eq!(
+        record(&execute(&scratch.0, actor, &explanation_args)),
+        explanation
+    );
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(saved["result"], explanation);
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        imported["id"]
+    );
+    assert_eq!(
+        saved["prior_results"][imported["id"].as_str().unwrap()],
+        imported
+    );
+    assert!(
+        minidora_engine::store::Store::open(&scratch.0)
+            .unwrap()
+            .actions(actor, "normal-route")
+            .unwrap()
+            .is_empty()
     );
 }
 
