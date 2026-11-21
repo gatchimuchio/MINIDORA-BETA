@@ -1602,6 +1602,7 @@ pub(crate) const PREVIOUS_COMPOSED_RULE_SOURCE_PREDICATE: &str =
     "EXACT_PREVIOUS_COMPOSED_RULE_SOURCE_V1";
 pub(crate) const PREVIOUS_RULE_SOURCE_BY_ID_PREDICATE: &str = "EXACT_PREVIOUS_RULE_SOURCE_BY_ID_V1";
 pub(crate) const PREVIOUS_RULE_LIST_PREDICATE: &str = "EXACT_PREVIOUS_RULE_LIST_V1";
+pub(crate) const LISTED_RULE_SOURCE_PREDICATE: &str = "EXACT_LISTED_RULE_SOURCE_V1";
 pub(crate) const COMPOSED_RULE_SOURCE_PREDICATE: &str = "EXACT_COMPOSED_RULE_SOURCE_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
@@ -1674,6 +1675,10 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
             input::PREVIOUS_RULE_LIST_PARSER_VERSION,
             PREVIOUS_RULE_LIST_PREDICATE,
         )),
+        Intent::AskListedRuleSource { .. } => Some((
+            input::LISTED_RULE_SOURCE_PARSER_VERSION,
+            LISTED_RULE_SOURCE_PREDICATE,
+        )),
         Intent::InspectComposedRuleSource { .. } => Some((
             input::COMPOSED_RULE_SOURCE_PARSER_VERSION,
             COMPOSED_RULE_SOURCE_PREDICATE,
@@ -1737,6 +1742,7 @@ pub(crate) fn goal_predicates(
         | Intent::InspectPreviousComposedRuleSource
         | Intent::InspectPreviousRuleSourceById { .. }
         | Intent::ListPreviousRules
+        | Intent::AskListedRuleSource { .. }
         | Intent::InspectComposedRuleSource { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
@@ -11079,6 +11085,7 @@ impl Engine {
             | Intent::InspectPreviousComposedRuleSource
             | Intent::InspectPreviousRuleSourceById { .. }
             | Intent::ListPreviousRules
+            | Intent::AskListedRuleSource { .. }
             | Intent::InspectComposedRuleSource { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
                     if matches!(intent, Intent::ListPreviousRules) {
@@ -17014,6 +17021,22 @@ impl RecordSourceReadout {
         }
         Ok(self)
     }
+
+    pub(crate) fn matches_surface(&self, result: &ResultRecord, plan: &ContentPlan) -> bool {
+        result
+            .dependencies
+            .split_last()
+            .is_some_and(|(proof_ref, dependencies)| {
+                proof_ref == &digest(&self.proof) && dependencies == self.dependencies
+            })
+            && result.guarantee == Guarantee::Computed
+            && plan.guarantee == Guarantee::Computed
+            && result.calculation.is_none()
+            && result.evidence.is_empty()
+            && plan.required_units == self.units
+            && result.text == self.units.join("\n")
+            && plan.text == result.text
+    }
 }
 
 pub(crate) struct RecordSourceTarget {
@@ -17024,6 +17047,14 @@ pub(crate) struct RecordSourceTarget {
 struct PreviousRuleSource {
     reference: PreviousRuleReference,
     composed_parents: Option<[String; 2]>,
+    list: Option<RuleListReference>,
+}
+
+struct RuleListReference {
+    result_id: String,
+    result_sha256: String,
+    input_ref: String,
+    proof_ref: String,
 }
 
 struct PreviousRuleReference {
@@ -17048,10 +17079,14 @@ impl RecordSourceTarget {
         revision: u64,
         goal: &GoalContract,
     ) -> Result<RecordSourceReadout> {
-        if matches!(goal.intent, Intent::InspectPreviousRuleSourceById { .. })
-            && matches!(self.lookup, Intent::InspectComposedRuleSource { .. })
-        {
-            require_record_source_actions(goal, 4)?;
+        if matches!(self.lookup, Intent::InspectComposedRuleSource { .. }) {
+            match goal.intent {
+                Intent::InspectPreviousRuleSourceById { .. } => {
+                    require_record_source_actions(goal, 4)?
+                }
+                Intent::AskListedRuleSource { .. } => require_record_source_actions(goal, 5)?,
+                _ => {}
+            }
         }
         if let Some(parents) = self
             .previous
@@ -17074,14 +17109,35 @@ impl RecordSourceTarget {
             "minidora-previous-rule-source-v1"
         };
         let reference = &previous.reference;
-        readout.proof = canonical(&(
-            proof_kind,
+        let why_identity = (
             &reference.result_id,
             &reference.result_sha256,
             &reference.input_ref,
             &reference.computation_ref,
-            rule_proof,
-        ))?;
+        );
+        readout.proof = if let Some(list) = &previous.list {
+            canonical(&(
+                "minidora-listed-rule-source-v1",
+                (
+                    &list.result_id,
+                    &list.result_sha256,
+                    &list.input_ref,
+                    &list.proof_ref,
+                ),
+                why_identity,
+                rule_proof,
+            ))?
+        } else {
+            let (result_id, result_sha256, input_ref, computation_ref) = why_identity;
+            canonical(&(
+                proof_kind,
+                result_id,
+                result_sha256,
+                input_ref,
+                computation_ref,
+                rule_proof,
+            ))?
+        };
         readout.dependencies.splice(
             ..0,
             [
@@ -17092,6 +17148,14 @@ impl RecordSourceTarget {
         readout
             .units
             .insert(0, format!("参照した理由説明ID: {}", reference.result_id));
+        if let Some(list) = &previous.list {
+            readout
+                .dependencies
+                .splice(..0, [list.result_id.clone(), list.proof_ref.clone()]);
+            readout
+                .units
+                .insert(0, format!("参照した規則一覧ID: {}", list.result_id));
+        }
         readout.within_evidence_budget(
             goal.budget.max_evidence_bytes,
             "前の理由説明と規則の出典が要求の証拠予算を超えています。",
@@ -17115,6 +17179,7 @@ pub(crate) fn record_source_target(
         Intent::InspectPreviousRuleSource => (false, None),
         Intent::InspectPreviousComposedRuleSource => (true, None),
         Intent::InspectPreviousRuleSourceById { rule_id } => (false, Some(rule_id.as_str())),
+        Intent::AskListedRuleSource { rule_id } => (false, Some(rule_id.as_str())),
         _ => {
             return Ok(RecordSourceTarget {
                 lookup: bundle.meaning.intent.clone(),
@@ -17122,8 +17187,14 @@ pub(crate) fn record_source_target(
             });
         }
     };
+    let from_list = matches!(bundle.meaning.intent, Intent::AskListedRuleSource { .. });
     let unavailable = || {
-        if composed_only {
+        if from_list {
+            failure(
+                "LISTED_RULE_SOURCE_UNAVAILABLE",
+                "参照した確定済み規則一覧と元の理由説明を照合できません。",
+            )
+        } else if composed_only {
             previous_composed_rule_source_unavailable()
         } else {
             failure(
@@ -17132,18 +17203,32 @@ pub(crate) fn record_source_target(
             )
         }
     };
-    let (reference, rules) =
-        verified_previous_rules(store, bundle, prior_results, false, &unavailable)?;
+    let (reference, rules, list) = if from_list {
+        let (reference, rules, list) =
+            verified_listed_rules(store, bundle, prior_results, &unavailable)?;
+        (reference, rules, Some(list))
+    } else {
+        let (reference, rules) =
+            verified_previous_rules(store, bundle, prior_results, false, &unavailable)?;
+        (reference, rules, None)
+    };
     let mut candidates = rules.iter().filter(|rule| {
         (!composed_only || rule.composed) && selected_id.is_none_or(|selected| selected == rule.id)
     });
     let rule = match (candidates.next(), candidates.next()) {
         (Some(rule), None) => rule,
         (None, _) if selected_id.is_some() => {
-            return Err(failure(
-                "PREVIOUS_RULE_SOURCE_ID_NOT_USED",
-                "指定した規則IDは参照した理由説明の証拠に含まれていません。",
-            ));
+            return Err(if from_list {
+                failure(
+                    "LISTED_RULE_SOURCE_ID_NOT_LISTED",
+                    "指定した規則IDは参照した規則一覧に含まれていません。",
+                )
+            } else {
+                failure(
+                    "PREVIOUS_RULE_SOURCE_ID_NOT_USED",
+                    "指定した規則IDは参照した理由説明の証拠に含まれていません。",
+                )
+            });
         }
         (None, _) => return Err(unavailable()),
         _ => {
@@ -17176,27 +17261,23 @@ pub(crate) fn record_source_target(
         previous: Some(PreviousRuleSource {
             reference,
             composed_parents,
+            list,
         }),
     })
 }
 
-fn verified_previous_rules(
+fn verified_previous_result<'a>(
     store: &Store,
     bundle: &InputBundle,
-    prior_results: &BTreeMap<String, ResultRecord>,
-    include_direct: bool,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
     unavailable: &impl Fn() -> Error,
-) -> Result<(PreviousRuleReference, Vec<PreviousTypedRule>)> {
+) -> Result<(&'a ResultRecord, String, InputBundle)> {
     let previous = bundle
         .meaning
         .context_result_ref
         .as_ref()
         .and_then(|id| prior_results.get(id).filter(|result| &result.id == id))
-        .filter(|result| {
-            result.lifecycle == Lifecycle::Commit
-                && (result.guarantee == Guarantee::Derived
-                    || (include_direct && result.guarantee == Guarantee::UserPremise))
-        })
+        .filter(|result| result.lifecycle == Lifecycle::Commit)
         .ok_or_else(unavailable)?;
     if bundle.context_sha256 != identity(&Some(previous))?
         || bundle
@@ -17224,6 +17305,23 @@ fn verified_previous_rules(
         }
         Ok((input_ref, origin))
     })?;
+    Ok((previous, input_ref, origin))
+}
+
+fn verified_previous_rules(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    include_direct: bool,
+    unavailable: &impl Fn() -> Error,
+) -> Result<(PreviousRuleReference, Vec<PreviousTypedRule>)> {
+    let (previous, input_ref, origin) =
+        verified_previous_result(store, bundle, prior_results, unavailable)?;
+    if previous.guarantee != Guarantee::Derived
+        && !(include_direct && previous.guarantee == Guarantee::UserPremise)
+    {
+        return Err(unavailable());
+    }
     let Intent::AskWhy { proposition } = &origin.meaning.intent else {
         return Err(unavailable());
     };
@@ -17243,7 +17341,11 @@ fn verified_previous_rules(
         return Err(unavailable());
     }
     let bytes = store
-        .get_bytes_if_present(actor, case, computation_ref)?
+        .get_bytes_if_present(
+            &bundle.request.actor_id,
+            &bundle.request.case_id,
+            computation_ref,
+        )?
         .ok_or_else(unavailable)?;
     let artifact: CoreComputationArtifactGeneratedContent =
         serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
@@ -17333,6 +17435,17 @@ pub(crate) fn previous_rule_list(
     };
     let (reference, rules) =
         verified_previous_rules(store, bundle, prior_results, true, &unavailable)?;
+    previous_rule_inventory(&reference, &rules, &unavailable)?.within_evidence_budget(
+        goal.budget.max_evidence_bytes,
+        "規則の一覧と照合証拠が要求の証拠予算を超えています。",
+    )
+}
+
+fn previous_rule_inventory(
+    reference: &PreviousRuleReference,
+    rules: &[PreviousTypedRule],
+    unavailable: &impl Fn() -> Error,
+) -> Result<RecordSourceReadout> {
     let ids: BTreeSet<_> = rules.iter().map(|rule| rule.id.as_str()).collect();
     if ids.len() != rules.len() {
         return Err(unavailable());
@@ -17341,7 +17454,7 @@ pub(crate) fn previous_rule_list(
         format!("参照した理由説明ID: {}", reference.result_id),
         format!("使用規則: {}件", rules.len()),
     ];
-    for rule in &rules {
+    for rule in rules {
         if rule.composed {
             let [left, right] = verified_previous_parent_ids(rule, &ids).ok_or_else(unavailable)?;
             units.push(format!("合成規則: {}（親規則: {left}、{right}）", rule.id));
@@ -17364,15 +17477,72 @@ pub(crate) fn previous_rule_list(
         &reference.computation_ref,
         &rows,
     ))?;
-    RecordSourceReadout {
+    Ok(RecordSourceReadout {
         proof,
         units,
-        dependencies: vec![reference.result_id, reference.computation_ref],
+        dependencies: vec![
+            reference.result_id.clone(),
+            reference.computation_ref.clone(),
+        ],
+    })
+}
+
+fn verified_listed_rules(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    unavailable: &impl Fn() -> Error,
+) -> Result<(
+    PreviousRuleReference,
+    Vec<PreviousTypedRule>,
+    RuleListReference,
+)> {
+    let (list, input_ref, origin) =
+        verified_previous_result(store, bundle, prior_results, unavailable)?;
+    if origin.meaning.intent != Intent::ListPreviousRules
+        || origin.meaning.parser_version != input::PREVIOUS_RULE_LIST_PARSER_VERSION
+        || origin.meaning.source_kind != "USER_REQUEST"
+        || list.actor_memory_revision.is_some()
+    {
+        return Err(unavailable());
     }
-    .within_evidence_budget(
-        goal.budget.max_evidence_bytes,
-        "規則の一覧と照合証拠が要求の証拠予算を超えています。",
-    )
+    let plan = list.content_plan.as_ref().ok_or_else(unavailable)?;
+    let render = list.render.as_ref().ok_or_else(unavailable)?;
+    let proof_ref = list.dependencies.last().ok_or_else(unavailable)?;
+    let (compute_ref, plan_dependencies) =
+        plan.dependencies.split_last().ok_or_else(unavailable)?;
+    let (reference, rules) =
+        verified_previous_rules(store, &origin, prior_results, true, unavailable)?;
+    let readout = previous_rule_inventory(&reference, &rules, unavailable)?;
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let computation = canonical(&(
+        &list.calculation,
+        &readout.units,
+        &list.evidence,
+        &list.dependencies,
+    ))?;
+    if !readout.matches_surface(list, plan)
+        || plan_dependencies != list.dependencies
+        || !validate_render(plan, render)
+        || store
+            .get_bytes_if_present(actor, case, proof_ref)?
+            .as_deref()
+            != Some(&readout.proof)
+        || store
+            .get_bytes_if_present(actor, case, compute_ref)?
+            .as_deref()
+            != Some(&computation)
+    {
+        return Err(unavailable());
+    }
+    let list_ref = RuleListReference {
+        result_id: list.id.clone(),
+        result_sha256: identity(list)?,
+        input_ref,
+        proof_ref: proof_ref.clone(),
+    };
+    Ok((reference, rules, list_ref))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -17600,6 +17770,7 @@ impl SourceMemoryRecord<'_> {
                     Intent::InspectDeclaredRuleSource { .. }
                         | Intent::InspectPreviousRuleSource
                         | Intent::InspectPreviousRuleSourceById { .. }
+                        | Intent::AskListedRuleSource { .. }
                 ) && input::verified_plain_rule_source(&bundle)?
                 {
                     let proof = canonical(&(
@@ -17751,7 +17922,7 @@ pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
     // compute, content, render and optional file confirmation.
     let reads = match goal.intent {
         Intent::ListPreviousRules => 1,
-        Intent::InspectPreviousComposedRuleSource => 4,
+        Intent::InspectPreviousComposedRuleSource | Intent::AskListedRuleSource { .. } => 4,
         Intent::InspectComposedRuleSource { .. }
         | Intent::InspectPreviousRuleSource
         | Intent::InspectPreviousRuleSourceById { .. } => 3,
@@ -17777,6 +17948,9 @@ fn require_record_source_actions(goal: &GoalContract, reads: u32) -> Result<()> 
                 "前の理由説明と合成規則の親規則を照合する行動予算が不足しています。"
             }
             Intent::ListPreviousRules => "前の理由説明を照合する行動予算が不足しています。",
+            Intent::AskListedRuleSource { .. } => {
+                "規則一覧と規則の元入力を照合する行動予算が不足しています。"
+            }
             _ => "条件定義と元入力を照合する行動予算が不足しています。",
         };
         return Err(failure("ACTION_BUDGET_EXHAUSTED", message));

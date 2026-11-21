@@ -5076,6 +5076,49 @@ fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarati
     assert_eq!(listed_id, shortcut.id);
     assert_eq!(composed_row[1], serde_json::json!(parents));
 
+    let list_id = listed["id"].as_str().unwrap();
+    let from_list_command = format!("　一覧の規則の出典： {listed_id}。　");
+    let from_list = run(&[
+        "--input",
+        "source-from-list",
+        "--max-actions",
+        "8",
+        &from_list_command,
+    ]);
+    assert_eq!(
+        from_list["text"].as_str().unwrap(),
+        format!(
+            "参照した規則一覧ID: {list_id}\n{}",
+            contextual["text"].as_str().unwrap()
+        )
+    );
+    let list_source_dependencies = from_list["dependencies"].as_array().unwrap();
+    assert_eq!(list_source_dependencies[0], list_id);
+    assert_eq!(list_source_dependencies[1], listed["dependencies"][2]);
+    assert_eq!(list_source_dependencies[2..9], contextual_deps[..7]);
+    let from_list_proof = sequence_artifact(&store, &list_source_dependencies[9]);
+    assert_eq!(from_list_proof[0], "minidora-listed-rule-source-v1");
+    assert_eq!(from_list_proof[1][0], list_id);
+    assert_eq!(from_list_proof[1][3], listed["dependencies"][2]);
+    assert_eq!(from_list_proof[2][0], why_id);
+    assert_eq!(from_list_proof[3], proof);
+    let from_list_bundle = store
+        .load_case("owner", "normal-route")
+        .unwrap()
+        .unwrap()
+        .bundle
+        .unwrap();
+    assert_eq!(
+        from_list_bundle.meaning.parser_version,
+        "declarative-ja-en-v143-listed-rule-source"
+    );
+    let spans = &from_list_bundle.meaning.source_roles["/AskListedRuleSource/rule_id"];
+    assert_eq!(spans.len(), 1);
+    assert_eq!(
+        from_list_command.get(spans[0].start..spans[0].end),
+        Some(listed_id)
+    );
+
     let selected_command = format!("　前の回答で使った規則の出典： {listed_id}。　");
     let selected = run(&[
         "--input",
@@ -5128,6 +5171,22 @@ fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarati
     let parent_proof = sequence_artifact(&store, &parent_deps[4]);
     assert_eq!(parent_proof[0], "minidora-selected-previous-rule-source-v1");
     assert_eq!(parent_proof[5][0], "minidora-rule-source-v1");
+    let from_older_list = run(&[
+        "--input",
+        "source-from-older-list",
+        "--context",
+        list_id,
+        "--max-actions",
+        "7",
+        &format!("一覧の規則の出典: {}", parents[0]),
+    ]);
+    assert_eq!(
+        from_older_list["text"].as_str().unwrap(),
+        format!(
+            "参照した規則一覧ID: {list_id}\n{}",
+            selected_parent["text"].as_str().unwrap()
+        )
+    );
     assert_eq!(store.load_memory("owner").unwrap(), memory);
     assert!(store.actions("owner", "source").unwrap().is_empty());
 }
