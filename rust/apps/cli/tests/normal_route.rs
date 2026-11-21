@@ -4925,6 +4925,85 @@ fn condition_rule_requires_both_guarded_premises_for_an_ordinary_derivation() {
 }
 
 #[test]
+fn condition_references_on_one_premise_require_all_named_conditions() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let reg = "　[scope=実験室][condition=点検][condition=校正]ユリは入室可。　";
+    let first = run(&["条件定義: [scope=実験室][condition=点検] ユリは点検済み"]);
+    let second = run(&["条件定義: [scope=実験室][condition=校正] ユリは校正済み"]);
+    let evidence = run(&["[scope=実験室]ユリは点検済み"]);
+    let premise = run(&["--case", "multiple-conditions", "--max-actions", "3", reg]);
+    assert_eq!(premise["guarantee"], "USER_PREMISE");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bundle = store
+        .load_case("owner", "multiple-conditions")
+        .unwrap()
+        .unwrap()
+        .bundle
+        .unwrap();
+    assert_eq!(
+        bundle.meaning.parser_version,
+        "declarative-ja-en-v134-multi-condition-relation"
+    );
+    for (index, value) in ["校正", "点検"].into_iter().enumerate() {
+        let role = format!("/Assert/proposition/condition_refs/{index}");
+        let spans = &bundle.meaning.source_roles[&role];
+        assert_eq!(spans.len(), 1);
+        assert_eq!(reg.get(spans[0].start..spans[0].end), Some(value));
+    }
+    let query = "[condition=校正][condition=点検][scope=実験室]ユリは入室可ですか";
+    let stopped_result = || stopped(&execute(&scratch.0, "owner", &[query]), 2, "SUSPEND");
+    let pending = stopped_result();
+    assert!(
+        pending["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_UNKNOWN")
+    );
+    assert!(pending["reason"].as_str().unwrap().contains("点検=True"));
+    let second_evidence = run(&["[scope=実験室]ユリは校正済み"]);
+    let supported = run(&[query]);
+    assert_eq!(supported["guarantee"], "USER_PREMISE");
+    for item in [&first, &second, &premise, &evidence, &second_evidence] {
+        assert!(
+            supported["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&item["dependencies"][0])
+        );
+    }
+    let without_second = "[scope=実験室][condition=点検]ユリは入室可ですか";
+    assert!(
+        stopped(
+            &execute(&scratch.0, "owner", &[without_second]),
+            2,
+            "SUSPEND"
+        )["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let fact_id = premise["dependencies"][0].as_str().unwrap();
+    let source = run(&[&format!("Factの出典: {fact_id}")]);
+    assert!(
+        source["text"]
+            .as_str()
+            .unwrap()
+            .contains("condition_refs/1")
+    );
+    run(&[&format!(
+        "{}を無効化して",
+        second_evidence["dependencies"][0].as_str().unwrap()
+    )]);
+    assert!(
+        stopped_result()["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_UNKNOWN")
+    );
+}
+
+#[test]
 fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

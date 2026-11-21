@@ -55,6 +55,8 @@ pub(crate) const GUARDED_RELATION_RULE_PARSER_VERSION: &str =
     "declarative-ja-en-v132-guarded-relation-rule";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION: &str =
     "declarative-ja-en-v133-guarded-conjunctive-rule";
+pub(crate) const MULTI_CONDITION_RELATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v134-multi-condition-relation";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -161,8 +163,32 @@ pub(crate) fn uses_generated_relation_explanation(meaning: &MeaningIR) -> bool {
     matches!(&meaning.intent, Intent::AskWhy { .. })
         && matches!(
             meaning.parser_version.as_str(),
-            LEGACY_RELATION_EXPLANATION_PARSER_VERSION | RELATION_EXPLANATION_PARSER_VERSION
+            LEGACY_RELATION_EXPLANATION_PARSER_VERSION
+                | RELATION_EXPLANATION_PARSER_VERSION
+                | MULTI_CONDITION_RELATION_PARSER_VERSION
         )
+}
+
+fn is_multi_condition_relation(intent: &Intent) -> bool {
+    match intent {
+        Intent::Assert { proposition }
+        | Intent::Ask { proposition }
+        | Intent::AskWhy { proposition } => proposition.condition_refs.len() > 1,
+        _ => false,
+    }
+}
+
+pub(crate) fn verified_multi_condition_relation_source(bundle: &InputBundle) -> Result<bool> {
+    let intent = &bundle.meaning.intent;
+    if bundle.meaning.parser_version != MULTI_CONDITION_RELATION_PARSER_VERSION
+        || bundle.meaning.source_kind != "USER_REQUEST"
+        || !is_multi_condition_relation(intent)
+        || &interpret(&bundle.request.text)? != intent
+    {
+        return Ok(false);
+    }
+    let roles = source_role_spans(&bundle.request.text, intent)?;
+    Ok(!roles.is_empty() && bundle.meaning.source_roles == roles)
 }
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
@@ -294,6 +320,11 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         | Intent::MoveCalculationSequenceStep { .. }
         | Intent::InsertCalculationSequenceStep { .. } => {
             sequence_edit_parser(&intent).expect("sequence edit parser")
+        }
+        Intent::Assert { .. } | Intent::Ask { .. } | Intent::AskWhy { .. }
+            if is_multi_condition_relation(&intent) =>
+        {
+            MULTI_CONDITION_RELATION_PARSER_VERSION
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
@@ -618,9 +649,9 @@ fn japanese_qualified_source_roles(
     if qualifiers.scope.map_or("default", |(scope, _)| scope) != proposition.scope
         || qualifiers.time.map(|(time, _)| time) != proposition.temporal_scope.as_deref()
         || !qualifiers
-            .condition
-            .map(|(condition, _)| condition)
-            .into_iter()
+            .conditions
+            .keys()
+            .copied()
             .eq(proposition.condition_refs.iter().map(String::as_str))
     {
         return Ok(None);
@@ -703,7 +734,6 @@ fn japanese_qualified_source_roles(
     for (role, qualifier) in [
         ("scope", qualifiers.scope),
         ("temporal_scope", qualifiers.time),
-        ("condition_refs/0", qualifiers.condition),
         ("valid_from", qualifiers.valid_from),
         ("valid_until", qualifiers.valid_until),
     ] {
@@ -713,6 +743,12 @@ fn japanese_qualified_source_roles(
                 .expect("qualifier is an exact slice of the original statement");
             roles.insert(format!("{role_root}/{role}"), vec![span]);
         }
+    }
+    for (index, (condition_id, offset)) in qualifiers.conditions.iter().enumerate() {
+        let start = qualifier_offset + *offset;
+        let span = source_span_at(text, start, start + condition_id.len())
+            .expect("condition qualifier is an exact slice of the original statement");
+        roles.insert(format!("{role_root}/condition_refs/{index}"), vec![span]);
     }
     if let Some(negation_span) = negation_span {
         roles.insert(format!("{role_root}/negation"), vec![negation_span]);
@@ -1680,7 +1716,7 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
         let (payload, qualifiers) = condition_source_definition_qualifiers(text)
             .filter(|(_, qualifiers)| {
                 qualifiers
-                    .condition
+                    .condition()
                     .is_some_and(|(value, _)| value == condition_id)
                     && qualifiers
                         .subject
@@ -3618,10 +3654,11 @@ fn guarded_relation_rule_clause(
     offset: usize,
     role_root: &str,
 ) -> Result<Option<GuardedRelationRuleClause>> {
-    let Some((body, qualifiers)) = relation_qualifiers(clause, QualifierContext::Relation) else {
+    let Some((body, qualifiers)) = relation_qualifiers(clause, QualifierContext::GuardedRule)
+    else {
         return Ok(None);
     };
-    let (Some((scope, _)), Some((condition_id, _))) = (qualifiers.scope, qualifiers.condition)
+    let (Some((scope, _)), Some((condition_id, _))) = (qualifiers.scope, qualifiers.condition())
     else {
         return Ok(None);
     };
@@ -3809,7 +3846,7 @@ fn interpret(text: &str) -> Result<Intent> {
         return Ok(condition_source_definition_qualifiers(text)
             .and_then(|(_, qualifiers)| {
                 Some(Intent::InspectConditionSourceByDefinition {
-                    condition_id: qualifiers.condition?.0.into(),
+                    condition_id: qualifiers.condition()?.0.into(),
                     subject: qualifiers.subject?.0.into(),
                     scope: qualifiers.scope?.0.into(),
                 })
@@ -3821,7 +3858,7 @@ fn interpret(text: &str) -> Result<Intent> {
     if condition_evaluation_payload(terminal_trim(text)).is_some() {
         return Ok(condition_evaluation_qualifiers(text)
             .and_then(|(_, detailed, qualifiers)| {
-                let condition_id = qualifiers.condition?.0.into();
+                let condition_id = qualifiers.condition()?.0.into();
                 let subject = qualifiers.subject?.0.into();
                 let scope = qualifiers.scope?.0.into();
                 let temporal_scope = qualifiers.time.map(|(time, _)| time.into());
@@ -4052,6 +4089,9 @@ fn interpret(text: &str) -> Result<Intent> {
                 |source| source.intent,
             ));
         }
+    }
+    if let Some(intent) = multi_condition_relation_intent(text, body)? {
+        return Ok(intent);
     }
     if let Some(capture) =
         regex(r"(?is)^(?:もし\s*)?(.+?)(?:ならば|なら|であれば)[、,\s]*(.+)$")?.captures(body)
@@ -5161,15 +5201,27 @@ fn mark_rule_variable(term: &mut String) {
 struct RelationQualifiers<'a> {
     scope: Option<(&'a str, usize)>,
     time: Option<(&'a str, usize)>,
-    condition: Option<(&'a str, usize)>,
+    conditions: BTreeMap<&'a str, usize>,
     subject: Option<(&'a str, usize)>,
     valid_from: Option<(&'a str, usize)>,
     valid_until: Option<(&'a str, usize)>,
 }
 
+impl<'a> RelationQualifiers<'a> {
+    fn condition(&self) -> Option<(&'a str, usize)> {
+        if self.conditions.len() != 1 {
+            return None;
+        }
+        self.conditions
+            .first_key_value()
+            .map(|(&id, &offset)| (id, offset))
+    }
+}
+
 #[derive(Clone, Copy)]
 enum QualifierContext {
     Relation,
+    GuardedRule,
     ConditionDefinition,
     ConditionEvaluation,
     ConditionSource,
@@ -5198,13 +5250,25 @@ fn relation_qualifiers(
             - raw_value.trim_start().len();
         let target = match (key, context) {
             ("scope", _) => &mut qualifiers.scope,
-            ("time", QualifierContext::Relation | QualifierContext::ConditionEvaluation)
-                if crate::relations::valid_utc_instant(value) =>
-            {
-                &mut qualifiers.time
-            }
+            (
+                "time",
+                QualifierContext::Relation
+                | QualifierContext::GuardedRule
+                | QualifierContext::ConditionEvaluation,
+            ) if crate::relations::valid_utc_instant(value) => &mut qualifiers.time,
             ("condition", _) if crate::relations::validate_condition_id(value).is_ok() => {
-                &mut qualifiers.condition
+                let limit = if matches!(context, QualifierContext::Relation) {
+                    32
+                } else {
+                    1
+                };
+                if qualifiers.conditions.len() >= limit
+                    || qualifiers.conditions.insert(value, start).is_some()
+                {
+                    return None;
+                }
+                body = rest.trim_start();
+                continue;
             }
             (
                 "subject",
@@ -5238,7 +5302,7 @@ fn ordinary_relation_proposition(text: &str) -> Result<Option<Proposition>> {
     else {
         return Ok(None);
     };
-    if qualifiers.time.is_none() && qualifiers.condition.is_none() {
+    if qualifiers.time.is_none() && qualifiers.conditions.is_empty() {
         return parse_proposition(text, false);
     }
     // The initial qualified grammar is one explicitly named Japanese copular
@@ -5252,13 +5316,41 @@ fn ordinary_relation_proposition(text: &str) -> Result<Option<Proposition>> {
     proposition.temporal_scope = qualifiers.time.map(|(time, _)| time.into());
     proposition
         .condition_refs
-        .extend(qualifiers.condition.map(|(id, _)| id.into()));
+        .extend(qualifiers.conditions.keys().map(|&id| id.into()));
     if singular_previous_subject(&proposition.subject)
         || japanese_assertion_source_roles(text, &proposition)?.is_none()
     {
         return Ok(None);
     }
     Ok(Some(proposition))
+}
+
+fn multi_condition_relation_intent(text: &str, body: &str) -> Result<Option<Intent>> {
+    if !body.starts_with('[') || body.match_indices("[condition=").nth(1).is_none() {
+        return Ok(None);
+    }
+    let statement = relation_question_statement(body);
+    let question = statement != body
+        || text
+            .trim_end()
+            .trim_end_matches(['。', '.', '!', '！'])
+            .trim_end()
+            .ends_with(['?', '？']);
+    Ok(Some(
+        ordinary_relation_proposition(statement)?
+            .filter(|proposition| proposition.condition_refs.len() > 1)
+            .map(|proposition| {
+                if question {
+                    Intent::Ask { proposition }
+                } else {
+                    Intent::Assert { proposition }
+                }
+            })
+            .unwrap_or_else(|| Intent::Unknown {
+                reason: "複数の条件には、重複のない条件IDと日本語の関係節を一つ指定してください。"
+                    .into(),
+            }),
+    ))
 }
 
 fn condition_definition_payload(text: &str) -> Option<&str> {
@@ -5288,7 +5380,7 @@ fn condition_source_definition_qualifiers(text: &str) -> Option<(&str, RelationQ
     }
     let payload = source_inspection_payload(terminal_trim(text), "条件定義の出典")?;
     let (body, qualifiers) = relation_qualifiers(payload, QualifierContext::ConditionSource)?;
-    let condition_id = qualifiers.condition?.0;
+    let condition_id = qualifiers.condition()?.0;
     let subject = qualifiers.subject?.0;
     let scope = qualifiers.scope?.0;
     (body.is_empty()
@@ -5314,7 +5406,7 @@ fn condition_qualifier_source_roles(
     let offset = text.len() - text.trim_start().len() + terminal_trim(text).len() - payload.len();
     let mut roles = BTreeMap::new();
     for (role, pair) in [
-        ("condition_id", qualifiers.condition),
+        ("condition_id", qualifiers.condition()),
         ("subject", qualifiers.subject),
         ("scope", qualifiers.scope),
         ("temporal_scope", qualifiers.time),
@@ -5491,7 +5583,7 @@ fn composite_condition_source(
     qualifiers: &RelationQualifiers<'_>,
 ) -> Option<CompositeConditionSource> {
     let (subject, _) = qualifiers.subject?;
-    let (condition_id, _) = qualifiers.condition?;
+    let (condition_id, _) = qualifiers.condition()?;
     if singular_previous_subject(subject)
         || unresolved_relation_subject(subject)
         || starts_quoted_source(subject)
@@ -5526,7 +5618,7 @@ fn composite_condition_source(
     };
     crate::relations::validate_condition_definition(&definition).ok()?;
     for (field, qualifier) in [
-        ("condition_id", qualifiers.condition),
+        ("condition_id", qualifiers.condition()),
         ("subject", qualifiers.subject),
         ("scope", qualifiers.scope),
         ("valid_from", qualifiers.valid_from),
@@ -5585,7 +5677,7 @@ fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
                 ),
         ));
     }
-    let Some((condition_id, _)) = qualifiers.condition else {
+    let Some((condition_id, _)) = qualifiers.condition() else {
         return Ok(Some(unsupported()));
     };
     let Some(mut proposition) = parse_proposition(body, false)? else {

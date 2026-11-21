@@ -115,6 +115,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
+                        | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
                 )
             })
         {
@@ -2562,6 +2563,64 @@ struct RetainedRelationProof {
     projection: (MemoryState, crate::relations::QueryOutcome),
 }
 
+fn verify_multi_condition_premise(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    proposition: &Proposition,
+) -> Result<()> {
+    let invalid = || {
+        failure(
+            "RECOVERY_MULTI_CONDITION_PREMISE_MISMATCH",
+            "the retained premise differs from its original conditional registration",
+        )
+    };
+    let source = identity(&bundle.request)?;
+    let id = crate::relations::user_premise_id(proposition, &source)?;
+    let actor = &bundle.request.actor_id;
+    let revision = result.actor_memory_revision.ok_or_else(invalid)?;
+    let memory = store
+        .load_memory_revision(actor, revision)?
+        .ok_or_else(invalid)?;
+    let fact = memory
+        .facts
+        .iter()
+        .find(|fact| fact.id == id)
+        .ok_or_else(invalid)?;
+    let evidence = crate::input::assertion_source_evidence(bundle)?.ok_or_else(invalid)?;
+    let units = crate::core::premise_registration_units(fact);
+    if &fact.proposition != proposition
+        || fact.source_input != source
+        || fact.source_evidence.as_ref() != Some(&evidence)
+        || fact.guarantee != Guarantee::UserPremise
+        || !fact.valid
+        || !fact.dependencies.is_empty()
+        || result.dependencies != [id]
+        || result.guarantee != Guarantee::UserPremise
+        || plan.guarantee != Guarantee::UserPremise
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.required_units != units
+        || result.text != units.join("\n")
+        || plan.text != result.text
+        || result.text.len() > bundle.request.budget.max_evidence_bytes
+        || bundle.request.budget.max_actions < 4
+    {
+        return Err(invalid());
+    }
+    if !crate::core::record_source_memory_at_head(store, actor)?
+        .facts
+        .contains(fact)
+    {
+        return Err(failure(
+            "RECOVERY_MULTI_CONDITION_PREMISE_CHANGED",
+            "the current premise differs from the adopted registration",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_guarded_rule_registration(
     store: &Store,
     bundle: &InputBundle,
@@ -4275,6 +4334,20 @@ fn inspect(
         ));
     }
     let requires_record_source = source_contract.is_some();
+    let requires_multi_condition_relation =
+        bundle.meaning.parser_version == crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION;
+    if requires_multi_condition_relation {
+        const CODE: &str = "RECOVERY_MULTI_CONDITION_RELATION_MISMATCH";
+        verify_registered_input(store, bundle, CODE)?;
+        if !crate::input::verified_multi_condition_relation_source(bundle)?
+            || result.actor_memory_revision.is_none()
+        {
+            return Err(failure(
+                CODE,
+                "the original multiple-condition input or actor-memory revision is unavailable",
+            ));
+        }
+    }
     let requires_guarded_rule = matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
@@ -4367,6 +4440,7 @@ fn inspect(
             || requires_condition_evaluation
             || requires_record_source
             || requires_guarded_rule
+            || requires_multi_condition_relation
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
@@ -4688,6 +4762,9 @@ fn inspect(
     }
     if requires_guarded_rule {
         verify_guarded_rule_registration(store, bundle, result, plan, &goal)?;
+    }
+    if requires_multi_condition_relation && let Intent::Assert { proposition } = &goal.intent {
+        verify_multi_condition_premise(store, bundle, result, plan, proposition)?;
     }
     if let Some(hypothesis) = crate::core::previous_group_mean_hypothesis(store, state)? {
         if result.guarantee != Guarantee::Hypothesis
@@ -8875,6 +8952,68 @@ mod tests {
         assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
         let recovered = engine.reconcile("alice", "case").unwrap();
         assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(
+            recovered.actor_memory_revision,
+            result.actor_memory_revision
+        );
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn multi_condition_premise_reconciles_exact_registered_evidence_without_resend() {
+        let fixture = empty_fixture();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "multiple-conditions",
+            "alice",
+            "[scope=実験室][condition=点検][condition=校正]ユリは入室可",
+        );
+        request.budget.max_actions = 4;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let mut altered = state.result.as_ref().unwrap().clone();
+        altered.dependencies.clear();
+        let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_MULTI_CONDITION_PREMISE_MISMATCH"),
+            "{error:?}"
+        );
+        let unrelated = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("other", "unrelated", "alice", "[scope=別室]ユリは待機中"),
+            )
+            .unwrap();
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, result.dependencies);
         assert_eq!(
             recovered.actor_memory_revision,
             result.actor_memory_revision

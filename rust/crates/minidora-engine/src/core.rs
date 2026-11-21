@@ -1597,6 +1597,7 @@ pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
+pub(crate) const MULTI_CONDITION_PREMISE_PREDICATE: &str = "EXACT_MULTI_CONDITION_PREMISE_V1";
 
 fn guarded_rule_predicate(meaning: &MeaningIR) -> Option<&'static str> {
     match (&meaning.intent, meaning.parser_version.as_str()) {
@@ -1681,6 +1682,11 @@ pub(crate) fn goal_predicates(
             if let Some(predicate) = guarded_rule_predicate(meaning) {
                 predicates.push(predicate.into());
             }
+        }
+        Intent::Assert { .. }
+            if meaning.parser_version == input::MULTI_CONDITION_RELATION_PARSER_VERSION =>
+        {
+            predicates.push(MULTI_CONDITION_PREMISE_PREDICATE.into());
         }
         intent @ (Intent::InspectFactSource { .. }
         | Intent::InspectConditionSource { .. }
@@ -1800,6 +1806,7 @@ fn verify_report_goal_content(
                 | CONDITION_SOURCE_BY_DEFINITION_PREDICATE
                 | GUARDED_RELATION_RULE_PREDICATE
                 | GUARDED_CONJUNCTIVE_RULE_PREDICATE
+                | MULTI_CONDITION_PREMISE_PREDICATE
         )
     }) else {
         return Ok(());
@@ -9078,27 +9085,54 @@ impl Engine {
                 result.guarantee = Guarantee::UserPremise;
             }
             Intent::Assert { proposition } => {
+                let multiple_conditions =
+                    bundle.meaning.parser_version == input::MULTI_CONDITION_RELATION_PARSER_VERSION;
+                if multiple_conditions
+                    && let Some((code, message)) = relation_registration_stop(
+                        &goal,
+                        "前提の登録・表示と必要なファイル確認の予算が不足しています。",
+                    )
+                {
+                    return self.stop(&mut state, Lifecycle::Suspend, code, message);
+                }
                 let _ = direct_typed_relation_assertion_input(&bundle, proposition)?;
                 let mut memory = self.store.load_memory(actor)?;
                 let source_evidence = input::assertion_source_evidence(&bundle)?;
+                if multiple_conditions && source_evidence.is_none() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "ASSERTION_SOURCE_EVIDENCE_UNAVAILABLE",
+                        "条件付き前提の原文範囲を確認できません。",
+                    );
+                }
                 let fact = relations::assert_fact_with_source_evidence(
                     &mut memory,
                     proposition.clone(),
                     &fingerprint,
                     source_evidence,
                 )?;
+                units = premise_registration_units(&fact);
+                if multiple_conditions && units.join("\n").len() > goal.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "前提の登録結果が要求の証拠予算を超えています。",
+                    );
+                }
                 self.store.save_memory(actor, &memory)?;
-                units.push(format!(
-                    "前提を保存しました: {}。",
-                    describe(&fact.proposition)
-                ));
-                units.push(format!("前提ID: {}", fact.id));
-                units.push(
-                    "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
-                        .into(),
-                );
                 result.dependencies.push(fact.id);
                 result.guarantee = Guarantee::UserPremise;
+                if multiple_conditions {
+                    result.actor_memory_revision = Some(memory.revision);
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: MULTI_CONDITION_PREMISE_PREDICATE,
+                        guarantee: Guarantee::UserPremise,
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                }
             }
             Intent::AssertPreviousRelation {
                 proposition,
@@ -9248,27 +9282,13 @@ impl Engine {
             }
             intent @ (Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. }) => {
                 let predicate = guarded_rule_predicate(&bundle.meaning);
-                if predicate.is_some() {
-                    if goal
-                        .output_path
-                        .as_ref()
-                        .is_some_and(|path| !goal.permissions.write_paths.contains(path))
-                    {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "WRITE_PERMISSION_MISSING",
-                            "指定ファイルへの書込権限がありません。",
-                        );
-                    }
-                    if goal.budget.max_actions < 3 + u32::from(goal.output_path.is_some()) {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "ACTION_BUDGET_EXHAUSTED",
-                            "規則の登録・表示と必要なファイル確認の予算が不足しています。",
-                        );
-                    }
+                if predicate.is_some()
+                    && let Some((code, message)) = relation_registration_stop(
+                        &goal,
+                        "規則の登録・表示と必要なファイル確認の予算が不足しています。",
+                    )
+                {
+                    return self.stop(&mut state, Lifecycle::Suspend, code, message);
                 }
                 let (premises, conclusion) = rule_declaration(intent).expect("rule declaration");
                 let _ = direct_typed_relation_rule_input(&bundle, premises, conclusion)?;
@@ -16629,6 +16649,32 @@ fn describe_without_condition_refs(proposition: &Proposition) -> String {
     describe(&without_condition_refs)
 }
 
+fn relation_registration_stop(
+    goal: &GoalContract,
+    budget_message: &'static str,
+) -> Option<(&'static str, &'static str)> {
+    if goal
+        .output_path
+        .as_ref()
+        .is_some_and(|path| !goal.permissions.write_paths.contains(path))
+    {
+        return Some((
+            "WRITE_PERMISSION_MISSING",
+            "指定ファイルへの書込権限がありません。",
+        ));
+    }
+    (goal.budget.max_actions < 3 + u32::from(goal.output_path.is_some()))
+        .then_some(("ACTION_BUDGET_EXHAUSTED", budget_message))
+}
+
+pub(crate) fn premise_registration_units(fact: &Fact) -> Vec<String> {
+    vec![
+        format!("前提を保存しました: {}。", describe(&fact.proposition)),
+        format!("前提ID: {}", fact.id),
+        "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。".into(),
+    ]
+}
+
 pub(crate) fn rule_registration_units(rule: &RelationRule) -> Vec<String> {
     let premise = describe(&rule.premise);
     let conclusion = describe(&rule.conclusion);
@@ -16908,11 +16954,7 @@ impl SourceMemoryRecord<'_> {
             Self::Fact(fact) => {
                 let evidence = fact.source_evidence.as_ref().ok_or_else(unavailable)?;
                 if fact.guarantee != Guarantee::UserPremise
-                    || fact.id
-                        != format!(
-                            "fact:{}",
-                            identity(&("user-premise-v1", &fact.proposition, &fact.source_input))?
-                        )
+                    || fact.id != relations::user_premise_id(&fact.proposition, &fact.source_input)?
                     || input::assertion_source_evidence(&bundle)?.as_ref() != Some(evidence)
                 {
                     return Err(unavailable());

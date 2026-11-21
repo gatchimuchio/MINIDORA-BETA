@@ -1213,6 +1213,13 @@ pub fn assert_fact(
     assert_fact_with_source_evidence(memory, proposition, source_input, None)
 }
 
+pub(crate) fn user_premise_id(proposition: &Proposition, source_input: &str) -> Result<String> {
+    Ok(format!(
+        "fact:{}",
+        identity(&("user-premise-v1", proposition, source_input))?
+    ))
+}
+
 pub(crate) fn assert_fact_with_source_evidence(
     memory: &mut MemoryState,
     proposition: Proposition,
@@ -1274,10 +1281,7 @@ pub(crate) fn assert_fact_with_source_evidence(
             ));
         }
     }
-    let id = format!(
-        "fact:{}",
-        identity(&("user-premise-v1", &proposition, source_input))?
-    );
+    let id = user_premise_id(&proposition, source_input)?;
     if let Some(old) = memory.facts.iter().find(|fact| fact.id == id) {
         if source_evidence
             .as_ref()
