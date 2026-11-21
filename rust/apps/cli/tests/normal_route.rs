@@ -4925,6 +4925,115 @@ fn condition_rule_requires_both_guarded_premises_for_an_ordinary_derivation() {
 }
 
 #[test]
+fn condition_rules_use_the_same_multiple_conditions_in_every_clause() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let guard = "[scope=実験室][condition=校正][condition=点検]";
+    let reverse = "[condition=点検][scope=実験室][condition=校正]";
+    let one = format!("もし{guard}Xは研究員なら{reverse}Xは案内係");
+    let two = format!("もし {reverse}Xは研究員 かつ {guard}Xは当番ならば、{reverse}Xは入室可。");
+    let rule_one = run(&["--case", "single-multi", "--max-actions", "3", &one]);
+    let rule_two = run(&["--case", "pair-multi", "--max-actions", "3", &two]);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    for (case, raw, roles) in [
+        (
+            "single-multi",
+            &one,
+            &["/AddRule/premise", "/AddRule/conclusion"][..],
+        ),
+        (
+            "pair-multi",
+            &two,
+            &[
+                "/AddConjunctiveRule/premises/0",
+                "/AddConjunctiveRule/premises/1",
+                "/AddConjunctiveRule/conclusion",
+            ][..],
+        ),
+    ] {
+        let bundle = store
+            .load_case("owner", case)
+            .unwrap()
+            .unwrap()
+            .bundle
+            .unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            "declarative-ja-en-v135-multi-condition-rule"
+        );
+        for root in roles {
+            for (index, value) in ["校正", "点検"].into_iter().enumerate() {
+                let role = format!("{root}/condition_refs/{index}");
+                let spans = &bundle.meaning.source_roles[&role];
+                assert_eq!(spans.len(), 1);
+                assert_eq!(raw.get(spans[0].start..spans[0].end), Some(value));
+            }
+        }
+    }
+    let revision = store.load_memory("owner").unwrap().revision;
+    let different = two.replace(
+        &format!("{guard}Xは当番"),
+        "[scope=実験室][condition=点検][condition=別条件]Xは当番",
+    );
+    let denied = stopped(&execute(&scratch.0, "owner", &[&different]), 2, "SUSPEND");
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CAPABILITY_UNAVAILABLE")
+    );
+    assert_eq!(store.load_memory("owner").unwrap().revision, revision);
+
+    let calibration = run(&["条件定義: [scope=実験室][condition=校正] ユリは校正済み"]);
+    let inspection = run(&["条件定義: [scope=実験室][condition=点検] ユリは点検済み"]);
+    let witness_inspection = run(&["[scope=実験室]ユリは点検済み"]);
+    let first = run(&[&format!("{guard}ユリは研究員")]);
+    let query_one = format!("{guard}ユリは案内係ですか");
+    let query_two = format!("{guard}ユリは入室可ですか");
+    let blocked = |command: &str| stopped(&execute(&scratch.0, "owner", &[command]), 2, "SUSPEND");
+    assert!(
+        blocked(&query_one)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_UNKNOWN")
+    );
+    let witness_calibration = run(&["[scope=実験室]ユリは校正済み"]);
+    let derived_one = run(&[&query_one]);
+    assert_eq!(derived_one["guarantee"], "DERIVED");
+    assert!(
+        derived_one["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&rule_one["dependencies"][0])
+    );
+    assert!(
+        blocked(&query_two)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let second = run(&[&format!("{guard}ユリは当番")]);
+    let derived_two = run(&[&query_two]);
+    assert_eq!(derived_two["guarantee"], "DERIVED");
+    for source in [
+        rule_two,
+        calibration,
+        inspection,
+        witness_inspection,
+        witness_calibration,
+        first,
+        second,
+    ] {
+        assert!(
+            derived_two["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&source["dependencies"][0])
+        );
+    }
+}
+
+#[test]
 fn condition_references_on_one_premise_require_all_named_conditions() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

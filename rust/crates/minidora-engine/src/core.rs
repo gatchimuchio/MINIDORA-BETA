@@ -1597,6 +1597,7 @@ pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
+pub(crate) const MULTI_CONDITION_RULE_PREDICATE: &str = "EXACT_MULTI_CONDITION_RULE_V1";
 pub(crate) const MULTI_CONDITION_PREMISE_PREDICATE: &str = "EXACT_MULTI_CONDITION_PREMISE_V1";
 
 fn guarded_rule_predicate(meaning: &MeaningIR) -> Option<&'static str> {
@@ -1607,6 +1608,10 @@ fn guarded_rule_predicate(meaning: &MeaningIR) -> Option<&'static str> {
         (Intent::AddConjunctiveRule { .. }, input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION) => {
             Some(GUARDED_CONJUNCTIVE_RULE_PREDICATE)
         }
+        (
+            Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. },
+            input::MULTI_CONDITION_RULE_PARSER_VERSION,
+        ) => Some(MULTI_CONDITION_RULE_PREDICATE),
         _ => None,
     }
 }
@@ -1806,6 +1811,7 @@ fn verify_report_goal_content(
                 | CONDITION_SOURCE_BY_DEFINITION_PREDICATE
                 | GUARDED_RELATION_RULE_PREDICATE
                 | GUARDED_CONJUNCTIVE_RULE_PREDICATE
+                | MULTI_CONDITION_RULE_PREDICATE
                 | MULTI_CONDITION_PREMISE_PREDICATE
         )
     }) else {

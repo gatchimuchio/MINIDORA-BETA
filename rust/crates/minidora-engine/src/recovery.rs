@@ -115,6 +115,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
+                        | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
                 )
             })
@@ -4352,6 +4353,7 @@ fn inspect(
         bundle.meaning.parser_version.as_str(),
         crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
             | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
+            | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
     );
     let requires_sequence_edit = matches!(
         bundle.meaning.parser_version.as_str(),
@@ -9034,25 +9036,38 @@ mod tests {
 
     #[test]
     fn guarded_rule_registration_reconciles_the_exact_persisted_rule_without_resend() {
-        assert_guarded_rule_registration_reconciles(false);
+        assert_guarded_rule_registration_reconciles(
+            "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可",
+            crate::core::GUARDED_RELATION_RULE_PREDICATE,
+        );
     }
 
     #[test]
     fn guarded_conjunctive_registration_reconciles_the_ordered_rule_without_resend() {
-        assert_guarded_rule_registration_reconciles(true);
-    }
-
-    fn assert_guarded_rule_registration_reconciles(conjunctive: bool) {
-        let fixture = empty_fixture();
-        let mut engine = Engine::open(&fixture.state).unwrap();
-        let declaration = if conjunctive {
+        assert_guarded_rule_registration_reconciles(
             concat!(
                 "もし[scope=実験室][condition=点検]Xは研究員 かつ ",
                 "[scope=実験室][condition=点検]Xは当番なら[scope=実験室][condition=点検]Xは入室可"
-            )
-        } else {
-            "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可"
-        };
+            ),
+            crate::core::GUARDED_CONJUNCTIVE_RULE_PREDICATE,
+        );
+    }
+
+    #[test]
+    fn multi_condition_rule_registration_reconciles_order_and_proof_without_resend() {
+        assert_guarded_rule_registration_reconciles(
+            concat!(
+                "もし[scope=実験室][condition=点検][condition=校正]Xは研究員 かつ ",
+                "[scope=実験室][condition=校正][condition=点検]Xは当番なら",
+                "[scope=実験室][condition=点検][condition=校正]Xは入室可"
+            ),
+            crate::core::MULTI_CONDITION_RULE_PREDICATE,
+        );
+    }
+
+    fn assert_guarded_rule_registration_reconciles(declaration: &str, predicate: &str) {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
         let mut request = RequestEnvelope::new("case", "guarded-rule", "alice", declaration);
         request.budget.max_actions = 4;
         request.output_path = Some(fixture.target.clone());
@@ -9069,16 +9084,35 @@ mod tests {
         let token = retain_attempted_prefix(&fixture.state);
         let mut engine = Engine::open(&fixture.state).unwrap();
         let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let goal_bytes = engine
+            .store
+            .get_bytes("alice", "case", state.goal_sha256.as_deref().unwrap())
+            .unwrap();
+        let mut goal: GoalContract = serde_json::from_slice(&goal_bytes).unwrap();
+        assert_eq!(goal.required_predicates[0], predicate);
+        if predicate == crate::core::MULTI_CONDITION_RULE_PREDICATE {
+            goal.required_predicates[0] = crate::core::GUARDED_CONJUNCTIVE_RULE_PREDICATE.into();
+            let mut replaced = state.clone();
+            replaced.goal_sha256 = Some(engine.store.put_artifact("alice", "case", &goal).unwrap());
+            let error = inspect(
+                &engine.store,
+                "alice",
+                &replaced,
+                state.result.as_ref().unwrap(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("UNSUPPORTED_RECOVERY_GOAL"),
+                "{error:?}"
+            );
+        }
         let mut altered = state.result.as_ref().unwrap().clone();
-        if conjunctive {
-            let bundle = state.bundle.as_ref().unwrap();
-            let Intent::AddConjunctiveRule {
-                premises,
-                conclusion,
-            } = &bundle.meaning.intent
-            else {
-                panic!("two-premise registration must retain its typed declaration")
-            };
+        let bundle = state.bundle.as_ref().unwrap();
+        if let Intent::AddConjunctiveRule {
+            premises,
+            conclusion,
+        } = &bundle.meaning.intent
+        {
             let source_input = identity(&request).unwrap();
             let reversed = [premises[1].clone(), premises[0].clone()];
             altered.dependencies[0] =

@@ -57,6 +57,8 @@ pub(crate) const GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION: &str =
     "declarative-ja-en-v133-guarded-conjunctive-rule";
 pub(crate) const MULTI_CONDITION_RELATION_PARSER_VERSION: &str =
     "declarative-ja-en-v134-multi-condition-relation";
+pub(crate) const MULTI_CONDITION_RULE_PARSER_VERSION: &str =
+    "declarative-ja-en-v135-multi-condition-rule";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -3654,14 +3656,15 @@ fn guarded_relation_rule_clause(
     offset: usize,
     role_root: &str,
 ) -> Result<Option<GuardedRelationRuleClause>> {
-    let Some((body, qualifiers)) = relation_qualifiers(clause, QualifierContext::GuardedRule)
-    else {
+    let Some((body, qualifiers)) = relation_qualifiers(clause, QualifierContext::Relation) else {
         return Ok(None);
     };
-    let (Some((scope, _)), Some((condition_id, _))) = (qualifiers.scope, qualifiers.condition())
-    else {
+    let Some((scope, _)) = qualifiers.scope else {
         return Ok(None);
     };
+    if qualifiers.conditions.is_empty() {
+        return Ok(None);
+    }
     let Some(mut proposition) = parse_proposition(body, false)? else {
         return Ok(None);
     };
@@ -3674,7 +3677,9 @@ fn guarded_relation_rule_clause(
     }
     proposition.scope = scope.into();
     proposition.temporal_scope = qualifiers.time.map(|(time, _)| time.into());
-    proposition.condition_refs.insert(condition_id.into());
+    proposition
+        .condition_refs
+        .extend(qualifiers.conditions.keys().map(|&id| id.into()));
     if crate::relations::validate(&proposition).is_err() {
         return Ok(None);
     }
@@ -3793,15 +3798,16 @@ fn same_guarded_rule_context(first: &Proposition, second: &Proposition) -> bool 
 }
 
 fn guarded_relation_rule_parser(intent: &Intent) -> Option<&'static str> {
-    match intent {
-        Intent::AddRule { premise, .. } if !premise.condition_refs.is_empty() => {
-            Some(GUARDED_RELATION_RULE_PARSER_VERSION)
+    let (first_premise, single_condition_version) = match intent {
+        Intent::AddRule { premise, .. } => (premise, GUARDED_RELATION_RULE_PARSER_VERSION),
+        Intent::AddConjunctiveRule { premises, .. } if premises.len() == 2 => {
+            (&premises[0], GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION)
         }
-        Intent::AddConjunctiveRule { premises, .. }
-            if premises.len() == 2 && !premises[0].condition_refs.is_empty() =>
-        {
-            Some(GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION)
-        }
+        _ => return None,
+    };
+    match first_premise.condition_refs.len() {
+        1 => Some(single_condition_version),
+        2..=32 => Some(MULTI_CONDITION_RULE_PARSER_VERSION),
         _ => None,
     }
 }
@@ -5221,7 +5227,6 @@ impl<'a> RelationQualifiers<'a> {
 #[derive(Clone, Copy)]
 enum QualifierContext {
     Relation,
-    GuardedRule,
     ConditionDefinition,
     ConditionEvaluation,
     ConditionSource,
@@ -5250,12 +5255,11 @@ fn relation_qualifiers(
             - raw_value.trim_start().len();
         let target = match (key, context) {
             ("scope", _) => &mut qualifiers.scope,
-            (
-                "time",
-                QualifierContext::Relation
-                | QualifierContext::GuardedRule
-                | QualifierContext::ConditionEvaluation,
-            ) if crate::relations::valid_utc_instant(value) => &mut qualifiers.time,
+            ("time", QualifierContext::Relation | QualifierContext::ConditionEvaluation)
+                if crate::relations::valid_utc_instant(value) =>
+            {
+                &mut qualifiers.time
+            }
             ("condition", _) if crate::relations::validate_condition_id(value).is_ok() => {
                 let limit = if matches!(context, QualifierContext::Relation) {
                     32
