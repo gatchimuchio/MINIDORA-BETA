@@ -1589,6 +1589,24 @@ pub(crate) const SEQUENCE_HISTORY_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_
 pub(crate) const SEQUENCE_STEP_EXPLANATION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_STEP_EXPLANATION_V1";
 pub(crate) const CONDITION_EVALUATION_PREDICATE: &str = "EXACT_CONDITION_EVALUATION_V1";
+pub(crate) const CONDITION_EVALUATION_DETAIL_PREDICATE: &str =
+    "EXACT_CONDITION_EVALUATION_DETAIL_V1";
+
+pub(crate) fn condition_evaluation_contract(
+    intent: &Intent,
+) -> Option<(&'static str, &'static str)> {
+    match intent {
+        Intent::EvaluateCondition { .. } => Some((
+            input::CONDITION_EVALUATION_PARSER_VERSION,
+            CONDITION_EVALUATION_PREDICATE,
+        )),
+        Intent::EvaluateConditionDetailed { .. } => Some((
+            input::CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
+            CONDITION_EVALUATION_DETAIL_PREDICATE,
+        )),
+        _ => None,
+    }
+}
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1610,10 +1628,12 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
-        Intent::EvaluateCondition { .. }
-            if meaning.parser_version == input::CONDITION_EVALUATION_PARSER_VERSION =>
-        {
-            predicates.push(CONDITION_EVALUATION_PREDICATE.into());
+        intent @ (Intent::EvaluateCondition { .. } | Intent::EvaluateConditionDetailed { .. }) => {
+            if let Some((parser, predicate)) = condition_evaluation_contract(intent)
+                && parser == meaning.parser_version
+            {
+                predicates.push(predicate.into());
+            }
         }
         Intent::AppendCalculationSequenceStep { .. }
             if meaning.parser_version == input::SEQUENCE_APPEND_PARSER_VERSION =>
@@ -1711,6 +1731,7 @@ fn verify_report_goal_content(
                 | SEQUENCE_HISTORY_PREDICATE
                 | SEQUENCE_STEP_EXPLANATION_PREDICATE
                 | CONDITION_EVALUATION_PREDICATE
+                | CONDITION_EVALUATION_DETAIL_PREDICATE
         )
     }) else {
         return Ok(());
@@ -10859,7 +10880,8 @@ impl Engine {
                     );
                 }
             },
-            Intent::EvaluateCondition { .. } => {
+            intent @ (Intent::EvaluateCondition { .. }
+            | Intent::EvaluateConditionDetailed { .. }) => {
                 let report =
                     condition_report_at_head(&self.store, actor, &goal).and_then(|report| {
                         report.verify_evidence_budget(goal.budget.max_evidence_bytes)?;
@@ -10872,16 +10894,18 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 };
-                let proof = self
-                    .store
-                    .put_artifact(actor, &request.case_id, &report.proof())?;
+                let proof =
+                    self.store
+                        .put_bytes(actor, &request.case_id, &report.proof_bytes()?)?;
                 result.actor_memory_revision = Some(report.revision);
                 result.dependencies = report.evaluation.dependencies;
                 result.dependencies.push(proof);
                 result.guarantee = Guarantee::Computed;
                 units = report.units;
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: CONDITION_EVALUATION_PREDICATE,
+                    predicate: condition_evaluation_contract(intent)
+                        .expect("condition evaluation intent")
+                        .1,
                     guarantee: Guarantee::Computed,
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
@@ -16520,19 +16544,30 @@ pub(crate) struct ConditionReadout {
     pub(crate) revision: u64,
     pub(crate) evaluation: ConditionEvaluation,
     pub(crate) units: Vec<String>,
+    pub(crate) detail: Option<Vec<relations::ConditionTraceStep>>,
 }
 
 impl ConditionReadout {
-    pub(crate) fn proof(&self) -> (&'static str, u64, &ConditionEvaluation) {
-        (
-            "minidora-condition-evaluation-v1",
-            self.revision,
-            &self.evaluation,
-        )
+    pub(crate) fn proof_bytes(&self) -> Result<Vec<u8>> {
+        if let Some(detail) = &self.detail {
+            canonical(&(
+                "minidora-condition-evaluation-detail-v1",
+                self.revision,
+                &self.evaluation,
+                detail,
+            ))
+        } else {
+            canonical(&(
+                "minidora-condition-evaluation-v1",
+                self.revision,
+                &self.evaluation,
+            ))
+        }
     }
 
     pub(crate) fn verify_evidence_budget(&self, max_bytes: usize) -> Result<()> {
-        if canonical(&self.proof())?
+        if self
+            .proof_bytes()?
             .len()
             .saturating_add(self.units.join("\n").len())
             > max_bytes
@@ -16550,26 +16585,35 @@ pub(crate) fn evaluate_condition_report(
     index: &MemoryIndexSnapshot<'_, '_>,
     goal: &GoalContract,
 ) -> Result<ConditionReadout> {
-    let Intent::EvaluateCondition {
-        condition_id,
-        subject,
-        scope,
-        temporal_scope,
-    } = &goal.intent
-    else {
-        return Err(failure(
-            "CONDITION_EVALUATION_GOAL_INVALID",
-            "条件評価の要求が一致しません。",
-        ));
+    let (condition_id, subject, scope, temporal_scope, detailed) = match &goal.intent {
+        Intent::EvaluateCondition {
+            condition_id,
+            subject,
+            scope,
+            temporal_scope,
+        } => (condition_id, subject, scope, temporal_scope, false),
+        Intent::EvaluateConditionDetailed {
+            condition_id,
+            subject,
+            scope,
+            temporal_scope,
+        } => (condition_id, subject, scope, temporal_scope, true),
+        _ => {
+            return Err(failure(
+                "CONDITION_EVALUATION_GOAL_INVALID",
+                "条件評価の要求が一致しません。",
+            ));
+        }
     };
     let completion_actions = 3 + u32::from(goal.output_path.is_some());
-    let evaluation = relations::evaluate_active_condition(
+    let (evaluation, trace) = relations::evaluate_active_condition(
         index,
         condition_id,
         subject,
         scope,
         temporal_scope.as_deref(),
         goal.budget.max_actions.saturating_sub(completion_actions),
+        detailed,
     )?;
     let mut units = vec![
         format!(
@@ -16596,11 +16640,62 @@ pub(crate) fn evaluate_condition_report(
             evaluation.evidence_fact_ids.join("、")
         ));
     }
+    let detail = detailed.then_some(trace);
+    if let Some(trace) = &detail {
+        for (index, step) in trace.iter().enumerate() {
+            append_condition_trace_units(&mut units, index + 1, step);
+        }
+    }
     Ok(ConditionReadout {
         revision: index.revision(),
         evaluation,
         units,
+        detail,
     })
+}
+
+fn append_condition_trace_units(
+    units: &mut Vec<String>,
+    number: usize,
+    step: &relations::ConditionTraceStep,
+) {
+    use relations::ConditionTraceTarget;
+    let target = match &step.target {
+        ConditionTraceTarget::Condition { condition_id } => format!("条件 {condition_id}"),
+        ConditionTraceTarget::Fact {
+            subject,
+            predicate,
+            object,
+        } => {
+            format!("Fact「{subject} / {predicate} / {object}」")
+        }
+        ConditionTraceTarget::And => "AND".into(),
+        ConditionTraceTarget::Or => "OR".into(),
+        ConditionTraceTarget::Not => "NOT".into(),
+    };
+    let status = condition_status_name(step.status);
+    if let Some(parent) = step.parent {
+        units.push(format!(
+            "内訳 {number}（親 {}） {target}: {status}",
+            parent + 1
+        ));
+    } else {
+        units.push(format!("内訳 {number} {target}: {status}"));
+    }
+    if let Some(reason) = &step.reason {
+        units.push(format!("内訳 {number} の診断: {reason}"));
+    }
+    for (label, ids) in [
+        ("肯定", &step.positive_fact_ids),
+        ("否定", &step.negative_fact_ids),
+    ] {
+        if !ids.is_empty() {
+            units.push(format!(
+                "内訳 {number} の{label}Fact ID: {}",
+                ids.join("、")
+            ));
+        }
+    }
 }
 
 pub(crate) fn condition_report_at_head(

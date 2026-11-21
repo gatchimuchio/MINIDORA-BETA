@@ -504,6 +504,12 @@ pub enum Intent {
         scope: String,
         temporal_scope: Option<String>,
     },
+    EvaluateConditionDetailed {
+        condition_id: String,
+        subject: String,
+        scope: String,
+        temporal_scope: Option<String>,
+    },
     AssertPreviousRelation {
         proposition: Proposition,
         explicit_scope: Option<String>,

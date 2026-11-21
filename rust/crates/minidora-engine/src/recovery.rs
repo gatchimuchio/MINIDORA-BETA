@@ -8,19 +8,19 @@
 use crate::{
     core::{
         APPENDED_SEQUENCE_EXPLANATION_PREDICATE, CHAINED_SEQUENCE_EXPLANATION_PREDICATE,
-        CONDITION_EVALUATION_PREDICATE, GENERATED_RELATION_EXPLANATION_PREDICATE,
-        INSERTED_SEQUENCE_EXPLANATION_PREDICATE, MOVED_SEQUENCE_EXPLANATION_PREDICATE,
-        RELATION_COMPARISON_PREDICATE, RELATION_EXPLANATION_PREDICATE,
-        REMOVED_SEQUENCE_EXPLANATION_PREDICATE, REPEATED_SEQUENCE_CORRECTION_PREDICATE,
-        REVISED_SEQUENCE_EXPLANATION_PREDICATE, REWIRED_SEQUENCE_CORRECTION_PREDICATE,
-        REWIRED_SEQUENCE_EXPLANATION_PREDICATE, SEQUENCE_APPEND_PREDICATE,
-        SEQUENCE_CORRECTION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE, SEQUENCE_HISTORY_PREDICATE,
-        SEQUENCE_INSERT_PREDICATE, SEQUENCE_MOVE_PREDICATE, SEQUENCE_REMOVE_PREDICATE,
-        SEQUENCE_STEP_EXPLANATION_PREDICATE, calculation_sequence_nodes,
-        calculation_sequence_report, corrected_calculation_from_context, exact_calculation_unit,
-        goal_predicates, prepare_sequence_edit, previous_calculation_sequence,
-        run_calculation_sequence, run_sequence_edit, store_execution_graph, validate_goal_render,
-        validate_render, verify_goal_content,
+        GENERATED_RELATION_EXPLANATION_PREDICATE, INSERTED_SEQUENCE_EXPLANATION_PREDICATE,
+        MOVED_SEQUENCE_EXPLANATION_PREDICATE, RELATION_COMPARISON_PREDICATE,
+        RELATION_EXPLANATION_PREDICATE, REMOVED_SEQUENCE_EXPLANATION_PREDICATE,
+        REPEATED_SEQUENCE_CORRECTION_PREDICATE, REVISED_SEQUENCE_EXPLANATION_PREDICATE,
+        REWIRED_SEQUENCE_CORRECTION_PREDICATE, REWIRED_SEQUENCE_EXPLANATION_PREDICATE,
+        SEQUENCE_APPEND_PREDICATE, SEQUENCE_CORRECTION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE,
+        SEQUENCE_HISTORY_PREDICATE, SEQUENCE_INSERT_PREDICATE, SEQUENCE_MOVE_PREDICATE,
+        SEQUENCE_REMOVE_PREDICATE, SEQUENCE_STEP_EXPLANATION_PREDICATE, calculation_sequence_nodes,
+        calculation_sequence_report, condition_evaluation_contract,
+        corrected_calculation_from_context, exact_calculation_unit, goal_predicates,
+        prepare_sequence_edit, previous_calculation_sequence, run_calculation_sequence,
+        run_sequence_edit, store_execution_graph, validate_goal_render, validate_render,
+        verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -100,6 +100,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::ShowCalculationSequenceHistory
                         | Intent::ExplainCalculationSequenceStep { .. }
                         | Intent::EvaluateCondition { .. }
+                        | Intent::EvaluateConditionDetailed { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -2590,13 +2591,13 @@ fn verify_condition_evaluation_result(
     // revision supplies only the evaluation and proof-dependency comparison.
     report.verify_evidence_budget(goal.budget.max_evidence_bytes)?;
     let current = crate::core::condition_report_at_head(store, actor, goal)?;
-    if report.evaluation != current.evaluation {
+    if report.evaluation != current.evaluation || report.detail != current.detail {
         return Err(failure(
             "RECOVERY_CONDITION_EVALUATION_CHANGED",
             "the current condition definition or relevant fact proof differs from the adopted evaluation",
         ));
     }
-    let proof = canonical(&report.proof())?;
+    let proof = report.proof_bytes()?;
     let proof_ref = digest(&proof);
     let mut dependencies = report.evaluation.dependencies.clone();
     dependencies.push(proof_ref.clone());
@@ -4096,14 +4097,20 @@ fn inspect(
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
     let requires_verified_correction =
         bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
-    let requires_condition_evaluation =
-        bundle.meaning.parser_version == crate::input::CONDITION_EVALUATION_PARSER_VERSION;
-    if matches!(goal.intent, Intent::EvaluateCondition { .. }) != requires_condition_evaluation {
+    let condition_contract = condition_evaluation_contract(&goal.intent);
+    let sealed_condition_parser = matches!(
+        bundle.meaning.parser_version.as_str(),
+        crate::input::CONDITION_EVALUATION_PARSER_VERSION
+            | crate::input::CONDITION_EVALUATION_DETAIL_PARSER_VERSION
+    )
+    .then_some(bundle.meaning.parser_version.as_str());
+    if condition_contract.map(|(parser, _)| parser) != sealed_condition_parser {
         return Err(failure(
             "RECOVERY_CONDITION_EVALUATION_MISMATCH",
             "the condition evaluation intent differs from the sealed parser contract",
         ));
     }
+    let requires_condition_evaluation = condition_contract.is_some();
     let requires_sequence_edit = matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::SEQUENCE_CORRECTION_PARSER_VERSION
@@ -4496,10 +4503,8 @@ fn inspect(
         ));
     }
     verify_goal_content(&goal, result, plan)?;
-    if requires_condition_evaluation {
-        if goal.required_predicates.first().map(String::as_str)
-            != Some(CONDITION_EVALUATION_PREDICATE)
-        {
+    if let Some((_, predicate)) = condition_contract {
+        if goal.required_predicates.first().map(String::as_str) != Some(predicate) {
             return Err(failure(
                 "RECOVERY_CONDITION_EVALUATION_MISMATCH",
                 "the condition evaluation has no exact typed completion predicate",
@@ -8504,7 +8509,10 @@ mod tests {
                     .unwrap(),
             )
             .unwrap();
-            assert_eq!(goal.required_predicates[0], CONDITION_EVALUATION_PREDICATE);
+            assert_eq!(
+                goal.required_predicates[0],
+                crate::core::CONDITION_EVALUATION_PREDICATE
+            );
             for marker in [Some("EXACT_CALCULATION_V1"), None] {
                 let mut wrong_state = state.clone();
                 let mut wrong_goal = goal.clone();
@@ -8637,6 +8645,90 @@ mod tests {
                 modified
             );
         }
+    }
+
+    #[test]
+    fn detailed_condition_evaluation_reconciles_the_exact_trace_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        for (id, text) in [
+            (
+                "condition",
+                "条件定義: [scope=実験室][condition=停止] ユリは停止中",
+            ),
+            ("positive", "[scope=実験室]ユリは停止中"),
+            ("negative", "[scope=実験室]ユリは停止中ではない"),
+        ] {
+            let result = engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        }
+        let mut request = RequestEnvelope::new(
+            "case",
+            "detail",
+            "alice",
+            "条件評価の内訳: [condition=停止][subject=ユリ][scope=実験室]",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert!(result.text.contains("内訳 1 条件 停止: CONFLICT"));
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let retained = state.result.as_ref().unwrap();
+        let mut shortened = retained.clone();
+        shortened.dependencies.pop();
+        let error = inspect(&engine.store, "alice", &state, &shortened).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_CONDITION_EVALUATION_MISMATCH"),
+            "{error:?}"
+        );
+
+        let mut goal: GoalContract = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", state.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            goal.required_predicates[0],
+            crate::core::CONDITION_EVALUATION_DETAIL_PREDICATE
+        );
+        goal.required_predicates[0] = crate::core::CONDITION_EVALUATION_PREDICATE.into();
+        state.goal_sha256 = Some(engine.store.put_artifact("alice", "case", &goal).unwrap());
+        let error = inspect(&engine.store, "alice", &state, retained).unwrap_err();
+        assert!(
+            error.to_string().contains("UNSUPPORTED_RECOVERY_GOAL"),
+            "{error:?}"
+        );
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, result.dependencies);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
     }
 
     #[test]

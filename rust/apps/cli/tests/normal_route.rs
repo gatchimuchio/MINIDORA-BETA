@@ -4481,6 +4481,64 @@ fn condition_evaluation_reports_four_states_without_writing_memory() {
 }
 
 #[test]
+fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    run(&["条件定義: [scope=実験室][condition=停止] ユリは停止中"]);
+    let positive = run(&["[scope=実験室]ユリは停止中"]);
+    let negative = run(&["[scope=実験室]ユリは停止中ではない"]);
+    run(&[
+        "条件定義: [scope=実験室][condition=監視][subject=ユリ] OR(AND([fact=ユリは点検済み], [ref=停止]), [fact=ユリは通信可能])",
+    ]);
+    let summary = run(&["条件評価: [condition=監視][subject=ユリ][scope=実験室]"]);
+    let detail = run(&["　条件評価の内訳： [condition=監視][subject=ユリ][scope=実験室]。"]);
+    let text = detail["text"].as_str().unwrap();
+    assert!(text.starts_with("条件 監視: UNKNOWN\n"));
+    assert!(text.starts_with(summary["text"].as_str().unwrap()));
+    assert!(text.contains("内訳 3（親 2） AND: FALSE"));
+    assert!(text.contains("内訳 5（親 3） 条件 停止: CONFLICT"));
+    assert!(text.contains("内訳 4 の診断: CONDITION_EVIDENCE_NOT_FOUND"));
+    assert!(!summary["text"].as_str().unwrap().contains("内訳 "));
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof_of = |report: &Value| {
+        sequence_artifact(
+            &store,
+            report["dependencies"].as_array().unwrap().last().unwrap(),
+        )
+    };
+    let proof = proof_of(&detail);
+    assert_eq!(proof[0], "minidora-condition-evaluation-detail-v1");
+    assert_eq!(proof[1], detail["actor_memory_revision"]);
+    assert_eq!(proof[2], proof_of(&summary)[2]);
+    let trace = proof[3].as_array().unwrap();
+    assert_eq!(trace.len(), 7);
+    assert_eq!(trace[3]["target"]["object"], "点検済み");
+    assert_eq!(trace[3]["reason"], "CONDITION_EVIDENCE_NOT_FOUND");
+    assert_eq!(trace[5]["parent"], 4);
+    assert_eq!(trace[5]["status"], "CONFLICT");
+    assert_eq!(
+        trace[5]["positive_fact_ids"],
+        serde_json::json!([positive["dependencies"][0]])
+    );
+    assert_eq!(
+        trace[5]["negative_fact_ids"],
+        serde_json::json!([negative["dependencies"][0]])
+    );
+    assert_eq!(trace[6]["target"]["object"], "通信可能");
+    assert_eq!(trace[6]["status"], "UNKNOWN");
+    assert_eq!(
+        detail["actor_memory_revision"],
+        summary["actor_memory_revision"]
+    );
+    assert_eq!(
+        store.load_memory("owner").unwrap().revision,
+        detail["actor_memory_revision"].as_u64().unwrap()
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() {
     let scratch = Scratch::new();
     let actor = "owner";

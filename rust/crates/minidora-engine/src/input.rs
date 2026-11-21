@@ -45,6 +45,8 @@ const COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION: &str =
 const INLINE_FACT_CONDITION_PARSER_VERSION: &str = "declarative-ja-en-v117-inline-fact-condition";
 pub(crate) const CONDITION_EVALUATION_PARSER_VERSION: &str =
     "declarative-ja-en-v127-condition-evaluation";
+pub(crate) const CONDITION_EVALUATION_DETAIL_PARSER_VERSION: &str =
+    "declarative-ja-en-v128-condition-evaluation-detail";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -303,6 +305,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::EvaluateCondition { .. } => CONDITION_EVALUATION_PARSER_VERSION,
+        Intent::EvaluateConditionDetailed { .. } => CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
         Intent::CsvSelectIndex { .. } => CSV_POSITIONAL_SELECTION_PARSER_VERSION,
@@ -1618,8 +1621,13 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
     }
-    if let Intent::EvaluateCondition { .. } = intent {
-        let (payload, qualifiers) = condition_evaluation_qualifiers(text).ok_or_else(|| {
+    let condition_role = match intent {
+        Intent::EvaluateCondition { .. } => Some("EvaluateCondition"),
+        Intent::EvaluateConditionDetailed { .. } => Some("EvaluateConditionDetailed"),
+        _ => None,
+    };
+    if let Some(condition_role) = condition_role {
+        let (payload, _, qualifiers) = condition_evaluation_qualifiers(text).ok_or_else(|| {
             failure(
                 "CONDITION_SOURCE_SPAN",
                 "condition evaluation source is misaligned",
@@ -1642,7 +1650,7 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
                         "condition qualifier is outside the source",
                     )
                 })?;
-                roles.insert(format!("/EvaluateCondition/{role}"), vec![span]);
+                roles.insert(format!("/{condition_role}/{role}"), vec![span]);
             }
         }
         return Ok(roles);
@@ -3514,12 +3522,15 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 fn interpret(text: &str) -> Result<Intent> {
     if condition_evaluation_payload(terminal_trim(text)).is_some() {
         return Ok(condition_evaluation_qualifiers(text)
-            .and_then(|(_, qualifiers)| {
-                Some(Intent::EvaluateCondition {
-                    condition_id: qualifiers.condition?.0.into(),
-                    subject: qualifiers.subject?.0.into(),
-                    scope: qualifiers.scope?.0.into(),
-                    temporal_scope: qualifiers.time.map(|(time, _)| time.into()),
+            .and_then(|(_, detailed, qualifiers)| {
+                let condition_id = qualifiers.condition?.0.into();
+                let subject = qualifiers.subject?.0.into();
+                let scope = qualifiers.scope?.0.into();
+                let temporal_scope = qualifiers.time.map(|(time, _)| time.into());
+                Some(if detailed {
+                    Intent::EvaluateConditionDetailed { condition_id, subject, scope, temporal_scope }
+                } else {
+                    Intent::EvaluateCondition { condition_id, subject, scope, temporal_scope }
                 })
             })
             .unwrap_or_else(|| Intent::Unknown {
@@ -4930,13 +4941,18 @@ fn condition_definition_payload(text: &str) -> Option<&str> {
         .map(str::trim_start)
 }
 
-fn condition_evaluation_payload(text: &str) -> Option<&str> {
+fn condition_evaluation_payload(text: &str) -> Option<(&str, bool)> {
     text.strip_prefix("条件評価:")
         .or_else(|| text.strip_prefix("条件評価："))
-        .map(str::trim_start)
+        .map(|payload| (payload.trim_start(), false))
+        .or_else(|| {
+            text.strip_prefix("条件評価の内訳:")
+                .or_else(|| text.strip_prefix("条件評価の内訳："))
+                .map(|payload| (payload.trim_start(), true))
+        })
 }
 
-fn condition_evaluation_qualifiers(text: &str) -> Option<(&str, RelationQualifiers<'_>)> {
+fn condition_evaluation_qualifiers(text: &str) -> Option<(&str, bool, RelationQualifiers<'_>)> {
     if text.trim().contains(['\r', '\n'])
         || text
             .trim_end()
@@ -4945,7 +4961,7 @@ fn condition_evaluation_qualifiers(text: &str) -> Option<(&str, RelationQualifie
     {
         return None;
     }
-    let payload = condition_evaluation_payload(terminal_trim(text))?;
+    let (payload, detailed) = condition_evaluation_payload(terminal_trim(text))?;
     let (body, qualifiers) = relation_qualifiers(payload, QualifierContext::ConditionEvaluation)?;
     let subject = qualifiers.subject?.0;
     (body.is_empty()
@@ -4954,7 +4970,7 @@ fn condition_evaluation_qualifiers(text: &str) -> Option<(&str, RelationQualifie
         && !starts_quoted_source(subject)
         && !singular_previous_subject(subject)
         && !unresolved_relation_subject(subject))
-    .then_some((payload, qualifiers))
+    .then_some((payload, detailed, qualifiers))
 }
 
 const CONDITION_ROLE_ROOT: &str = "/DefineCondition/definition";
