@@ -5043,12 +5043,45 @@ fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarati
             .unwrap()
             .contains("PREVIOUS_RULE_SOURCE_AMBIGUOUS")
     );
-    let selected_command = format!("　前の回答で使った規則の出典： {}。　", shortcut.id);
+    let listed = run(&[
+        "--input",
+        "previous-rule-list",
+        "--context",
+        why_id,
+        "--max-actions",
+        "4",
+        "前の回答で使った規則の一覧",
+    ]);
+    assert!(listed["actor_memory_revision"].is_null());
+    let listing = listed["text"].as_str().unwrap();
+    let reference = listing
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("参照した理由説明ID: ")
+        .unwrap();
+    assert_eq!(reference, why_id);
+    assert!(listing.contains("使用規則: 3件"));
+    assert!(listing.contains(&format!(
+        "合成規則: {}（親規則: {}、{}）",
+        shortcut.id, parents[0], parents[1]
+    )));
+    let list_proof = sequence_artifact(&store, &listed["dependencies"][2]);
+    assert_eq!(list_proof[0], "minidora-previous-rule-list-v1");
+    assert_eq!(list_proof[1], why_id);
+    let rows = list_proof[5].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    let composed_row = rows.iter().find(|row| row[2] == true).unwrap();
+    let listed_id = composed_row[0].as_str().unwrap();
+    assert_eq!(listed_id, shortcut.id);
+    assert_eq!(composed_row[1], serde_json::json!(parents));
+
+    let selected_command = format!("　前の回答で使った規則の出典： {listed_id}。　");
     let selected = run(&[
         "--input",
         "select-shortcut",
         "--context",
-        why_id,
+        reference,
         "--max-actions",
         "7",
         &selected_command,
@@ -5097,6 +5130,33 @@ fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarati
     assert_eq!(parent_proof[5][0], "minidora-rule-source-v1");
     assert_eq!(store.load_memory("owner").unwrap(), memory);
     assert!(store.actions("owner", "source").unwrap().is_empty());
+}
+
+#[test]
+fn previous_rule_source_list_preserves_zero_rules_for_a_direct_why() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    run(&["[scope=実験室]ユリは当番"]);
+    let why = run(&["なぜ[scope=実験室]ユリは当番ですか"]);
+    assert_eq!(why["guarantee"], "USER_PREMISE");
+    let listed = run(&[
+        "--max-actions",
+        "4",
+        "　前の回答で使った規則の一覧を教えて。　",
+    ]);
+    assert_eq!(
+        listed["text"],
+        format!(
+            "参照した理由説明ID: {}\n使用規則: 0件",
+            why["id"].as_str().unwrap()
+        )
+    );
+    assert!(listed["actor_memory_revision"].is_null());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &listed["dependencies"][2]);
+    assert_eq!(proof[1], why["id"]);
+    assert!(proof[5].as_array().unwrap().is_empty());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
 }
 
 #[test]

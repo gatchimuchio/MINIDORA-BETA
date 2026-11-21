@@ -109,6 +109,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::InspectPreviousRuleSource
                         | Intent::InspectPreviousComposedRuleSource
                         | Intent::InspectPreviousRuleSourceById { .. }
+                        | Intent::ListPreviousRules
                         | Intent::InspectComposedRuleSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
@@ -2701,6 +2702,25 @@ fn verify_record_source_result(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<()> {
+    if matches!(goal.intent, Intent::ListPreviousRules) {
+        const MISMATCH: &str = "RECOVERY_PREVIOUS_RULE_LIST_MISMATCH";
+        verify_registered_input(store, bundle, MISMATCH)?;
+        crate::core::check_record_source_actions(goal)?;
+        if result.actor_memory_revision.is_some() {
+            return Err(failure(
+                MISMATCH,
+                "the historical rule list must not depend on current memory",
+            ));
+        }
+        let readout = crate::core::previous_rule_list(store, bundle, &state.prior_results, goal)
+            .map_err(|error| match error {
+                Error::Contract { code, message } if code == "PREVIOUS_RULE_LIST_UNAVAILABLE" => {
+                    failure(MISMATCH, message)
+                }
+                error => error,
+            })?;
+        return verify_record_source_readout(store, bundle, result, plan, readout, MISMATCH);
+    }
     let (mismatch, changed) = match &goal.intent {
         Intent::InspectFactSource { .. } => (
             "RECOVERY_FACT_SOURCE_MISMATCH",
@@ -2751,7 +2771,6 @@ fn verify_record_source_result(
     let target = crate::core::record_source_target(store, bundle, &state.prior_results)
         .map_err(context_mismatch)?;
     let actor = &bundle.request.actor_id;
-    let case = &bundle.request.case_id;
     let revision = result.actor_memory_revision.ok_or_else(|| {
         failure(
             mismatch,
@@ -2775,24 +2794,7 @@ fn verify_record_source_result(
     let readout = target
         .readout(record, store, actor, revision, goal)
         .map_err(context_mismatch)?;
-    let proof_ref = digest(&readout.proof);
-    let mut expected_dependencies = readout.dependencies;
-    expected_dependencies.push(proof_ref.clone());
-    if result.dependencies != expected_dependencies
-        || result.guarantee != Guarantee::Computed
-        || plan.guarantee != Guarantee::Computed
-        || result.calculation.is_some()
-        || !result.evidence.is_empty()
-        || plan.required_units != readout.units
-        || result.text != readout.units.join("\n")
-        || plan.text != result.text
-        || store.get_bytes(actor, case, &proof_ref)? != readout.proof
-    {
-        return Err(failure(
-            mismatch,
-            "the retained record source differs from its sealed proof and surface",
-        ));
-    }
+    verify_record_source_readout(store, bundle, result, plan, readout, mismatch)?;
     let head = crate::core::record_source_memory_at_head(store, actor)?;
     let changed = || {
         failure(
@@ -2815,6 +2817,36 @@ fn verify_record_source_result(
     };
     if current != record {
         return Err(changed());
+    }
+    Ok(())
+}
+
+fn verify_record_source_readout(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    readout: crate::core::RecordSourceReadout,
+    mismatch: &str,
+) -> Result<()> {
+    let request = &bundle.request;
+    let proof_ref = digest(&readout.proof);
+    let mut expected_dependencies = readout.dependencies;
+    expected_dependencies.push(proof_ref.clone());
+    if result.dependencies != expected_dependencies
+        || result.guarantee != Guarantee::Computed
+        || plan.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.required_units != readout.units
+        || result.text != readout.units.join("\n")
+        || plan.text != result.text
+        || store.get_bytes(&request.actor_id, &request.case_id, &proof_ref)? != readout.proof
+    {
+        return Err(failure(
+            mismatch,
+            "the retained record source differs from its sealed proof and surface",
+        ));
     }
     Ok(())
 }
@@ -4384,11 +4416,16 @@ fn inspect(
             | crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION
             | crate::input::PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION
             | crate::input::PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION
+            | crate::input::PREVIOUS_RULE_LIST_PARSER_VERSION
             | crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
     if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
-        let code = if sealed_source_parser
+        let code = if sealed_source_parser == Some(crate::input::PREVIOUS_RULE_LIST_PARSER_VERSION)
+            || matches!(goal.intent, Intent::ListPreviousRules)
+        {
+            "RECOVERY_PREVIOUS_RULE_LIST_MISMATCH"
+        } else if sealed_source_parser
             == Some(crate::input::PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION)
             || matches!(goal.intent, Intent::InspectPreviousRuleSourceById { .. })
         {

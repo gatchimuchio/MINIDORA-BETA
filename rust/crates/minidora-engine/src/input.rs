@@ -70,6 +70,8 @@ pub(crate) const PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v140-previous-composed-rule-source";
 pub(crate) const PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION: &str =
     "declarative-ja-en-v141-previous-rule-source-by-id";
+pub(crate) const PREVIOUS_RULE_LIST_PARSER_VERSION: &str =
+    "declarative-ja-en-v142-previous-rule-list";
 const PREVIOUS_RULE_SOURCE_LABEL: &str = "前の回答で使った規則の出典";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
@@ -356,6 +358,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::InspectPreviousRuleSource => PREVIOUS_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectPreviousRuleSourceById { .. } => PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION,
         Intent::InspectPreviousComposedRuleSource => PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION,
+        Intent::ListPreviousRules => PREVIOUS_RULE_LIST_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
             CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
@@ -3910,24 +3913,28 @@ fn interpret(text: &str) -> Result<Intent> {
             rule_id: rule_id.into(),
         });
     }
-    for (label, composed) in [
-        (PREVIOUS_RULE_SOURCE_LABEL, false),
-        ("前の回答で使った合成規則の出典", true),
+    for (label, intent, reason) in [
+        (
+            PREVIOUS_RULE_SOURCE_LABEL,
+            Intent::InspectPreviousRuleSource,
+            "前の回答で使った規則の出典だけを指定してください。",
+        ),
+        (
+            "前の回答で使った合成規則の出典",
+            Intent::InspectPreviousComposedRuleSource,
+            "前の回答で使った合成規則の出典だけを指定してください。",
+        ),
+        (
+            "前の回答で使った規則の一覧",
+            Intent::ListPreviousRules,
+            "前の回答で使った規則の一覧だけを指定してください。",
+        ),
     ] {
         if let Some(suffix) = statement.strip_prefix(label) {
             if matches!(suffix, "" | "を教えて") && !text.trim().contains(['?', '？', '\r', '\n'])
             {
-                return Ok(if composed {
-                    Intent::InspectPreviousComposedRuleSource
-                } else {
-                    Intent::InspectPreviousRuleSource
-                });
+                return Ok(intent);
             }
-            let reason = if composed {
-                "前の回答で使った合成規則の出典だけを指定してください。"
-            } else {
-                "前の回答で使った規則の出典だけを指定してください。"
-            };
             return Ok(Intent::Unknown {
                 reason: reason.into(),
             });
