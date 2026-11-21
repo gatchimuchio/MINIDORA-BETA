@@ -264,6 +264,8 @@ pub enum Intent {
     CorrectCalculationSequenceStep {
         step_id: String,
         expression: SourceSpan,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        change_dependencies: bool,
     },
     CorrectCalculation {
         operand_index: usize,

@@ -206,10 +206,11 @@ pub(crate) fn run_calculation_sequence<'a>(
 }
 
 pub(crate) struct PreviousCalculationSequence<'a> {
-    pub(crate) input: InputBundle,
+    input: InputBundle,
     original: &'a ResultRecord,
     followups: Vec<CalculationSequenceFollowup<'a>>,
     corrections: usize,
+    effective_steps: Vec<CalculationSequenceStep>,
 }
 
 struct CalculationSequenceFollowup<'a> {
@@ -218,15 +219,23 @@ struct CalculationSequenceFollowup<'a> {
 }
 
 impl PreviousCalculationSequence<'_> {
-    fn steps(&self) -> &[CalculationSequenceStep] {
+    fn root_steps(&self) -> &[CalculationSequenceStep] {
         let Intent::CalculateSequence { steps } = &self.input.meaning.intent else {
             unreachable!("sequence history starts at a calculation sequence");
         };
         steps
     }
 
+    pub(crate) fn effective_steps(&self) -> &[CalculationSequenceStep] {
+        &self.effective_steps
+    }
+
     pub(crate) fn predicate(&self) -> &'static str {
-        if self.corrections > 0 {
+        if self.followups.iter().any(|entry| {
+            entry.bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION
+        }) {
+            REWIRED_SEQUENCE_EXPLANATION_PREDICATE
+        } else if self.corrections > 0 {
             REVISED_SEQUENCE_EXPLANATION_PREDICATE
         } else if self.followups.is_empty() {
             SEQUENCE_EXPLANATION_PREDICATE
@@ -236,7 +245,7 @@ impl PreviousCalculationSequence<'_> {
     }
 
     pub(crate) fn context_actions(&self) -> usize {
-        self.followups.len() - self.corrections + self.corrections * self.steps().len()
+        self.followups.len() - self.corrections + self.corrections * self.effective_steps.len()
     }
 }
 
@@ -268,7 +277,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
             return Err(invalid());
         }
         let mut current = previous;
-        let mut followups = Vec::new();
+        let mut followups: Vec<CalculationSequenceFollowup<'_>> = Vec::new();
         let mut corrections = 0;
         let mut visited = BTreeSet::new();
         loop {
@@ -289,7 +298,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
             {
                 return Err(invalid());
             }
-            if matches!(input.meaning.intent, Intent::CalculateSequence { .. }) {
+            if let Intent::CalculateSequence { steps } = &input.meaning.intent {
                 if history
                     .input_result(&current.input_id, current.input_version)?
                     .as_ref()
@@ -298,20 +307,29 @@ pub(crate) fn previous_calculation_sequence<'a>(
                     return Err(invalid());
                 }
                 followups.reverse();
+                let mut effective_steps = steps.clone();
+                for entry in &followups {
+                    if let Some(started) = started {
+                        sequence_history_time(&request.budget, started)?;
+                    }
+                    if input::sequence_correction_parser(&entry.bundle.meaning.intent).is_some() {
+                        let (target, revised) =
+                            revised_calculation_step(&effective_steps, &entry.bundle)?;
+                        effective_steps[target] = revised;
+                    }
+                }
                 return Ok(Some(PreviousCalculationSequence {
                     input,
                     original: current,
                     followups,
                     corrections,
+                    effective_steps,
                 }));
             }
-            let correction = matches!(
-                input.meaning.intent,
-                Intent::CorrectCalculationSequenceStep { .. }
-            );
+            let correction_parser = input::sequence_correction_parser(&input.meaning.intent);
             let detail = matches!(input.meaning.intent, Intent::ExplainPrevious);
             if followups.is_empty()
-                && !correction
+                && correction_parser.is_none()
                 && (!detail
                     || current.dependencies.len() == 1
                         && current.calculation.as_ref().is_some_and(|calculation| {
@@ -322,9 +340,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
             {
                 return Ok(None);
             }
-            if !(detail
-                || correction
-                    && input.meaning.parser_version == input::SEQUENCE_CORRECTION_PARSER_VERSION)
+            if !(detail || correction_parser == Some(input.meaning.parser_version.as_str()))
                 || history
                     .input_result(&current.input_id, current.input_version)?
                     .as_ref()
@@ -357,7 +373,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
             {
                 return Err(invalid());
             }
-            corrections += usize::from(correction);
+            corrections += usize::from(correction_parser.is_some());
             followups.push(CalculationSequenceFollowup {
                 bundle: input,
                 result: current,
@@ -473,13 +489,14 @@ fn sequence_explanation_units(
     Ok(units)
 }
 
-fn sequence_correction_target(
+fn revised_calculation_step(
     steps: &[CalculationSequenceStep],
     bundle: &InputBundle,
-) -> Result<(usize, SourceSpan)> {
+) -> Result<(usize, CalculationSequenceStep)> {
     let Intent::CorrectCalculationSequenceStep {
         step_id,
         expression,
+        change_dependencies,
     } = &bundle.meaning.intent
     else {
         return Err(invalid_sequence_proof());
@@ -495,15 +512,61 @@ fn sequence_correction_target(
         })?;
     let references = input::calculation_step_references(&expression.text)
         .map_err(|message| failure("SEQUENCE_CORRECTION_REFERENCE_INVALID", message))?;
-    if references.iter().collect::<BTreeSet<_>>()
-        != steps[target].requires.iter().collect::<BTreeSet<_>>()
+    let mut revised = steps[target].clone();
+    if *change_dependencies {
+        revised.requires.clear();
+        for reference in references {
+            let position = steps
+                .iter()
+                .position(|step| step.id == reference)
+                .ok_or_else(|| {
+                    failure(
+                        "SEQUENCE_CORRECTION_REFERENCE_UNKNOWN",
+                        format!("参照先の手順 {reference} はありません。"),
+                    )
+                })?;
+            if position == target {
+                return Err(failure(
+                    "SEQUENCE_CORRECTION_SELF_REFERENCE",
+                    format!("手順 {reference} は自分自身を参照できません。"),
+                ));
+            }
+            if position > target {
+                return Err(failure(
+                    "SEQUENCE_CORRECTION_FORWARD_REFERENCE",
+                    format!("手順 {step_id} より後に定義された手順 {reference} は参照できません。"),
+                ));
+            }
+            if !revised.requires.contains(&reference) {
+                revised.requires.push(reference);
+            }
+        }
+    } else if references.iter().collect::<BTreeSet<_>>()
+        != revised.requires.iter().collect::<BTreeSet<_>>()
     {
         return Err(failure(
             "SEQUENCE_CORRECTION_DEPENDENCIES_CHANGED",
-            "訂正する式には、元の段と同じ先行手順を参照させてください。",
+            "参照先を変更するには「を参照先も含めて訂正」を指定してください。",
         ));
     }
-    Ok((target, expression.clone()))
+    revised.expression = expression.clone();
+    Ok((target, revised))
+}
+
+#[derive(serde::Serialize)]
+struct SequenceDependencyRevision<'a> {
+    kind: &'static str,
+    selected_result_id: &'a str,
+    original_result_id: &'a str,
+    previous_raw_sha256: &'a str,
+    correction_input_id: &'a str,
+    correction_raw_sha256: &'a str,
+    step_id: &'a str,
+    previous_expression: &'a SourceSpan,
+    revised_expression: &'a SourceSpan,
+    previous_requires: &'a [String],
+    revised_requires: &'a [String],
+    dependencies: &'a [String],
 }
 
 struct ReplayedCalculationSequence<'a> {
@@ -530,34 +593,61 @@ impl<'a> ReplayedCalculationSequence<'a> {
     fn revise(
         &mut self,
         bundle: &'a InputBundle,
-        graph: &mut Scheduler,
+        graph: Option<&mut Scheduler>,
         budget: &ResourceBudget,
         started: Instant,
         dependencies: &mut Vec<String>,
         mut artifact_ref: impl FnMut(&[u8]) -> Result<String>,
     ) -> Result<CalculationSequenceResult> {
-        let (target, expression) = sequence_correction_target(&self.steps, bundle)?;
+        let (target, revised_step) = revised_calculation_step(&self.steps, bundle)?;
         let preceding = &self.steps[target];
         let id = preceding.id.clone();
         let source = self.sources[&id];
-        let kind = if self.active.id == self.original.id {
-            "minidora-calculation-sequence-correction-v1"
-        } else {
-            "minidora-calculation-sequence-correction-v2"
-        };
         let proof = self.dependencies();
-        let revision = canonical(&(
-            kind,
-            bundle.meaning.context_result_ref.as_deref(),
-            &self.original.id,
-            &source.raw_sha256,
-            identity(&bundle.request)?,
-            &bundle.raw_sha256,
-            &id,
-            &preceding.expression,
-            &expression,
-            &proof,
-        ))?;
+        let correction_id = identity(&bundle.request)?;
+        let revision = if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
+            canonical(&SequenceDependencyRevision {
+                kind: "minidora-calculation-sequence-correction-v3",
+                selected_result_id: &self.selected.id,
+                original_result_id: &self.original.id,
+                previous_raw_sha256: &source.raw_sha256,
+                correction_input_id: &correction_id,
+                correction_raw_sha256: &bundle.raw_sha256,
+                step_id: &id,
+                previous_expression: &preceding.expression,
+                revised_expression: &revised_step.expression,
+                previous_requires: &preceding.requires,
+                revised_requires: &revised_step.requires,
+                dependencies: &proof,
+            })?
+        } else {
+            let kind = if self.active.id == self.original.id {
+                "minidora-calculation-sequence-correction-v1"
+            } else {
+                "minidora-calculation-sequence-correction-v2"
+            };
+            canonical(&(
+                kind,
+                bundle.meaning.context_result_ref.as_deref(),
+                &self.original.id,
+                &source.raw_sha256,
+                &correction_id,
+                &bundle.raw_sha256,
+                &id,
+                &preceding.expression,
+                &revised_step.expression,
+                &proof,
+            ))?
+        };
+        self.steps[target] = revised_step;
+        self.sources.insert(id.clone(), bundle);
+        let mut private_graph;
+        let graph = if let Some(graph) = graph {
+            graph
+        } else {
+            private_graph = sequence_proof_graph(&self.steps, budget)?;
+            &mut private_graph
+        };
         let mut retain = |bytes: &[u8]| {
             sequence_history_time(budget, started)?;
             debit_sequence_evidence(&mut self.remaining_bytes, bytes)?;
@@ -568,8 +658,6 @@ impl<'a> ReplayedCalculationSequence<'a> {
             dependencies.push(self.active.id.clone());
         }
         dependencies.push(retain(&revision)?);
-        self.steps[target].expression = expression;
-        self.sources.insert(id.clone(), bundle);
         let mut revised = run_calculation_sequence(
             &self.steps,
             |id| &self.sources[id].request.text,
@@ -594,7 +682,7 @@ fn replay_calculation_sequence<'a>(
     let original = context.original;
     let mut remaining_bytes = budget.max_evidence_bytes;
     let base = &context.input;
-    let steps = context.steps();
+    let steps = context.root_steps();
     let mut prior_graph = (context.corrections != 0)
         .then(|| sequence_proof_graph(steps, budget))
         .transpose()?;
@@ -646,13 +734,10 @@ fn replay_calculation_sequence<'a>(
             Intent::CorrectCalculationSequenceStep { .. }
         ) {
             corrections_left -= 1;
-            let mut prior_graph = (corrections_left != 0)
-                .then(|| sequence_proof_graph(steps, budget))
-                .transpose()?;
             let mut dependencies = Vec::new();
             let observed = replay.revise(
                 &followup.bundle,
-                prior_graph.as_mut().unwrap_or(&mut *graph),
+                (corrections_left == 0).then_some(&mut *graph),
                 budget,
                 started,
                 &mut dependencies,
@@ -702,6 +787,7 @@ pub(crate) fn explain_calculation_sequence(
 pub(crate) struct SequenceCorrection<'a> {
     baseline: PreviousCalculationSequence<'a>,
     pub(crate) steps: Vec<CalculationSequenceStep>,
+    predicate: &'static str,
 }
 
 impl SequenceCorrection<'_> {
@@ -710,11 +796,7 @@ impl SequenceCorrection<'_> {
     }
 
     pub(crate) fn predicate(&self) -> &'static str {
-        if self.baseline.corrections == 0 {
-            SEQUENCE_CORRECTION_PREDICATE
-        } else {
-            REPEATED_SEQUENCE_CORRECTION_PREDICATE
-        }
+        self.predicate
     }
 }
 
@@ -725,6 +807,11 @@ pub(crate) fn prepare_sequence_correction<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     started: Instant,
 ) -> Result<SequenceCorrection<'a>> {
+    if input::sequence_correction_parser(&bundle.meaning.intent)
+        != Some(bundle.meaning.parser_version.as_str())
+    {
+        return Err(invalid_sequence_proof());
+    }
     let baseline =
         previous_calculation_sequence(store, bundle, previous, prior_results, Some(started))?
             .ok_or_else(|| {
@@ -733,9 +820,21 @@ pub(crate) fn prepare_sequence_correction<'a>(
                     "訂正対象となる同じケースの確定済み連続計算が必要です。",
                 )
             })?;
-    let steps = baseline.steps().to_vec();
-    sequence_correction_target(&steps, bundle)?;
-    Ok(SequenceCorrection { baseline, steps })
+    let mut steps = baseline.effective_steps().to_vec();
+    let (target, revised) = revised_calculation_step(&steps, bundle)?;
+    steps[target] = revised;
+    let predicate = if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
+        REWIRED_SEQUENCE_CORRECTION_PREDICATE
+    } else if baseline.corrections > 0 {
+        REPEATED_SEQUENCE_CORRECTION_PREDICATE
+    } else {
+        SEQUENCE_CORRECTION_PREDICATE
+    };
+    Ok(SequenceCorrection {
+        baseline,
+        steps,
+        predicate,
+    })
 }
 
 pub(crate) fn run_sequence_correction(
@@ -748,10 +847,17 @@ pub(crate) fn run_sequence_correction(
     artifact_ref: impl FnMut(&[u8]) -> Result<String>,
 ) -> Result<CalculationSequenceResult> {
     let budget = &bundle.request.budget;
-    let mut prior_graph = sequence_proof_graph(&context.steps, budget)?;
+    let mut prior_graph = sequence_proof_graph(context.baseline.effective_steps(), budget)?;
     let mut replay =
         replay_calculation_sequence(store, &context.baseline, &mut prior_graph, budget, started)?;
-    replay.revise(bundle, graph, budget, started, dependencies, artifact_ref)
+    replay.revise(
+        bundle,
+        Some(graph),
+        budget,
+        started,
+        dependencies,
+        artifact_ref,
+    )
 }
 
 pub(crate) fn store_execution_graph(
@@ -806,6 +912,8 @@ pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
 pub(crate) const SEQUENCE_CORRECTION_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1";
 pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2";
+pub(crate) const REWIRED_SEQUENCE_CORRECTION_PREDICATE: &str =
+    "EXACT_CALCULATION_SEQUENCE_CORRECTION_V3";
 const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 pub(crate) const GENERATED_RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V2";
@@ -818,6 +926,8 @@ pub(crate) const CHAINED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V2";
 pub(crate) const REVISED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V3";
+pub(crate) const REWIRED_SEQUENCE_EXPLANATION_PREDICATE: &str =
+    "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V4";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -840,13 +950,15 @@ pub(crate) fn goal_predicates(
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::CorrectCalculationSequenceStep { .. }
-            if meaning.parser_version == input::SEQUENCE_CORRECTION_PARSER_VERSION =>
+            if input::sequence_correction_parser(&meaning.intent)
+                == Some(meaning.parser_version.as_str()) =>
         {
-            predicates.push(
-                sequence_predicate
-                    .unwrap_or(SEQUENCE_CORRECTION_PREDICATE)
-                    .into(),
-            );
+            let predicate = if meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
+                REWIRED_SEQUENCE_CORRECTION_PREDICATE
+            } else {
+                sequence_predicate.unwrap_or(SEQUENCE_CORRECTION_PREDICATE)
+            };
+            predicates.push(predicate.into());
         }
         Intent::ExplainPrevious => {
             predicates.extend(sequence_predicate.map(str::to_owned));
@@ -895,6 +1007,7 @@ fn verify_report_goal_content(
                 | SEQUENCE_EXPLANATION_PREDICATE
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
+                | REWIRED_SEQUENCE_EXPLANATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -5471,15 +5584,15 @@ impl Engine {
             });
             compute_requires.push(summary_id);
         }
-        let sequence_intent = previous_sequence
-            .as_ref()
-            .map_or(&bundle.meaning.intent, |context| {
-                &context.input.meaning.intent
-            });
         let sequence_steps = sequence_correction
             .as_ref()
             .map(|context| context.steps.as_slice())
-            .or(match sequence_intent {
+            .or_else(|| {
+                previous_sequence
+                    .as_ref()
+                    .map(PreviousCalculationSequence::effective_steps)
+            })
+            .or(match &bundle.meaning.intent {
                 Intent::CalculateSequence { steps } => Some(steps.as_slice()),
                 _ => None,
             });

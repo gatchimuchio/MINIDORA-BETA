@@ -18,6 +18,8 @@ pub(crate) const CALCULATION_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v118-verified-calculation-correction";
 pub(crate) const SEQUENCE_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v119-calculation-sequence-correction";
+pub(crate) const SEQUENCE_REWIRE_PARSER_VERSION: &str =
+    "declarative-ja-en-v120-calculation-sequence-rewire";
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
@@ -261,7 +263,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
-        Intent::CorrectCalculationSequenceStep { .. } => SEQUENCE_CORRECTION_PARSER_VERSION,
+        Intent::CorrectCalculationSequenceStep { .. } => {
+            sequence_correction_parser(&intent).expect("sequence correction parser")
+        }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. }
             if source_roles.iter().any(|(role, spans)| {
@@ -1883,13 +1887,32 @@ pub(crate) fn calculation_step_references(
     Ok(references)
 }
 
+pub(crate) fn sequence_correction_parser(intent: &Intent) -> Option<&'static str> {
+    let Intent::CorrectCalculationSequenceStep {
+        change_dependencies,
+        ..
+    } = intent
+    else {
+        return None;
+    };
+    Some(if *change_dependencies {
+        SEQUENCE_REWIRE_PARSER_VERSION
+    } else {
+        SEQUENCE_CORRECTION_PARSER_VERSION
+    })
+}
+
 fn calculation_sequence_correction_intent(text: &str) -> Result<Option<Intent>> {
     let trimmed = text.trim();
     let header = trimmed.lines().next().unwrap_or_default();
     if !header.starts_with("計算手順の")
-        || !header.split_once("を訂正").is_some_and(|(_, suffix)| {
-            suffix.trim_start().starts_with([':', '：']) || suffix.trim().is_empty()
-        })
+        || !["を訂正", "を参照先も含めて訂正"]
+            .into_iter()
+            .any(|command| {
+                header.split_once(command).is_some_and(|(_, suffix)| {
+                    suffix.trim_start().starts_with([':', '：']) || suffix.trim().is_empty()
+                })
+            })
     {
         return Ok(None);
     }
@@ -1898,12 +1921,12 @@ fn calculation_sequence_correction_intent(text: &str) -> Result<Option<Intent>> 
             .into(),
     };
     let Some(captures) =
-        regex(r"^計算手順の[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を訂正[:：][ \t]*([^\r\n]+)$")?
+        regex(r"^計算手順の[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を(参照先も含めて)?訂正[:：][ \t]*([^\r\n]+)$")?
             .captures(trimmed)
     else {
         return Ok(Some(unsupported()));
     };
-    let expression = captures.get(2).expect("formula capture exists");
+    let expression = captures.get(3).expect("formula capture exists");
     let offset = text.len() - text.trim_start().len();
     if expression.len() > 8192 {
         return Ok(Some(unsupported()));
@@ -1915,6 +1938,7 @@ fn calculation_sequence_correction_intent(text: &str) -> Result<Option<Intent>> 
     Ok(Some(Intent::CorrectCalculationSequenceStep {
         step_id: captures[1].to_owned(),
         expression: span,
+        change_dependencies: captures.get(2).is_some(),
     }))
 }
 
