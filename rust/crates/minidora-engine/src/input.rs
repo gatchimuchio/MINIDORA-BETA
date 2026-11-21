@@ -60,6 +60,8 @@ pub(crate) const MULTI_CONDITION_RELATION_PARSER_VERSION: &str =
 pub(crate) const MULTI_CONDITION_RULE_PARSER_VERSION: &str =
     "declarative-ja-en-v135-multi-condition-rule";
 pub(crate) const RULE_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v136-rule-source";
+pub(crate) const COMPOSED_RULE_SOURCE_PARSER_VERSION: &str =
+    "declarative-ja-en-v137-composed-rule-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -340,6 +342,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::EvaluateConditionDetailed { .. } => CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
         Intent::InspectFactSource { .. } => FACT_SOURCE_PARSER_VERSION,
         Intent::InspectRuleSource { .. } => RULE_SOURCE_PARSER_VERSION,
+        Intent::InspectComposedRuleSource { .. } => COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
             CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
@@ -1689,6 +1692,13 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
             "/InspectRuleSource/rule_id",
             "RULE_SOURCE_SPAN",
             "rule",
+        )),
+        Intent::InspectComposedRuleSource { rule_id } => Some((
+            "合成規則の出典",
+            rule_id,
+            "/InspectComposedRuleSource/rule_id",
+            "COMPOSED_RULE_SOURCE_SPAN",
+            "composed rule",
         )),
         Intent::InspectConditionSource { record_id } => Some((
             "条件定義の出典",
@@ -3835,21 +3845,56 @@ pub(crate) fn verified_guarded_relation_rule_source(bundle: &InputBundle) -> Res
     )
 }
 
+pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
+    let intent = &bundle.meaning.intent;
+    let (premises, conclusion) = match intent {
+        Intent::AddRule {
+            premise,
+            conclusion,
+        } => (std::slice::from_ref(premise), conclusion),
+        Intent::AddConjunctiveRule {
+            premises,
+            conclusion,
+        } if premises.len() == 2 => (premises.as_slice(), conclusion),
+        _ => return Ok(false),
+    };
+    if bundle.meaning.parser_version != PARSER_VERSION
+        || bundle.meaning.source_kind != "USER_REQUEST"
+        || std::iter::once(conclusion)
+            .chain(premises)
+            .any(|proposition| !proposition.condition_refs.is_empty())
+        || &interpret(&bundle.request.text)? != intent
+    {
+        return Ok(false);
+    }
+    // Generic v89 role hints need not exist in older records. When present,
+    // require the original parser's index, without treating it as clause proof.
+    Ok(bundle.meaning.source_roles.is_empty()
+        || source_role_spans(&bundle.request.text, intent)? == bundle.meaning.source_roles)
+}
+
 fn interpret(text: &str) -> Result<Intent> {
-    if let Some(rule_id) = source_inspection_payload(terminal_trim(text), "規則の出典") {
-        return Ok(
-            if !text.trim().contains(['?', '？', '\r', '\n'])
-                && valid_source_record_id(rule_id, "rule:")
+    for (label, composed) in [("規則の出典", false), ("合成規則の出典", true)] {
+        if let Some(rule_id) = source_inspection_payload(terminal_trim(text), label) {
+            if text.trim().contains(['?', '？', '\r', '\n'])
+                || !valid_source_record_id(rule_id, "rule:")
             {
-                Intent::InspectRuleSource {
-                    rule_id: rule_id.into(),
-                }
+                let reason = if composed {
+                    "出典を照会する合成規則IDを一つ指定してください。"
+                } else {
+                    "出典を照会する規則IDを一つ指定してください。"
+                };
+                return Ok(Intent::Unknown {
+                    reason: reason.into(),
+                });
+            }
+            let rule_id = rule_id.into();
+            return Ok(if composed {
+                Intent::InspectComposedRuleSource { rule_id }
             } else {
-                Intent::Unknown {
-                    reason: "出典を照会する規則IDを一つ指定してください。".into(),
-                }
-            },
-        );
+                Intent::InspectRuleSource { rule_id }
+            });
+        }
     }
     if let Some(fact_id) = source_inspection_payload(terminal_trim(text), "Factの出典") {
         return Ok(

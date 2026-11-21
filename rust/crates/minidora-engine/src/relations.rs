@@ -1645,6 +1645,27 @@ fn compose(left: &RelationRule, right: &RelationRule) -> Result<Vec<RelationRule
     Ok(composed_rules.into_values().collect())
 }
 
+pub(crate) fn verified_composed_rule(
+    rule: &RelationRule,
+    left: &RelationRule,
+    right: &RelationRule,
+) -> Result<bool> {
+    if left.id == right.id
+        || [left, right].into_iter().any(|parent| {
+            !parent.dependencies.is_empty()
+                || parent.source_input.is_empty()
+                || parent.source_input.starts_with("derived:")
+        })
+    {
+        return Ok(false);
+    }
+    Ok(compose(left, right)?.into_iter().any(|mut candidate| {
+        // The immutable proof can be inspected after a withdrawal.
+        candidate.valid = rule.valid;
+        candidate == *rule
+    }))
+}
+
 fn permitted_rule<'a>(
     rule: &'a RelationRule,
     rules: &BTreeMap<&str, &'a RelationRule>,

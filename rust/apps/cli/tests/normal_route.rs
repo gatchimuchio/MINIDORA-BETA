@@ -4813,6 +4813,91 @@ fn rule_source_resolves_the_exact_guarded_declaration_across_owned_cases() {
 }
 
 #[test]
+fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarations() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let left = "　もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは当番。　";
+    let right =
+        "もし[scope=実験室][condition=点検]Yは当番なら[scope=実験室][condition=点検]Yは入室可";
+    let declared_left = run(&["--case", "left", "--input", "rule-left", left]);
+    let declared_right = run(&["--case", "right", "--input", "rule-right", right]);
+    run(&["条件定義: [scope=実験室][condition=点検] ユリは点検済み"]);
+    run(&["[scope=実験室]ユリは点検済み"]);
+    run(&["[scope=実験室][condition=点検]ユリは研究員"]);
+    let why = run(&["なぜ[scope=実験室][condition=点検]ユリは入室可ですか"]);
+    assert_eq!(why["guarantee"], "DERIVED", "{why:?}");
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let memory = store.load_memory("owner").unwrap();
+    let parents = [
+        declared_left["dependencies"][0].as_str().unwrap(),
+        declared_right["dependencies"][0].as_str().unwrap(),
+    ];
+    let shortcut = memory
+        .rules
+        .iter()
+        .find(|rule| rule.dependencies == parents)
+        .expect("saved composed rule with the exact ordered parents");
+    assert!(
+        why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(shortcut.id))
+    );
+    let command = format!("　合成規則の出典： {}。　", shortcut.id);
+    let report = run(&["--case", "source", "--max-actions", "6", &command]);
+    assert_eq!(report["guarantee"], "COMPUTED");
+    let deps = report["dependencies"].as_array().unwrap();
+    assert_eq!(
+        deps[..5],
+        [
+            serde_json::json!(shortcut.id),
+            serde_json::json!(parents[0]),
+            serde_json::json!(parents[1]),
+            declared_left["id"].clone(),
+            declared_right["id"].clone(),
+        ]
+    );
+    let proof: Value = serde_json::from_slice(
+        &store
+            .get_bytes("owner", "source", deps[5].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(proof[0], "minidora-composed-rule-source-v1");
+    assert_eq!(proof[1], report["actor_memory_revision"]);
+    assert_eq!(proof[2]["id"], shortcut.id);
+    for (index, original, case) in [(0, left, "left"), (1, right, "right")] {
+        assert_eq!(proof[3][index][0]["id"], parents[index]);
+        assert_eq!(proof[3][index][1], case);
+        assert_eq!(
+            proof[3][index][5],
+            minidora_domain::digest(original.as_bytes())
+        );
+        assert!(
+            report["text"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("原文: {original:?}"))
+        );
+    }
+    let saved = store.load_case("owner", "source").unwrap().unwrap();
+    let bundle = saved.bundle.unwrap();
+    assert_eq!(
+        bundle.meaning.parser_version,
+        "declarative-ja-en-v137-composed-rule-source"
+    );
+    assert_eq!(bundle.meaning.source_roles.len(), 1);
+    let span = &bundle.meaning.source_roles["/InspectComposedRuleSource/rule_id"][0];
+    assert_eq!(
+        command.get(span.start..span.end),
+        Some(shortcut.id.as_str())
+    );
+    assert_eq!(store.load_memory("owner").unwrap(), memory);
+    assert!(store.actions("owner", "source").unwrap().is_empty());
+}
+
+#[test]
 fn condition_rule_registration_derives_only_while_its_guard_is_supported() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

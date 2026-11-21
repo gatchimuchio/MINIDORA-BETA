@@ -516,6 +516,9 @@ pub enum Intent {
     InspectRuleSource {
         rule_id: String,
     },
+    InspectComposedRuleSource {
+        rule_id: String,
+    },
     InspectConditionSource {
         record_id: String,
     },

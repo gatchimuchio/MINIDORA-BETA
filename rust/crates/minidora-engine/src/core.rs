@@ -1596,6 +1596,7 @@ pub(crate) const CONDITION_SOURCE_PREDICATE: &str = "EXACT_CONDITION_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
 pub(crate) const RULE_SOURCE_PREDICATE: &str = "EXACT_RULE_SOURCE_V1";
+pub(crate) const COMPOSED_RULE_SOURCE_PREDICATE: &str = "EXACT_COMPOSED_RULE_SOURCE_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
 pub(crate) const MULTI_CONDITION_RULE_PREDICATE: &str = "EXACT_MULTI_CONDITION_RULE_V1";
@@ -1647,6 +1648,10 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
         Intent::InspectRuleSource { .. } => {
             Some((input::RULE_SOURCE_PARSER_VERSION, RULE_SOURCE_PREDICATE))
         }
+        Intent::InspectComposedRuleSource { .. } => Some((
+            input::COMPOSED_RULE_SOURCE_PARSER_VERSION,
+            COMPOSED_RULE_SOURCE_PREDICATE,
+        )),
         _ => None,
     }
 }
@@ -1700,7 +1705,8 @@ pub(crate) fn goal_predicates(
         intent @ (Intent::InspectFactSource { .. }
         | Intent::InspectConditionSource { .. }
         | Intent::InspectConditionSourceByDefinition { .. }
-        | Intent::InspectRuleSource { .. }) => {
+        | Intent::InspectRuleSource { .. }
+        | Intent::InspectComposedRuleSource { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
             {
@@ -1811,14 +1817,12 @@ fn verify_report_goal_content(
                 | SEQUENCE_STEP_EXPLANATION_PREDICATE
                 | CONDITION_EVALUATION_PREDICATE
                 | CONDITION_EVALUATION_DETAIL_PREDICATE
-                | FACT_SOURCE_PREDICATE
-                | CONDITION_SOURCE_PREDICATE
-                | CONDITION_SOURCE_BY_DEFINITION_PREDICATE
                 | GUARDED_RELATION_RULE_PREDICATE
                 | GUARDED_CONJUNCTIVE_RULE_PREDICATE
                 | MULTI_CONDITION_RULE_PREDICATE
                 | MULTI_CONDITION_PREMISE_PREDICATE
-        )
+        ) || record_source_contract(&goal.intent)
+            .is_some_and(|(_, required)| required == predicate.as_str())
     }) else {
         return Ok(());
     };
@@ -1840,6 +1844,57 @@ fn verify_report_goal_content(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn rule_source_goal_rejects_an_adopted_plan_with_other_provenance() {
+    let id = format!("rule:{}", "a".repeat(64));
+    for label in ["規則の出典", "合成規則の出典"] {
+        let request =
+            RequestEnvelope::new("case", "rule-source", "actor", &format!("{label}: {id}"));
+        let bundle = input::seal(&request, None).unwrap();
+        let (_, predicate) = record_source_contract(&bundle.meaning.intent).unwrap();
+        let goal = GoalContract {
+            input_fingerprint: bundle.fingerprint.clone(),
+            intent: bundle.meaning.intent.clone(),
+            output_path: None,
+            permissions: request.permissions.clone(),
+            budget: request.budget.clone(),
+            required_predicates: goal_predicates(&bundle.meaning, false, None),
+            required_graph_ref: String::new(),
+            renderer_version: None,
+        };
+        let report = ReportGoalContent {
+            predicate,
+            guarantee: Guarantee::Computed,
+            dependencies: vec![id.clone(), "original-proof".into()],
+            units: vec!["原文".into()],
+        };
+        let mut result = base_result(&request);
+        result.guarantee = report.guarantee.clone();
+        result.dependencies = report.dependencies.clone();
+        let mut plan = ContentPlan {
+            id: "plan".into(),
+            text: report.units.join("\n"),
+            locale: "ja".into(),
+            guarantee: report.guarantee.clone(),
+            required_units: report.units.clone(),
+            dependencies: result.dependencies.clone(),
+            model_revision: String::new(),
+            model_artifact_ref: String::new(),
+            model_observation_ref: String::new(),
+        };
+        plan.dependencies.push("compute".into());
+        verify_report_goal_content(&goal, &result, &plan, "compute", Some(&report)).unwrap();
+        plan.dependencies[1] = "different-proof".into();
+        let error = verify_report_goal_content(&goal, &result, &plan, "compute", Some(&report))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("GOAL_REPORT_MISMATCH"),
+            "{error:?}"
+        );
+    }
 }
 
 pub(crate) fn exact_calculation_unit(calculation: &Calculation) -> String {
@@ -10987,15 +11042,15 @@ impl Engine {
             intent @ (Intent::InspectFactSource { .. }
             | Intent::InspectConditionSource { .. }
             | Intent::InspectConditionSourceByDefinition { .. }
-            | Intent::InspectRuleSource { .. }) => {
+            | Intent::InspectRuleSource { .. }
+            | Intent::InspectComposedRuleSource { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
                     let memory = record_source_memory_at_head(&self.store, actor)?;
                     let record = lookup_source_record(&memory, intent)?;
                     let readout = record.readout(&self.store, actor, memory.revision, &goal)?;
-                    let (id, origin) = record.id_and_origin();
-                    Ok((memory.revision, id.to_owned(), origin.to_owned(), readout))
+                    Ok((memory.revision, readout))
                 });
-                let (revision, id, origin, readout) = match report {
+                let (revision, readout) = match report {
                     Ok(report) => report,
                     Err(Error::Contract { code, message }) => {
                         return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
@@ -11006,7 +11061,8 @@ impl Engine {
                     .store
                     .put_bytes(actor, &request.case_id, &readout.proof)?;
                 result.actor_memory_revision = Some(revision);
-                result.dependencies = vec![id, origin, proof_ref];
+                result.dependencies = readout.dependencies;
+                result.dependencies.push(proof_ref);
                 result.guarantee = Guarantee::Computed;
                 units = readout.units;
                 report_goal_content = Some(ReportGoalContent {
@@ -16901,6 +16957,16 @@ pub(crate) fn condition_report_at_head(
 pub(crate) struct RecordSourceReadout {
     pub(crate) proof: Vec<u8>,
     pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+}
+
+impl RecordSourceReadout {
+    fn within_evidence_budget(self, max_bytes: usize, limit_message: &str) -> Result<Self> {
+        if self.proof.len().saturating_add(self.units.join("\n").len()) > max_bytes {
+            return Err(failure("RESOURCE_LIMIT", limit_message));
+        }
+        Ok(self)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -16908,17 +16974,83 @@ pub(crate) enum SourceMemoryRecord<'a> {
     Fact(&'a Fact),
     Condition(&'a ConditionRecord),
     Rule(&'a RelationRule),
+    ComposedRule {
+        rule: &'a RelationRule,
+        parents: [&'a RelationRule; 2],
+    },
+}
+
+struct CommittedRecordSource {
+    case_id: String,
+    input_id: String,
+    version: u64,
+    bundle_ref: String,
+    bundle: InputBundle,
+}
+
+fn verified_committed_record_source(
+    store: &Store,
+    actor: &str,
+    id: &str,
+    origin: &str,
+    unavailable: impl Fn() -> Error,
+) -> Result<CommittedRecordSource> {
+    let (case_id, input_id, version) = store
+        .owned_source_input_key(actor, origin)?
+        .ok_or_else(&unavailable)?;
+    let (bundle_ref, bundle) = store.with_verified_case_history(actor, &case_id, |history| {
+        let (bundle_ref, bundle) = history
+            .input_bundle(&input_id, version)?
+            .ok_or_else(&unavailable)?;
+        let source = history
+            .input_result(&input_id, version)?
+            .ok_or_else(&unavailable)?;
+        if identity(&bundle.request)? != origin
+            || source.id != origin
+            || source.input_id != input_id
+            || source.input_version != version
+            || source.lifecycle != Lifecycle::Commit
+            || source.guarantee != Guarantee::UserPremise
+            || !source
+                .dependencies
+                .iter()
+                .any(|dependency| dependency == id)
+            || !history.contains_committed_result(&source)?
+        {
+            return Err(unavailable());
+        }
+        Ok((bundle_ref, bundle))
+    })?;
+    Ok(CommittedRecordSource {
+        case_id,
+        input_id,
+        version,
+        bundle_ref,
+        bundle,
+    })
+}
+
+fn verified_declared_rule(rule: &RelationRule, bundle: &InputBundle) -> Result<bool> {
+    let Some((premises @ [premise, additional @ ..], conclusion)) =
+        rule_declaration(&bundle.meaning.intent)
+    else {
+        return Ok(false);
+    };
+    Ok(premise == &rule.premise
+        && additional == rule.additional_premises
+        && conclusion == &rule.conclusion
+        && rule.dependencies.is_empty()
+        && rule.id == relations::declared_rule_id(premises, conclusion, &rule.source_input)?)
+}
+
+fn composed_rule_source_unavailable() -> Error {
+    failure(
+        "COMPOSED_RULE_SOURCE_UNAVAILABLE",
+        "指定した合成規則と二つの親規則の確定済み入力を照合できません。",
+    )
 }
 
 impl SourceMemoryRecord<'_> {
-    pub(crate) fn id_and_origin(&self) -> (&str, &str) {
-        match self {
-            Self::Fact(fact) => (&fact.id, &fact.source_input),
-            Self::Condition(record) => (&record.id, &record.source_input),
-            Self::Rule(rule) => (&rule.id, &rule.source_input),
-        }
-    }
-
     pub(crate) fn readout(
         self,
         store: &Store,
@@ -16926,48 +17058,37 @@ impl SourceMemoryRecord<'_> {
         revision: u64,
         goal: &GoalContract,
     ) -> Result<RecordSourceReadout> {
-        let (id, origin) = self.id_and_origin();
-        let unavailable = || match self {
-            Self::Fact(_) => failure(
+        let (id, origin, code, message) = match self {
+            Self::Fact(fact) => (
+                &fact.id,
+                &fact.source_input,
                 "FACT_SOURCE_UNAVAILABLE",
                 "指定したFactの確定済み入力と原文の対応を確認できません。",
             ),
-            Self::Condition(_) => failure(
+            Self::Condition(record) => (
+                &record.id,
+                &record.source_input,
                 "CONDITION_SOURCE_UNAVAILABLE",
                 "指定した条件定義の確定済み入力と原文の対応を確認できません。",
             ),
-            Self::Rule(_) => failure(
+            Self::Rule(rule) => (
+                &rule.id,
+                &rule.source_input,
                 "RULE_SOURCE_UNAVAILABLE",
                 "指定した規則の確定済み入力と原文の対応を確認できません。",
             ),
+            Self::ComposedRule { rule, parents } => {
+                return read_composed_rule_source(store, actor, revision, goal, rule, parents);
+            }
         };
-        let (source_case, input_id, version) = store
-            .owned_source_input_key(actor, origin)?
-            .ok_or_else(unavailable)?;
-        let (bundle_ref, bundle) =
-            store.with_verified_case_history(actor, &source_case, |history| {
-                let (bundle_ref, bundle) = history
-                    .input_bundle(&input_id, version)?
-                    .ok_or_else(unavailable)?;
-                let source = history
-                    .input_result(&input_id, version)?
-                    .ok_or_else(unavailable)?;
-                if identity(&bundle.request)? != origin
-                    || source.id != origin
-                    || source.input_id != input_id
-                    || source.input_version != version
-                    || source.lifecycle != Lifecycle::Commit
-                    || source.guarantee != Guarantee::UserPremise
-                    || !source
-                        .dependencies
-                        .iter()
-                        .any(|dependency| dependency == id)
-                    || !history.contains_committed_result(&source)?
-                {
-                    return Err(unavailable());
-                }
-                Ok((bundle_ref, bundle))
-            })?;
+        let unavailable = || failure(code, message);
+        let CommittedRecordSource {
+            case_id: source_case,
+            input_id,
+            version,
+            bundle_ref,
+            bundle,
+        } = verified_committed_record_source(store, actor, id, origin, unavailable)?;
         let (proof, mut units, source_roles, limit_message) = match self {
             Self::Fact(fact) => {
                 let evidence = fact.source_evidence.as_ref().ok_or_else(unavailable)?;
@@ -17048,33 +17169,13 @@ impl SourceMemoryRecord<'_> {
                 )
             }
             Self::Rule(rule) => {
-                let Some((premises @ [premise, additional @ ..], conclusion)) =
-                    rule_declaration(&bundle.meaning.intent)
-                else {
-                    return Err(unavailable());
-                };
                 let roles = &bundle.meaning.source_roles;
-                if premise != &rule.premise
-                    || additional != rule.additional_premises
-                    || conclusion != &rule.conclusion
-                    || !rule.dependencies.is_empty()
-                    || rule.id != relations::declared_rule_id(premises, conclusion, origin)?
+                if !verified_declared_rule(rule, &bundle)?
                     || roles.is_empty()
                     || !input::verified_guarded_relation_rule_source(&bundle)?
                 {
                     return Err(unavailable());
                 }
-                let mut units = vec![
-                    format!("規則 {}", rule.id),
-                    format!("記憶状態: {}", if rule.valid { "有効" } else { "失効" }),
-                    format!("適用範囲: {}", rule.premise.scope),
-                ];
-                units.extend(
-                    premises.iter().enumerate().map(|(index, premise)| {
-                        format!("前提 {}: {}", index + 1, describe(premise))
-                    }),
-                );
-                units.push(format!("結論: {}", describe(conclusion)));
                 (
                     canonical(&(
                         "minidora-rule-source-v1",
@@ -17087,11 +17188,12 @@ impl SourceMemoryRecord<'_> {
                         &bundle.raw_sha256,
                         roles,
                     ))?,
-                    units,
+                    rule_source_units("規則", rule),
                     roles,
                     "規則の出典と表示が要求の証拠予算を超えています。",
                 )
             }
+            Self::ComposedRule { .. } => unreachable!("composed rule source handled above"),
         };
         units.extend([
             format!("出典ケース: {source_case:?}、入力ID: {input_id:?}、版: {version}"),
@@ -17106,20 +17208,129 @@ impl SourceMemoryRecord<'_> {
                 ));
             }
         }
-        if proof.len().saturating_add(units.join("\n").len()) > goal.budget.max_evidence_bytes {
-            return Err(failure("RESOURCE_LIMIT", limit_message));
+        RecordSourceReadout {
+            proof,
+            units,
+            dependencies: vec![id.clone(), origin.clone()],
         }
-        Ok(RecordSourceReadout { proof, units })
+        .within_evidence_budget(goal.budget.max_evidence_bytes, limit_message)
     }
+}
+
+fn rule_source_units(label: &str, rule: &RelationRule) -> Vec<String> {
+    let mut units = vec![
+        format!("{label} {}", rule.id),
+        format!("記憶状態: {}", if rule.valid { "有効" } else { "失効" }),
+        format!("適用範囲: {}", rule.premise.scope),
+    ];
+    units.extend(
+        std::iter::once(&rule.premise)
+            .chain(&rule.additional_premises)
+            .enumerate()
+            .map(|(index, premise)| format!("前提 {}: {}", index + 1, describe(premise))),
+    );
+    units.push(format!("結論: {}", describe(&rule.conclusion)));
+    units
+}
+
+fn read_composed_rule_source(
+    store: &Store,
+    actor: &str,
+    revision: u64,
+    goal: &GoalContract,
+    rule: &RelationRule,
+    parents: [&RelationRule; 2],
+) -> Result<RecordSourceReadout> {
+    if (rule.valid && parents.iter().any(|parent| !parent.valid))
+        || !relations::verified_composed_rule(rule, parents[0], parents[1])?
+    {
+        return Err(composed_rule_source_unavailable());
+    }
+    let mut units = rule_source_units("合成規則", rule);
+    let mut origins = Vec::with_capacity(parents.len());
+    for (index, parent) in parents.into_iter().enumerate() {
+        let origin = verified_committed_record_source(
+            store,
+            actor,
+            &parent.id,
+            &parent.source_input,
+            composed_rule_source_unavailable,
+        )?;
+        if !verified_declared_rule(parent, &origin.bundle)?
+            || !(input::verified_guarded_relation_rule_source(&origin.bundle)?
+                || input::verified_plain_rule_source(&origin.bundle)?)
+        {
+            return Err(composed_rule_source_unavailable());
+        }
+        units.extend([
+            format!("親規則 {}: {}", index + 1, parent.id),
+            format!(
+                "親規則の記憶状態: {}",
+                if parent.valid { "有効" } else { "失効" }
+            ),
+            format!(
+                "出典ケース: {:?}、入力ID: {:?}、版: {}",
+                origin.case_id, origin.input_id, origin.version
+            ),
+            format!("元の結果ID: {}", parent.source_input),
+            format!("原文SHA-256: {}", origin.bundle.raw_sha256),
+            format!("原文: {:?}", origin.bundle.request.text),
+        ]);
+        origins.push(origin);
+    }
+    let parent_sources: Vec<_> = parents
+        .iter()
+        .zip(&origins)
+        .map(|(parent, origin)| {
+            (
+                parent,
+                &origin.case_id,
+                &origin.input_id,
+                origin.version,
+                &origin.bundle_ref,
+                &origin.bundle.raw_sha256,
+                &origin.bundle.meaning.parser_version,
+            )
+        })
+        .collect();
+    let proof = canonical(&(
+        "minidora-composed-rule-source-v1",
+        revision,
+        rule,
+        parent_sources,
+    ))?;
+    RecordSourceReadout {
+        proof,
+        units,
+        dependencies: vec![
+            rule.id.clone(),
+            parents[0].id.clone(),
+            parents[1].id.clone(),
+            parents[0].source_input.clone(),
+            parents[1].source_input.clone(),
+        ],
+    }
+    .within_evidence_budget(
+        goal.budget.max_evidence_bytes,
+        "合成規則と親規則の出典が要求の証拠予算を超えています。",
+    )
 }
 
 pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
     // Reserve the record and verified source-history reads in addition to
     // compute, content, render and optional file confirmation.
-    if goal.budget.max_actions < 5 + u32::from(goal.output_path.is_some()) {
+    let reads = if matches!(goal.intent, Intent::InspectComposedRuleSource { .. }) {
+        3
+    } else {
+        2
+    };
+    if goal.budget.max_actions < reads + 3 + u32::from(goal.output_path.is_some()) {
         let message = match &goal.intent {
             Intent::InspectFactSource { .. } => "Factと元入力を照合する行動予算が不足しています。",
             Intent::InspectRuleSource { .. } => "規則と元入力を照合する行動予算が不足しています。",
+            Intent::InspectComposedRuleSource { .. } => {
+                "合成規則と親規則の元入力を照合する行動予算が不足しています。"
+            }
             _ => "条件定義と元入力を照合する行動予算が不足しています。",
         };
         return Err(failure("ACTION_BUDGET_EXHAUSTED", message));
@@ -17179,6 +17390,24 @@ pub(crate) fn lookup_source_record<'a>(
                     "指定した規則を利用者の保存記録から確認できません。",
                 )
             }),
+        Intent::InspectComposedRuleSource { rule_id } => {
+            let find_rule = |id: &str| memory.rules.iter().find(|rule| rule.id == id);
+            let rule = find_rule(rule_id).ok_or_else(|| {
+                failure(
+                    "COMPOSED_RULE_SOURCE_NOT_FOUND",
+                    "指定した合成規則を利用者の保存記録から確認できません。",
+                )
+            })?;
+            let [left, right] = rule.dependencies.as_slice() else {
+                return Err(composed_rule_source_unavailable());
+            };
+            let left = find_rule(left).ok_or_else(composed_rule_source_unavailable)?;
+            let right = find_rule(right).ok_or_else(composed_rule_source_unavailable)?;
+            Ok(SourceMemoryRecord::ComposedRule {
+                rule,
+                parents: [left, right],
+            })
+        }
         Intent::InspectConditionSourceByDefinition {
             condition_id,
             subject,

@@ -105,6 +105,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::InspectConditionSource { .. }
                         | Intent::InspectConditionSourceByDefinition { .. }
                         | Intent::InspectRuleSource { .. }
+                        | Intent::InspectComposedRuleSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -2704,6 +2705,10 @@ fn verify_record_source_result(
             "RECOVERY_RULE_SOURCE_MISMATCH",
             "RECOVERY_RULE_SOURCE_CHANGED",
         ),
+        Intent::InspectComposedRuleSource { .. } => (
+            "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH",
+            "RECOVERY_COMPOSED_RULE_SOURCE_CHANGED",
+        ),
         _ => (
             "RECOVERY_CONDITION_SOURCE_MISMATCH",
             "RECOVERY_CONDITION_SOURCE_CHANGED",
@@ -2735,8 +2740,8 @@ fn verify_record_source_result(
     })?;
     let readout = record.readout(store, actor, revision, goal)?;
     let proof_ref = digest(&readout.proof);
-    let (id, origin) = record.id_and_origin();
-    let expected_dependencies = [id, origin, proof_ref.as_str()];
+    let mut expected_dependencies = readout.dependencies;
+    expected_dependencies.push(proof_ref.clone());
     if result.dependencies != expected_dependencies
         || result.guarantee != Guarantee::Computed
         || plan.guarantee != Guarantee::Computed
@@ -2760,7 +2765,14 @@ fn verify_record_source_result(
         )
     };
     let current = match crate::core::lookup_source_record(&head, &goal.intent) {
-        Err(Error::Contract { code, .. }) if code == "RULE_SOURCE_NOT_FOUND" => {
+        Err(Error::Contract { code, .. })
+            if matches!(
+                code.as_str(),
+                "RULE_SOURCE_NOT_FOUND"
+                    | "COMPOSED_RULE_SOURCE_NOT_FOUND"
+                    | "COMPOSED_RULE_SOURCE_UNAVAILABLE"
+            ) =>
+        {
             return Err(changed());
         }
         record => record?,
@@ -4332,10 +4344,16 @@ fn inspect(
             | crate::input::CONDITION_SOURCE_PARSER_VERSION
             | crate::input::CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
             | crate::input::RULE_SOURCE_PARSER_VERSION
+            | crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
     if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
-        let code = if sealed_source_parser == Some(crate::input::RULE_SOURCE_PARSER_VERSION)
+        let code = if sealed_source_parser
+            == Some(crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION)
+            || matches!(goal.intent, Intent::InspectComposedRuleSource { .. })
+        {
+            "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH"
+        } else if sealed_source_parser == Some(crate::input::RULE_SOURCE_PARSER_VERSION)
             || matches!(goal.intent, Intent::InspectRuleSource { .. })
         {
             "RECOVERY_RULE_SOURCE_MISMATCH"
@@ -9335,6 +9353,88 @@ mod tests {
             .execute(
                 "alice",
                 RequestEnvelope::new("other", "unrelated", "alice", "[scope=別室]ユリは待機中"),
+            )
+            .unwrap();
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, report.dependencies);
+        assert_eq!(
+            recovered.actor_memory_revision,
+            report.actor_memory_revision
+        );
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn composed_rule_source_reconciles_the_ordered_parent_lineage_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut parent_ids = Vec::new();
+        for (id, text) in [
+            ("left", "もし[scope=lab]Xは鳥なら[scope=lab]Xは動物"),
+            ("right", "もし[scope=lab]Xは動物なら[scope=lab]Xは温血動物"),
+        ] {
+            let result = engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            parent_ids.push(result.dependencies[0].clone());
+        }
+        let memory = engine.store.load_memory("alice").unwrap();
+        let shortcut = memory
+            .rules
+            .iter()
+            .find(|rule| rule.dependencies == parent_ids)
+            .unwrap();
+        let command = format!("合成規則の出典: {}", shortcut.id);
+        let mut request = RequestEnvelope::new("case", "composed-provenance", "alice", &command);
+        request.budget.max_actions = 7;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let report = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(report.lifecycle, Lifecycle::Commit, "{report:?}");
+        assert_eq!(report.dependencies[1..3], parent_ids);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let mut swapped = state.result.as_ref().unwrap().clone();
+        swapped.dependencies.swap(1, 2);
+        let error = inspect(&engine.store, "alice", &state, &swapped).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH"),
+            "{error:?}"
+        );
+        let unrelated = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "other",
+                    "unrelated",
+                    "alice",
+                    "[scope=archive]ユリは記録済み",
+                ),
             )
             .unwrap();
         assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
