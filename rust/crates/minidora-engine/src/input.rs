@@ -59,6 +59,7 @@ pub(crate) const MULTI_CONDITION_RELATION_PARSER_VERSION: &str =
     "declarative-ja-en-v134-multi-condition-relation";
 pub(crate) const MULTI_CONDITION_RULE_PARSER_VERSION: &str =
     "declarative-ja-en-v135-multi-condition-rule";
+pub(crate) const RULE_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v136-rule-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -338,6 +339,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::EvaluateCondition { .. } => CONDITION_EVALUATION_PARSER_VERSION,
         Intent::EvaluateConditionDetailed { .. } => CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
         Intent::InspectFactSource { .. } => FACT_SOURCE_PARSER_VERSION,
+        Intent::InspectRuleSource { .. } => RULE_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
             CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
@@ -1680,6 +1682,13 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
             "/InspectFactSource/fact_id",
             "FACT_SOURCE_SPAN",
             "Fact",
+        )),
+        Intent::InspectRuleSource { rule_id } => Some((
+            "規則の出典",
+            rule_id,
+            "/InspectRuleSource/rule_id",
+            "RULE_SOURCE_SPAN",
+            "rule",
         )),
         Intent::InspectConditionSource { record_id } => Some((
             "条件定義の出典",
@@ -3827,6 +3836,21 @@ pub(crate) fn verified_guarded_relation_rule_source(bundle: &InputBundle) -> Res
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(rule_id) = source_inspection_payload(terminal_trim(text), "規則の出典") {
+        return Ok(
+            if !text.trim().contains(['?', '？', '\r', '\n'])
+                && valid_source_record_id(rule_id, "rule:")
+            {
+                Intent::InspectRuleSource {
+                    rule_id: rule_id.into(),
+                }
+            } else {
+                Intent::Unknown {
+                    reason: "出典を照会する規則IDを一つ指定してください。".into(),
+                }
+            },
+        );
+    }
     if let Some(fact_id) = source_inspection_payload(terminal_trim(text), "Factの出典") {
         return Ok(
             if !text.contains(['?', '？']) && valid_source_record_id(fact_id, "fact:") {

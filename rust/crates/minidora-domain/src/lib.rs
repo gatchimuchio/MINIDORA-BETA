@@ -513,6 +513,9 @@ pub enum Intent {
     InspectFactSource {
         fact_id: String,
     },
+    InspectRuleSource {
+        rule_id: String,
+    },
     InspectConditionSource {
         record_id: String,
     },

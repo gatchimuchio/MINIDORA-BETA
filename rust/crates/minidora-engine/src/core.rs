@@ -1595,6 +1595,7 @@ pub(crate) const FACT_SOURCE_PREDICATE: &str = "EXACT_FACT_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_PREDICATE: &str = "EXACT_CONDITION_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
+pub(crate) const RULE_SOURCE_PREDICATE: &str = "EXACT_RULE_SOURCE_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
 pub(crate) const MULTI_CONDITION_RULE_PREDICATE: &str = "EXACT_MULTI_CONDITION_RULE_V1";
@@ -1643,6 +1644,9 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
             input::CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION,
             CONDITION_SOURCE_BY_DEFINITION_PREDICATE,
         )),
+        Intent::InspectRuleSource { .. } => {
+            Some((input::RULE_SOURCE_PARSER_VERSION, RULE_SOURCE_PREDICATE))
+        }
         _ => None,
     }
 }
@@ -1695,7 +1699,8 @@ pub(crate) fn goal_predicates(
         }
         intent @ (Intent::InspectFactSource { .. }
         | Intent::InspectConditionSource { .. }
-        | Intent::InspectConditionSourceByDefinition { .. }) => {
+        | Intent::InspectConditionSourceByDefinition { .. }
+        | Intent::InspectRuleSource { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
             {
@@ -10981,7 +10986,8 @@ impl Engine {
             },
             intent @ (Intent::InspectFactSource { .. }
             | Intent::InspectConditionSource { .. }
-            | Intent::InspectConditionSourceByDefinition { .. }) => {
+            | Intent::InspectConditionSourceByDefinition { .. }
+            | Intent::InspectRuleSource { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
                     let memory = record_source_memory_at_head(&self.store, actor)?;
                     let record = lookup_source_record(&memory, intent)?;
@@ -16901,6 +16907,7 @@ pub(crate) struct RecordSourceReadout {
 pub(crate) enum SourceMemoryRecord<'a> {
     Fact(&'a Fact),
     Condition(&'a ConditionRecord),
+    Rule(&'a RelationRule),
 }
 
 impl SourceMemoryRecord<'_> {
@@ -16908,6 +16915,7 @@ impl SourceMemoryRecord<'_> {
         match self {
             Self::Fact(fact) => (&fact.id, &fact.source_input),
             Self::Condition(record) => (&record.id, &record.source_input),
+            Self::Rule(rule) => (&rule.id, &rule.source_input),
         }
     }
 
@@ -16927,6 +16935,10 @@ impl SourceMemoryRecord<'_> {
             Self::Condition(_) => failure(
                 "CONDITION_SOURCE_UNAVAILABLE",
                 "指定した条件定義の確定済み入力と原文の対応を確認できません。",
+            ),
+            Self::Rule(_) => failure(
+                "RULE_SOURCE_UNAVAILABLE",
+                "指定した規則の確定済み入力と原文の対応を確認できません。",
             ),
         };
         let (source_case, input_id, version) = store
@@ -17035,6 +17047,51 @@ impl SourceMemoryRecord<'_> {
                     "条件定義の出典と表示が要求の証拠予算を超えています。",
                 )
             }
+            Self::Rule(rule) => {
+                let Some((premises @ [premise, additional @ ..], conclusion)) =
+                    rule_declaration(&bundle.meaning.intent)
+                else {
+                    return Err(unavailable());
+                };
+                let roles = &bundle.meaning.source_roles;
+                if premise != &rule.premise
+                    || additional != rule.additional_premises
+                    || conclusion != &rule.conclusion
+                    || !rule.dependencies.is_empty()
+                    || rule.id != relations::declared_rule_id(premises, conclusion, origin)?
+                    || roles.is_empty()
+                    || !input::verified_guarded_relation_rule_source(&bundle)?
+                {
+                    return Err(unavailable());
+                }
+                let mut units = vec![
+                    format!("規則 {}", rule.id),
+                    format!("記憶状態: {}", if rule.valid { "有効" } else { "失効" }),
+                    format!("適用範囲: {}", rule.premise.scope),
+                ];
+                units.extend(
+                    premises.iter().enumerate().map(|(index, premise)| {
+                        format!("前提 {}: {}", index + 1, describe(premise))
+                    }),
+                );
+                units.push(format!("結論: {}", describe(conclusion)));
+                (
+                    canonical(&(
+                        "minidora-rule-source-v1",
+                        revision,
+                        rule,
+                        &source_case,
+                        &input_id,
+                        version,
+                        &bundle_ref,
+                        &bundle.raw_sha256,
+                        roles,
+                    ))?,
+                    units,
+                    roles,
+                    "規則の出典と表示が要求の証拠予算を超えています。",
+                )
+            }
         };
         units.extend([
             format!("出典ケース: {source_case:?}、入力ID: {input_id:?}、版: {version}"),
@@ -17060,10 +17117,10 @@ pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
     // Reserve the record and verified source-history reads in addition to
     // compute, content, render and optional file confirmation.
     if goal.budget.max_actions < 5 + u32::from(goal.output_path.is_some()) {
-        let message = if matches!(goal.intent, Intent::InspectFactSource { .. }) {
-            "Factと元入力を照合する行動予算が不足しています。"
-        } else {
-            "条件定義と元入力を照合する行動予算が不足しています。"
+        let message = match &goal.intent {
+            Intent::InspectFactSource { .. } => "Factと元入力を照合する行動予算が不足しています。",
+            Intent::InspectRuleSource { .. } => "規則と元入力を照合する行動予算が不足しています。",
+            _ => "条件定義と元入力を照合する行動予算が不足しています。",
         };
         return Err(failure("ACTION_BUDGET_EXHAUSTED", message));
     }
@@ -17111,6 +17168,17 @@ pub(crate) fn lookup_source_record<'a>(
             .find(|record| &record.id == record_id)
             .map(SourceMemoryRecord::Condition)
             .ok_or_else(condition_not_found),
+        Intent::InspectRuleSource { rule_id } => memory
+            .rules
+            .iter()
+            .find(|rule| &rule.id == rule_id)
+            .map(SourceMemoryRecord::Rule)
+            .ok_or_else(|| {
+                failure(
+                    "RULE_SOURCE_NOT_FOUND",
+                    "指定した規則を利用者の保存記録から確認できません。",
+                )
+            }),
         Intent::InspectConditionSourceByDefinition {
             condition_id,
             subject,

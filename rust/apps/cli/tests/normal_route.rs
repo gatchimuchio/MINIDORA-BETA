@@ -4750,6 +4750,69 @@ fn condition_source_by_definition_resolves_withdrawn_record_from_exact_qualifier
 }
 
 #[test]
+fn rule_source_resolves_the_exact_guarded_declaration_across_owned_cases() {
+    let scratch = Scratch::new();
+    let source = concat!(
+        "　もし[scope=実験室][condition=点検][condition=校正]Xは研究員 かつ ",
+        "[scope=実験室][condition=校正][condition=点検]Xは当番なら",
+        "[scope=実験室][condition=点検][condition=校正]Xは入室可。　"
+    );
+    let declared = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--case", "declarations", "--input", "access-rule", source],
+    ));
+    let rule_id = declared["dependencies"][0].as_str().unwrap();
+    let command = format!("　規則の出典： {rule_id}。　");
+    let report = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "rule-provenance", "--max-actions", "5", &command],
+    ));
+    assert_eq!(report["guarantee"], "COMPUTED");
+    assert_eq!(report["dependencies"][0], rule_id);
+    assert_eq!(report["dependencies"][1], declared["id"]);
+    let report_text = report["text"].as_str().unwrap();
+    assert!(report_text.contains("前提 1: $xは研究員である"));
+    assert!(report_text.contains("前提 2: $xは当番である"));
+    assert!(report_text.contains("出典ケース: \"declarations\"、入力ID: \"access-rule\"、版: 1"));
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &report["dependencies"][2]);
+    assert_eq!(proof[0], "minidora-rule-source-v1");
+    assert_eq!(proof[1], report["actor_memory_revision"]);
+    assert_eq!(proof[2]["id"], rule_id);
+    assert_eq!(proof[2]["source_input"], declared["id"]);
+    assert_eq!(proof[7], minidora_domain::digest(source.as_bytes()));
+    let roles = proof[8].as_object().unwrap();
+    assert!(roles.contains_key("/AddConjunctiveRule/premises/1/condition_refs/1"));
+    assert_eq!(
+        roles["/AddConjunctiveRule/premises/0/subject"][0]["text"],
+        "X"
+    );
+    for spans in roles.values() {
+        for span in spans.as_array().unwrap() {
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert_eq!(source.get(start..end), span["text"].as_str());
+        }
+    }
+    let saved = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let bundle = saved.bundle.unwrap();
+    assert_eq!(
+        bundle.meaning.parser_version,
+        "declarative-ja-en-v136-rule-source"
+    );
+    assert_eq!(bundle.meaning.source_roles.len(), 1);
+    let request_span = &bundle.meaning.source_roles["/InspectRuleSource/rule_id"][0];
+    assert_eq!(
+        command.get(request_span.start..request_span.end),
+        Some(rule_id)
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn condition_rule_registration_derives_only_while_its_guard_is_supported() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
