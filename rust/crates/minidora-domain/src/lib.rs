@@ -291,6 +291,9 @@ pub enum Intent {
     },
     ExplainPrevious,
     ShowCalculationSequenceHistory,
+    ExplainCalculationSequenceStep {
+        step_id: String,
+    },
     ReplacePreviousText {
         old: String,
         new: String,

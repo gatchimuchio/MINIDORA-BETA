@@ -30,6 +30,8 @@ pub(crate) const SEQUENCE_INSERT_PARSER_VERSION: &str =
     "declarative-ja-en-v124-calculation-sequence-insert";
 pub(crate) const SEQUENCE_HISTORY_PARSER_VERSION: &str =
     "declarative-ja-en-v125-calculation-sequence-history";
+pub(crate) const SEQUENCE_STEP_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v126-calculation-sequence-step-explanation";
 pub(crate) const MAX_CALCULATION_SEQUENCE_STEPS: usize = 16;
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
@@ -309,6 +311,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
         Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,
+        Intent::ExplainCalculationSequenceStep { .. } => SEQUENCE_STEP_EXPLANATION_PARSER_VERSION,
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource
         | Intent::SummarizePreviousSourceConstrained { .. }
@@ -3477,6 +3480,29 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(step_id) = terminal_trim(text)
+        .strip_prefix("計算手順の")
+        .and_then(|target| {
+            target
+                .strip_suffix("を詳しく説明して")
+                .or_else(|| target.strip_suffix("を詳しく説明"))
+        })
+    {
+        let step_id = step_id.trim();
+        return Ok(
+            if valid_calculation_step_id(step_id) && !text.trim().contains(['?', '？', '\r', '\n'])
+            {
+                Intent::ExplainCalculationSequenceStep {
+                    step_id: step_id.into(),
+                }
+            } else {
+                Intent::Unknown {
+                    reason: "詳説する手順IDを一つ明記してください。疑問形は使わないでください。"
+                        .into(),
+                }
+            },
+        );
+    }
     if matches!(
         terminal_trim(text),
         "計算手順の変更履歴を表示" | "計算手順の変更履歴を表示して"

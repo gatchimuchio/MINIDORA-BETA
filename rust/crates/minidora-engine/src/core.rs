@@ -363,10 +363,15 @@ pub(crate) fn previous_calculation_sequence<'a>(
             let edit_parser = input::sequence_edit_parser(&input.meaning.intent);
             let shows_history =
                 matches!(input.meaning.intent, Intent::ShowCalculationSequenceHistory);
+            let explains_step = matches!(
+                input.meaning.intent,
+                Intent::ExplainCalculationSequenceStep { .. }
+            );
             let detail = matches!(input.meaning.intent, Intent::ExplainPrevious);
             if followups.is_empty()
                 && edit_parser.is_none()
                 && !shows_history
+                && !explains_step
                 && (!detail
                     || current.dependencies.len() == 1
                         && current.calculation.as_ref().is_some_and(|calculation| {
@@ -380,6 +385,9 @@ pub(crate) fn previous_calculation_sequence<'a>(
             if !(detail
                 || shows_history
                     && input.meaning.parser_version == input::SEQUENCE_HISTORY_PARSER_VERSION
+                || explains_step
+                    && input.meaning.parser_version
+                        == input::SEQUENCE_STEP_EXPLANATION_PARSER_VERSION
                 || edit_parser == Some(input.meaning.parser_version.as_str()))
                 || history
                     .input_result(&current.input_id, current.input_version)?
@@ -488,29 +496,33 @@ fn read_sequence_artifact(
     Ok(reference)
 }
 
+fn append_sequence_step_units(units: &mut Vec<String>, step: &CalculationSequenceStepArtifact) {
+    units.push(format!(
+        "手順 {} の元の式: {}",
+        step.id, step.source_expression.text
+    ));
+    if !step.consumed.is_empty() {
+        let references = step
+            .consumed
+            .iter()
+            .map(|reference| format!("{} = {}", reference.step_id, reference.exact_value))
+            .collect::<Vec<_>>()
+            .join("、");
+        units.push(format!("代入した先行手順の値: {references}"));
+    }
+    units.push(format!(
+        "手順 {} の結果: {} = {}",
+        step.id, step.evaluated_expression, step.calculation.exact_value
+    ));
+}
+
 fn sequence_explanation_units(
     observed: &CalculationSequenceResult,
     budget: &ResourceBudget,
 ) -> Result<Vec<String>> {
     let mut units = Vec::new();
     for step in &observed.steps {
-        units.push(format!(
-            "手順 {} の元の式: {}",
-            step.id, step.source_expression.text
-        ));
-        if !step.consumed.is_empty() {
-            let references = step
-                .consumed
-                .iter()
-                .map(|reference| format!("{} = {}", reference.step_id, reference.exact_value))
-                .collect::<Vec<_>>()
-                .join("、");
-            units.push(format!("代入した先行手順の値: {references}"));
-        }
-        units.push(format!(
-            "手順 {} の結果: {} = {}",
-            step.id, step.evaluated_expression, step.calculation.exact_value
-        ));
+        append_sequence_step_units(&mut units, step);
     }
     units.push(format!("最終結果: {}", observed.calculation.exact_value));
     if units
@@ -917,6 +929,43 @@ impl<'a> ReplayedCalculationSequence<'a> {
         dependencies
     }
 
+    fn explain_step(
+        &self,
+        step_id: &str,
+        budget: &ResourceBudget,
+    ) -> Result<(&Calculation, Vec<String>)> {
+        let step = self
+            .observed
+            .steps
+            .iter()
+            .find(|step| step.id == step_id)
+            .ok_or_else(|| {
+                failure(
+                    "SEQUENCE_EXPLANATION_STEP_UNKNOWN",
+                    format!("選択した計算の版に手順 {step_id} はありません。"),
+                )
+            })?;
+        let source = self
+            .sources
+            .get(step_id)
+            .ok_or_else(invalid_sequence_proof)?;
+        let source_id = identity(&source.request)?;
+        let expression = &step.source_expression;
+        let mut units = Vec::new();
+        append_sequence_step_units(&mut units, step);
+        units.push(format!(
+            "式の出典: 結果ID {source_id}、原文SHA-256 {}、UTF-8バイト [{}, {})",
+            source.raw_sha256, expression.start, expression.end,
+        ));
+        if units.join("\n").len() > budget.max_evidence_bytes {
+            return Err(failure(
+                "RESOURCE_LIMIT",
+                "指定した計算手順の説明が要求の証拠予算を超えています。",
+            ));
+        }
+        Ok((&step.calculation, units))
+    }
+
     fn revise(
         &mut self,
         bundle: &'a InputBundle,
@@ -1289,22 +1338,27 @@ fn replay_calculation_sequence<'a>(
             replay.observed = observed;
             replay.active = result;
         } else {
-            let units = if matches!(
-                followup.bundle.meaning.intent,
-                Intent::ShowCalculationSequenceHistory
-            ) {
-                replay
-                    .history_units
-                    .as_ref()
-                    .ok_or_else(invalid_sequence_proof)?
-            } else {
-                &replay.units
+            let step_units;
+            let (calculation, units) = match &followup.bundle.meaning.intent {
+                Intent::ShowCalculationSequenceHistory => (
+                    &replay.observed.calculation,
+                    replay
+                        .history_units
+                        .as_deref()
+                        .ok_or_else(invalid_sequence_proof)?,
+                ),
+                Intent::ExplainCalculationSequenceStep { step_id } => {
+                    let (calculation, units) = replay.explain_step(step_id, budget)?;
+                    step_units = units;
+                    (calculation, step_units.as_slice())
+                }
+                _ => (&replay.observed.calculation, replay.units.as_slice()),
             };
             if result.dependencies != replay.dependencies()
-                || result.calculation.as_ref() != Some(&replay.observed.calculation)
+                || result.calculation.as_ref() != Some(calculation)
                 || result.guarantee != Guarantee::Computed
                 || plan.guarantee != Guarantee::Computed
-                || &plan.required_units != units
+                || plan.required_units != units
                 || plan.text != units.join("\n")
             {
                 return Err(invalid_sequence_proof());
@@ -1315,34 +1369,32 @@ fn replay_calculation_sequence<'a>(
     Ok(replay)
 }
 
-pub(crate) fn explain_calculation_sequence(
+pub(crate) fn calculation_sequence_report(
     store: &Store,
     context: &PreviousCalculationSequence<'_>,
+    intent: &Intent,
     graph: &mut Scheduler,
     budget: &ResourceBudget,
     started: Instant,
 ) -> Result<CalculationSequenceExplanation> {
-    let replay = replay_calculation_sequence(store, context, graph, budget, started, false)?;
+    let show_history = matches!(intent, Intent::ShowCalculationSequenceHistory);
+    let replay = replay_calculation_sequence(store, context, graph, budget, started, show_history)?;
     let dependencies = replay.dependencies();
+    let (calculation, units) = match intent {
+        Intent::ExplainPrevious => (replay.observed.calculation, replay.units),
+        Intent::ShowCalculationSequenceHistory => (
+            replay.observed.calculation,
+            replay.history_units.ok_or_else(invalid_sequence_proof)?,
+        ),
+        Intent::ExplainCalculationSequenceStep { step_id } => {
+            let (calculation, units) = replay.explain_step(step_id, budget)?;
+            (calculation.clone(), units)
+        }
+        _ => return Err(invalid_sequence_proof()),
+    };
     Ok(CalculationSequenceExplanation {
-        calculation: replay.observed.calculation,
-        units: replay.units,
-        dependencies,
-    })
-}
-
-pub(crate) fn show_calculation_sequence_history(
-    store: &Store,
-    context: &PreviousCalculationSequence<'_>,
-    graph: &mut Scheduler,
-    budget: &ResourceBudget,
-    started: Instant,
-) -> Result<CalculationSequenceExplanation> {
-    let replay = replay_calculation_sequence(store, context, graph, budget, started, true)?;
-    let dependencies = replay.dependencies();
-    Ok(CalculationSequenceExplanation {
-        calculation: replay.observed.calculation,
-        units: replay.history_units.ok_or_else(invalid_sequence_proof)?,
+        calculation,
+        units,
         dependencies,
     })
 }
@@ -1534,6 +1586,8 @@ pub(crate) const MOVED_SEQUENCE_EXPLANATION_PREDICATE: &str =
 pub(crate) const INSERTED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V8";
 pub(crate) const SEQUENCE_HISTORY_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_HISTORY_V1";
+pub(crate) const SEQUENCE_STEP_EXPLANATION_PREDICATE: &str =
+    "EXACT_CALCULATION_SEQUENCE_STEP_EXPLANATION_V1";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1594,6 +1648,11 @@ pub(crate) fn goal_predicates(
         {
             predicates.push(SEQUENCE_HISTORY_PREDICATE.into());
         }
+        Intent::ExplainCalculationSequenceStep { .. }
+            if meaning.parser_version == input::SEQUENCE_STEP_EXPLANATION_PARSER_VERSION =>
+        {
+            predicates.push(SEQUENCE_STEP_EXPLANATION_PREDICATE.into());
+        }
         Intent::AskWhy { .. } if input::uses_generated_relation_explanation(meaning) => {
             predicates.push(GENERATED_RELATION_EXPLANATION_PREDICATE.into());
         }
@@ -1644,6 +1703,7 @@ fn verify_report_goal_content(
                 | MOVED_SEQUENCE_EXPLANATION_PREDICATE
                 | INSERTED_SEQUENCE_EXPLANATION_PREDICATE
                 | SEQUENCE_HISTORY_PREDICATE
+                | SEQUENCE_STEP_EXPLANATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -1757,7 +1817,8 @@ pub(crate) fn corrected_calculation_from_context(
                     | Intent::RemoveCalculationSequenceStep { .. }
                     | Intent::MoveCalculationSequenceStep { .. }
                     | Intent::InsertCalculationSequenceStep { .. }
-                    | Intent::ShowCalculationSequenceHistory => {
+                    | Intent::ShowCalculationSequenceHistory
+                    | Intent::ExplainCalculationSequenceStep { .. } => {
                         return Err(failure(
                             "SEQUENCE_CORRECTION_REQUIRES_STEP",
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
@@ -5559,7 +5620,9 @@ impl Engine {
         let previous_sequence = if has_compute_budget
             && matches!(
                 bundle.meaning.intent,
-                Intent::ExplainPrevious | Intent::ShowCalculationSequenceHistory
+                Intent::ExplainPrevious
+                    | Intent::ShowCalculationSequenceHistory
+                    | Intent::ExplainCalculationSequenceStep { .. }
             )
             && let (Some(prior), Some(prior_case)) = (previous, latest.as_ref())
         {
@@ -7472,38 +7535,39 @@ impl Engine {
                 result.guarantee = Guarantee::SourceReport;
                 state.result = Some(result.clone());
             }
-            Intent::ExplainPrevious | Intent::ShowCalculationSequenceHistory
+            Intent::ExplainPrevious
+            | Intent::ShowCalculationSequenceHistory
+            | Intent::ExplainCalculationSequenceStep { .. }
                 if previous_sequence.is_some() =>
             {
                 let context = previous_sequence
                     .as_ref()
                     .expect("sequence context checked");
-                let show_history = matches!(
-                    bundle.meaning.intent,
-                    Intent::ShowCalculationSequenceHistory
-                );
-                let report = if show_history {
-                    show_calculation_sequence_history
-                } else {
-                    explain_calculation_sequence
+                let explanation = match calculation_sequence_report(
+                    &self.store,
+                    context,
+                    &bundle.meaning.intent,
+                    &mut graph,
+                    &goal.budget,
+                    started,
+                ) {
+                    Ok(explanation) => explanation,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
                 };
-                let explanation =
-                    match report(&self.store, context, &mut graph, &goal.budget, started) {
-                        Ok(explanation) => explanation,
-                        Err(Error::Contract { code, message }) => {
-                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
-                        }
-                        Err(error) => return Err(error),
-                    };
                 units = explanation.units;
                 result.calculation = Some(explanation.calculation);
                 result.dependencies = explanation.dependencies;
                 result.guarantee = Guarantee::Computed;
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: if show_history {
-                        SEQUENCE_HISTORY_PREDICATE
-                    } else {
-                        context.predicate()
+                    predicate: match bundle.meaning.intent {
+                        Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PREDICATE,
+                        Intent::ExplainCalculationSequenceStep { .. } => {
+                            SEQUENCE_STEP_EXPLANATION_PREDICATE
+                        }
+                        _ => context.predicate(),
                     },
                     guarantee: Guarantee::Computed,
                     dependencies: result.dependencies.clone(),
@@ -7516,6 +7580,14 @@ impl Engine {
                     Lifecycle::Suspend,
                     "SEQUENCE_HISTORY_CONTEXT_REQUIRED",
                     "変更履歴を表示するには、同じケースの確定済み連続計算が必要です。",
+                );
+            }
+            Intent::ExplainCalculationSequenceStep { .. } => {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "SEQUENCE_STEP_EXPLANATION_CONTEXT_REQUIRED",
+                    "手順を詳説するには、同じケースの確定済み連続計算が必要です。",
                 );
             }
             Intent::ExplainPrevious => {

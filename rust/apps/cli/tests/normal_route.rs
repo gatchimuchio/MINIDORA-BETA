@@ -2066,6 +2066,82 @@ fn calculation_sequence_route_history_shows_only_edits_of_selected_edition() {
 }
 
 #[test]
+fn calculation_sequence_route_explains_one_step_and_preserves_edition_context() {
+    let scratch = Scratch::new();
+    let source = "calculation-sequence:\nbase: 2+3\nfinal: @{base}*2";
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "step-root", source],
+    ));
+    let original_id = original["id"].as_str().unwrap();
+    let edit = "計算手順の fee を final の前に挿入: @{base}+2";
+    let inserted = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "step-insert", "--context", original_id, edit],
+    ));
+    let inserted_id = inserted["id"].as_str().unwrap();
+    let expression_start = edit.find("@{base}+2").unwrap();
+    let source_sha = minidora_domain::digest(edit.as_bytes());
+    let source_end = edit.len();
+    let expected = format!(
+        "手順 fee の元の式: @{{base}}+2\n代入した先行手順の値: base = 5\n手順 fee の結果: (5)+2 = 7\n式の出典: 結果ID {inserted_id}、原文SHA-256 {source_sha}、UTF-8バイト [{expression_start}, {source_end})"
+    );
+    let command = "計算手順の fee を詳しく説明して。";
+    let details = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "step-detail",
+            "--context",
+            inserted_id,
+            "--max-actions",
+            "8",
+            command,
+        ],
+    ));
+    assert_eq!(details["calculation"]["exact_value"], "7");
+    assert_eq!(details["text"], expected);
+    assert_eq!(details["dependencies"][0], inserted_id);
+    let history = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "step-history",
+            "--context",
+            details["id"].as_str().unwrap(),
+            "--max-actions",
+            "9",
+            "計算手順の変更履歴を表示",
+        ],
+    ));
+    assert_eq!(history["calculation"]["exact_value"], "10");
+    assert_eq!(history["text"].as_str().unwrap().lines().count(), 2);
+    assert_eq!(history["dependencies"][0], details["id"]);
+    assert_eq!(history["dependencies"][1], inserted_id);
+    let skipped = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--input", "step-unknown", "--context", original_id, command],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        skipped["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SEQUENCE_EXPLANATION_STEP_UNKNOWN")
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");
