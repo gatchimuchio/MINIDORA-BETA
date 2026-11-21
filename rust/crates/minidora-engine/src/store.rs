@@ -762,6 +762,7 @@ impl Store {
         }
         if initialize {
             sql(connection.execute_batch(SCHEMA))?;
+            sql(connection.execute_batch(RELATION_INDEX_SCHEMA))?;
             sql(connection.execute(
                 "INSERT OR IGNORE INTO store_metadata(key,value) VALUES('schema',?1)",
                 [SCHEMA_VERSION],
@@ -832,6 +833,28 @@ impl Store {
         let value = read(&snapshot)?;
         sql(transaction.commit())?;
         Ok(Some(value))
+    }
+
+    /// Project an already authenticated snapshot without replacing the
+    /// durable index for the actor's current revision.
+    pub(crate) fn with_snapshot_relation_index<T>(
+        actor: &str,
+        memory: &MemoryState,
+        read: impl FnOnce(&MemoryIndexSnapshot<'_, '_>) -> Result<T>,
+    ) -> Result<T> {
+        valid_id(actor)?;
+        let mut connection = sql(Connection::open_in_memory())?;
+        sql(connection.pragma_update(None, "temp_store", "MEMORY"))?;
+        sql(connection.execute_batch(RELATION_INDEX_SCHEMA))?;
+        let transaction = sql(connection.transaction())?;
+        index_memory_state_records(&transaction, actor, memory)?;
+        let value = read(&MemoryIndexSnapshot {
+            transaction: &transaction,
+            actor: actor.into(),
+            revision: memory.revision,
+        })?;
+        sql(transaction.commit())?;
+        Ok(value)
     }
 
     /// Rebuilds a cold or stale derived index from one already loaded snapshot.
@@ -2482,6 +2505,27 @@ impl Store {
     }
 }
 
+const RELATION_INDEX_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_index_record(
+ actor_id TEXT NOT NULL,record_id TEXT NOT NULL,record_kind TEXT NOT NULL CHECK(record_kind IN ('FACT','RULE','CONDITION')),
+ ordinal INTEGER NOT NULL CHECK(ordinal>=0),payload_json TEXT NOT NULL,payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256)=64),
+ valid INTEGER NOT NULL CHECK(valid IN (0,1)),subject TEXT,predicate TEXT,object TEXT,negative INTEGER,scope TEXT,
+ temporal_scope TEXT,condition_refs TEXT,condition_id TEXT,
+ PRIMARY KEY(actor_id,record_id));
+CREATE INDEX IF NOT EXISTS memory_index_relation_lookup
+ ON memory_index_record(actor_id,valid,record_kind,predicate,scope,temporal_scope,condition_refs,subject,object);
+CREATE INDEX IF NOT EXISTS memory_index_common_subject_scope
+ ON memory_index_record(actor_id,valid,scope,subject,record_kind);
+CREATE INDEX IF NOT EXISTS memory_index_scope
+ ON memory_index_record(actor_id,valid,scope,record_kind,ordinal);
+CREATE INDEX IF NOT EXISTS memory_index_profile_subject
+ ON memory_index_record(actor_id,valid,subject,record_kind);
+CREATE INDEX IF NOT EXISTS memory_index_condition_evidence
+ ON memory_index_record(actor_id,valid,record_kind,subject,predicate,object,scope,temporal_scope);
+CREATE INDEX IF NOT EXISTS memory_index_condition_id
+ ON memory_index_record(actor_id,valid,record_kind,condition_id);
+"#;
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS store_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifact_ref(sha256 TEXT PRIMARY KEY CHECK(length(sha256)=64),byte_length INTEGER NOT NULL CHECK(byte_length>=0),kind TEXT NOT NULL);
@@ -2513,24 +2557,6 @@ CREATE TABLE IF NOT EXISTS action_history(
 CREATE TABLE IF NOT EXISTS memory_revision(
  actor_id TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0),record_sha256 TEXT NOT NULL REFERENCES artifact_ref(sha256),PRIMARY KEY(actor_id,revision));
 CREATE TABLE IF NOT EXISTS memory_index_state(actor_id TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>=0));
-CREATE TABLE IF NOT EXISTS memory_index_record(
- actor_id TEXT NOT NULL,record_id TEXT NOT NULL,record_kind TEXT NOT NULL CHECK(record_kind IN ('FACT','RULE','CONDITION')),
- ordinal INTEGER NOT NULL CHECK(ordinal>=0),payload_json TEXT NOT NULL,payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256)=64),
- valid INTEGER NOT NULL CHECK(valid IN (0,1)),subject TEXT,predicate TEXT,object TEXT,negative INTEGER,scope TEXT,
- temporal_scope TEXT,condition_refs TEXT,condition_id TEXT,
- PRIMARY KEY(actor_id,record_id));
-CREATE INDEX IF NOT EXISTS memory_index_relation_lookup
- ON memory_index_record(actor_id,valid,record_kind,predicate,scope,temporal_scope,condition_refs,subject,object);
-CREATE INDEX IF NOT EXISTS memory_index_common_subject_scope
- ON memory_index_record(actor_id,valid,scope,subject,record_kind);
-CREATE INDEX IF NOT EXISTS memory_index_scope
- ON memory_index_record(actor_id,valid,scope,record_kind,ordinal);
-CREATE INDEX IF NOT EXISTS memory_index_profile_subject
- ON memory_index_record(actor_id,valid,subject,record_kind);
-CREATE INDEX IF NOT EXISTS memory_index_condition_evidence
- ON memory_index_record(actor_id,valid,record_kind,subject,predicate,object,scope,temporal_scope);
-CREATE INDEX IF NOT EXISTS memory_index_condition_id
- ON memory_index_record(actor_id,valid,record_kind,condition_id);
 CREATE TRIGGER IF NOT EXISTS input_conflict_no_update BEFORE UPDATE ON input_conflict BEGIN SELECT RAISE(ABORT,'immutable conflict observation'); END;
 CREATE TRIGGER IF NOT EXISTS input_conflict_no_delete BEFORE DELETE ON input_conflict BEGIN SELECT RAISE(ABORT,'immutable conflict observation'); END;
 CREATE TRIGGER IF NOT EXISTS case_revision_no_update BEFORE UPDATE ON case_revision BEGIN SELECT RAISE(ABORT,'immutable case revision'); END;

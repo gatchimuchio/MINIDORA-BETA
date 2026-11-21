@@ -11302,13 +11302,18 @@ fn verify_generated_relation_replay(
     Ok(())
 }
 
+pub(crate) struct RelationRecoveryProofs<'a> {
+    pub(crate) current: (&'a MemoryState, &'a relations::QueryOutcome),
+    pub(crate) original: Option<(&'a MemoryState, &'a relations::QueryOutcome)>,
+}
+
 pub(crate) fn verify_generated_why_computation(
     store: &Store,
     state: &CaseRevision,
     result: &ResultRecord,
     plan: &ContentPlan,
     proposition: &Proposition,
-    (current_memory, current_answer): (&MemoryState, &relations::QueryOutcome),
+    proofs: RelationRecoveryProofs<'_>,
     budget: &ResourceBudget,
 ) -> Result<Option<String>> {
     let actor = &state.actor_id;
@@ -11350,6 +11355,7 @@ pub(crate) fn verify_generated_why_computation(
                 == artifact.relation_meaning_plan,
         )
     };
+    let (current_memory, current_answer) = proofs.current;
     if !matches_proof(current_memory, current_answer)? {
         return Err(failure(
             "RECOVERY_PROOF_INVALIDATED",
@@ -11357,16 +11363,16 @@ pub(crate) fn verify_generated_why_computation(
         ));
     }
     if current_memory.revision != revision {
-        let original = store
-            .load_memory_revision(actor, revision)?
+        let (original_memory, original_answer) = proofs
+            .original
+            .filter(|(memory, _)| memory.revision == revision)
             .ok_or_else(|| {
                 failure(
                     "RECOVERY_MEMORY_REVISION_MISSING",
                     "the original actor-memory snapshot for the generated explanation is missing",
                 )
             })?;
-        let original_answer = relations::query(&original, proposition, budget.max_actions)?;
-        if !matches_proof(&original, &original_answer)? {
+        if !matches_proof(original_memory, original_answer)? {
             return Err(failure(
                 "RECOVERY_MEMORY_PROOF_MISMATCH",
                 "the original snapshot does not reproduce the adopted meaning plan",

@@ -2493,6 +2493,26 @@ fn verify_explain_previous_relation_profile_answer_result(
     Ok(())
 }
 
+fn query_recovery_snapshot(
+    state: &CaseRevision,
+    memory: MemoryState,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<(MemoryState, crate::relations::QueryOutcome)> {
+    if !proposition.condition_refs.is_empty()
+        && state
+            .bundle
+            .as_ref()
+            .is_some_and(|bundle| bundle.meaning.source_kind == "USER_REQUEST")
+    {
+        return Store::with_snapshot_relation_index(&state.actor_id, &memory, |index| {
+            crate::relations::query_active_relation(index, proposition, max_actions)
+        });
+    }
+    let answer = crate::relations::query(&memory, proposition, max_actions)?;
+    Ok((memory, answer))
+}
+
 fn verify_result_memory_provenance(
     store: &Store,
     actor: &str,
@@ -2501,13 +2521,14 @@ fn verify_result_memory_provenance(
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
-) -> Result<()> {
+) -> Result<Option<(MemoryState, crate::relations::QueryOutcome)>> {
     let Some(memory) = result_memory_snapshot(store, actor, result)? else {
-        return Ok(());
+        return Ok(None);
     };
     match &goal.intent {
         Intent::Ask { proposition } | Intent::AskWhy { proposition } => {
-            let answer = crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+            let (memory, answer) =
+                query_recovery_snapshot(state, memory, proposition, goal.budget.max_actions)?;
             if !matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED")
                 || crate::relations::answer_dependencies(&answer) != result.dependencies
                 || crate::relations::answer_guarantee(&answer) != result.guarantee
@@ -2516,6 +2537,9 @@ fn verify_result_memory_provenance(
                     "RECOVERY_MEMORY_PROOF_MISMATCH",
                     "the retained result does not match the actor-memory revision it records",
                 ));
+            }
+            if matches!(goal.intent, Intent::AskWhy { .. }) {
+                return Ok(Some((memory, answer)));
             }
         }
         Intent::AskRelationObjects {
@@ -2577,7 +2601,7 @@ fn verify_result_memory_provenance(
         }
         _ => {}
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Confirm that a retained result can supply bodies to a source question or summary.
@@ -4172,7 +4196,8 @@ fn inspect(
         }
         hypothesis.verify_artifacts(store, actor, case)?;
     }
-    verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?;
+    let original_relation =
+        verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?;
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
     let previous_result_summary =
@@ -4302,9 +4327,7 @@ fn inspect(
             Some((projected_memory, answer)) => (projected_memory, answer?),
             None => {
                 let memory = store.load_memory(actor)?;
-                let answer =
-                    crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
-                (memory, answer)
+                query_recovery_snapshot(state, memory, proposition, goal.budget.max_actions)?
             }
         };
         if matches!(goal.intent, Intent::AskWhy { .. }) {
@@ -4314,7 +4337,12 @@ fn inspect(
                 result,
                 plan,
                 proposition,
-                (&memory, &answer),
+                crate::core::RelationRecoveryProofs {
+                    current: (&memory, &answer),
+                    original: original_relation
+                        .as_ref()
+                        .map(|(memory, answer)| (memory, answer)),
+                },
                 &goal.budget,
             )?;
             if requires_generated_why && generated_compute_ref.is_none() {
@@ -4849,23 +4877,22 @@ fn inspect(
                         Some(language::calculation_explanation_surfaces(calculation))
                     }
                     (Intent::AskWhy { proposition }, None) => {
-                        let memory = match result.actor_memory_revision {
-                        Some(revision) => store.load_memory_revision(actor, revision)?.ok_or_else(
-                            || {
-                                failure(
-                                    "RECOVERY_MEMORY_REVISION_MISSING",
-                                    "the actor-memory revision used by Core is no longer retained",
-                                )
-                            },
-                        )?,
-                        None => store.load_memory(actor)?,
-                    };
-                        let answer =
-                            crate::relations::query(&memory, proposition, goal.budget.max_actions)?;
+                        let fallback;
+                        let (memory, answer) = if let Some(proof) = original_relation.as_ref() {
+                            proof
+                        } else {
+                            fallback = query_recovery_snapshot(
+                                state,
+                                store.load_memory(actor)?,
+                                proposition,
+                                goal.budget.max_actions,
+                            )?;
+                            &fallback
+                        };
                         let explanation_units = crate::core::relation_why_explanation_units(
-                            &memory,
+                            memory,
                             proposition,
-                            &answer,
+                            answer,
                         )
                         .map_err(|_| {
                             failure(
@@ -4873,8 +4900,8 @@ fn inspect(
                                 "the current relation proof has no matching explanation surfaces",
                             )
                         })?;
-                        if crate::relations::answer_dependencies(&answer) != result.dependencies
-                            || crate::relations::answer_guarantee(&answer) != result.guarantee
+                        if crate::relations::answer_dependencies(answer) != result.dependencies
+                            || crate::relations::answer_guarantee(answer) != result.guarantee
                             || explanation_units != plan.required_units
                         {
                             return Err(failure(
@@ -12472,6 +12499,144 @@ mod tests {
         let error = inspect(&engine.store, "alice", &retained, &retained_result).unwrap_err();
         assert!(error.to_string().contains("RECOVERY_CONTEXT_PROOF_CHANGED"));
         assert_eq!(fs::read(&explanation_target).unwrap(), explanation_bytes);
+    }
+
+    #[test]
+    fn tight_composite_explanation_reconciles_with_unrelated_history_and_cold_index() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut source_input = String::new();
+        for (id, text) in [
+            (
+                "calibration-condition",
+                "条件定義: [scope=実験室][condition=校正] ユリは校正済み",
+            ),
+            (
+                "inspection-condition",
+                "条件定義: [scope=実験室][condition=点検] ユリは点検済み",
+            ),
+            (
+                "stop-condition",
+                "条件定義: [scope=実験室][condition=停止] ユリは停止中",
+            ),
+            (
+                "combined-condition",
+                "条件定義: [scope=実験室][condition=監視][subject=ユリ] AND([ref=校正], OR([ref=点検], NOT([ref=停止])))",
+            ),
+            ("calibration", "[scope=実験室]ユリは校正済み"),
+            ("not-stopped", "[scope=実験室]ユリは停止中ではない"),
+            (
+                "guarded-claim",
+                "[scope=実験室][condition=監視]ユリは観測可能",
+            ),
+        ] {
+            let result = engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            source_input = result.id;
+        }
+
+        let mut original = engine.store.load_memory("alice").unwrap();
+        let next_revision = original.revision + 1;
+        for ordinal in 0..24 {
+            crate::relations::assert_fact(
+                &mut original,
+                Proposition {
+                    subject: format!("archive-subject-{ordinal}"),
+                    predicate: "is".into(),
+                    object: "archived".into(),
+                    negative: false,
+                    scope: "archive".into(),
+                    condition_refs: BTreeSet::new(),
+                    temporal_scope: None,
+                },
+                &source_input,
+            )
+            .unwrap();
+        }
+        original.revision = next_revision;
+        engine.store.save_memory("alice", &original).unwrap();
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "tight-why",
+            "alice",
+            "なぜ[scope=実験室][condition=監視]ユリは観測可能ですか",
+        );
+        request.budget.max_actions = 30;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let Intent::AskWhy { proposition } =
+            crate::input::seal(&request, None).unwrap().meaning.intent
+        else {
+            panic!("expected an ordinary relation explanation");
+        };
+        assert!(matches!(
+            crate::relations::query(&original, &proposition, request.budget.max_actions),
+            Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET"
+        ));
+        let saved = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(saved.lifecycle, Lifecycle::Commit, "{saved:?}");
+        assert_eq!(saved.actor_memory_revision, Some(original.revision));
+        assert_eq!(saved.dependencies.len(), 7);
+        let file_bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+        let token = retain_attempted_prefix(&fixture.state);
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let later = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "other-case",
+                    "unrelated",
+                    "alice",
+                    "[scope=archive]ナナは記録済み",
+                ),
+            )
+            .unwrap();
+        assert_eq!(later.lifecycle, Lifecycle::Commit);
+        let current = engine.store.load_memory("alice").unwrap();
+        assert!(current.revision > original.revision);
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, saved.id);
+        assert_eq!(recovered.dependencies, saved.dependencies);
+        assert_eq!(recovered.actor_memory_revision, saved.actor_memory_revision);
+        assert_eq!(recovered.render, saved.render);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = engine.store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action_id, recovered.receipts[0].action_id);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(fs::read(&fixture.target).unwrap(), file_bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.store.load_memory("alice").unwrap(), current);
+        assert!(
+            engine
+                .store
+                .with_relation_index("alice", |_| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
     }
 
     #[test]
