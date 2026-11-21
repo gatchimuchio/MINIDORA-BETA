@@ -2465,3 +2465,20 @@ Debian 13 Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。�
 - `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo build -p minidora-cli --locked` は終了0。Store32件、条件依存を含む投影1件、条件付き説明の復旧1件、中断した実書き込みの復旧1件、通常CLI4件の計39件がPASS。認証HTTP・ブラウザー、全workspace実行試験、厳格Clippy再検査、製品規模の資源上限評価、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
 
 復旧2世代は `ece1402` と `aafbdd5`。終了時の資産は計7件。保持3件（実装記録・要求トレース・原典読解台帳）、稼働中2件（Store・共有Cargoキャッシュ）、ゴミ箱移動済み2件、保管済み・保留は各0件。検証用の `/workspace/.minidora-cloud/b181-index-stage.xry5XR` と `/workspace/.minidora-cloud/b181-recovery-benchmark.wPAZjv` はLinuxのGIOゴミ箱へ移動し、元パスの不存在、収容物、復元情報を確認した。計10,287ファイル、92ディレクトリ、338,507,719論理バイト。最終処分待ち2件、容量回収0。Windows保管とオンライン専用化は非該当。
+
+## 2026-11-21 JST B182 — D3-C E6 復旧用の一時索引を検索キーと記録位置で構成
+
+着工点は `0c1299ae3d3eb560bfc42261675a2b75216ce83d`。D2仕様・工程とD3-C指示の採用SHA-256、R2 §11・§12・§17、E5 B114合同判定、CAP-D02・CAP-D04・E04・E08・E12・G09を照合した。B181の復旧用一時索引は、取得済みの記憶に加えて、全記録の正規JSONとハッシュをSQLiteに保持していた。
+
+一時索引に入るのは認証済みの記憶から抽出した検索キー、記録種別、ID、種別内の位置、有効フラグ。本文とハッシュの列はNULLに制限する。選択した行だけ、同じ記憶版の位置から型付き記録を取得して、ID・有効フラグ・全検索キーを照合する。位置が誤っていれば `MEMORY_INDEX_CORRUPT`。永続索引は独自の本文とSHA-256を検証する。8本の選択SQLと書き込みSQL、永続DDLを基線とバイト単位で照合した。選択の並び順と上限は同じSQLが担う。一時索引のメタデータ構築と保存スナップショットの認証には引き続き全件が必要で、製品規模の資源上限は未確認。
+
+凍結版・現行・原典台帳でblob `091be6d043a647a7af080959320d0b2ccf398b16` が一致する `src/minidora/統合駆動_v2/保存.py` 全119行を確認した。凍結版は出典と作用履歴を含む登録型データを版付きJSONで復元し、API利用者はその値をHDS実行主体の再開へ渡す。Rustの経路は利用者のケースと記憶の版を保管し、再開時に保存版と現行版の証明を照合する。凍結版の実行・保存形式の互換性・通常経路の同等性は未検証。原典読解は167/416件。93要件の正式受入は `UNVERIFIED`、E6は継続中。
+
+Debian 13 Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。デバッグCLI SHA-256は基線 `be61e54955ea10f17571303df9340555fa35c1391be890f9e8160ebf8b6486e6`、最終版 `c4163f6b5f0c1bf9b0718f47cae467e0ee8b9b6c7a773fbdcbbd2c53f36dbba6`。`Cargo.lock` は `b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc`。Storeの `git diff --binary` SHA-256は `e63932c9eb49a1881db868ffd282c84d2cc5c83234388b29c155ab7b878be418`。
+
+- 一時索引の準備を実Storeから抽出し、等しいSQLiteとRustのデバッグ構成で比較した。前回と同形の合成Factを事前に用意し、接続作成から全行登録までを、両版の順序を交互にして各5回計測。1,000件は0.075→0.022秒、8,000件は0.586→0.158秒、24,000件は1.683→0.476秒。24,000件のプロセスピークRSS中央値は68,696→53,792 KiB。全件数、本文列の件数、型付き標本・位置の照合は全試行PASS。保存データの読み込み、認証、推論、作用はこの時間に含まない。
+- 実CLIでは、真正な条件付き説明を当時の最大30アクションで採用・書き出し、`ATTEMPTED` の中断状態から復旧した。3 Factと516 Fact、現行永続索引あり・なしの4組を各版3回、最終版との比較に計24回。516 Factの索引なしは復旧全体の中央値0.788→0.732秒、起動後の `VmHWM` 中央値31,664→31,132 KiB。OSのファイルキャッシュを消去していない。24試行で結果・グラフ・出所・受領と実ファイル1,634バイトのSHA-256・inode・更新時刻が一致し、`LOCAL_FILE_RECONCILED_NO_RESEND`。追加作用・再書き込みは0件。空にした永続索引は復旧後も空だった。
+- 条件を失効させた認証済み復旧は索引の両状態で `RECOVERY_PROOF_INVALIDATED`。別利用者は `ACCESS_DENIED`、各事例でファイルや作用を変えなかった。永続索引の通常再構築・追記・親子条件失効は520→521→521行で、両版の応答・スキーマ・全行の列・本文とハッシュは一致した。静的照合で永続行の検証順が変わる点を検出し、本文のチェックサム、本文の型、フラグ、位置の順へ戻した。実CLIに誤ったチェックサムと不正JSONを持つ条件行を読ませ、両版の `MEMORY_INDEX_CORRUPT` による `SUSPEND` と作用0件を確認した。
+- `cargo fmt --all -- --check`、`cargo check --workspace --all-targets --locked`、`cargo build -p minidora-cli --locked` は終了0。Store 33件、復旧67件、索引投影8件、通常CLI 4件の計112件がPASS。追加Store回帰は本文・ハッシュ列のNULL、有効行の選択、失効済み記録のID取得、誤った位置での停止を確認した。全workspace実行試験、厳格Clippy再検査、認証HTTP・ブラウザー、製品規模の資源上限評価、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
+
+復旧2世代は `0c1299a` と `ece1402`。資産は計8件。保持3件（実装記録・要求トレース・原典読解台帳）、稼働中2件（Store・共有Cargoキャッシュ）、ゴミ箱移動済み3件、保管済み・保留は各0件。検証用の `/workspace/.minidora-cloud/b182-index-stage.Ng7mtK`、`/workspace/.minidora-cloud/b182-recovery-benchmark.O7hQED`、`/workspace/.minidora-cloud/b182-final-recovery.1akkb8` をLinuxのGIOゴミ箱へ移動し、元パスの不存在、収容物、復元情報を照合した。計20,724ファイル、165ディレクトリ、407,355,641論理バイト。最終処分待ち3件、容量回収0。Windows保管とオンライン専用化は非該当。
