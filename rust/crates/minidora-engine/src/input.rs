@@ -64,6 +64,8 @@ pub(crate) const COMPOSED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v137-composed-rule-source";
 pub(crate) const DECLARED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v138-declared-rule-source";
+pub(crate) const PREVIOUS_RULE_SOURCE_PARSER_VERSION: &str =
+    "declarative-ja-en-v139-previous-rule-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -346,6 +348,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::InspectRuleSource { .. } => RULE_SOURCE_PARSER_VERSION,
         Intent::InspectDeclaredRuleSource { .. } => DECLARED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectComposedRuleSource { .. } => COMPOSED_RULE_SOURCE_PARSER_VERSION,
+        Intent::InspectPreviousRuleSource => PREVIOUS_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
             CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
@@ -3884,8 +3887,24 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    let statement = terminal_trim(text);
+    if statement.starts_with("前の回答で使った規則の出典") {
+        return Ok(
+            if matches!(
+                statement,
+                "前の回答で使った規則の出典" | "前の回答で使った規則の出典を教えて"
+            ) && !text.trim().contains(['?', '？', '\r', '\n'])
+            {
+                Intent::InspectPreviousRuleSource
+            } else {
+                Intent::Unknown {
+                    reason: "前の回答で使った規則の出典だけを指定してください。".into(),
+                }
+            },
+        );
+    }
     for (label, composed) in [("規則の出典", false), ("合成規則の出典", true)] {
-        if let Some(rule_id) = source_inspection_payload(terminal_trim(text), label) {
+        if let Some(rule_id) = source_inspection_payload(statement, label) {
             if text.trim().contains(['?', '？', '\r', '\n'])
                 || !valid_source_record_id(rule_id, "rule:")
             {

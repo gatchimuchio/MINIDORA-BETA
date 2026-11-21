@@ -4869,6 +4869,59 @@ fn plain_rule_source_follows_a_derived_answer_to_the_exact_prior_input_version()
 }
 
 #[test]
+fn previous_rule_source_uses_the_bound_why_instead_of_searching_turns() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let declaration = "　もし[scope=実験室]Xは研究員なら[scope=実験室]Xは入室可。　";
+    let registered = run(&["--case", "declarations", declaration]);
+    run(&["--case", "evidence", "[scope=実験室]ユリは研究員"]);
+    let why = run(&["--input", "why", "なぜ[scope=実験室]ユリは入室可ですか"]);
+    assert_eq!(why["guarantee"], "DERIVED", "{why:?}");
+    let why_id = why["id"].as_str().unwrap();
+    let phrase = "　前の回答で使った規則の出典を教えて。　";
+    let report = run(&["--input", "implicit", "--max-actions", "6", phrase]);
+    assert_eq!(report["dependencies"][0], why_id);
+    assert_eq!(
+        report["dependencies"][1],
+        why["content_plan"]["dependencies"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone()
+    );
+    assert_eq!(report["dependencies"][2], registered["dependencies"][0]);
+    assert_eq!(report["dependencies"][3], registered["id"]);
+    let text = report["text"].as_str().unwrap();
+    assert!(text.starts_with(&format!("参照した理由説明ID: {why_id}\n")));
+    assert!(text.contains(&format!("原文: {declaration:?}")));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &report["dependencies"][4]);
+    assert_eq!(proof[0], "minidora-previous-rule-source-v1");
+    assert_eq!(proof[1], why_id);
+    assert_eq!(proof[4], report["dependencies"][1]);
+    assert_eq!(proof[5][0], "minidora-plain-rule-source-v1");
+
+    run(&["--input", "other-answer", "2+3"]);
+    let stopped = stopped(
+        &execute(&scratch.0, "owner", &["--input", "still-implicit", phrase]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        stopped["reason"]
+            .as_str()
+            .unwrap()
+            .contains("PREVIOUS_RULE_SOURCE_UNAVAILABLE")
+    );
+    assert!(stopped["render"].is_null());
+    let explicit = run(&["--input", "explicit", "--context", why_id, phrase]);
+    assert_eq!(explicit["text"], report["text"]);
+    assert_eq!(explicit["dependencies"], report["dependencies"]);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarations() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

@@ -106,6 +106,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::InspectConditionSourceByDefinition { .. }
                         | Intent::InspectRuleSource { .. }
                         | Intent::InspectDeclaredRuleSource { .. }
+                        | Intent::InspectPreviousRuleSource
                         | Intent::InspectComposedRuleSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
@@ -2692,6 +2693,7 @@ fn verify_guarded_rule_registration(
 
 fn verify_record_source_result(
     store: &Store,
+    state: &CaseRevision,
     bundle: &InputBundle,
     result: &ResultRecord,
     plan: &ContentPlan,
@@ -2706,6 +2708,10 @@ fn verify_record_source_result(
             "RECOVERY_RULE_SOURCE_MISMATCH",
             "RECOVERY_RULE_SOURCE_CHANGED",
         ),
+        Intent::InspectPreviousRuleSource => (
+            "RECOVERY_PREVIOUS_RULE_SOURCE_MISMATCH",
+            "RECOVERY_RULE_SOURCE_CHANGED",
+        ),
         Intent::InspectComposedRuleSource { .. } => (
             "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH",
             "RECOVERY_COMPOSED_RULE_SOURCE_CHANGED",
@@ -2717,6 +2723,19 @@ fn verify_record_source_result(
     };
     verify_registered_input(store, bundle, mismatch)?;
     crate::core::check_record_source_actions(goal)?;
+    let target = crate::core::record_source_target(store, bundle, &state.prior_results).map_err(
+        |error| match error {
+            Error::Contract { code, message }
+                if matches!(
+                    code.as_str(),
+                    "PREVIOUS_RULE_SOURCE_UNAVAILABLE" | "PREVIOUS_RULE_SOURCE_AMBIGUOUS"
+                ) =>
+            {
+                failure(mismatch, &message)
+            }
+            error => error,
+        },
+    )?;
     let actor = &bundle.request.actor_id;
     let case = &bundle.request.case_id;
     let revision = result.actor_memory_revision.ok_or_else(|| {
@@ -2733,13 +2752,13 @@ fn verify_record_source_result(
                 "the original source memory is unavailable",
             )
         })?;
-    let record = crate::core::lookup_source_record(&snapshot, &goal.intent).map_err(|_| {
+    let record = crate::core::lookup_source_record(&snapshot, &target.lookup).map_err(|_| {
         failure(
             mismatch,
             "the sealed record is absent from its original actor-memory revision",
         )
     })?;
-    let readout = record.readout(store, actor, revision, goal)?;
+    let readout = target.readout(record, store, actor, revision, goal)?;
     let proof_ref = digest(&readout.proof);
     let mut expected_dependencies = readout.dependencies;
     expected_dependencies.push(proof_ref.clone());
@@ -2765,7 +2784,7 @@ fn verify_record_source_result(
             "the current record or its validity differs from the adopted source result",
         )
     };
-    let current = match crate::core::lookup_source_record(&head, &goal.intent) {
+    let current = match crate::core::lookup_source_record(&head, &target.lookup) {
         Err(Error::Contract { code, .. })
             if matches!(
                 code.as_str(),
@@ -4346,12 +4365,17 @@ fn inspect(
             | crate::input::CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
             | crate::input::RULE_SOURCE_PARSER_VERSION
             | crate::input::DECLARED_RULE_SOURCE_PARSER_VERSION
+            | crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION
             | crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
     if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
         let code = if sealed_source_parser
-            == Some(crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION)
+            == Some(crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION)
+            || matches!(goal.intent, Intent::InspectPreviousRuleSource)
+        {
+            "RECOVERY_PREVIOUS_RULE_SOURCE_MISMATCH"
+        } else if sealed_source_parser == Some(crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION)
             || matches!(goal.intent, Intent::InspectComposedRuleSource { .. })
         {
             "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH"
@@ -4804,7 +4828,7 @@ fn inspect(
         verify_condition_evaluation_result(store, bundle, result, plan, &goal)?;
     }
     if requires_record_source {
-        verify_record_source_result(store, bundle, result, plan, &goal)?;
+        verify_record_source_result(store, state, bundle, result, plan, &goal)?;
     }
     if requires_guarded_rule {
         verify_guarded_rule_registration(store, bundle, result, plan, &goal)?;
@@ -9410,6 +9434,91 @@ mod tests {
             recovered.actor_memory_revision,
             report.actor_memory_revision
         );
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn previous_rule_source_recovery_rechecks_the_historical_why_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut answers = Vec::new();
+        for (id, text) in [
+            ("rule", "もし[scope=lab]Xは鳥なら[scope=lab]Xは動物"),
+            ("fact", "[scope=lab]シロは鳥"),
+            ("why", "なぜ[scope=lab]シロは動物ですか"),
+        ] {
+            let result = engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            answers.push(result);
+        }
+        let previous = answers.last().unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "previous-rule",
+            "alice",
+            "前の回答で使った規則の出典",
+        );
+        request.budget.max_actions = 7;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let report = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(report.lifecycle, Lifecycle::Commit, "{report:?}");
+        assert_eq!(report.dependencies[0], previous.id);
+        assert_eq!(report.dependencies[2], answers[0].dependencies[0]);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let mut altered = state.clone();
+        altered
+            .prior_results
+            .get_mut(&previous.id)
+            .unwrap()
+            .text
+            .push('。');
+        let error = inspect(
+            &engine.store,
+            "alice",
+            &altered,
+            state.result.as_ref().unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_PREVIOUS_RULE_SOURCE_MISMATCH"),
+            "{error:?}"
+        );
+        let unrelated = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("other", "unrelated", "alice", "[scope=別室]ユリは待機中"),
+            )
+            .unwrap();
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, report.dependencies);
         assert_eq!(recovered.receipts[0].action_id, token);
         assert_eq!(
             recovered.receipts[0].reason.as_deref(),

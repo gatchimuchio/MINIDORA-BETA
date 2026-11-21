@@ -1597,6 +1597,7 @@ pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
 pub(crate) const RULE_SOURCE_PREDICATE: &str = "EXACT_RULE_SOURCE_V1";
 pub(crate) const DECLARED_RULE_SOURCE_PREDICATE: &str = "EXACT_DECLARED_RULE_SOURCE_V1";
+pub(crate) const PREVIOUS_RULE_SOURCE_PREDICATE: &str = "EXACT_PREVIOUS_RULE_SOURCE_V1";
 pub(crate) const COMPOSED_RULE_SOURCE_PREDICATE: &str = "EXACT_COMPOSED_RULE_SOURCE_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
@@ -1652,6 +1653,10 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
         Intent::InspectDeclaredRuleSource { .. } => Some((
             input::DECLARED_RULE_SOURCE_PARSER_VERSION,
             DECLARED_RULE_SOURCE_PREDICATE,
+        )),
+        Intent::InspectPreviousRuleSource => Some((
+            input::PREVIOUS_RULE_SOURCE_PARSER_VERSION,
+            PREVIOUS_RULE_SOURCE_PREDICATE,
         )),
         Intent::InspectComposedRuleSource { .. } => Some((
             input::COMPOSED_RULE_SOURCE_PARSER_VERSION,
@@ -1712,6 +1717,7 @@ pub(crate) fn goal_predicates(
         | Intent::InspectConditionSourceByDefinition { .. }
         | Intent::InspectRuleSource { .. }
         | Intent::InspectDeclaredRuleSource { .. }
+        | Intent::InspectPreviousRuleSource
         | Intent::InspectComposedRuleSource { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
@@ -11050,11 +11056,14 @@ impl Engine {
             | Intent::InspectConditionSourceByDefinition { .. }
             | Intent::InspectRuleSource { .. }
             | Intent::InspectDeclaredRuleSource { .. }
+            | Intent::InspectPreviousRuleSource
             | Intent::InspectComposedRuleSource { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
+                    let target = record_source_target(&self.store, &bundle, &state.prior_results)?;
                     let memory = record_source_memory_at_head(&self.store, actor)?;
-                    let record = lookup_source_record(&memory, intent)?;
-                    let readout = record.readout(&self.store, actor, memory.revision, &goal)?;
+                    let record = lookup_source_record(&memory, &target.lookup)?;
+                    let readout =
+                        target.readout(record, &self.store, actor, memory.revision, &goal)?;
                     Ok((memory.revision, readout))
                 });
                 let (revision, readout) = match report {
@@ -16976,6 +16985,175 @@ impl RecordSourceReadout {
     }
 }
 
+pub(crate) struct RecordSourceTarget {
+    pub(crate) lookup: Intent,
+    previous: Option<PreviousRuleSource>,
+}
+
+struct PreviousRuleSource {
+    result_id: String,
+    result_sha256: String,
+    input_ref: String,
+    computation_ref: String,
+}
+
+impl RecordSourceTarget {
+    pub(crate) fn readout(
+        &self,
+        record: SourceMemoryRecord<'_>,
+        store: &Store,
+        actor: &str,
+        revision: u64,
+        goal: &GoalContract,
+    ) -> Result<RecordSourceReadout> {
+        let mut readout = record.readout(store, actor, revision, goal)?;
+        let Some(previous) = &self.previous else {
+            return Ok(readout);
+        };
+        let rule_proof: serde_json::Value = serde_json::from_slice(&readout.proof)?;
+        readout.proof = canonical(&(
+            "minidora-previous-rule-source-v1",
+            &previous.result_id,
+            &previous.result_sha256,
+            &previous.input_ref,
+            &previous.computation_ref,
+            rule_proof,
+        ))?;
+        readout.dependencies.splice(
+            ..0,
+            [previous.result_id.clone(), previous.computation_ref.clone()],
+        );
+        readout
+            .units
+            .insert(0, format!("参照した理由説明ID: {}", previous.result_id));
+        readout.within_evidence_budget(
+            goal.budget.max_evidence_bytes,
+            "前の理由説明と規則の出典が要求の証拠予算を超えています。",
+        )
+    }
+}
+
+pub(crate) fn record_source_target(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+) -> Result<RecordSourceTarget> {
+    if !matches!(bundle.meaning.intent, Intent::InspectPreviousRuleSource) {
+        return Ok(RecordSourceTarget {
+            lookup: bundle.meaning.intent.clone(),
+            previous: None,
+        });
+    }
+    let unavailable = || {
+        failure(
+            "PREVIOUS_RULE_SOURCE_UNAVAILABLE",
+            "参照した回答から、使用した規則の確定済み理由説明を確認できません。",
+        )
+    };
+    let previous = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| prior_results.get(id).filter(|result| &result.id == id))
+        .filter(|result| {
+            result.lifecycle == Lifecycle::Commit && result.guarantee == Guarantee::Derived
+        })
+        .ok_or_else(unavailable)?;
+    if bundle.context_sha256 != identity(&Some(previous))? {
+        return Err(unavailable());
+    }
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let (input_ref, origin) = store.with_verified_case_history(actor, case, |history| {
+        let (input_ref, origin) = history
+            .input_bundle(&previous.input_id, previous.input_version)?
+            .ok_or_else(unavailable)?;
+        if identity(&origin.request)? != previous.id
+            || history
+                .input_result(&previous.input_id, previous.input_version)?
+                .as_ref()
+                != Some(previous)
+            || !history.contains_committed_result(previous)?
+        {
+            return Err(unavailable());
+        }
+        Ok((input_ref, origin))
+    })?;
+    let Intent::AskWhy { proposition } = &origin.meaning.intent else {
+        return Err(unavailable());
+    };
+    if origin.meaning.source_kind != "USER_REQUEST"
+        || !input::uses_generated_relation_explanation(&origin.meaning)
+    {
+        return Err(unavailable());
+    }
+    let plan = previous.content_plan.as_ref().ok_or_else(unavailable)?;
+    let render = previous.render.as_ref().ok_or_else(unavailable)?;
+    let (computation_ref, dependencies) = plan.dependencies.split_last().ok_or_else(unavailable)?;
+    if dependencies != previous.dependencies
+        || plan.guarantee != previous.guarantee
+        || plan.text != previous.text
+        || !validate_render(plan, render)
+    {
+        return Err(unavailable());
+    }
+    let bytes = store
+        .get_bytes_if_present(actor, case, computation_ref)?
+        .ok_or_else(unavailable)?;
+    let artifact: CoreComputationArtifactGeneratedContent =
+        serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+    let meaning = &artifact.relation_meaning_plan;
+    if artifact.kind != generated_artifact_kind(artifact.adaptation.as_ref())
+        || &meaning.asked != proposition
+        || meaning.conclusion != artifact.relation_meaning
+        || meaning.guarantee != previous.guarantee
+        || meaning.dependencies != dependencies
+        || artifact.relation_proof_dependencies != dependencies
+        || artifact.dependencies != dependencies
+        || artifact.units != plan.required_units
+        || artifact.content_generation.text != previous.text
+    {
+        return Err(unavailable());
+    }
+    let rule_ids: Vec<_> = meaning
+        .units
+        .iter()
+        .filter_map(|unit| match &unit.meaning {
+            CoreSemanticMeaning::Rule { record_id, .. } => Some(record_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let proof_rule_ids: BTreeSet<_> = dependencies
+        .iter()
+        .map(String::as_str)
+        .filter(|id| id.starts_with("rule:"))
+        .collect();
+    if rule_ids.iter().copied().collect::<BTreeSet<_>>() != proof_rule_ids {
+        return Err(unavailable());
+    }
+    let rule_id = match rule_ids.as_slice() {
+        [rule_id] => *rule_id,
+        [] => return Err(unavailable()),
+        _ => {
+            return Err(failure(
+                "PREVIOUS_RULE_SOURCE_AMBIGUOUS",
+                "参照した理由説明には複数の規則があります。規則IDを指定してください。",
+            ));
+        }
+    };
+    Ok(RecordSourceTarget {
+        lookup: Intent::InspectDeclaredRuleSource {
+            rule_id: rule_id.into(),
+        },
+        previous: Some(PreviousRuleSource {
+            result_id: previous.id.clone(),
+            result_sha256: identity(previous)?,
+            input_ref,
+            computation_ref: computation_ref.clone(),
+        }),
+    })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceMemoryRecord<'a> {
     Fact(&'a Fact),
@@ -17196,8 +17374,10 @@ impl SourceMemoryRecord<'_> {
                         roles,
                     ))?;
                     (proof, Some(roles))
-                } else if matches!(goal.intent, Intent::InspectDeclaredRuleSource { .. })
-                    && input::verified_plain_rule_source(&bundle)?
+                } else if matches!(
+                    goal.intent,
+                    Intent::InspectDeclaredRuleSource { .. } | Intent::InspectPreviousRuleSource
+                ) && input::verified_plain_rule_source(&bundle)?
                 {
                     let proof = canonical(&(
                         "minidora-plain-rule-source-v1",
@@ -17346,7 +17526,10 @@ fn read_composed_rule_source(
 pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
     // Reserve the record and verified source-history reads in addition to
     // compute, content, render and optional file confirmation.
-    let reads = if matches!(goal.intent, Intent::InspectComposedRuleSource { .. }) {
+    let reads = if matches!(
+        goal.intent,
+        Intent::InspectComposedRuleSource { .. } | Intent::InspectPreviousRuleSource
+    ) {
         3
     } else {
         2
@@ -17359,6 +17542,9 @@ pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
             }
             Intent::InspectComposedRuleSource { .. } => {
                 "合成規則と親規則の元入力を照合する行動予算が不足しています。"
+            }
+            Intent::InspectPreviousRuleSource => {
+                "前の理由説明と規則の元入力を照合する行動予算が不足しています。"
             }
             _ => "条件定義と元入力を照合する行動予算が不足しています。",
         };
