@@ -880,6 +880,12 @@ impl Store {
         }
         let store = Self { connection, blobs };
         store.verify_integrity()?;
+        if initialize {
+            sql(store.connection.execute(
+                "CREATE INDEX IF NOT EXISTS input_identity_fingerprint ON input_identity(fingerprint)",
+                [],
+            ))?;
+        }
         Ok(store)
     }
 
@@ -2157,7 +2163,7 @@ impl Store {
                 continue;
             };
             let source_key: Option<(String, String, i64)> = sql(self.connection.query_row(
-                "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2",
+                "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2 ORDER BY i.rowid LIMIT 1",
                 params![actor, fact.source_input],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             ).optional())?;
@@ -2828,6 +2834,49 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn reopening_an_existing_store_indexes_source_fingerprints_in_original_row_order() {
+        let directory = Directory::new();
+        let request = RequestEnvelope::new("case-a", "input-a", "alice", "隼は鳥");
+        let fingerprint = identity(&request).unwrap();
+        let mut engine = crate::core::Engine::open(&directory.0).unwrap();
+        let result = engine.execute("alice", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit);
+        drop(engine);
+
+        let store = Store::open(&directory.0).unwrap();
+        let original = store.load_memory("alice").unwrap();
+        assert_eq!(original.facts[0].source_input, fingerprint);
+        assert!(original.facts[0].source_evidence.is_some());
+
+        // The Store API accepts nonunique fingerprints. A later alias in an
+        // earlier-sorting case must not displace the original sealed evidence.
+        let alias = RequestEnvelope::new("case-0", "input-a", "alice", "another request");
+        assert!(store.register_input("alice", &alias, &fingerprint).unwrap());
+        store
+            .connection
+            .execute("DROP INDEX input_identity_fingerprint", [])
+            .unwrap();
+        assert_eq!(store.load_memory("alice").unwrap(), original);
+        drop(store);
+
+        let reopened = Store::open(&directory.0).unwrap();
+        let indexed_column: String = reopened
+            .connection
+            .query_row("PRAGMA index_info(input_identity_fingerprint)", [], |row| {
+                row.get(2)
+            })
+            .unwrap();
+        assert_eq!(indexed_column, "fingerprint");
+        assert_eq!(reopened.load_memory("alice").unwrap(), original);
+        assert_eq!(
+            reopened
+                .load_memory_revision("alice", original.revision)
+                .unwrap(),
+            Some(original)
+        );
     }
 
     #[test]
