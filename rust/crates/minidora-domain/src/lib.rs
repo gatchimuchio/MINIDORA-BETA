@@ -261,6 +261,10 @@ pub enum Intent {
     CalculateSequence {
         steps: Vec<CalculationSequenceStep>,
     },
+    CorrectCalculationSequenceStep {
+        step_id: String,
+        expression: SourceSpan,
+    },
     CorrectCalculation {
         operand_index: usize,
         replacement: String,

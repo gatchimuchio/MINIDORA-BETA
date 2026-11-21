@@ -65,9 +65,9 @@ impl CalculationSequenceResult {
 
 /// Execute only the next ready node of the sealed Goal. The artifact callback
 /// persists live results or authenticates the same bytes during reconciliation.
-pub(crate) fn run_calculation_sequence(
+pub(crate) fn run_calculation_sequence<'a>(
     steps: &[CalculationSequenceStep],
-    original_text: &str,
+    source_text: impl Fn(&str) -> &'a str,
     graph: &mut Scheduler,
     budget: &ResourceBudget,
     started: Instant,
@@ -112,7 +112,7 @@ pub(crate) fn run_calculation_sequence(
             ));
         }
         let span = &step.expression;
-        if original_text.get(span.start..span.end) != Some(span.text.as_str()) {
+        if source_text(&step.id).get(span.start..span.end) != Some(span.text.as_str()) {
             return Err(failure(
                 "SEQUENCE_DEPENDENCY_MISMATCH",
                 "sealed calculation expression does not match the original input span",
@@ -287,6 +287,15 @@ pub(crate) fn previous_calculation_sequence<'a>(
                     details,
                 }));
             }
+            if matches!(
+                input.meaning.intent,
+                Intent::CorrectCalculationSequenceStep { .. }
+            ) {
+                return Err(failure(
+                    "SEQUENCE_CORRECTION_FOLLOWUP_UNSUPPORTED",
+                    "訂正済みの連続計算を起点とする詳説・再訂正にはまだ対応していません。",
+                ));
+            }
             if details.is_empty()
                 && (!matches!(input.meaning.intent, Intent::ExplainPrevious)
                     || current.dependencies.len() == 1
@@ -348,6 +357,7 @@ pub(crate) struct CalculationSequenceExplanation {
     pub(crate) calculation: Calculation,
     pub(crate) units: Vec<String>,
     pub(crate) dependencies: Vec<String>,
+    verified_artifact_bytes: usize,
 }
 
 pub(crate) fn explain_calculation_sequence(
@@ -373,7 +383,7 @@ pub(crate) fn explain_calculation_sequence(
     let mut dependencies = vec![previous.id.clone()];
     let observed = run_calculation_sequence(
         steps,
-        &request.text,
+        |_| &request.text,
         graph,
         budget,
         started,
@@ -460,7 +470,170 @@ pub(crate) fn explain_calculation_sequence(
         calculation: observed.calculation,
         units,
         dependencies,
+        verified_artifact_bytes: budget.max_evidence_bytes - remaining_bytes,
     })
+}
+
+pub(crate) struct SequenceCorrection<'a> {
+    baseline: PreviousCalculationSequence<'a>,
+    pub(crate) steps: Vec<CalculationSequenceStep>,
+    target: usize,
+}
+
+impl SequenceCorrection<'_> {
+    pub(crate) fn verification_actions(&self) -> usize {
+        self.steps.len() + self.baseline.context_actions()
+    }
+}
+
+pub(crate) fn prepare_sequence_correction<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &'a ResultRecord,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    started: Instant,
+) -> Result<SequenceCorrection<'a>> {
+    let missing = || {
+        failure(
+            "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
+            "訂正対象となる同じケースの確定済み連続計算が必要です。",
+        )
+    };
+    let Intent::CorrectCalculationSequenceStep {
+        step_id,
+        expression,
+    } = &bundle.meaning.intent
+    else {
+        return Err(missing());
+    };
+    let baseline =
+        previous_calculation_sequence(store, bundle, previous, prior_results, Some(started))?
+            .ok_or_else(missing)?;
+    let Intent::CalculateSequence { steps } = &baseline.input.meaning.intent else {
+        return Err(missing());
+    };
+    let target = steps
+        .iter()
+        .position(|step| &step.id == step_id)
+        .ok_or_else(|| {
+            failure(
+                "SEQUENCE_CORRECTION_STEP_UNKNOWN",
+                "指定した手順IDが元の連続計算にありません。",
+            )
+        })?;
+    let references = input::calculation_step_references(&expression.text)
+        .map_err(|message| failure("SEQUENCE_CORRECTION_REFERENCE_INVALID", message))?;
+    if references.iter().collect::<BTreeSet<_>>()
+        != steps[target].requires.iter().collect::<BTreeSet<_>>()
+    {
+        return Err(failure(
+            "SEQUENCE_CORRECTION_DEPENDENCIES_CHANGED",
+            "訂正する式には、元の段と同じ先行手順を参照させてください。",
+        ));
+    }
+    let mut steps = steps.clone();
+    steps[target].expression = expression.clone();
+    Ok(SequenceCorrection {
+        baseline,
+        steps,
+        target,
+    })
+}
+
+pub(crate) fn run_sequence_correction(
+    store: &Store,
+    bundle: &InputBundle,
+    context: &SequenceCorrection<'_>,
+    graph: &mut Scheduler,
+    started: Instant,
+    dependencies: &mut Vec<String>,
+    mut artifact_ref: impl FnMut(&[u8]) -> Result<String>,
+) -> Result<CalculationSequenceResult> {
+    let request = &bundle.request;
+    let original = &context.baseline.input;
+    let Intent::CalculateSequence {
+        steps: original_steps,
+    } = &original.meaning.intent
+    else {
+        return Err(failure(
+            "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
+            "元の計算手順がありません。",
+        ));
+    };
+    let mut nodes = calculation_sequence_nodes(original_steps);
+    nodes.push(GoalNode {
+        id: "compute".into(),
+        kind: GoalNodeKind::CoreResult,
+        requires: nodes.iter().map(|node| node.id.clone()).collect(),
+    });
+    let mut original_graph = Scheduler::new(nodes, request.budget.max_actions)?;
+    let proof = explain_calculation_sequence(
+        store,
+        &context.baseline,
+        &mut original_graph,
+        &request.budget,
+        started,
+    )?;
+    let edited = &context.steps[context.target];
+    let revision = canonical(&(
+        "minidora-calculation-sequence-correction-v1",
+        bundle.meaning.context_result_ref.as_deref(),
+        &context.baseline.original.id,
+        &original.raw_sha256,
+        identity(request)?,
+        &bundle.raw_sha256,
+        &edited.id,
+        &original_steps[context.target].expression,
+        &edited.expression,
+        &proof.dependencies,
+    ))?;
+    let mut remaining_bytes = request.budget.max_evidence_bytes - proof.verified_artifact_bytes;
+    let mut retain = |bytes: &[u8]| {
+        if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "計算手順の訂正を検証中に締切へ達しました。",
+            ));
+        }
+        remaining_bytes = remaining_bytes.checked_sub(bytes.len()).ok_or_else(|| {
+            failure(
+                "RESOURCE_LIMIT",
+                "元の手順と訂正の成果物が証拠予算を超えています。",
+            )
+        })?;
+        artifact_ref(bytes)
+    };
+    dependencies.extend(
+        proof
+            .dependencies
+            .iter()
+            .take(if context.baseline.details.is_empty() {
+                1
+            } else {
+                2
+            })
+            .cloned(),
+    );
+    dependencies.push(retain(&revision)?);
+    let mut revised = run_calculation_sequence(
+        &context.steps,
+        |id| {
+            if id == edited.id {
+                &request.text
+            } else {
+                &original.request.text
+            }
+        },
+        graph,
+        &request.budget,
+        started,
+        dependencies,
+        retain,
+    )?;
+    revised
+        .units
+        .insert(0, format!("訂正した手順: {}", edited.id));
+    Ok(revised)
 }
 
 pub(crate) fn store_execution_graph(
@@ -512,6 +685,7 @@ const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
 pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
 pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_CORRECTION_V1";
+pub(crate) const SEQUENCE_CORRECTION_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1";
 const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 pub(crate) const GENERATED_RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V2";
@@ -543,6 +717,11 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        Intent::CorrectCalculationSequenceStep { .. }
+            if meaning.parser_version == input::SEQUENCE_CORRECTION_PARSER_VERSION =>
+        {
+            predicates.push(SEQUENCE_CORRECTION_PREDICATE.into());
+        }
         Intent::ExplainPrevious => {
             predicates.extend(sequence_explanation.map(str::to_owned));
         }
@@ -696,7 +875,7 @@ pub(crate) fn corrected_calculation_from_context(
                         }
                         break value;
                     }
-                    Intent::CalculateSequence { .. } => {
+                    Intent::CalculateSequence { .. } | Intent::CorrectCalculationSequenceStep { .. } => {
                         return Err(failure(
                             "SEQUENCE_CORRECTION_REQUIRES_STEP",
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
@@ -4507,6 +4686,11 @@ impl Engine {
                 Some(started),
             ) {
                 Ok(context) => context,
+                Err(Error::Contract { code, message })
+                    if code == "SEQUENCE_CORRECTION_FOLLOWUP_UNSUPPORTED" =>
+                {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
                 Err(error) => {
                     let code = match &error {
                         Error::Contract { code, .. }
@@ -4517,6 +4701,42 @@ impl Engine {
                         _ => "CALCULATION_CONTEXT_INVALID",
                     };
                     return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                }
+            }
+        } else {
+            None
+        };
+        let sequence_correction = if has_compute_budget
+            && matches!(
+                bundle.meaning.intent,
+                Intent::CorrectCalculationSequenceStep { .. }
+            ) {
+            let Some((prior, prior_case)) = previous.zip(latest.as_ref()) else {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
+                    "訂正対象となる同じケースの確定済み連続計算が必要です。",
+                );
+            };
+            match prepare_sequence_correction(
+                &self.store,
+                &bundle,
+                prior,
+                &prior_case.prior_results,
+                started,
+            ) {
+                Ok(context) => Some(context),
+                Err(Error::Contract { code, message }) => {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "CALCULATION_CONTEXT_INVALID",
+                        &error.to_string(),
+                    );
                 }
             }
         } else {
@@ -5134,7 +5354,14 @@ impl Engine {
             .map_or(&bundle.meaning.intent, |context| {
                 &context.input.meaning.intent
             });
-        if let Intent::CalculateSequence { steps } = sequence_intent {
+        let sequence_steps = sequence_correction
+            .as_ref()
+            .map(|context| context.steps.as_slice())
+            .or(match sequence_intent {
+                Intent::CalculateSequence { steps } => Some(steps.as_slice()),
+                _ => None,
+            });
+        if let Some(steps) = sequence_steps {
             let sequence_nodes = calculation_sequence_nodes(steps);
             compute_requires.extend(sequence_nodes.iter().map(|node| node.id.clone()));
             nodes.extend(sequence_nodes);
@@ -5167,7 +5394,10 @@ impl Engine {
         let required_actions = nodes.len()
             + previous_sequence
                 .as_ref()
-                .map_or(0, PreviousCalculationSequence::context_actions);
+                .map_or(0, PreviousCalculationSequence::context_actions)
+            + sequence_correction
+                .as_ref()
+                .map_or(0, SequenceCorrection::verification_actions);
         let mut graph = Scheduler::new(nodes, request.budget.max_actions)?;
         let goal = GoalContract {
             input_fingerprint: fingerprint.clone(),
@@ -5388,9 +5618,42 @@ impl Engine {
             Intent::CalculateSequence { steps } => {
                 let observed = match run_calculation_sequence(
                     steps,
-                    &request.text,
+                    |_| &request.text,
                     &mut graph,
                     &goal.budget,
+                    started,
+                    &mut result.dependencies,
+                    |bytes| self.store.put_bytes(actor, &request.case_id, bytes),
+                ) {
+                    Ok(observed) => observed,
+                    Err(Error::Contract { code, message }) => {
+                        state.result = Some(result.clone());
+                        let lifecycle = if code == "SEQUENCE_DEPENDENCY_MISMATCH" {
+                            Lifecycle::Fail
+                        } else {
+                            Lifecycle::Suspend
+                        };
+                        return self.stop(&mut state, lifecycle, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                units.clone_from(&observed.units);
+                result.calculation = Some(observed.calculation.clone());
+                result.guarantee = Guarantee::Computed;
+                sequence_result = Some(observed);
+            }
+            Intent::CorrectCalculationSequenceStep { .. } => {
+                let context = sequence_correction.as_ref().ok_or_else(|| {
+                    failure(
+                        "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
+                        "訂正対象の連続計算がありません。",
+                    )
+                })?;
+                let observed = match run_sequence_correction(
+                    &self.store,
+                    &bundle,
+                    context,
+                    &mut graph,
                     started,
                     &mut result.dependencies,
                     |bytes| self.store.put_bytes(actor, &request.case_id, bytes),

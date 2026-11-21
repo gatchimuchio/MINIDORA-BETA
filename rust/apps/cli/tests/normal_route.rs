@@ -788,6 +788,98 @@ fn calculation_sequence_route_retry_explanation_and_version_history() {
 }
 
 #[test]
+fn calculation_sequence_route_named_correction_preserves_dependency_graph() {
+    let scratch = Scratch::new();
+    let original_args = [
+        "--input",
+        "sequence-source",
+        "計算手順を実行して:\nbase: 1 km + 500 m\nindependent: 2+3\nfinal: 100 m + @{base}",
+    ];
+    let original = record(&execute(&scratch.0, "owner", &original_args));
+    let id = original["id"].as_str().unwrap();
+    let revision_args = [
+        "--input",
+        "sequence-step-correction",
+        "--context",
+        id,
+        "--max-actions",
+        "9",
+        "計算手順の base を訂正: 500 m + 100 m",
+    ];
+    let corrected = record(&execute(&scratch.0, "owner", &revision_args));
+    assert_eq!(corrected["calculation"]["exact_value"], "700 m");
+    assert!(
+        corrected["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("訂正した手順: base\n")
+    );
+    assert_eq!(corrected["dependencies"][0], original["id"]);
+    assert_eq!(corrected["dependencies"][3], original["dependencies"][1]);
+    assert_ne!(corrected["dependencies"][2], original["dependencies"][0]);
+    assert_ne!(corrected["dependencies"][4], original["dependencies"][2]);
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &revision_args)),
+        corrected
+    );
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &original_args)),
+        original
+    );
+
+    let removed_dependency = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--context", id, "計算手順の final を訂正: 300 m"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        removed_dependency["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SEQUENCE_CORRECTION_DEPENDENCIES_CHANGED")
+    );
+    let path = scratch.0.join("over-budget.txt");
+    let path_text = path.to_str().unwrap();
+    let long_change = format!("計算手順の base を訂正: 500 m{}+ 100 m", " ".repeat(4000));
+    let over_budget = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--context",
+                id,
+                "--max-evidence-bytes",
+                "8000",
+                "--output",
+                path_text,
+                "--allow-write",
+                path_text,
+                &long_change,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        over_budget["reason"]
+            .as_str()
+            .unwrap()
+            .contains("RESOURCE_LIMIT")
+    );
+    assert!(!path.exists());
+    let premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["計算手順の説明は技術文書です"],
+    ));
+    assert_eq!(premise["guarantee"], "USER_PREMISE");
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");

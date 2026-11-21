@@ -11,8 +11,9 @@ use crate::{
         RELATION_COMPARISON_PREDICATE, RELATION_EXPLANATION_PREDICATE,
         SEQUENCE_EXPLANATION_PREDICATE, calculation_sequence_nodes,
         corrected_calculation_from_context, exact_calculation_unit, explain_calculation_sequence,
-        goal_predicates, previous_calculation_sequence, run_calculation_sequence,
-        store_execution_graph, validate_goal_render, validate_render, verify_goal_content,
+        goal_predicates, prepare_sequence_correction, previous_calculation_sequence,
+        run_calculation_sequence, run_sequence_correction, store_execution_graph,
+        validate_goal_render, validate_render, verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -84,6 +85,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                 matches!(
                     bundle.meaning.intent,
                     Intent::CalculateSequence { .. }
+                        | Intent::CorrectCalculationSequenceStep { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -4017,6 +4019,16 @@ fn inspect(
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
     let requires_verified_correction =
         bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
+    let requires_sequence_correction =
+        bundle.meaning.parser_version == crate::input::SEQUENCE_CORRECTION_PARSER_VERSION;
+    if requires_sequence_correction
+        != matches!(goal.intent, Intent::CorrectCalculationSequenceStep { .. })
+    {
+        return Err(failure(
+            "RECOVERY_SEQUENCE_CORRECTION_MISMATCH",
+            "the correction intent differs from the sealed parser contract",
+        ));
+    }
     let requires_generated_why = crate::input::uses_generated_relation_explanation(&bundle.meaning);
     let sequence_predicate =
         goal.required_predicates
@@ -4033,6 +4045,7 @@ fn inspect(
         && (requires_generated_comparison
             || requires_generated_calculation
             || requires_verified_correction
+            || requires_sequence_correction
             || requires_generated_why
             || explains_sequence
             || goal.required_predicates != legacy_predicates)
@@ -4073,6 +4086,30 @@ fn inspect(
         .filter(|context| context.predicate() == predicate)
         .ok_or_else(invalid)?;
         Some(context)
+    } else {
+        None
+    };
+    let correction_started = Instant::now();
+    let sequence_correction = if requires_sequence_correction {
+        verify_registered_input(store, bundle, "RECOVERY_SEQUENCE_CORRECTION_MISMATCH")?;
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_SEQUENCE_CORRECTION_MISMATCH",
+                    "the sealed correction has no retained context",
+                )
+            })?;
+        Some(prepare_sequence_correction(
+            store,
+            bundle,
+            previous,
+            &state.prior_results,
+            correction_started,
+        )?)
     } else {
         None
     };
@@ -5406,7 +5443,14 @@ fn inspect(
     let sequence_intent = previous_sequence
         .as_ref()
         .map_or(&goal.intent, |context| &context.input.meaning.intent);
-    if let Intent::CalculateSequence { steps } = sequence_intent {
+    let sequence_steps = sequence_correction
+        .as_ref()
+        .map(|context| context.steps.as_slice())
+        .or(match sequence_intent {
+            Intent::CalculateSequence { steps } => Some(steps.as_slice()),
+            _ => None,
+        });
+    if let Some(steps) = sequence_steps {
         let sequence_nodes = calculation_sequence_nodes(steps);
         sources.extend(sequence_nodes.iter().map(|node| node.id.clone()));
         expected_nodes.extend(sequence_nodes);
@@ -5447,9 +5491,49 @@ fn inspect(
             "the original allowance does not cover the explanation history and required nodes",
         ));
     }
+    if sequence_correction.as_ref().is_some_and(|context| {
+        nodes.len() + context.verification_actions() > goal.budget.max_actions as usize
+    }) {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "the original allowance does not cover the correction proofs and required nodes",
+        ));
+    }
     let mut graph = Scheduler::new(nodes, goal.budget.max_actions)?;
     let mut source_refs = BTreeMap::new();
-    if let Some(context) = &previous_sequence {
+    let verify_sequence_artifact = |expected: &[u8]| {
+        let reference = digest(expected);
+        if store.get_bytes(actor, case, &reference)? != expected {
+            return Err(failure(
+                "RECOVERY_ARTIFACT_MISMATCH",
+                "retained calculation step, correction or report differs",
+            ));
+        }
+        Ok(reference)
+    };
+    if let Some(context) = &sequence_correction {
+        let mut dependencies = Vec::new();
+        let observed = run_sequence_correction(
+            store,
+            bundle,
+            context,
+            &mut graph,
+            correction_started,
+            &mut dependencies,
+            verify_sequence_artifact,
+        )?;
+        observed.verify_content(result, plan)?;
+        if dependencies != result.dependencies
+            || !result.evidence.is_empty()
+            || result.text != plan.text
+        {
+            return Err(failure(
+                "RECOVERY_DEPENDENCY_MISMATCH",
+                "the result differs from the sealed step correction and its ordered proofs",
+            ));
+        }
+        source_refs.clone_from(graph.observed());
+    } else if let Some(context) = &previous_sequence {
         let explanation = explain_calculation_sequence(
             store,
             context,
@@ -5476,21 +5560,12 @@ fn inspect(
         let mut dependencies = Vec::new();
         let observed = run_calculation_sequence(
             steps,
-            &request.text,
+            |_| &request.text,
             &mut graph,
             &goal.budget,
             Instant::now(),
             &mut dependencies,
-            |expected| {
-                let reference = digest(expected);
-                if store.get_bytes(actor, case, &reference)? != expected {
-                    return Err(failure(
-                        "RECOVERY_ARTIFACT_MISMATCH",
-                        "retained calculation step or report differs",
-                    ));
-                }
-                Ok(reference)
-            },
+            verify_sequence_artifact,
         )?;
         observed.verify_content(result, plan)?;
         if dependencies != result.dependencies {
@@ -7092,6 +7167,88 @@ mod tests {
         let recovered = reconcile(&store, "alice", "case").unwrap();
         assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
         assert_eq!(recovered.dependencies, corrected.dependencies);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn sequence_correction_recovery_authenticates_original_and_revision() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let original = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "sequence",
+                    "alice",
+                    "計算手順を実行して:\nbase: 1 km + 500 m\nfinal: 100 m + @{base}",
+                ),
+            )
+            .unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit);
+        let mut request = RequestEnvelope::new(
+            "case",
+            "sequence",
+            "alice",
+            "計算手順の base を訂正: 500 m + 100 m",
+        );
+        request.input_version = 2;
+        request.budget.max_actions = 8;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let corrected = engine.execute("alice", request).unwrap();
+        assert_eq!(corrected.lifecycle, Lifecycle::Commit, "{corrected:?}");
+        assert_eq!(corrected.calculation.as_ref().unwrap().exact_value, "700 m");
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        let mut altered = state.result.as_ref().unwrap().clone();
+        altered.dependencies.remove(1);
+        let error = inspect(&store, "alice", &state, &altered).unwrap_err();
+        assert!(error.to_string().contains("RECOVERY_DEPENDENCY_MISMATCH"));
+        let mut without_original = state.clone();
+        without_original.prior_results.remove(&original.id).unwrap();
+        let error = inspect(
+            &store,
+            "alice",
+            &without_original,
+            state.result.as_ref().unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_SEQUENCE_CORRECTION_MISMATCH")
+        );
+        assert_eq!(
+            store.actions("alice", "case").unwrap()[0].phase,
+            EffectPhase::Unknown
+        );
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.calculation, corrected.calculation);
+        assert_eq!(recovered.dependencies, corrected.dependencies);
+        assert_eq!(recovered.content_plan, corrected.content_plan);
+        assert_eq!(recovered.render, corrected.render);
+        assert_eq!(recovered.text, corrected.text);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
         assert_eq!(recovered.receipts[0].action_id, token);
         assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
         assert_eq!(fs::read(&fixture.target).unwrap(), bytes);

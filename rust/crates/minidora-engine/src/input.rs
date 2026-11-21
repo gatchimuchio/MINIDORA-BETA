@@ -16,6 +16,8 @@ pub(crate) const COMPARISON_PARSER_VERSION: &str = "declarative-ja-en-v91-compar
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
 pub(crate) const CALCULATION_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v118-verified-calculation-correction";
+pub(crate) const SEQUENCE_CORRECTION_PARSER_VERSION: &str =
+    "declarative-ja-en-v119-calculation-sequence-correction";
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
@@ -259,6 +261,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
+        Intent::CorrectCalculationSequenceStep { .. } => SEQUENCE_CORRECTION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. }
             if source_roles.iter().any(|(role, spans)| {
@@ -1858,7 +1861,9 @@ fn valid_calculation_step_id(value: &str) -> bool {
         && value.len() <= 32
 }
 
-fn calculation_step_references(expression: &str) -> std::result::Result<Vec<String>, String> {
+pub(crate) fn calculation_step_references(
+    expression: &str,
+) -> std::result::Result<Vec<String>, String> {
     let mut references = Vec::new();
     let mut cursor = 0;
     while let Some(relative_start) = expression[cursor..].find("@{") {
@@ -1876,6 +1881,41 @@ fn calculation_step_references(expression: &str) -> std::result::Result<Vec<Stri
         cursor = end + 1;
     }
     Ok(references)
+}
+
+fn calculation_sequence_correction_intent(text: &str) -> Result<Option<Intent>> {
+    let trimmed = text.trim();
+    let header = trimmed.lines().next().unwrap_or_default();
+    if !header.starts_with("計算手順の")
+        || !header.split_once("を訂正").is_some_and(|(_, suffix)| {
+            suffix.trim_start().starts_with([':', '：']) || suffix.trim().is_empty()
+        })
+    {
+        return Ok(None);
+    }
+    let unsupported = || Intent::Unknown {
+        reason: "「計算手順の base を訂正: 2 + 3」の形式で、一つの手順IDと式を指定してください。"
+            .into(),
+    };
+    let Some(captures) =
+        regex(r"^計算手順の[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を訂正[:：][ \t]*([^\r\n]+)$")?
+            .captures(trimmed)
+    else {
+        return Ok(Some(unsupported()));
+    };
+    let expression = captures.get(2).expect("formula capture exists");
+    let offset = text.len() - text.trim_start().len();
+    if expression.len() > 8192 {
+        return Ok(Some(unsupported()));
+    }
+    let Some(span) = source_span_at(text, offset + expression.start(), offset + expression.end())
+    else {
+        return Ok(Some(unsupported()));
+    };
+    Ok(Some(Intent::CorrectCalculationSequenceStep {
+        step_id: captures[1].to_owned(),
+        expression: span,
+    }))
 }
 
 fn calculation_sequence_intent(text: &str, header: &str) -> Result<Option<Intent>> {
@@ -3266,6 +3306,9 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(intent) = calculation_sequence_correction_intent(text)? {
+        return Ok(intent);
+    }
     let header = text
         .split_once('\n')
         .map_or_else(|| terminal_trim(text), |(header, _)| terminal_trim(header));
