@@ -2928,13 +2928,14 @@ fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() 
         result["dependencies"][0].as_str().unwrap().to_owned()
     })
     .collect();
-    for text in [
+    let facts: Vec<_> = [
         "[scope=実験室]ユリは校正済み",
         "[scope=実験室]ユリは停止中ではない",
         "[scope=実験室][condition=監視]ユリは観測可能",
-    ] {
-        record(&execute(&scratch.0, actor, &[text]));
-    }
+    ]
+    .into_iter()
+    .map(|text| record(&execute(&scratch.0, actor, &[text])))
+    .collect();
     let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
     let before = store.load_memory(actor).unwrap();
     let missing = [
@@ -2981,7 +2982,7 @@ fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() 
         &execute(
             &scratch.0,
             actor,
-            &["--input", "budget-stop", "--max-actions", "30", question],
+            &["--input", "budget-stop", "--max-actions", "29", question],
         ),
         2,
         "SUSPEND",
@@ -3020,6 +3021,78 @@ fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() 
         );
     }
 
+    let opposed = record(&execute(
+        &scratch.0,
+        actor,
+        &["[scope=実験室]ユリは校正済みではない"],
+    ));
+    let conflict_limited = stopped(
+        &execute(&scratch.0, actor, &["--max-actions", "31", question]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        conflict_limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT")
+    );
+    let conflict = stopped(&execute(&scratch.0, actor, &[question]), 2, "SUSPEND");
+    assert!(
+        conflict["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONDITION_CONFLICT")
+    );
+    assert!(
+        conflict["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&opposed["dependencies"][0])
+    );
+    assert!(
+        conflict["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&facts[0]["dependencies"][0])
+    );
+    assert!(conflict["render"].is_null());
+
+    for fact_id in [&opposed["dependencies"][0], &facts[1]["dependencies"][0]] {
+        record(&execute(
+            &scratch.0,
+            actor,
+            &[&format!("invalidate {}", fact_id.as_str().unwrap())],
+        ));
+    }
+    for text in [
+        "[scope=実験室]ユリは停止中",
+        "[scope=実験室]ユリは点検済みではない",
+    ] {
+        record(&execute(&scratch.0, actor, &[text]));
+    }
+    let false_limited = stopped(
+        &execute(&scratch.0, actor, &["--max-actions", "31", question]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        false_limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT")
+    );
+    let refuted = stopped(&execute(&scratch.0, actor, &[question]), 3, "REJECT");
+    assert!(
+        refuted["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONDITION_FALSE")
+    );
+    assert_eq!(refuted["dependencies"].as_array().unwrap().len(), 7);
+    assert!(refuted["render"].is_null());
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+
     record(&execute(
         &scratch.0,
         actor,
@@ -3052,6 +3125,40 @@ fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() 
     assert_eq!(
         stopped(&execute(&scratch.0, actor, &missing), 2, "SUSPEND"),
         stop
+    );
+}
+
+#[test]
+fn a_guarded_claim_remains_condition_evidence_when_both_index_lookups_select_it() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    for text in [
+        "条件定義: [scope=実験室][condition=校正] ユリは校正済み",
+        "[scope=実験室][condition=校正]ユリは校正済み",
+    ] {
+        record(&execute(&scratch.0, actor, &[text]));
+    }
+    let question = "なぜ[scope=実験室][condition=校正]ユリは校正済みですか";
+    let stopped_on_cycle = stopped(&execute(&scratch.0, actor, &[question]), 2, "SUSPEND");
+    assert!(
+        stopped_on_cycle["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_EVIDENCE_CONDITION_UNRESOLVED")
+    );
+    assert!(stopped_on_cycle["render"].is_null());
+
+    let evidence = record(&execute(
+        &scratch.0,
+        actor,
+        &["[scope=実験室]ユリは校正済み"],
+    ));
+    let actual = record(&execute(&scratch.0, actor, &[question]));
+    assert!(
+        actual["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&evidence["dependencies"][0])
     );
 }
 

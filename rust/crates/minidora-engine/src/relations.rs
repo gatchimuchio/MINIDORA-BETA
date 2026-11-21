@@ -345,6 +345,7 @@ type ConditionEvidenceKey<'a> = (&'a str, &'a str, &'a str, &'a str);
 struct ConditionEvaluationBudget<'a, 'memory> {
     max_steps: u32,
     steps: &'a mut u32,
+    projected_evidence: Option<&'a [usize]>,
     evidence: Option<BTreeMap<ConditionEvidenceKey<'memory>, Vec<&'memory Fact>>>,
 }
 
@@ -360,7 +361,14 @@ impl<'memory> ConditionEvaluationBudget<'_, 'memory> {
             // One charged pass for this query's immutable facts. A fact's
             // own conditions are checked later on the active recursion path.
             let mut index = BTreeMap::<_, Vec<_>>::new();
-            for fact in &memory.facts {
+            let count = self
+                .projected_evidence
+                .map_or(memory.facts.len(), <[usize]>::len);
+            for position in 0..count {
+                let fact_index = self
+                    .projected_evidence
+                    .map_or(position, |indices| indices[position]);
+                let fact = &memory.facts[fact_index];
                 charge_step(self.steps, self.max_steps)?;
                 let proposition = &fact.proposition;
                 if !fact.valid
@@ -966,6 +974,7 @@ fn evaluate_condition_refs(
     memory: &MemoryState,
     target: &Proposition,
     allowed_hypotheses: Option<&BTreeSet<String>>,
+    projected_evidence: Option<&[usize]>,
     max_steps: u32,
     steps: &mut u32,
 ) -> Result<(
@@ -982,6 +991,7 @@ fn evaluate_condition_refs(
     let mut budget = ConditionEvaluationBudget {
         max_steps,
         steps,
+        projected_evidence,
         evidence: None,
     };
     for condition_id in &target.condition_refs {
@@ -1540,7 +1550,38 @@ pub fn query(
     proposition: &Proposition,
     max_steps: u32,
 ) -> Result<QueryOutcome> {
-    query_internal(memory, proposition, max_steps, None)
+    query_internal(memory, proposition, max_steps, None, None)
+}
+
+/// Form and consume the exact condition-evidence selection in the same
+/// projection. All projected Facts remain available to the relation proof.
+pub(crate) fn query_active_relation(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    proposition: &Proposition,
+    max_actions: u32,
+) -> Result<(MemoryState, QueryOutcome)> {
+    let mut evidence_indices = Vec::new();
+    let collect_evidence =
+        (!proposition.condition_refs.is_empty()).then_some(&mut evidence_indices);
+    let (memory, projection_actions) =
+        project_relation(index, proposition, max_actions, collect_evidence)?;
+    let query_budget = max_actions.checked_sub(projection_actions).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "active memory projection exhausted the relation action budget",
+        )
+    })?;
+    let mut answer = query_internal(
+        &memory,
+        proposition,
+        query_budget,
+        None,
+        Some(&evidence_indices),
+    )?;
+    answer.steps = projection_actions
+        .checked_add(answer.steps)
+        .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+    Ok((memory, answer))
 }
 
 /// Build a bounded, rebuildable current-memory projection for a typed Ask.
@@ -1550,6 +1591,15 @@ pub(crate) fn active_relation_projection(
     index: &MemoryIndexSnapshot<'_, '_>,
     proposition: &Proposition,
     max_actions: u32,
+) -> Result<(MemoryState, u32)> {
+    project_relation(index, proposition, max_actions, None)
+}
+
+fn project_relation(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    proposition: &Proposition,
+    max_actions: u32,
+    mut evidence_indices: Option<&mut Vec<usize>>,
 ) -> Result<(MemoryState, u32)> {
     validate(proposition)?;
     if max_actions == 0 {
@@ -1607,6 +1657,7 @@ pub(crate) fn active_relation_projection(
     let mut record_ids = VecDeque::new();
     let mut requested_record_ids = BTreeSet::new();
     let mut evidence_queries = BTreeSet::new();
+    let mut condition_evidence_ids = BTreeSet::new();
 
     macro_rules! include_record {
         ($record:expr) => {{
@@ -1705,6 +1756,11 @@ pub(crate) fn active_relation_projection(
                         remaining,
                     )?;
                     for fact in evidence {
+                        if evidence_indices.is_some() {
+                            // Record the evidence role even when another
+                            // lookup already loaded this same Fact.
+                            condition_evidence_ids.insert(fact.value.id().to_owned());
+                        }
                         include_record!(fact);
                     }
                 }
@@ -1741,7 +1797,24 @@ pub(crate) fn active_relation_projection(
     facts.sort_by_key(|(ordinal, _)| *ordinal);
     rules.sort_by_key(|(ordinal, _)| *ordinal);
     conditions.sort_by_key(|(ordinal, _)| *ordinal);
-    memory.facts = facts.into_iter().map(|(_, record)| record).collect();
+    memory.facts = facts
+        .into_iter()
+        .enumerate()
+        .map(|(position, (_, fact))| {
+            if let Some(indices) = evidence_indices.as_deref_mut()
+                && condition_evidence_ids.contains(&fact.id)
+            {
+                indices.push(position);
+            }
+            fact
+        })
+        .collect();
+    if evidence_indices.is_some_and(|indices| indices.len() != condition_evidence_ids.len()) {
+        return Err(failure(
+            "MEMORY_INDEX_CORRUPT",
+            "condition evidence does not match the projected Fact records",
+        ));
+    }
     memory.rules = rules.into_iter().map(|(_, record)| record).collect();
     memory.conditions = conditions.into_iter().map(|(_, record)| record).collect();
     Ok((memory, actions))
@@ -2081,7 +2154,13 @@ pub(crate) fn query_hypothetical(
     max_steps: u32,
     allowed_hypotheses: &BTreeSet<String>,
 ) -> Result<QueryOutcome> {
-    query_internal(memory, proposition, max_steps, Some(allowed_hypotheses))
+    query_internal(
+        memory,
+        proposition,
+        max_steps,
+        Some(allowed_hypotheses),
+        None,
+    )
 }
 
 /// Return direct, active premises that match a query in every typed field
@@ -2276,6 +2355,7 @@ fn query_internal(
     proposition: &Proposition,
     max_steps: u32,
     allowed_hypotheses: Option<&BTreeSet<String>>,
+    projected_evidence: Option<&[usize]>,
 ) -> Result<QueryOutcome> {
     validate(proposition)?;
     if max_steps == 0 {
@@ -2290,6 +2370,7 @@ fn query_internal(
             memory,
             proposition,
             allowed_hypotheses,
+            projected_evidence,
             max_steps,
             &mut steps,
         )?;

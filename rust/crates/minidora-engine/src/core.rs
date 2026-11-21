@@ -840,18 +840,9 @@ fn indexed_relation_evaluation(
     proposition: &Proposition,
     max_actions: u32,
 ) -> Result<(MemoryState, RelationClauseEvaluation)> {
-    let (mut memory, projection_actions) =
-        relations::active_relation_projection(index, proposition, max_actions)?;
-    let query_budget = max_actions.checked_sub(projection_actions).ok_or_else(|| {
-        failure(
-            "RELATION_BUDGET",
-            "active memory projection exhausted the relation action budget",
-        )
-    })?;
-    let mut answer = relations::query(&memory, proposition, query_budget)?;
-    let mut actions = projection_actions
-        .checked_add(answer.steps)
-        .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+    let (mut memory, mut answer) =
+        relations::query_active_relation(index, proposition, max_actions)?;
+    let mut actions = answer.steps;
     let mut out_of_scope_facts = Vec::new();
     if answer.status == "UNKNOWN"
         && answer
