@@ -4628,6 +4628,128 @@ fn condition_source_resolves_exact_timed_definition_across_owned_cases() {
 }
 
 #[test]
+fn condition_source_by_definition_resolves_withdrawn_record_from_exact_qualifiers() {
+    let scratch = Scratch::new();
+    let source = "条件定義: [scope=実験室][condition=点検] ユリは点検済み";
+    let defined = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--case", "archive", source],
+    ));
+    let id = defined["dependencies"][0].as_str().unwrap();
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &["--case", "withdraw", &format!("{id}を無効化して")],
+    ));
+    let evaluation = record(&execute(
+        &scratch.0,
+        "owner",
+        &["条件評価: [condition=点検][subject=ユリ][scope=実験室]"],
+    ));
+    assert!(
+        evaluation["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("条件 点検: UNKNOWN")
+    );
+    assert!(!evaluation["text"].as_str().unwrap().contains(id));
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let revision = store.load_memory("owner").unwrap().revision;
+    let command = "　条件定義の出典： [scope= 実験室 ][condition=点検] [subject=ユリ]。　";
+    let named = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--case", "named-source", "--max-actions", "5", command],
+    ));
+    let by_record = record(&execute(
+        &scratch.0,
+        "owner",
+        &[&format!("条件定義の出典: {id}")],
+    ));
+    assert_eq!(named["text"], by_record["text"]);
+    assert!(named["text"].as_str().unwrap().contains("記憶状態: 失効"));
+    assert_eq!(named["dependencies"], by_record["dependencies"]);
+    assert_eq!(named["dependencies"][0], id);
+    assert_eq!(named["dependencies"][1], defined["id"]);
+    assert_eq!(named["actor_memory_revision"], revision);
+    let sealed = store
+        .load_case("owner", "named-source")
+        .unwrap()
+        .unwrap()
+        .bundle
+        .unwrap();
+    assert_eq!(
+        sealed.meaning.parser_version,
+        "declarative-ja-en-v131-condition-source-by-definition"
+    );
+    assert_eq!(sealed.meaning.source_roles.len(), 3);
+    for (role, expected) in [
+        ("condition_id", "点検"),
+        ("subject", "ユリ"),
+        ("scope", "実験室"),
+    ] {
+        let spans =
+            &sealed.meaning.source_roles[&format!("/InspectConditionSourceByDefinition/{role}")];
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].text, expected);
+        assert_eq!(command.get(spans[0].start..spans[0].end), Some(expected));
+    }
+
+    let forbidden = scratch.0.join("denied-provenance.txt");
+    let path = forbidden.to_str().unwrap();
+    let same_public_stop = |actor, case, raw| {
+        stopped(
+            &execute(
+                &scratch.0,
+                actor,
+                &["--case", case, "--output", path, "--allow-write", path, raw],
+            ),
+            2,
+            "SUSPEND",
+        )
+    };
+    let missing = same_public_stop(
+        "owner",
+        "denied",
+        "条件定義の出典: [condition=未登録][subject=ユリ][scope=実験室]",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_SOURCE_NOT_FOUND")
+    );
+    for denied in [
+        same_public_stop("visitor", "visitor-denied", command),
+        same_public_stop(
+            "owner",
+            "denied",
+            "条件定義の出典: [condition=点検][subject=葵][scope=実験室]",
+        ),
+        same_public_stop(
+            "owner",
+            "denied",
+            "条件定義の出典: [condition=点検][subject=ユリ][scope=別室]",
+        ),
+    ] {
+        assert_eq!(denied["reason"], missing["reason"]);
+        assert_eq!(denied["text"], missing["text"]);
+        assert!(denied["render"].is_null());
+    }
+    assert!(!forbidden.exists());
+    assert!(store.actions("owner", "denied").unwrap().is_empty());
+    assert!(
+        store
+            .actions("visitor", "visitor-denied")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.load_memory("owner").unwrap().revision, revision);
+}
+
+#[test]
 fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

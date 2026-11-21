@@ -516,6 +516,11 @@ pub enum Intent {
     InspectConditionSource {
         record_id: String,
     },
+    InspectConditionSourceByDefinition {
+        condition_id: String,
+        subject: String,
+        scope: String,
+    },
     AssertPreviousRelation {
         proposition: Proposition,
         explicit_scope: Option<String>,

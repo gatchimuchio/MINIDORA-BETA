@@ -103,6 +103,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::EvaluateConditionDetailed { .. }
                         | Intent::InspectFactSource { .. }
                         | Intent::InspectConditionSource { .. }
+                        | Intent::InspectConditionSourceByDefinition { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -4188,16 +4189,18 @@ fn inspect(
     let source_contract = crate::core::record_source_contract(&goal.intent);
     let sealed_source_parser = matches!(
         bundle.meaning.parser_version.as_str(),
-        crate::input::FACT_SOURCE_PARSER_VERSION | crate::input::CONDITION_SOURCE_PARSER_VERSION
+        crate::input::FACT_SOURCE_PARSER_VERSION
+            | crate::input::CONDITION_SOURCE_PARSER_VERSION
+            | crate::input::CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
     if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
-        let code = if sealed_source_parser == Some(crate::input::CONDITION_SOURCE_PARSER_VERSION)
-            || matches!(goal.intent, Intent::InspectConditionSource { .. })
+        let code = if sealed_source_parser == Some(crate::input::FACT_SOURCE_PARSER_VERSION)
+            || matches!(goal.intent, Intent::InspectFactSource { .. })
         {
-            "RECOVERY_CONDITION_SOURCE_MISMATCH"
-        } else {
             "RECOVERY_FACT_SOURCE_MISMATCH"
+        } else {
+            "RECOVERY_CONDITION_SOURCE_MISMATCH"
         };
         return Err(failure(
             code,
@@ -8816,6 +8819,15 @@ mod tests {
 
     #[test]
     fn condition_source_reconciles_original_input_without_resend() {
+        assert_condition_source_reconciles_without_resend(false);
+    }
+
+    #[test]
+    fn condition_source_by_definition_reconciles_original_input_without_resend() {
+        assert_condition_source_reconciles_without_resend(true);
+    }
+
+    fn assert_condition_source_reconciles_without_resend(by_definition: bool) {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
         let defined = engine
@@ -8830,7 +8842,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(defined.lifecycle, Lifecycle::Commit, "{defined:?}");
-        let command = format!("条件定義の出典: {}", defined.dependencies[0]);
+        let command = if by_definition {
+            "条件定義の出典: [condition=点検][subject=ユリ][scope=実験室]".into()
+        } else {
+            format!("条件定義の出典: {}", defined.dependencies[0])
+        };
         let mut request = RequestEnvelope::new("case", "provenance", "alice", &command);
         request.budget.max_actions = 6;
         request.output_path = Some(fixture.target.clone());
@@ -8857,6 +8873,35 @@ mod tests {
                 .contains("RECOVERY_CONDITION_SOURCE_MISMATCH"),
             "{error:?}"
         );
+        if by_definition {
+            let original_goal_ref = state.goal_sha256.as_deref().unwrap();
+            let mut goal: GoalContract = serde_json::from_slice(
+                &engine
+                    .store
+                    .get_bytes("alice", "case", original_goal_ref)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                goal.required_predicates[0],
+                crate::core::CONDITION_SOURCE_BY_DEFINITION_PREDICATE
+            );
+            goal.required_predicates[0] = crate::core::CONDITION_SOURCE_PREDICATE.into();
+            let mut substituted = state.clone();
+            substituted.goal_sha256 =
+                Some(engine.store.put_artifact("alice", "case", &goal).unwrap());
+            let error = inspect(
+                &engine.store,
+                "alice",
+                &substituted,
+                state.result.as_ref().unwrap(),
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("UNSUPPORTED_RECOVERY_GOAL"),
+                "{error:?}"
+            );
+        }
         let unrelated = engine
             .execute(
                 "alice",

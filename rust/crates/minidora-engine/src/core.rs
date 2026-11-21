@@ -1593,6 +1593,8 @@ pub(crate) const CONDITION_EVALUATION_DETAIL_PREDICATE: &str =
     "EXACT_CONDITION_EVALUATION_DETAIL_V1";
 pub(crate) const FACT_SOURCE_PREDICATE: &str = "EXACT_FACT_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_PREDICATE: &str = "EXACT_CONDITION_SOURCE_V1";
+pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
+    "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
 
 pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &'static str)> {
     match intent {
@@ -1602,6 +1604,10 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
         Intent::InspectConditionSource { .. } => Some((
             input::CONDITION_SOURCE_PARSER_VERSION,
             CONDITION_SOURCE_PREDICATE,
+        )),
+        Intent::InspectConditionSourceByDefinition { .. } => Some((
+            input::CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION,
+            CONDITION_SOURCE_BY_DEFINITION_PREDICATE,
         )),
         _ => None,
     }
@@ -1643,7 +1649,9 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
-        intent @ (Intent::InspectFactSource { .. } | Intent::InspectConditionSource { .. }) => {
+        intent @ (Intent::InspectFactSource { .. }
+        | Intent::InspectConditionSource { .. }
+        | Intent::InspectConditionSourceByDefinition { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
             {
@@ -1756,6 +1764,7 @@ fn verify_report_goal_content(
                 | CONDITION_EVALUATION_DETAIL_PREDICATE
                 | FACT_SOURCE_PREDICATE
                 | CONDITION_SOURCE_PREDICATE
+                | CONDITION_SOURCE_BY_DEFINITION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -10904,7 +10913,9 @@ impl Engine {
                     );
                 }
             },
-            intent @ (Intent::InspectFactSource { .. } | Intent::InspectConditionSource { .. }) => {
+            intent @ (Intent::InspectFactSource { .. }
+            | Intent::InspectConditionSource { .. }
+            | Intent::InspectConditionSourceByDefinition { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
                     let memory = record_source_memory_at_head(&self.store, actor)?;
                     let record = lookup_source_record(&memory, intent)?;
@@ -16968,6 +16979,12 @@ pub(crate) fn lookup_source_record<'a>(
     memory: &'a MemoryState,
     intent: &Intent,
 ) -> Result<SourceMemoryRecord<'a>> {
+    let condition_not_found = || {
+        failure(
+            "CONDITION_SOURCE_NOT_FOUND",
+            "指定した条件定義を利用者の保存記録から確認できません。",
+        )
+    };
     match intent {
         Intent::InspectFactSource { fact_id } => memory
             .facts
@@ -16985,12 +17002,23 @@ pub(crate) fn lookup_source_record<'a>(
             .iter()
             .find(|record| &record.id == record_id)
             .map(SourceMemoryRecord::Condition)
-            .ok_or_else(|| {
-                failure(
-                    "CONDITION_SOURCE_NOT_FOUND",
-                    "指定した条件定義を利用者の保存記録から確認できません。",
-                )
-            }),
+            .ok_or_else(condition_not_found),
+        Intent::InspectConditionSourceByDefinition {
+            condition_id,
+            subject,
+            scope,
+        } => memory
+            .conditions
+            .iter()
+            .find(|record| {
+                // The authenticated snapshot keeps original definitions after invalidation.
+                let definition = &record.definition;
+                &definition.condition_id == condition_id
+                    && &definition.subject == subject
+                    && &definition.scope == scope
+            })
+            .map(SourceMemoryRecord::Condition)
+            .ok_or_else(condition_not_found),
         _ => Err(failure(
             "RECORD_SOURCE_GOAL_INVALID",
             "出典照会の要求が一致しません。",
