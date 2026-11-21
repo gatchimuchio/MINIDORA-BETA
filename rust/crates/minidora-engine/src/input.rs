@@ -68,6 +68,9 @@ pub(crate) const PREVIOUS_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v139-previous-rule-source";
 pub(crate) const PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v140-previous-composed-rule-source";
+pub(crate) const PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION: &str =
+    "declarative-ja-en-v141-previous-rule-source-by-id";
+const PREVIOUS_RULE_SOURCE_LABEL: &str = "前の回答で使った規則の出典";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -351,6 +354,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::InspectDeclaredRuleSource { .. } => DECLARED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectComposedRuleSource { .. } => COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectPreviousRuleSource => PREVIOUS_RULE_SOURCE_PARSER_VERSION,
+        Intent::InspectPreviousRuleSourceById { .. } => PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION,
         Intent::InspectPreviousComposedRuleSource => PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
@@ -1715,6 +1719,13 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
             "/InspectComposedRuleSource/rule_id",
             "COMPOSED_RULE_SOURCE_SPAN",
             "composed rule",
+        )),
+        Intent::InspectPreviousRuleSourceById { rule_id } => Some((
+            PREVIOUS_RULE_SOURCE_LABEL,
+            rule_id,
+            "/InspectPreviousRuleSourceById/rule_id",
+            "PREVIOUS_RULE_SOURCE_SPAN",
+            "previous rule",
         )),
         Intent::InspectConditionSource { record_id } => Some((
             "条件定義の出典",
@@ -3891,8 +3902,16 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
 
 fn interpret(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
+    if let Some(rule_id) = source_inspection_payload(statement, PREVIOUS_RULE_SOURCE_LABEL)
+        && !text.trim().contains(['?', '？', '\r', '\n'])
+        && valid_source_record_id(rule_id, "rule:")
+    {
+        return Ok(Intent::InspectPreviousRuleSourceById {
+            rule_id: rule_id.into(),
+        });
+    }
     for (label, composed) in [
-        ("前の回答で使った規則の出典", false),
+        (PREVIOUS_RULE_SOURCE_LABEL, false),
         ("前の回答で使った合成規則の出典", true),
     ] {
         if let Some(suffix) = statement.strip_prefix(label) {

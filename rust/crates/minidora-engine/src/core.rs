@@ -1600,6 +1600,7 @@ pub(crate) const DECLARED_RULE_SOURCE_PREDICATE: &str = "EXACT_DECLARED_RULE_SOU
 pub(crate) const PREVIOUS_RULE_SOURCE_PREDICATE: &str = "EXACT_PREVIOUS_RULE_SOURCE_V1";
 pub(crate) const PREVIOUS_COMPOSED_RULE_SOURCE_PREDICATE: &str =
     "EXACT_PREVIOUS_COMPOSED_RULE_SOURCE_V1";
+pub(crate) const PREVIOUS_RULE_SOURCE_BY_ID_PREDICATE: &str = "EXACT_PREVIOUS_RULE_SOURCE_BY_ID_V1";
 pub(crate) const COMPOSED_RULE_SOURCE_PREDICATE: &str = "EXACT_COMPOSED_RULE_SOURCE_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
@@ -1664,6 +1665,10 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
             input::PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION,
             PREVIOUS_COMPOSED_RULE_SOURCE_PREDICATE,
         )),
+        Intent::InspectPreviousRuleSourceById { .. } => Some((
+            input::PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION,
+            PREVIOUS_RULE_SOURCE_BY_ID_PREDICATE,
+        )),
         Intent::InspectComposedRuleSource { .. } => Some((
             input::COMPOSED_RULE_SOURCE_PARSER_VERSION,
             COMPOSED_RULE_SOURCE_PREDICATE,
@@ -1725,6 +1730,7 @@ pub(crate) fn goal_predicates(
         | Intent::InspectDeclaredRuleSource { .. }
         | Intent::InspectPreviousRuleSource
         | Intent::InspectPreviousComposedRuleSource
+        | Intent::InspectPreviousRuleSourceById { .. }
         | Intent::InspectComposedRuleSource { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
@@ -11065,6 +11071,7 @@ impl Engine {
             | Intent::InspectDeclaredRuleSource { .. }
             | Intent::InspectPreviousRuleSource
             | Intent::InspectPreviousComposedRuleSource
+            | Intent::InspectPreviousRuleSourceById { .. }
             | Intent::InspectComposedRuleSource { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
                     let target = record_source_target(&self.store, &bundle, &state.prior_results)?;
@@ -17015,6 +17022,11 @@ impl RecordSourceTarget {
         revision: u64,
         goal: &GoalContract,
     ) -> Result<RecordSourceReadout> {
+        if matches!(goal.intent, Intent::InspectPreviousRuleSourceById { .. })
+            && matches!(self.lookup, Intent::InspectComposedRuleSource { .. })
+        {
+            require_record_source_actions(goal, 4)?;
+        }
         if let Some(parents) = self
             .previous
             .as_ref()
@@ -17028,7 +17040,9 @@ impl RecordSourceTarget {
             return Ok(readout);
         };
         let rule_proof: serde_json::Value = serde_json::from_slice(&readout.proof)?;
-        let proof_kind = if previous.composed_parents.is_some() {
+        let proof_kind = if matches!(goal.intent, Intent::InspectPreviousRuleSourceById { .. }) {
+            "minidora-selected-previous-rule-source-v1"
+        } else if previous.composed_parents.is_some() {
             "minidora-previous-composed-rule-source-v1"
         } else {
             "minidora-previous-rule-source-v1"
@@ -17067,9 +17081,10 @@ pub(crate) fn record_source_target(
     bundle: &InputBundle,
     prior_results: &BTreeMap<String, ResultRecord>,
 ) -> Result<RecordSourceTarget> {
-    let composed_only = match bundle.meaning.intent {
-        Intent::InspectPreviousRuleSource => false,
-        Intent::InspectPreviousComposedRuleSource => true,
+    let (composed_only, selected_id) = match &bundle.meaning.intent {
+        Intent::InspectPreviousRuleSource => (false, None),
+        Intent::InspectPreviousComposedRuleSource => (true, None),
+        Intent::InspectPreviousRuleSourceById { rule_id } => (false, Some(rule_id.as_str())),
         _ => {
             return Ok(RecordSourceTarget {
                 lookup: bundle.meaning.intent.clone(),
@@ -17183,11 +17198,17 @@ pub(crate) fn record_source_target(
     if rules.iter().map(|(id, _, _)| *id).collect::<BTreeSet<_>>() != proof_rule_ids {
         return Err(unavailable());
     }
-    let mut candidates = rules
-        .into_iter()
-        .filter(|(_, _, composed)| !composed_only || *composed);
-    let (rule_id, parents, _) = match (candidates.next(), candidates.next()) {
+    let mut candidates = rules.into_iter().filter(|(id, _, composed)| {
+        (!composed_only || *composed) && selected_id.is_none_or(|selected| selected == *id)
+    });
+    let (rule_id, parents, composed) = match (candidates.next(), candidates.next()) {
         (Some(rule), None) => rule,
+        (None, _) if selected_id.is_some() => {
+            return Err(failure(
+                "PREVIOUS_RULE_SOURCE_ID_NOT_USED",
+                "指定した規則IDは参照した理由説明の証拠に含まれていません。",
+            ));
+        }
         (None, _) => return Err(unavailable()),
         _ => {
             return Err(if composed_only {
@@ -17203,7 +17224,7 @@ pub(crate) fn record_source_target(
             });
         }
     };
-    let composed_parents = if composed_only {
+    let composed_parents = if composed_only || (selected_id.is_some() && composed) {
         let [left, right] = parents else {
             return Err(unavailable());
         };
@@ -17220,7 +17241,7 @@ pub(crate) fn record_source_target(
     };
     let rule_id = rule_id.into();
     Ok(RecordSourceTarget {
-        lookup: if composed_only {
+        lookup: if composed_parents.is_some() {
             Intent::InspectComposedRuleSource { rule_id }
         } else {
             Intent::InspectDeclaredRuleSource { rule_id }
@@ -17457,7 +17478,9 @@ impl SourceMemoryRecord<'_> {
                     (proof, Some(roles))
                 } else if matches!(
                     goal.intent,
-                    Intent::InspectDeclaredRuleSource { .. } | Intent::InspectPreviousRuleSource
+                    Intent::InspectDeclaredRuleSource { .. }
+                        | Intent::InspectPreviousRuleSource
+                        | Intent::InspectPreviousRuleSourceById { .. }
                 ) && input::verified_plain_rule_source(&bundle)?
                 {
                     let proof = canonical(&(
@@ -17609,9 +17632,15 @@ pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
     // compute, content, render and optional file confirmation.
     let reads = match goal.intent {
         Intent::InspectPreviousComposedRuleSource => 4,
-        Intent::InspectComposedRuleSource { .. } | Intent::InspectPreviousRuleSource => 3,
+        Intent::InspectComposedRuleSource { .. }
+        | Intent::InspectPreviousRuleSource
+        | Intent::InspectPreviousRuleSourceById { .. } => 3,
         _ => 2,
     };
+    require_record_source_actions(goal, reads)
+}
+
+fn require_record_source_actions(goal: &GoalContract, reads: u32) -> Result<()> {
     if goal.budget.max_actions < reads + 3 + u32::from(goal.output_path.is_some()) {
         let message = match &goal.intent {
             Intent::InspectFactSource { .. } => "Factと元入力を照合する行動予算が不足しています。",
@@ -17621,7 +17650,7 @@ pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
             Intent::InspectComposedRuleSource { .. } => {
                 "合成規則と親規則の元入力を照合する行動予算が不足しています。"
             }
-            Intent::InspectPreviousRuleSource => {
+            Intent::InspectPreviousRuleSource | Intent::InspectPreviousRuleSourceById { .. } => {
                 "前の理由説明と規則の元入力を照合する行動予算が不足しています。"
             }
             Intent::InspectPreviousComposedRuleSource => {

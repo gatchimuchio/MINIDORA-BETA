@@ -108,6 +108,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::InspectDeclaredRuleSource { .. }
                         | Intent::InspectPreviousRuleSource
                         | Intent::InspectPreviousComposedRuleSource
+                        | Intent::InspectPreviousRuleSourceById { .. }
                         | Intent::InspectComposedRuleSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
@@ -2717,6 +2718,10 @@ fn verify_record_source_result(
             "RECOVERY_PREVIOUS_COMPOSED_RULE_SOURCE_MISMATCH",
             "RECOVERY_COMPOSED_RULE_SOURCE_CHANGED",
         ),
+        Intent::InspectPreviousRuleSourceById { .. } => (
+            "RECOVERY_PREVIOUS_RULE_SOURCE_BY_ID_MISMATCH",
+            "RECOVERY_PREVIOUS_RULE_SOURCE_BY_ID_CHANGED",
+        ),
         Intent::InspectComposedRuleSource { .. } => (
             "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH",
             "RECOVERY_COMPOSED_RULE_SOURCE_CHANGED",
@@ -2734,6 +2739,7 @@ fn verify_record_source_result(
                 code.as_str(),
                 "PREVIOUS_RULE_SOURCE_UNAVAILABLE"
                     | "PREVIOUS_RULE_SOURCE_AMBIGUOUS"
+                    | "PREVIOUS_RULE_SOURCE_ID_NOT_USED"
                     | "PREVIOUS_COMPOSED_RULE_SOURCE_UNAVAILABLE"
                     | "PREVIOUS_COMPOSED_RULE_SOURCE_AMBIGUOUS"
             ) =>
@@ -4377,11 +4383,17 @@ fn inspect(
             | crate::input::DECLARED_RULE_SOURCE_PARSER_VERSION
             | crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION
             | crate::input::PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION
+            | crate::input::PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION
             | crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
     if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
         let code = if sealed_source_parser
+            == Some(crate::input::PREVIOUS_RULE_SOURCE_BY_ID_PARSER_VERSION)
+            || matches!(goal.intent, Intent::InspectPreviousRuleSourceById { .. })
+        {
+            "RECOVERY_PREVIOUS_RULE_SOURCE_BY_ID_MISMATCH"
+        } else if sealed_source_parser
             == Some(crate::input::PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION)
             || matches!(goal.intent, Intent::InspectPreviousComposedRuleSource)
         {

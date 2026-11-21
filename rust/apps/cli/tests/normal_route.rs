@@ -5043,6 +5043,58 @@ fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarati
             .unwrap()
             .contains("PREVIOUS_RULE_SOURCE_AMBIGUOUS")
     );
+    let selected_command = format!("　前の回答で使った規則の出典： {}。　", shortcut.id);
+    let selected = run(&[
+        "--input",
+        "select-shortcut",
+        "--context",
+        why_id,
+        "--max-actions",
+        "7",
+        &selected_command,
+    ]);
+    assert_eq!(selected["text"], contextual["text"]);
+    let selected_deps = selected["dependencies"].as_array().unwrap();
+    assert_eq!(selected_deps[..7], contextual_deps[..7]);
+    let selected_proof = sequence_artifact(&store, &selected_deps[7]);
+    assert_eq!(
+        selected_proof[0],
+        "minidora-selected-previous-rule-source-v1"
+    );
+    assert_eq!(selected_proof[1], why_id);
+    assert_eq!(selected_proof[5], proof);
+    let selected_bundle = store
+        .load_case("owner", "normal-route")
+        .unwrap()
+        .unwrap()
+        .bundle
+        .unwrap();
+    assert_eq!(
+        selected_bundle.meaning.parser_version,
+        "declarative-ja-en-v141-previous-rule-source-by-id"
+    );
+    let spans = &selected_bundle.meaning.source_roles["/InspectPreviousRuleSourceById/rule_id"];
+    assert_eq!(spans.len(), 1);
+    assert_eq!(
+        selected_command.get(spans[0].start..spans[0].end),
+        Some(shortcut.id.as_str())
+    );
+    let selected_parent = run(&[
+        "--input",
+        "select-parent",
+        "--context",
+        why_id,
+        "--max-actions",
+        "6",
+        &format!("前の回答で使った規則の出典: {}", parents[0]),
+    ]);
+    let parent_deps = selected_parent["dependencies"].as_array().unwrap();
+    assert_eq!(parent_deps[0], why_id);
+    assert_eq!(parent_deps[2], parents[0]);
+    assert_eq!(parent_deps[3], declared_left["id"]);
+    let parent_proof = sequence_artifact(&store, &parent_deps[4]);
+    assert_eq!(parent_proof[0], "minidora-selected-previous-rule-source-v1");
+    assert_eq!(parent_proof[5][0], "minidora-rule-source-v1");
     assert_eq!(store.load_memory("owner").unwrap(), memory);
     assert!(store.actions("owner", "source").unwrap().is_empty());
 }
