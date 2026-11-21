@@ -48,6 +48,7 @@ pub(crate) const CONDITION_EVALUATION_PARSER_VERSION: &str =
 pub(crate) const CONDITION_EVALUATION_DETAIL_PARSER_VERSION: &str =
     "declarative-ja-en-v128-condition-evaluation-detail";
 pub(crate) const FACT_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v129-fact-source";
+pub(crate) const CONDITION_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v130-condition-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -289,25 +290,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
-        Intent::DefineCondition { .. }
-            if source_roles.iter().any(|(role, spans)| {
-                role.ends_with("/kind") && spans.iter().any(|span| span.text == "fact")
-            }) =>
-        {
-            INLINE_FACT_CONDITION_PARSER_VERSION
+        Intent::DefineCondition { definition } => {
+            condition_definition_parser_version(definition, &source_roles)
         }
-        Intent::DefineCondition { definition } if !definition.dependencies.is_empty() => {
-            COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION
-        }
-        Intent::DefineCondition { definition }
-            if definition.valid_from.is_some() || definition.valid_until.is_some() =>
-        {
-            TIMED_CONDITION_DEFINITION_PARSER_VERSION
-        }
-        Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::EvaluateCondition { .. } => CONDITION_EVALUATION_PARSER_VERSION,
         Intent::EvaluateConditionDetailed { .. } => CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
         Intent::InspectFactSource { .. } => FACT_SOURCE_PARSER_VERSION,
+        Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
         Intent::CsvSelectIndex { .. } => CSV_POSITIONAL_SELECTION_PARSER_VERSION,
@@ -1623,27 +1612,41 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
     }
-    if let Intent::InspectFactSource { fact_id } = intent {
+    let source_inspection = match intent {
+        Intent::InspectFactSource { fact_id } => Some((
+            "Factの出典",
+            fact_id,
+            "/InspectFactSource/fact_id",
+            "FACT_SOURCE_SPAN",
+            "Fact",
+        )),
+        Intent::InspectConditionSource { record_id } => Some((
+            "条件定義の出典",
+            record_id,
+            "/InspectConditionSource/record_id",
+            "CONDITION_SOURCE_SPAN",
+            "condition record",
+        )),
+        _ => None,
+    };
+    if let Some((label, record_id, role, code, record_label)) = source_inspection {
         let trimmed = terminal_trim(text);
-        let payload = fact_source_payload(trimmed)
-            .filter(|payload| *payload == fact_id)
+        let payload = source_inspection_payload(trimmed, label)
+            .filter(|payload| *payload == record_id)
             .ok_or_else(|| {
                 failure(
-                    "FACT_SOURCE_SPAN",
-                    "the Fact identity does not match the original request",
+                    code,
+                    format!("the {record_label} identity does not match the original request"),
                 )
             })?;
         let start = text.len() - text.trim_start().len() + trimmed.len() - payload.len();
         let span = source_span_at(text, start, start + payload.len()).ok_or_else(|| {
             failure(
-                "FACT_SOURCE_SPAN",
-                "the Fact identity is outside the original request",
+                code,
+                format!("the {record_label} identity is outside the original request"),
             )
         })?;
-        return Ok(BTreeMap::from([(
-            "/InspectFactSource/fact_id".into(),
-            vec![span],
-        )]));
+        return Ok(BTreeMap::from([(role.into(), vec![span])]));
     }
     let condition_role = match intent {
         Intent::EvaluateCondition { .. } => Some("EvaluateCondition"),
@@ -3544,22 +3547,31 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
-    if let Some(fact_id) = fact_source_payload(terminal_trim(text)) {
+    if let Some(fact_id) = source_inspection_payload(terminal_trim(text), "Factの出典") {
         return Ok(
-            if !text.contains(['?', '？'])
-                && fact_id.strip_prefix("fact:").is_some_and(|digest| {
-                    digest.len() == 64
-                        && digest
-                            .bytes()
-                            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-                })
-            {
+            if !text.contains(['?', '？']) && valid_source_record_id(fact_id, "fact:") {
                 Intent::InspectFactSource {
                     fact_id: fact_id.into(),
                 }
             } else {
                 Intent::Unknown {
                     reason: "出典を照会するFact IDを一つ指定してください。".into(),
+                }
+            },
+        );
+    }
+    if let Some(record_id) = source_inspection_payload(terminal_trim(text), "条件定義の出典")
+    {
+        return Ok(
+            if !text.trim().contains(['?', '？', '\r', '\n'])
+                && valid_source_record_id(record_id, "condition-record:")
+            {
+                Intent::InspectConditionSource {
+                    record_id: record_id.into(),
+                }
+            } else {
+                Intent::Unknown {
+                    reason: "出典を照会する条件定義の記録IDを一つ指定してください。".into(),
                 }
             },
         );
@@ -4985,10 +4997,19 @@ fn condition_definition_payload(text: &str) -> Option<&str> {
         .map(str::trim_start)
 }
 
-fn fact_source_payload(text: &str) -> Option<&str> {
-    text.strip_prefix("Factの出典:")
-        .or_else(|| text.strip_prefix("Factの出典："))
+fn source_inspection_payload<'a>(text: &'a str, label: &str) -> Option<&'a str> {
+    text.strip_prefix(label)?
+        .strip_prefix([':', '：'])
         .map(str::trim_start)
+}
+
+fn valid_source_record_id(record_id: &str, prefix: &str) -> bool {
+    record_id.strip_prefix(prefix).is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }
 
 fn condition_evaluation_payload(text: &str) -> Option<(&str, bool)> {
@@ -5295,6 +5316,43 @@ fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
         }));
     }
     Ok(Some(Intent::DefineCondition { definition }))
+}
+
+fn condition_definition_parser_version(
+    definition: &ConditionDefinition,
+    source_roles: &BTreeMap<String, Vec<SourceSpan>>,
+) -> &'static str {
+    if source_roles.iter().any(|(role, spans)| {
+        role.ends_with("/kind") && spans.iter().any(|span| span.text == "fact")
+    }) {
+        INLINE_FACT_CONDITION_PARSER_VERSION
+    } else if !definition.dependencies.is_empty() {
+        COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION
+    } else if definition.valid_from.is_some() || definition.valid_until.is_some() {
+        TIMED_CONDITION_DEFINITION_PARSER_VERSION
+    } else {
+        CONDITION_DEFINITION_PARSER_VERSION
+    }
+}
+
+pub(crate) fn verified_condition_definition_source(
+    bundle: &InputBundle,
+    definition: &ConditionDefinition,
+) -> Result<bool> {
+    if bundle.meaning.source_kind != "USER_REQUEST"
+        || !matches!(&bundle.meaning.intent, Intent::DefineCondition { definition: sealed } if sealed == definition)
+        || !matches!(
+            condition_definition_intent(&bundle.request.text)?,
+            Some(Intent::DefineCondition { definition: parsed }) if &parsed == definition
+        )
+    {
+        return Ok(false);
+    }
+
+    let roles = condition_definition_source_roles(&bundle.request.text, definition)?;
+    Ok(!roles.is_empty()
+        && bundle.meaning.parser_version == condition_definition_parser_version(definition, &roles)
+        && bundle.meaning.source_roles == roles)
 }
 
 fn condition_definition_source_roles(

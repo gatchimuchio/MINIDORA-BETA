@@ -102,6 +102,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::EvaluateCondition { .. }
                         | Intent::EvaluateConditionDetailed { .. }
                         | Intent::InspectFactSource { .. }
+                        | Intent::InspectConditionSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -2558,25 +2559,32 @@ struct RetainedRelationProof {
     projection: (MemoryState, crate::relations::QueryOutcome),
 }
 
-fn verify_fact_source_result(
+fn verify_record_source_result(
     store: &Store,
     bundle: &InputBundle,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<()> {
-    const CODE: &str = "RECOVERY_FACT_SOURCE_MISMATCH";
-    verify_registered_input(store, bundle, CODE)?;
-    crate::core::check_fact_source_actions(goal)?;
-    let Intent::InspectFactSource { fact_id } = &goal.intent else {
-        return Err(failure(CODE, "the sealed Fact-source goal is missing"));
+    let (mismatch, changed) = if matches!(goal.intent, Intent::InspectFactSource { .. }) {
+        (
+            "RECOVERY_FACT_SOURCE_MISMATCH",
+            "RECOVERY_FACT_SOURCE_CHANGED",
+        )
+    } else {
+        (
+            "RECOVERY_CONDITION_SOURCE_MISMATCH",
+            "RECOVERY_CONDITION_SOURCE_CHANGED",
+        )
     };
+    verify_registered_input(store, bundle, mismatch)?;
+    crate::core::check_record_source_actions(goal)?;
     let actor = &bundle.request.actor_id;
     let case = &bundle.request.case_id;
     let revision = result.actor_memory_revision.ok_or_else(|| {
         failure(
-            CODE,
-            "the Fact-source result has no retained actor-memory revision",
+            mismatch,
+            "the source result has no retained actor-memory revision",
         )
     })?;
     let snapshot = store
@@ -2584,26 +2592,19 @@ fn verify_fact_source_result(
         .ok_or_else(|| {
             failure(
                 "RECOVERY_MEMORY_REVISION_MISSING",
-                "the original Fact source memory is unavailable",
+                "the original source memory is unavailable",
             )
         })?;
-    let fact = snapshot
-        .facts
-        .iter()
-        .find(|fact| &fact.id == fact_id)
-        .ok_or_else(|| {
-            failure(
-                CODE,
-                "the sealed Fact is absent from its original actor-memory revision",
-            )
-        })?;
-    let readout = crate::core::fact_source_readout(store, actor, revision, fact, goal)?;
+    let record = crate::core::lookup_source_record(&snapshot, &goal.intent).map_err(|_| {
+        failure(
+            mismatch,
+            "the sealed record is absent from its original actor-memory revision",
+        )
+    })?;
+    let readout = record.readout(store, actor, revision, goal)?;
     let proof_ref = digest(&readout.proof);
-    let expected_dependencies = [
-        fact.id.clone(),
-        fact.source_input.clone(),
-        proof_ref.clone(),
-    ];
+    let (id, origin) = record.id_and_origin();
+    let expected_dependencies = [id, origin, proof_ref.as_str()];
     if result.dependencies != expected_dependencies
         || result.guarantee != Guarantee::Computed
         || plan.guarantee != Guarantee::Computed
@@ -2615,15 +2616,16 @@ fn verify_fact_source_result(
         || store.get_bytes(actor, case, &proof_ref)? != readout.proof
     {
         return Err(failure(
-            CODE,
-            "the retained Fact source differs from its sealed proof and surface",
+            mismatch,
+            "the retained record source differs from its sealed proof and surface",
         ));
     }
-    let (_, current) = crate::core::fact_source_at_head(store, actor, fact_id)?;
-    if current != *fact {
+    let head = crate::core::record_source_memory_at_head(store, actor)?;
+    let current = crate::core::lookup_source_record(&head, &goal.intent)?;
+    if current != record {
         return Err(failure(
-            "RECOVERY_FACT_SOURCE_CHANGED",
-            "the current Fact or its validity differs from the adopted Fact-source result",
+            changed,
+            "the current record or its validity differs from the adopted source result",
         ));
     }
     Ok(())
@@ -4183,14 +4185,26 @@ fn inspect(
         ));
     }
     let requires_condition_evaluation = condition_contract.is_some();
-    let requires_fact_source =
-        bundle.meaning.parser_version == crate::input::FACT_SOURCE_PARSER_VERSION;
-    if matches!(goal.intent, Intent::InspectFactSource { .. }) != requires_fact_source {
+    let source_contract = crate::core::record_source_contract(&goal.intent);
+    let sealed_source_parser = matches!(
+        bundle.meaning.parser_version.as_str(),
+        crate::input::FACT_SOURCE_PARSER_VERSION | crate::input::CONDITION_SOURCE_PARSER_VERSION
+    )
+    .then_some(bundle.meaning.parser_version.as_str());
+    if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
+        let code = if sealed_source_parser == Some(crate::input::CONDITION_SOURCE_PARSER_VERSION)
+            || matches!(goal.intent, Intent::InspectConditionSource { .. })
+        {
+            "RECOVERY_CONDITION_SOURCE_MISMATCH"
+        } else {
+            "RECOVERY_FACT_SOURCE_MISMATCH"
+        };
         return Err(failure(
-            "RECOVERY_FACT_SOURCE_MISMATCH",
-            "the Fact-source intent differs from its sealed parser contract",
+            code,
+            "the record-source intent differs from its sealed parser contract",
         ));
     }
+    let requires_record_source = source_contract.is_some();
     let requires_sequence_edit = matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::SEQUENCE_CORRECTION_PARSER_VERSION
@@ -4276,7 +4290,7 @@ fn inspect(
             || requires_generated_calculation
             || requires_verified_correction
             || requires_condition_evaluation
-            || requires_fact_source
+            || requires_record_source
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
@@ -4593,8 +4607,8 @@ fn inspect(
         }
         verify_condition_evaluation_result(store, bundle, result, plan, &goal)?;
     }
-    if requires_fact_source {
-        verify_fact_source_result(store, bundle, result, plan, &goal)?;
+    if requires_record_source {
+        verify_record_source_result(store, bundle, result, plan, &goal)?;
     }
     if let Some(hypothesis) = crate::core::previous_group_mean_hypothesis(store, state)? {
         if result.guarantee != Guarantee::Hypothesis
@@ -4608,7 +4622,7 @@ fn inspect(
         }
         hypothesis.verify_artifacts(store, actor, case)?;
     }
-    let original_relation = if requires_condition_evaluation || requires_fact_source {
+    let original_relation = if requires_condition_evaluation || requires_record_source {
         None
     } else {
         verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?
@@ -8786,6 +8800,82 @@ mod tests {
             recovered.actor_memory_revision,
             result.actor_memory_revision
         );
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn condition_source_reconciles_original_input_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let defined = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "definition",
+                    "alice",
+                    "条件定義: [scope=実験室][condition=点検] ユリは点検済み",
+                ),
+            )
+            .unwrap();
+        assert_eq!(defined.lifecycle, Lifecycle::Commit, "{defined:?}");
+        let command = format!("条件定義の出典: {}", defined.dependencies[0]);
+        let mut request = RequestEnvelope::new("case", "provenance", "alice", &command);
+        request.budget.max_actions = 6;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.dependencies[1], defined.id);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let mut altered = state.result.as_ref().unwrap().clone();
+        altered.dependencies[1] = altered.dependencies[0].clone();
+        let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_CONDITION_SOURCE_MISMATCH"),
+            "{error:?}"
+        );
+        let unrelated = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "other",
+                    "unrelated",
+                    "alice",
+                    "[scope=archive]ナナは記録済み",
+                ),
+            )
+            .unwrap();
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(
+            recovered.actor_memory_revision,
+            result.actor_memory_revision
+        );
+        assert_eq!(recovered.dependencies, result.dependencies);
         assert_eq!(recovered.receipts[0].action_id, token);
         assert_eq!(
             recovered.receipts[0].reason.as_deref(),

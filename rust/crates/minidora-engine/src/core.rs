@@ -1592,6 +1592,20 @@ pub(crate) const CONDITION_EVALUATION_PREDICATE: &str = "EXACT_CONDITION_EVALUAT
 pub(crate) const CONDITION_EVALUATION_DETAIL_PREDICATE: &str =
     "EXACT_CONDITION_EVALUATION_DETAIL_V1";
 pub(crate) const FACT_SOURCE_PREDICATE: &str = "EXACT_FACT_SOURCE_V1";
+pub(crate) const CONDITION_SOURCE_PREDICATE: &str = "EXACT_CONDITION_SOURCE_V1";
+
+pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &'static str)> {
+    match intent {
+        Intent::InspectFactSource { .. } => {
+            Some((input::FACT_SOURCE_PARSER_VERSION, FACT_SOURCE_PREDICATE))
+        }
+        Intent::InspectConditionSource { .. } => Some((
+            input::CONDITION_SOURCE_PARSER_VERSION,
+            CONDITION_SOURCE_PREDICATE,
+        )),
+        _ => None,
+    }
+}
 
 pub(crate) fn condition_evaluation_contract(
     intent: &Intent,
@@ -1629,10 +1643,12 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
-        Intent::InspectFactSource { .. }
-            if meaning.parser_version == input::FACT_SOURCE_PARSER_VERSION =>
-        {
-            predicates.push(FACT_SOURCE_PREDICATE.into());
+        intent @ (Intent::InspectFactSource { .. } | Intent::InspectConditionSource { .. }) => {
+            if let Some((parser, predicate)) = record_source_contract(intent)
+                && parser == meaning.parser_version
+            {
+                predicates.push(predicate.into());
+            }
         }
         intent @ (Intent::EvaluateCondition { .. } | Intent::EvaluateConditionDetailed { .. }) => {
             if let Some((parser, predicate)) = condition_evaluation_contract(intent)
@@ -1739,6 +1755,7 @@ fn verify_report_goal_content(
                 | CONDITION_EVALUATION_PREDICATE
                 | CONDITION_EVALUATION_DETAIL_PREDICATE
                 | FACT_SOURCE_PREDICATE
+                | CONDITION_SOURCE_PREDICATE
         )
     }) else {
         return Ok(());
@@ -10887,13 +10904,15 @@ impl Engine {
                     );
                 }
             },
-            Intent::InspectFactSource { fact_id } => {
-                let report = check_fact_source_actions(&goal).and_then(|()| {
-                    let (revision, fact) = fact_source_at_head(&self.store, actor, fact_id)?;
-                    let readout = fact_source_readout(&self.store, actor, revision, &fact, &goal)?;
-                    Ok((revision, fact, readout))
+            intent @ (Intent::InspectFactSource { .. } | Intent::InspectConditionSource { .. }) => {
+                let report = check_record_source_actions(&goal).and_then(|()| {
+                    let memory = record_source_memory_at_head(&self.store, actor)?;
+                    let record = lookup_source_record(&memory, intent)?;
+                    let readout = record.readout(&self.store, actor, memory.revision, &goal)?;
+                    let (id, origin) = record.id_and_origin();
+                    Ok((memory.revision, id.to_owned(), origin.to_owned(), readout))
                 });
-                let (revision, fact, readout) = match report {
+                let (revision, id, origin, readout) = match report {
                     Ok(report) => report,
                     Err(Error::Contract { code, message }) => {
                         return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
@@ -10904,11 +10923,13 @@ impl Engine {
                     .store
                     .put_bytes(actor, &request.case_id, &readout.proof)?;
                 result.actor_memory_revision = Some(revision);
-                result.dependencies = vec![fact.id, fact.source_input, proof_ref];
+                result.dependencies = vec![id, origin, proof_ref];
                 result.guarantee = Guarantee::Computed;
                 units = readout.units;
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: FACT_SOURCE_PREDICATE,
+                    predicate: record_source_contract(intent)
+                        .expect("record source intent")
+                        .1,
                     guarantee: Guarantee::Computed,
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
@@ -16748,30 +16769,191 @@ pub(crate) fn condition_report_at_head(
     })
 }
 
-pub(crate) struct FactSourceReadout {
+pub(crate) struct RecordSourceReadout {
     pub(crate) proof: Vec<u8>,
     pub(crate) units: Vec<String>,
 }
 
-pub(crate) fn check_fact_source_actions(goal: &GoalContract) -> Result<()> {
-    // One Fact lookup and one verified source-history read, ahead of
-    // compute, content, render and the optional file confirmation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceMemoryRecord<'a> {
+    Fact(&'a Fact),
+    Condition(&'a ConditionRecord),
+}
+
+impl SourceMemoryRecord<'_> {
+    pub(crate) fn id_and_origin(&self) -> (&str, &str) {
+        match self {
+            Self::Fact(fact) => (&fact.id, &fact.source_input),
+            Self::Condition(record) => (&record.id, &record.source_input),
+        }
+    }
+
+    pub(crate) fn readout(
+        self,
+        store: &Store,
+        actor: &str,
+        revision: u64,
+        goal: &GoalContract,
+    ) -> Result<RecordSourceReadout> {
+        let (id, origin) = self.id_and_origin();
+        let unavailable = || match self {
+            Self::Fact(_) => failure(
+                "FACT_SOURCE_UNAVAILABLE",
+                "指定したFactの確定済み入力と原文の対応を確認できません。",
+            ),
+            Self::Condition(_) => failure(
+                "CONDITION_SOURCE_UNAVAILABLE",
+                "指定した条件定義の確定済み入力と原文の対応を確認できません。",
+            ),
+        };
+        let (source_case, input_id, version) = store
+            .owned_source_input_key(actor, origin)?
+            .ok_or_else(unavailable)?;
+        let (bundle_ref, bundle) =
+            store.with_verified_case_history(actor, &source_case, |history| {
+                let (bundle_ref, bundle) = history
+                    .input_bundle(&input_id, version)?
+                    .ok_or_else(unavailable)?;
+                let source = history
+                    .input_result(&input_id, version)?
+                    .ok_or_else(unavailable)?;
+                if identity(&bundle.request)? != origin
+                    || source.id != origin
+                    || source.input_id != input_id
+                    || source.input_version != version
+                    || source.lifecycle != Lifecycle::Commit
+                    || source.guarantee != Guarantee::UserPremise
+                    || !source
+                        .dependencies
+                        .iter()
+                        .any(|dependency| dependency == id)
+                    || !history.contains_committed_result(&source)?
+                {
+                    return Err(unavailable());
+                }
+                Ok((bundle_ref, bundle))
+            })?;
+        let (proof, mut units, source_roles, limit_message) = match self {
+            Self::Fact(fact) => {
+                let evidence = fact.source_evidence.as_ref().ok_or_else(unavailable)?;
+                if fact.guarantee != Guarantee::UserPremise
+                    || fact.id
+                        != format!(
+                            "fact:{}",
+                            identity(&("user-premise-v1", &fact.proposition, &fact.source_input))?
+                        )
+                    || input::assertion_source_evidence(&bundle)?.as_ref() != Some(evidence)
+                {
+                    return Err(unavailable());
+                }
+                (
+                    canonical(&(
+                        "minidora-fact-source-v1",
+                        revision,
+                        fact,
+                        &source_case,
+                        &input_id,
+                        version,
+                        &bundle_ref,
+                    ))?,
+                    vec![
+                        format!("保存前提 {}", fact.id),
+                        format!("記憶状態: {}", if fact.valid { "有効" } else { "失効" }),
+                        format!("命題: {}", describe(&fact.proposition)),
+                    ],
+                    &evidence.source_roles,
+                    "Factの出典と表示が要求の証拠予算を超えています。",
+                )
+            }
+            Self::Condition(record) => {
+                let definition = &record.definition;
+                if record.semantics_version != CONDITION_SEMANTICS_VERSION
+                    || record.id
+                        != format!(
+                            "condition-record:{}",
+                            identity(&(CONDITION_SEMANTICS_VERSION, definition))?
+                        )
+                    || !input::verified_condition_definition_source(&bundle, definition)?
+                {
+                    return Err(unavailable());
+                }
+                let mut units = vec![
+                    format!("条件定義 {}", record.id),
+                    format!("記憶状態: {}", if record.valid { "有効" } else { "失効" }),
+                    format!("条件ID: {}", definition.condition_id),
+                    format!(
+                        "適用主体: {}、範囲: {}",
+                        definition.subject, definition.scope
+                    ),
+                    format!(
+                        "期間の下限（含む）: {}、上限（含まない）: {}",
+                        definition.valid_from.as_deref().unwrap_or("なし"),
+                        definition.valid_until.as_deref().unwrap_or("なし"),
+                    ),
+                    format!("意味版: {}", record.semantics_version),
+                    format!("条件式: {}", serde_json::to_string(&definition.expression)?),
+                ];
+                if !record.dependencies.is_empty() {
+                    units.push(format!(
+                        "依存する定義記録ID: {}",
+                        record.dependencies.join("、")
+                    ));
+                }
+                (
+                    canonical(&(
+                        "minidora-condition-source-v1",
+                        revision,
+                        record,
+                        &source_case,
+                        &input_id,
+                        version,
+                        &bundle_ref,
+                        &bundle.raw_sha256,
+                        &bundle.meaning.source_roles,
+                    ))?,
+                    units,
+                    &bundle.meaning.source_roles,
+                    "条件定義の出典と表示が要求の証拠予算を超えています。",
+                )
+            }
+        };
+        units.extend([
+            format!("出典ケース: {source_case:?}、入力ID: {input_id:?}、版: {version}"),
+            format!("元の結果ID: {origin}"),
+            format!("原文SHA-256: {}", bundle.raw_sha256),
+        ]);
+        for (role, spans) in source_roles {
+            for span in spans {
+                units.push(format!(
+                    "原文 {role} [{}, {}): {:?}",
+                    span.start, span.end, span.text
+                ));
+            }
+        }
+        if proof.len().saturating_add(units.join("\n").len()) > goal.budget.max_evidence_bytes {
+            return Err(failure("RESOURCE_LIMIT", limit_message));
+        }
+        Ok(RecordSourceReadout { proof, units })
+    }
+}
+
+pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
+    // Reserve the record and verified source-history reads in addition to
+    // compute, content, render and optional file confirmation.
     if goal.budget.max_actions < 5 + u32::from(goal.output_path.is_some()) {
-        return Err(failure(
-            "ACTION_BUDGET_EXHAUSTED",
-            "Factと元入力を照合する行動予算が不足しています。",
-        ));
+        let message = if matches!(goal.intent, Intent::InspectFactSource { .. }) {
+            "Factと元入力を照合する行動予算が不足しています。"
+        } else {
+            "条件定義と元入力を照合する行動予算が不足しています。"
+        };
+        return Err(failure("ACTION_BUDGET_EXHAUSTED", message));
     }
     Ok(())
 }
 
-pub(crate) fn fact_source_at_head(
-    store: &Store,
-    actor: &str,
-    fact_id: &str,
-) -> Result<(u64, Fact)> {
-    // A Fact's active flag is not part of its ID. Read the authoritative
-    // revision, including that flag, rather than its rebuildable cache row.
+pub(crate) fn record_source_memory_at_head(store: &Store, actor: &str) -> Result<MemoryState> {
+    // Read validity from the authoritative snapshot, including for retained
+    // inactive records that are omitted by normal evidence selection.
     let (snapshot, head) = store.load_memory_with_reference(actor)?;
     if head.is_some_and(|(revision, _)| u64::try_from(revision).ok() != Some(snapshot.revision)) {
         return Err(failure(
@@ -16779,99 +16961,41 @@ pub(crate) fn fact_source_at_head(
             "the current memory row differs from its immutable snapshot version",
         ));
     }
-    let fact = snapshot
-        .facts
-        .into_iter()
-        .find(|fact| fact.id == fact_id)
-        .ok_or_else(|| {
-            failure(
-                "FACT_SOURCE_NOT_FOUND",
-                "指定したFactを利用者の保存記録から確認できません。",
-            )
-        })?;
-    Ok((snapshot.revision, fact))
+    Ok(snapshot)
 }
 
-pub(crate) fn fact_source_readout(
-    store: &Store,
-    actor: &str,
-    revision: u64,
-    fact: &Fact,
-    goal: &GoalContract,
-) -> Result<FactSourceReadout> {
-    let unavailable = || {
-        failure(
-            "FACT_SOURCE_UNAVAILABLE",
-            "指定したFactの確定済み入力と原文の対応を確認できません。",
-        )
-    };
-    if !matches!(&goal.intent, Intent::InspectFactSource { fact_id } if fact_id == &fact.id)
-        || fact.guarantee != Guarantee::UserPremise
-        || fact.id
-            != format!(
-                "fact:{}",
-                identity(&("user-premise-v1", &fact.proposition, &fact.source_input))?
-            )
-    {
-        return Err(unavailable());
+pub(crate) fn lookup_source_record<'a>(
+    memory: &'a MemoryState,
+    intent: &Intent,
+) -> Result<SourceMemoryRecord<'a>> {
+    match intent {
+        Intent::InspectFactSource { fact_id } => memory
+            .facts
+            .iter()
+            .find(|fact| &fact.id == fact_id)
+            .map(SourceMemoryRecord::Fact)
+            .ok_or_else(|| {
+                failure(
+                    "FACT_SOURCE_NOT_FOUND",
+                    "指定したFactを利用者の保存記録から確認できません。",
+                )
+            }),
+        Intent::InspectConditionSource { record_id } => memory
+            .conditions
+            .iter()
+            .find(|record| &record.id == record_id)
+            .map(SourceMemoryRecord::Condition)
+            .ok_or_else(|| {
+                failure(
+                    "CONDITION_SOURCE_NOT_FOUND",
+                    "指定した条件定義を利用者の保存記録から確認できません。",
+                )
+            }),
+        _ => Err(failure(
+            "RECORD_SOURCE_GOAL_INVALID",
+            "出典照会の要求が一致しません。",
+        )),
     }
-    let evidence = fact.source_evidence.as_ref().ok_or_else(unavailable)?;
-    let (source_case, input_id, version) = store
-        .owned_source_input_key(actor, &fact.source_input)?
-        .ok_or_else(unavailable)?;
-    let bundle_ref = store.with_verified_case_history(actor, &source_case, |history| {
-        let (bundle_ref, bundle) = history
-            .input_bundle(&input_id, version)?
-            .ok_or_else(unavailable)?;
-        let source = history
-            .input_result(&input_id, version)?
-            .ok_or_else(unavailable)?;
-        if identity(&bundle.request)? != fact.source_input
-            || input::assertion_source_evidence(&bundle)?.as_ref() != Some(evidence)
-            || source.id != fact.source_input
-            || source.input_id != input_id
-            || source.input_version != version
-            || source.lifecycle != Lifecycle::Commit
-            || source.guarantee != Guarantee::UserPremise
-            || !source.dependencies.contains(&fact.id)
-            || !history.contains_committed_result(&source)?
-        {
-            return Err(unavailable());
-        }
-        Ok(bundle_ref)
-    })?;
-    let proof = canonical(&(
-        "minidora-fact-source-v1",
-        revision,
-        fact,
-        &source_case,
-        &input_id,
-        version,
-        &bundle_ref,
-    ))?;
-    let mut units = vec![
-        format!("保存前提 {}", fact.id),
-        format!("記憶状態: {}", if fact.valid { "有効" } else { "失効" }),
-        format!("命題: {}", describe(&fact.proposition)),
-        format!("出典ケース: {source_case:?}、入力ID: {input_id:?}、版: {version}"),
-        format!("元の結果ID: {}", fact.source_input),
-        format!("原文SHA-256: {}", evidence.raw_sha256),
-    ];
-    for (role, spans) in &evidence.source_roles {
-        for span in spans {
-            units.push(format!(
-                "原文 {role} [{}, {}): {:?}",
-                span.start, span.end, span.text
-            ));
-        }
-    }
-    if proof.len().saturating_add(units.join("\n").len()) > goal.budget.max_evidence_bytes {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "Factの出典と表示が要求の証拠予算を超えています。",
-        ));
-    }
-    Ok(FactSourceReadout { proof, units })
 }
 
 fn japanese_godan_negative_form(predicate: &str) -> Option<String> {

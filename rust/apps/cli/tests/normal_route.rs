@@ -4550,6 +4550,84 @@ fn fact_source_resolves_exact_saved_input_across_owned_cases() {
 }
 
 #[test]
+fn condition_source_resolves_exact_timed_definition_across_owned_cases() {
+    let scratch = Scratch::new();
+    let source = concat!(
+        "条件定義: [scope=実験室][condition=点検]",
+        "[valid_from=2026-11-20T00:00:00Z][valid_until=2026-11-21T00:00:00Z] ユリは点検済み"
+    );
+    let defined = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--case", "definitions", "--input", "inspection", source],
+    ));
+    let id = defined["dependencies"][0].as_str().unwrap();
+    assert!(id.starts_with("condition-record:"));
+    let command = format!("　条件定義の出典： {id}。　");
+    let report = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "condition-provenance",
+            "--max-actions",
+            "5",
+            &command,
+        ],
+    ));
+    assert_eq!(report["dependencies"][0], id);
+    assert_eq!(report["dependencies"][1], defined["id"]);
+    let text = report["text"].as_str().unwrap();
+    assert!(text.contains("記憶状態: 有効"));
+    assert!(text.contains("出典ケース: \"definitions\"、入力ID: \"inspection\"、版: 1"));
+    assert!(text.contains(
+        "期間の下限（含む）: 2026-11-20T00:00:00Z、上限（含まない）: 2026-11-21T00:00:00Z"
+    ));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &report["dependencies"][2]);
+    assert_eq!(proof[0], "minidora-condition-source-v1");
+    assert_eq!(proof[1], report["actor_memory_revision"]);
+    assert_eq!(proof[2]["id"], id);
+    assert_eq!(proof[2]["source_input"], defined["id"]);
+    assert_eq!(proof[7], minidora_domain::digest(source.as_bytes()));
+    let roles = proof[8].as_object().unwrap();
+    assert!(!roles.is_empty());
+    for spans in roles.values() {
+        for span in spans.as_array().unwrap() {
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert_eq!(source.get(start..end), span["text"].as_str());
+        }
+    }
+    let foreign = stopped(
+        &execute(&scratch.0, "other", &["--case", "foreign", &command]),
+        2,
+        "SUSPEND",
+    );
+    let missing_command = format!("条件定義の出典: condition-record:{}", "0".repeat(64));
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "other",
+            &["--case", "foreign", &missing_command],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        foreign["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_SOURCE_NOT_FOUND")
+    );
+    assert_eq!(foreign["reason"], missing["reason"]);
+    assert_eq!(foreign["text"], missing["text"]);
+    assert!(foreign["content_plan"].is_null());
+    assert!(foreign["render"].is_null());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
