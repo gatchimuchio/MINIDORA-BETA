@@ -737,13 +737,20 @@ fn calculation_sequence_route_retry_explanation_and_version_history() {
     let explanation = record(&execute(&scratch.0, "owner", &["詳しく説明して"]));
     assert_eq!(explanation["lifecycle"], "COMMIT");
     assert_eq!(explanation["calculation"], first["calculation"]);
-    assert!(explanation["text"].as_str().unwrap().contains("(5)*2"));
-    assert!(explanation["text"].as_str().unwrap().contains("10"));
-    assert!(
-        explanation["dependencies"]
-            .as_array()
-            .unwrap()
-            .contains(&first["id"])
+    let units = [
+        "手順 u の元の式: 2+3",
+        "手順 u の結果: 2+3 = 5",
+        "手順 final の元の式: @{u}*2",
+        "代入した先行手順の値: u = 5",
+        "手順 final の結果: (5)*2 = 10",
+        "最終結果: 10",
+    ];
+    assert_eq!(explanation["text"], units.join("\n"));
+    let mut dependencies = vec![first["id"].clone()];
+    dependencies.extend(first["dependencies"].as_array().unwrap().iter().cloned());
+    assert_eq!(
+        explanation["dependencies"].as_array().unwrap(),
+        &dependencies
     );
     assert_eq!(
         inspect_normal_case(&scratch.0, "owner")["bundle"]["meaning"]["context_result_ref"],
