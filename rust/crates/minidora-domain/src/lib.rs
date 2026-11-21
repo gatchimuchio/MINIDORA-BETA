@@ -498,6 +498,12 @@ pub enum Intent {
     DefineCondition {
         definition: ConditionDefinition,
     },
+    EvaluateCondition {
+        condition_id: String,
+        subject: String,
+        scope: String,
+        temporal_scope: Option<String>,
+    },
     AssertPreviousRelation {
         proposition: Proposition,
         explicit_scope: Option<String>,

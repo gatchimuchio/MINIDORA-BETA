@@ -340,6 +340,23 @@ struct ConditionEvaluationState {
     reason: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+struct ConditionTarget<'a> {
+    subject: &'a str,
+    scope: &'a str,
+    temporal_scope: Option<&'a str>,
+}
+
+impl<'a> From<&'a Proposition> for ConditionTarget<'a> {
+    fn from(proposition: &'a Proposition) -> Self {
+        Self {
+            subject: &proposition.subject,
+            scope: &proposition.scope,
+            temporal_scope: proposition.temporal_scope.as_deref(),
+        }
+    }
+}
+
 type ConditionEvidenceKey<'a> = (&'a str, &'a str, &'a str, &'a str);
 
 struct ConditionEvaluationBudget<'a, 'memory> {
@@ -353,7 +370,7 @@ impl<'memory> ConditionEvaluationBudget<'_, 'memory> {
     fn matching_evidence(
         &mut self,
         memory: &'memory MemoryState,
-        target: &Proposition,
+        temporal_scope: Option<&str>,
         allowed_hypotheses: Option<&BTreeSet<String>>,
         key: ConditionEvidenceKey<'memory>,
     ) -> Result<Vec<&'memory Fact>> {
@@ -375,7 +392,7 @@ impl<'memory> ConditionEvaluationBudget<'_, 'memory> {
                     || fact.guarantee == Guarantee::Unknown
                     || (fact.guarantee == Guarantee::Hypothesis
                         && !allowed_hypotheses.is_some_and(|ids| ids.contains(&fact.id)))
-                    || proposition.temporal_scope != target.temporal_scope
+                    || proposition.temporal_scope.as_deref() != temporal_scope
                     || fact
                         .dependencies
                         .iter()
@@ -706,7 +723,7 @@ fn evaluate_condition_expression<'memory>(
     memory: &'memory MemoryState,
     expression: &'memory ConditionExpression,
     definition: &'memory ConditionDefinition,
-    target: &'memory Proposition,
+    target: ConditionTarget<'memory>,
     allowed_hypotheses: Option<&BTreeSet<String>>,
     budget: &mut ConditionEvaluationBudget<'_, 'memory>,
     visiting: &mut BTreeSet<String>,
@@ -715,7 +732,7 @@ fn evaluate_condition_expression<'memory>(
     match expression {
         ConditionExpression::Fact { predicate, object } => {
             let evidence_subject = if definition.subject == "$subject" {
-                target.subject.as_str()
+                target.subject
             } else {
                 definition.subject.as_str()
             };
@@ -729,7 +746,9 @@ fn evaluate_condition_expression<'memory>(
                 object.as_str(),
                 definition.scope.as_str(),
             );
-            for fact in budget.matching_evidence(memory, target, allowed_hypotheses, key)? {
+            for fact in
+                budget.matching_evidence(memory, target.temporal_scope, allowed_hypotheses, key)?
+            {
                 let mut fact_conditions = ConditionStatus::True;
                 for condition_id in &fact.proposition.condition_refs {
                     let evaluated = evaluate_condition(
@@ -850,7 +869,7 @@ fn evaluate_condition_expression<'memory>(
 fn evaluate_condition<'memory>(
     memory: &'memory MemoryState,
     condition_id: &str,
-    target: &'memory Proposition,
+    target: ConditionTarget<'memory>,
     allowed_hypotheses: Option<&BTreeSet<String>>,
     budget: &mut ConditionEvaluationBudget<'_, 'memory>,
     visiting: &mut BTreeSet<String>,
@@ -919,7 +938,6 @@ fn evaluate_condition<'memory>(
     if (record.definition.valid_from.is_some() || record.definition.valid_until.is_some())
         && target
             .temporal_scope
-            .as_deref()
             .is_none_or(|time| !valid_utc_instant(time))
     {
         visiting.remove(condition_id);
@@ -931,16 +949,16 @@ fn evaluate_condition<'memory>(
             ..ConditionEvaluationState::default()
         });
     }
-    if target.temporal_scope.as_ref().is_some_and(|time| {
+    if target.temporal_scope.is_some_and(|time| {
         record
             .definition
             .valid_from
-            .as_ref()
+            .as_deref()
             .is_some_and(|start| time < start)
             || record
                 .definition
                 .valid_until
-                .as_ref()
+                .as_deref()
                 .is_some_and(|end| time >= end)
     }) {
         visiting.remove(condition_id);
@@ -970,9 +988,10 @@ fn evaluate_condition<'memory>(
     Ok(result)
 }
 
-fn evaluate_condition_refs(
+fn evaluate_condition_refs<'a>(
     memory: &MemoryState,
-    target: &Proposition,
+    target: ConditionTarget<'_>,
+    condition_ids: impl ExactSizeIterator<Item = &'a str>,
     allowed_hypotheses: Option<&BTreeSet<String>>,
     projected_evidence: Option<&[usize]>,
     max_steps: u32,
@@ -982,11 +1001,11 @@ fn evaluate_condition_refs(
     Vec<ConditionEvaluation>,
     BTreeSet<String>,
 )> {
-    if target.condition_refs.is_empty() {
+    if condition_ids.len() == 0 {
         return Ok((None, Vec::new(), BTreeSet::new()));
     }
     let mut overall = ConditionStatus::True;
-    let mut evaluations = Vec::with_capacity(target.condition_refs.len());
+    let mut evaluations = Vec::with_capacity(condition_ids.len());
     let mut dependencies = BTreeSet::new();
     let mut budget = ConditionEvaluationBudget {
         max_steps,
@@ -994,7 +1013,7 @@ fn evaluate_condition_refs(
         projected_evidence,
         evidence: None,
     };
-    for condition_id in &target.condition_refs {
+    for condition_id in condition_ids {
         let state = evaluate_condition(
             memory,
             condition_id,
@@ -1009,7 +1028,7 @@ fn evaluate_condition_refs(
         let evidence_fact_ids = state.evidence_fact_ids.into_iter().collect::<Vec<_>>();
         dependencies.extend(state.dependencies.iter().cloned());
         evaluations.push(ConditionEvaluation {
-            condition_id: condition_id.clone(),
+            condition_id: condition_id.to_owned(),
             status,
             definition_record_ids,
             evidence_fact_ids,
@@ -1586,6 +1605,59 @@ pub(crate) fn query_active_relation(
     Ok((memory, answer))
 }
 
+/// Evaluate an explicit condition against the current indexed evidence.
+pub(crate) fn evaluate_active_condition(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    condition_id: &str,
+    subject: &str,
+    scope: &str,
+    temporal_scope: Option<&str>,
+    max_actions: u32,
+) -> Result<ConditionEvaluation> {
+    validate_condition_id(condition_id)?;
+    let invalid_term = |value: &str| {
+        value.trim().is_empty()
+            || value.len() > 1024
+            || value.chars().any(char::is_control)
+            || variable(value)
+    };
+    if invalid_term(subject) || invalid_term(scope) || temporal_scope.is_some_and(invalid_term) {
+        return Err(failure(
+            "INVALID_CONDITION_TARGET",
+            "condition evaluation requires bounded, exact subject, scope and optional time",
+        ));
+    }
+    let target = ConditionTarget {
+        subject,
+        scope,
+        temporal_scope,
+    };
+    let mut evidence_indices = Vec::new();
+    let (memory, mut actions) = project_memory(
+        index,
+        None,
+        target,
+        std::iter::once(condition_id),
+        max_actions,
+        Some(&mut evidence_indices),
+    )?;
+    let (_, mut evaluations, _) = evaluate_condition_refs(
+        &memory,
+        target,
+        std::iter::once(condition_id),
+        None,
+        Some(&evidence_indices),
+        max_actions,
+        &mut actions,
+    )?;
+    evaluations.pop().ok_or_else(|| {
+        failure(
+            "CONDITION_EVALUATION_UNAVAILABLE",
+            "the explicit condition did not produce an evaluation",
+        )
+    })
+}
+
 /// Build a bounded, rebuildable current-memory projection for a typed Ask.
 /// The index only supplies stored records; Core remains the sole caller that
 /// evaluates conditions and adopts the resulting proof.
@@ -1601,9 +1673,27 @@ fn project_relation(
     index: &MemoryIndexSnapshot<'_, '_>,
     proposition: &Proposition,
     max_actions: u32,
-    mut evidence_indices: Option<&mut Vec<usize>>,
+    evidence_indices: Option<&mut Vec<usize>>,
 ) -> Result<(MemoryState, u32)> {
     validate(proposition)?;
+    project_memory(
+        index,
+        Some(proposition),
+        proposition.into(),
+        proposition.condition_refs.iter().map(String::as_str),
+        max_actions,
+        evidence_indices,
+    )
+}
+
+fn project_memory<'a>(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    proposition: Option<&Proposition>,
+    target: ConditionTarget<'_>,
+    condition_ids: impl IntoIterator<Item = &'a str>,
+    max_actions: u32,
+    mut evidence_indices: Option<&mut Vec<usize>>,
+) -> Result<(MemoryState, u32)> {
     if max_actions == 0 {
         return Err(failure(
             "RELATION_BUDGET",
@@ -1652,9 +1742,9 @@ fn project_relation(
 
     let mut actions = 0;
     let mut records = BTreeMap::<String, IndexedMemoryRecord>::new();
-    let mut relation_shapes = VecDeque::from([proposition.clone()]);
+    let mut relation_shapes = VecDeque::from_iter(proposition.cloned());
     let mut seen_relation_shapes = BTreeSet::new();
-    let mut condition_ids = VecDeque::from_iter(proposition.condition_refs.iter().cloned());
+    let mut condition_ids = VecDeque::from_iter(condition_ids.into_iter().map(str::to_owned));
     let mut seen_condition_ids = BTreeSet::new();
     let mut record_ids = VecDeque::new();
     let mut requested_record_ids = BTreeSet::new();
@@ -1732,7 +1822,7 @@ fn project_relation(
                 include_record!(record);
 
                 let subject = if definition.subject == "$subject" {
-                    proposition.subject.as_str()
+                    target.subject
                 } else {
                     definition.subject.as_str()
                 };
@@ -1742,7 +1832,7 @@ fn project_relation(
                         predicate.clone(),
                         object.clone(),
                         definition.scope.clone(),
-                        proposition.temporal_scope.clone(),
+                        target.temporal_scope.map(str::to_owned),
                     );
                     if !evidence_queries.insert(evidence_key) {
                         continue;
@@ -1754,7 +1844,7 @@ fn project_relation(
                         &predicate,
                         &object,
                         &definition.scope,
-                        proposition.temporal_scope.as_deref(),
+                        target.temporal_scope,
                         remaining,
                     )?;
                     for fact in evidence {
@@ -2370,7 +2460,8 @@ fn query_internal(
     let (condition_status, condition_evaluations, condition_dependencies) =
         evaluate_condition_refs(
             memory,
-            proposition,
+            proposition.into(),
+            proposition.condition_refs.iter().map(String::as_str),
             allowed_hypotheses,
             projected_evidence,
             max_steps,

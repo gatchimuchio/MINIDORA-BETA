@@ -4346,6 +4346,141 @@ fn timed_condition_definition_from_ordinary_input_respects_half_open_interval() 
 }
 
 #[test]
+fn condition_evaluation_reports_four_states_without_writing_memory() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let command = "　条件評価： [condition=校正][subject=ユリ][scope=実験室]。　";
+    let missing = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "eval-missing", command],
+    ));
+    assert_eq!(missing["actor_memory_revision"], 0);
+    assert!(
+        missing["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("条件 校正: UNKNOWN\n")
+    );
+    assert!(
+        missing["text"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_DEFINITION_MISSING")
+    );
+    let definition = record(&execute(
+        &scratch.0,
+        actor,
+        &["条件定義: [scope=実験室][condition=校正] ユリは校正済み"],
+    ));
+    let negative = record(&execute(
+        &scratch.0,
+        actor,
+        &["[scope=実験室]ユリは校正済みではない"],
+    ));
+    let false_result = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "eval-false", command],
+    ));
+    assert!(
+        false_result["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("条件 校正: FALSE\n")
+    );
+    assert!(
+        false_result["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&negative["dependencies"][0])
+    );
+    record(&execute(
+        &scratch.0,
+        actor,
+        &["条件定義: [scope=実験室][condition=未校正][subject=ユリ] NOT([ref=校正])"],
+    ));
+    let true_result = record(&execute(
+        &scratch.0,
+        actor,
+        &["条件評価: [condition=未校正][subject=ユリ][scope=実験室]"],
+    ));
+    assert!(
+        true_result["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("条件 未校正: TRUE\n")
+    );
+    let positive = record(&execute(
+        &scratch.0,
+        actor,
+        &["[scope=実験室]ユリは校正済み"],
+    ));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let before = store.load_memory(actor).unwrap();
+    let conflict = record(&execute(
+        &scratch.0,
+        actor,
+        &["--input", "eval-conflict", command],
+    ));
+    assert!(
+        conflict["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("条件 校正: CONFLICT\n")
+    );
+    let proof_ref = conflict["dependencies"].as_array().unwrap().last().unwrap();
+    let proof = sequence_artifact(&store, proof_ref);
+    assert_eq!(proof[0], "minidora-condition-evaluation-v1");
+    assert_eq!(proof[1], before.revision);
+    assert_eq!(
+        proof[2]["definition_record_ids"],
+        serde_json::json!([definition["dependencies"][0]])
+    );
+    let fact_ids = proof[2]["evidence_fact_ids"].as_array().unwrap();
+    assert_eq!(fact_ids.len(), 2);
+    assert!(fact_ids.contains(&negative["dependencies"][0]));
+    assert!(fact_ids.contains(&positive["dependencies"][0]));
+    assert_eq!(
+        record(&execute(
+            &scratch.0,
+            actor,
+            &["--input", "eval-false", command]
+        )),
+        false_result
+    );
+    assert_eq!(store.load_memory(actor).unwrap(), before);
+
+    let target = scratch.0.join("rejected-evaluation.txt");
+    let path = target.to_str().unwrap();
+    let denied = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--output",
+                path,
+                "--allow-write",
+                path,
+                "--max-actions",
+                "4",
+                command,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .contains("RELATION_BUDGET")
+    );
+    assert!(!target.exists());
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() {
     let scratch = Scratch::new();
     let actor = "owner";

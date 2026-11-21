@@ -1588,6 +1588,7 @@ pub(crate) const INSERTED_SEQUENCE_EXPLANATION_PREDICATE: &str =
 pub(crate) const SEQUENCE_HISTORY_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_HISTORY_V1";
 pub(crate) const SEQUENCE_STEP_EXPLANATION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_STEP_EXPLANATION_V1";
+pub(crate) const CONDITION_EVALUATION_PREDICATE: &str = "EXACT_CONDITION_EVALUATION_V1";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1609,6 +1610,11 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        Intent::EvaluateCondition { .. }
+            if meaning.parser_version == input::CONDITION_EVALUATION_PARSER_VERSION =>
+        {
+            predicates.push(CONDITION_EVALUATION_PREDICATE.into());
+        }
         Intent::AppendCalculationSequenceStep { .. }
             if meaning.parser_version == input::SEQUENCE_APPEND_PARSER_VERSION =>
         {
@@ -1704,6 +1710,7 @@ fn verify_report_goal_content(
                 | INSERTED_SEQUENCE_EXPLANATION_PREDICATE
                 | SEQUENCE_HISTORY_PREDICATE
                 | SEQUENCE_STEP_EXPLANATION_PREDICATE
+                | CONDITION_EVALUATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -10852,6 +10859,34 @@ impl Engine {
                     );
                 }
             },
+            Intent::EvaluateCondition { .. } => {
+                let report =
+                    condition_report_at_head(&self.store, actor, &goal).and_then(|report| {
+                        report.verify_evidence_budget(goal.budget.max_evidence_bytes)?;
+                        Ok(report)
+                    });
+                let report = match report {
+                    Ok(report) => report,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let proof = self
+                    .store
+                    .put_artifact(actor, &request.case_id, &report.proof())?;
+                result.actor_memory_revision = Some(report.revision);
+                result.dependencies = report.evaluation.dependencies;
+                result.dependencies.push(proof);
+                result.guarantee = Guarantee::Computed;
+                units = report.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: CONDITION_EVALUATION_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
             Intent::DefineCondition { definition } => {
                 let _ = direct_condition_input(&bundle, definition)?;
                 let mut memory = self.store.load_memory(actor)?;
@@ -16479,6 +16514,109 @@ fn condition_status_name(status: ConditionStatus) -> &'static str {
         ConditionStatus::Unknown => "UNKNOWN",
         ConditionStatus::Conflict => "CONFLICT",
     }
+}
+
+pub(crate) struct ConditionReadout {
+    pub(crate) revision: u64,
+    pub(crate) evaluation: ConditionEvaluation,
+    pub(crate) units: Vec<String>,
+}
+
+impl ConditionReadout {
+    pub(crate) fn proof(&self) -> (&'static str, u64, &ConditionEvaluation) {
+        (
+            "minidora-condition-evaluation-v1",
+            self.revision,
+            &self.evaluation,
+        )
+    }
+
+    pub(crate) fn verify_evidence_budget(&self, max_bytes: usize) -> Result<()> {
+        if canonical(&self.proof())?
+            .len()
+            .saturating_add(self.units.join("\n").len())
+            > max_bytes
+        {
+            return Err(failure(
+                "RESOURCE_LIMIT",
+                "条件評価の証拠と表示が要求の予算を超えています。",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn evaluate_condition_report(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    goal: &GoalContract,
+) -> Result<ConditionReadout> {
+    let Intent::EvaluateCondition {
+        condition_id,
+        subject,
+        scope,
+        temporal_scope,
+    } = &goal.intent
+    else {
+        return Err(failure(
+            "CONDITION_EVALUATION_GOAL_INVALID",
+            "条件評価の要求が一致しません。",
+        ));
+    };
+    let completion_actions = 3 + u32::from(goal.output_path.is_some());
+    let evaluation = relations::evaluate_active_condition(
+        index,
+        condition_id,
+        subject,
+        scope,
+        temporal_scope.as_deref(),
+        goal.budget.max_actions.saturating_sub(completion_actions),
+    )?;
+    let mut units = vec![
+        format!(
+            "条件 {condition_id}: {}",
+            condition_status_name(evaluation.status)
+        ),
+        format!(
+            "評価主体: {subject}、範囲: {scope}、時点: {}",
+            temporal_scope.as_deref().unwrap_or("未指定")
+        ),
+    ];
+    if let Some(reason) = &evaluation.reason {
+        units.push(format!("評価理由: {reason}"));
+    }
+    if !evaluation.definition_record_ids.is_empty() {
+        units.push(format!(
+            "条件定義の記録ID: {}",
+            evaluation.definition_record_ids.join("、")
+        ));
+    }
+    if !evaluation.evidence_fact_ids.is_empty() {
+        units.push(format!(
+            "証拠Fact ID: {}",
+            evaluation.evidence_fact_ids.join("、")
+        ));
+    }
+    Ok(ConditionReadout {
+        revision: index.revision(),
+        evaluation,
+        units,
+    })
+}
+
+pub(crate) fn condition_report_at_head(
+    store: &Store,
+    actor: &str,
+    goal: &GoalContract,
+) -> Result<ConditionReadout> {
+    if let Some(report) =
+        store.with_relation_index(actor, |index| evaluate_condition_report(index, goal))?
+    {
+        return Ok(report);
+    }
+    let snapshot = store.load_memory(actor)?;
+    Store::with_snapshot_relation_index(actor, &snapshot, |index| {
+        evaluate_condition_report(index, goal)
+    })
 }
 
 fn japanese_godan_negative_form(predicate: &str) -> Option<String> {
