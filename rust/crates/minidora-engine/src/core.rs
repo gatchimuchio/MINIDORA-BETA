@@ -2802,10 +2802,11 @@ impl Engine {
             superseded_fact_ids,
             target,
         ))?;
-        let mut invalidated = BTreeSet::new();
-        for id in superseded_fact_ids {
-            invalidated.extend(relations::invalidate(&mut memory, id)?);
-        }
+        let mut invalidated_record_ids = relations::invalidate_in_order(
+            &mut memory,
+            superseded_fact_ids.iter().map(String::as_str),
+        )?;
+        invalidated_record_ids.sort_unstable();
         let mut hypothesis_ids = Vec::with_capacity(assumptions.len());
         for (ordinal, assumption) in assumptions.iter().enumerate() {
             let hypothesis = relations::add_hypothesis(
@@ -2837,8 +2838,6 @@ impl Engine {
             .condition_status
             .is_some_and(|status| status != ConditionStatus::True)
         {
-            let mut invalidated_record_ids: Vec<_> = invalidated.into_iter().collect();
-            invalidated_record_ids.sort();
             return Ok(CounterfactualRelationReport {
                 status: CounterfactualRelationStatus::Unknown,
                 target: target.clone(),
@@ -2889,8 +2888,6 @@ impl Engine {
                 .filter(|id| dependency_set.contains(*id))
                 .cloned()
                 .collect();
-            let mut invalidated_record_ids: Vec<_> = invalidated.into_iter().collect();
-            invalidated_record_ids.sort();
             return Ok(CounterfactualRelationReport {
                 status: CounterfactualRelationStatus::Conflict,
                 target: target.clone(),
@@ -2935,7 +2932,7 @@ impl Engine {
             hypothesis_ids,
             hypothesis_ids_used,
             superseded_fact_ids: superseded_fact_ids.to_vec(),
-            invalidated_record_ids: invalidated.into_iter().collect(),
+            invalidated_record_ids,
             base_memory_revision,
             scenario_memory_revision: memory.revision,
             steps: outcome.steps.saturating_add(preparation_actions),
@@ -10185,14 +10182,8 @@ fn apply_premise_correction(
 ) -> Result<(Vec<String>, usize)> {
     let (superseded, replacement) = propositions;
     let original_memory_revision = memory.revision;
-    let mut invalidated = Vec::new();
-    for id in targets {
-        for affected in relations::invalidate(memory, id)? {
-            if !invalidated.contains(&affected) {
-                invalidated.push(affected);
-            }
-        }
-    }
+    let mut invalidated =
+        relations::invalidate_in_order(memory, targets.iter().map(String::as_str))?;
     let negative_superseded = Proposition {
         negative: true,
         ..superseded.clone()

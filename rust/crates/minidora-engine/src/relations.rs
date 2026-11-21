@@ -1023,11 +1023,13 @@ fn evaluate_condition_refs(
 pub(crate) fn is_ground(proposition: &Proposition) -> bool {
     variables(proposition).is_empty()
 }
-fn bump(memory: &mut MemoryState) -> Result<()> {
-    memory.revision = memory
-        .revision
+fn next_memory_revision(revision: u64) -> Result<u64> {
+    revision
         .checked_add(1)
-        .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))?;
+        .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))
+}
+fn bump(memory: &mut MemoryState) -> Result<()> {
+    memory.revision = next_memory_revision(memory.revision)?;
     Ok(())
 }
 
@@ -2674,17 +2676,19 @@ pub fn answer_guarantee(answer: &QueryOutcome) -> Guarantee {
 /// Preserve originals and append validity changes in the Core's next durable
 /// memory revision. No counterexample or rule record is physically deleted.
 pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
-    if !memory.facts.iter().any(|fact| fact.id == id)
-        && !memory.rules.iter().any(|rule| rule.id == id)
-        && !memory.conditions.iter().any(|condition| condition.id == id)
-    {
-        return Err(failure(
-            "UNKNOWN_MEMORY_ID",
-            "no fact or rule has the requested identity",
-        ));
-    }
-    let mut dependents = BTreeMap::<&str, Vec<&str>>::new();
-    for (record_id, dependencies) in memory
+    invalidate_in_order(memory, std::iter::once(id))
+}
+
+/// Return each root's new affected IDs in lexical order, processing roots in
+/// caller order. Each root still advances the candidate memory revision.
+pub(crate) fn invalidate_in_order<'a>(
+    memory: &mut MemoryState,
+    roots: impl Iterator<Item = &'a str> + Clone,
+) -> Result<Vec<String>> {
+    let Some(first) = roots.clone().next() else {
+        return Ok(Vec::new());
+    };
+    let records = memory
         .facts
         .iter()
         .map(|fact| (&fact.id, &fact.dependencies))
@@ -2699,40 +2703,85 @@ pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
                 .conditions
                 .iter()
                 .map(|condition| (&condition.id, &condition.dependencies)),
+        );
+    let mut missing: BTreeSet<_> = roots.clone().collect();
+    for (record_id, _) in records.clone() {
+        missing.remove(record_id.as_str());
+        if missing.is_empty() {
+            break;
+        }
+    }
+    let unknown_id = || {
+        failure(
+            "UNKNOWN_MEMORY_ID",
+            "no fact or rule has the requested identity",
         )
-    {
+    };
+    if missing.contains(first) {
+        return Err(unknown_id());
+    }
+
+    let mut dependents = BTreeMap::<&str, Vec<&str>>::new();
+    for (record_id, dependencies) in records {
         for dependency in dependencies {
             dependents.entry(dependency).or_default().push(record_id);
         }
     }
-    // Already inactive records still carry the dependency path to later records.
-    let mut invalid = BTreeSet::from([id]);
-    let mut pending = VecDeque::from([id]);
-    while let Some(dependency) = pending.pop_front() {
-        for &record_id in dependents.get(dependency).into_iter().flatten() {
-            if invalid.insert(record_id) {
-                pending.push_back(record_id);
+    let mut first_root = BTreeMap::new();
+    let mut pending = VecDeque::new();
+    let mut revision = memory.revision;
+    let status: Result<()> = (|| {
+        for (ordinal, id) in roots.enumerate() {
+            if missing.contains(id) {
+                return Err(unknown_id());
             }
+            first_root.entry(id).or_insert_with(|| {
+                pending.push_back(id);
+                ordinal
+            });
+            // Inactive records still carry edges. Each reached ID belongs to
+            // its first root, so later roots can reuse the traversed paths.
+            while let Some(dependency) = pending.pop_front() {
+                for &record_id in dependents.get(dependency).into_iter().flatten() {
+                    first_root.entry(record_id).or_insert_with(|| {
+                        pending.push_back(record_id);
+                        ordinal
+                    });
+                }
+            }
+            revision = next_memory_revision(revision)?;
         }
-    }
-    let invalid: Vec<String> = invalid.into_iter().map(str::to_owned).collect();
+        Ok(())
+    })();
+    let mut invalid: Vec<_> = first_root
+        .into_iter()
+        .map(|(id, ordinal)| (id.to_owned(), ordinal))
+        .collect();
+    let is_invalid = |id: &str| {
+        invalid
+            .binary_search_by(|(affected, _)| affected.as_str().cmp(id))
+            .is_ok()
+    };
     for fact in &mut memory.facts {
-        if invalid.binary_search(&fact.id).is_ok() {
+        if is_invalid(&fact.id) {
             fact.valid = false;
         }
     }
     for rule in &mut memory.rules {
-        if invalid.binary_search(&rule.id).is_ok() {
+        if is_invalid(&rule.id) {
             rule.valid = false;
         }
     }
     for condition in &mut memory.conditions {
-        if invalid.binary_search(&condition.id).is_ok() {
+        if is_invalid(&condition.id) {
             condition.valid = false;
         }
     }
-    bump(memory)?;
-    Ok(invalid)
+    // Keep the mutations up to the same stopping point as sequential calls.
+    memory.revision = revision;
+    status?;
+    invalid.sort_by_key(|(_, ordinal)| *ordinal);
+    Ok(invalid.into_iter().map(|(id, _)| id).collect())
 }
 
 pub fn format_proposition(proposition: &Proposition) -> String {
@@ -2874,6 +2923,67 @@ mod tests {
             assert_eq!(invalidate(&mut memory, &root.id).unwrap(), affected);
             assert_eq!(memory, expected);
         }
+    }
+
+    #[test]
+    fn ordered_invalidation_shares_dependents_and_preserves_the_stop_point() {
+        let fact = |id: &str, dependencies: &[&str]| Fact {
+            id: id.into(),
+            proposition: p("sensor", "ready"),
+            guarantee: Guarantee::UserPremise,
+            source_input: id.into(),
+            source_evidence: None,
+            dependencies: dependencies.iter().map(|id| (*id).into()).collect(),
+            valid: true,
+        };
+        let original = MemoryState {
+            revision: 10,
+            facts: vec![
+                fact("z", &[]),
+                fact("a", &[]),
+                fact("m", &["z", "a"]),
+                fact("b", &["a"]),
+                fact("unrelated", &[]),
+            ],
+            ..MemoryState::default()
+        };
+        let mut memory = original.clone();
+        assert_eq!(
+            invalidate_in_order(&mut memory, ["z", "a", "z"].into_iter()).unwrap(),
+            ["m", "z", "a", "b"]
+        );
+        let mut expected = original.clone();
+        expected.facts[..4]
+            .iter_mut()
+            .for_each(|fact| fact.valid = false);
+        expected.revision = 13;
+        assert_eq!(memory, expected);
+        assert!(
+            invalidate_in_order(&mut memory, std::iter::empty())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(memory, expected);
+
+        let mut memory = original.clone();
+        assert!(matches!(
+            invalidate_in_order(&mut memory, ["z", "missing", "a"].into_iter()),
+            Err(Error::Contract { code, .. }) if code == "UNKNOWN_MEMORY_ID"
+        ));
+        let mut expected_prefix = original.clone();
+        expected_prefix.facts[0].valid = false;
+        expected_prefix.facts[2].valid = false;
+        expected_prefix.revision = 11;
+        assert_eq!(memory, expected_prefix);
+
+        let mut memory = original;
+        memory.revision = u64::MAX - 1;
+        assert!(matches!(
+            invalidate_in_order(&mut memory, ["z", "a", "unrelated"].into_iter()),
+            Err(Error::Contract { code, .. }) if code == "MEMORY_REVISION_LIMIT"
+        ));
+        expected.revision = u64::MAX;
+        assert_eq!(memory, expected);
     }
 
     #[test]

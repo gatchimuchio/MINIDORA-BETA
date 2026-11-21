@@ -568,6 +568,59 @@ fn direct_core_observation_two_separates_derived_conflicting_and_unmet_relations
         .expect("counterfactual actor memory after all isolated scenarios");
     assert_eq!(counterfactual_memory_before, final_counterfactual_memory);
 
+    let second_calibrated = execute(
+        &mut engine,
+        counterfactual_actor,
+        counterfactual_case,
+        "counterfactual-nera-calibrated-again",
+        "[scope=virtual-lab]Nera is calibrated",
+    );
+    assert_eq!(second_calibrated.lifecycle, Lifecycle::Commit);
+    let mut expected_invalidated = [
+        counterfactual_calibrated_id.clone(),
+        second_calibrated.dependencies[0].clone(),
+    ];
+    expected_invalidated.sort();
+    assert_ne!(expected_invalidated[0], expected_invalidated[1]);
+    let reversed_roots = [
+        expected_invalidated[1].clone(),
+        expected_invalidated[0].clone(),
+    ];
+    let before_two_overrides = counterfactual_store
+        .load_memory(counterfactual_actor)
+        .expect("read the actor memory with both direct premises");
+    let two_overrides = engine
+        .evaluate_counterfactual_relation(
+            counterfactual_actor,
+            counterfactual_case,
+            std::slice::from_ref(&assumption),
+            &reversed_roots,
+            &target,
+            128,
+        )
+        .expect("override both saved instances in the isolated scenario");
+    assert_eq!(
+        two_overrides.status,
+        minidora_engine::core::CounterfactualRelationStatus::Supported
+    );
+    assert_eq!(two_overrides.guarantee, Guarantee::Hypothesis);
+    assert_eq!(two_overrides.superseded_fact_ids, reversed_roots);
+    assert_eq!(two_overrides.invalidated_record_ids, expected_invalidated);
+    assert_eq!(
+        two_overrides.base_memory_revision,
+        before_two_overrides.revision
+    );
+    assert_eq!(
+        two_overrides.scenario_memory_revision,
+        before_two_overrides.revision + 3
+    );
+    assert_eq!(
+        counterfactual_store
+            .load_memory(counterfactual_actor)
+            .expect("read the unchanged actor memory"),
+        before_two_overrides
+    );
+
     let store = Store::open(&directory).expect("open Core store for final memory snapshot");
     let primary_memory: MemoryState = store
         .load_memory(primary_actor)
