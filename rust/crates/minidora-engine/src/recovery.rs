@@ -114,6 +114,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
                         | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
+                        | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                 )
             })
         {
@@ -2579,15 +2580,13 @@ fn verify_guarded_rule_registration(
     if !crate::input::verified_guarded_relation_rule_source(bundle)? {
         return Err(invalid());
     }
-    let Intent::AddRule {
-        premise,
-        conclusion,
-    } = &goal.intent
+    let Some((premises @ [premise, additional @ ..], conclusion)) =
+        crate::core::rule_declaration(&goal.intent)
     else {
         return Err(invalid());
     };
     let source_input = identity(&bundle.request)?;
-    let id = crate::relations::declared_rule_id(premise, conclusion, &source_input)?;
+    let id = crate::relations::declared_rule_id(premises, conclusion, &source_input)?;
     let actor = &bundle.request.actor_id;
     let revision = result.actor_memory_revision.ok_or_else(invalid)?;
     let memory = store
@@ -2602,7 +2601,7 @@ fn verify_guarded_rule_registration(
     if &rule.premise != premise
         || &rule.conclusion != conclusion
         || rule.source_input != source_input
-        || !rule.additional_premises.is_empty()
+        || rule.additional_premises != additional
         || !rule.dependencies.is_empty()
         || !rule.valid
         || result.dependencies != [id]
@@ -4276,8 +4275,11 @@ fn inspect(
         ));
     }
     let requires_record_source = source_contract.is_some();
-    let requires_guarded_rule =
-        bundle.meaning.parser_version == crate::input::GUARDED_RELATION_RULE_PARSER_VERSION;
+    let requires_guarded_rule = matches!(
+        bundle.meaning.parser_version.as_str(),
+        crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
+            | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
+    );
     let requires_sequence_edit = matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::SEQUENCE_CORRECTION_PARSER_VERSION
@@ -8893,14 +8895,26 @@ mod tests {
 
     #[test]
     fn guarded_rule_registration_reconciles_the_exact_persisted_rule_without_resend() {
+        assert_guarded_rule_registration_reconciles(false);
+    }
+
+    #[test]
+    fn guarded_conjunctive_registration_reconciles_the_ordered_rule_without_resend() {
+        assert_guarded_rule_registration_reconciles(true);
+    }
+
+    fn assert_guarded_rule_registration_reconciles(conjunctive: bool) {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
-        let mut request = RequestEnvelope::new(
-            "case",
-            "guarded-rule",
-            "alice",
-            "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可",
-        );
+        let declaration = if conjunctive {
+            concat!(
+                "もし[scope=実験室][condition=点検]Xは研究員 かつ ",
+                "[scope=実験室][condition=点検]Xは当番なら[scope=実験室][condition=点検]Xは入室可"
+            )
+        } else {
+            "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可"
+        };
+        let mut request = RequestEnvelope::new("case", "guarded-rule", "alice", declaration);
         request.budget.max_actions = 4;
         request.output_path = Some(fixture.target.clone());
         request
@@ -8917,7 +8931,22 @@ mod tests {
         let mut engine = Engine::open(&fixture.state).unwrap();
         let state = engine.store.load_case("alice", "case").unwrap().unwrap();
         let mut altered = state.result.as_ref().unwrap().clone();
-        altered.actor_memory_revision = None;
+        if conjunctive {
+            let bundle = state.bundle.as_ref().unwrap();
+            let Intent::AddConjunctiveRule {
+                premises,
+                conclusion,
+            } = &bundle.meaning.intent
+            else {
+                panic!("two-premise registration must retain its typed declaration")
+            };
+            let source_input = identity(&request).unwrap();
+            let reversed = [premises[1].clone(), premises[0].clone()];
+            altered.dependencies[0] =
+                crate::relations::declared_rule_id(&reversed, conclusion, &source_input).unwrap();
+        } else {
+            altered.actor_memory_revision = None;
+        }
         let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();
         assert!(
             error.to_string().contains("RECOVERY_GUARDED_RULE_MISMATCH"),

@@ -4852,6 +4852,79 @@ fn condition_rule_registration_derives_only_while_its_guard_is_supported() {
 }
 
 #[test]
+fn condition_rule_requires_both_guarded_premises_for_an_ordinary_derivation() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let declaration = concat!(
+        "　もし [scope=実験室][condition=点検]Xは研究員 且つ ",
+        "[condition=点検][scope=実験室]Xは当番ならば、",
+        "[scope=実験室][condition=点検]Xは入室可。　"
+    );
+    let rule = run(&[
+        "--case",
+        "two-premise-rule",
+        "--max-actions",
+        "3",
+        declaration,
+    ]);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let case = store
+        .load_case("owner", "two-premise-rule")
+        .unwrap()
+        .unwrap();
+    let bundle = case.bundle.unwrap();
+    assert_eq!(
+        bundle.meaning.parser_version,
+        "declarative-ja-en-v133-guarded-conjunctive-rule"
+    );
+    for (role, value) in [
+        ("premises/0/object", "研究員"),
+        ("premises/1/object", "当番"),
+        ("conclusion/object", "入室可"),
+        ("premises/0/condition_refs/0", "点検"),
+        ("premises/1/condition_refs/0", "点検"),
+        ("conclusion/condition_refs/0", "点検"),
+    ] {
+        let source = &bundle.meaning.source_roles[&format!("/AddConjunctiveRule/{role}")][0];
+        assert_eq!(declaration.get(source.start..source.end), Some(value));
+    }
+    let memory = store.load_memory("owner").unwrap();
+    assert_eq!(memory.rules.len(), 1);
+    assert_eq!(memory.rules[0].premise.object, "研究員");
+    assert_eq!(memory.rules[0].additional_premises[0].object, "当番");
+
+    let definition = run(&["条件定義: [scope=実験室][condition=点検] ユリは点検済み"]);
+    let evidence = run(&["[scope=実験室]ユリは点検済み"]);
+    let first = run(&["[scope=実験室][condition=点検]ユリは研究員"]);
+    let query = "[scope=実験室][condition=点検]ユリは入室可ですか";
+    let blocked = || stopped(&execute(&scratch.0, "owner", &[query]), 2, "SUSPEND");
+    assert!(
+        blocked()["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let second = run(&["[scope=実験室][condition=点検]ユリは当番"]);
+    let accepted = run(&[query]);
+    assert_eq!(accepted["guarantee"], "DERIVED");
+    for source in [rule, definition, evidence, first, second] {
+        assert!(
+            accepted["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&source["dependencies"][0])
+        );
+    }
+    let opposing = run(&["[scope=実験室][condition=点検]ユリは当番ではない"]);
+    assert!(blocked()["render"].is_null());
+    run(&[&format!(
+        "{}を無効化して",
+        opposing["dependencies"][0].as_str().unwrap()
+    )]);
+    assert_eq!(run(&[query])["dependencies"], accepted["dependencies"]);
+}
+
+#[test]
 fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

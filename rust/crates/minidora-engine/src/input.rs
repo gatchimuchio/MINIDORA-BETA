@@ -53,6 +53,8 @@ pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION: &str =
     "declarative-ja-en-v131-condition-source-by-definition";
 pub(crate) const GUARDED_RELATION_RULE_PARSER_VERSION: &str =
     "declarative-ja-en-v132-guarded-relation-rule";
+pub(crate) const GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION: &str =
+    "declarative-ja-en-v133-guarded-conjunctive-rule";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -294,8 +296,8 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
-        Intent::AddRule { premise, .. } if !premise.condition_refs.is_empty() => {
-            GUARDED_RELATION_RULE_PARSER_VERSION
+        Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
+            guarded_relation_rule_parser(&intent).unwrap_or(PARSER_VERSION)
         }
         Intent::DefineCondition { definition } => {
             condition_definition_parser_version(definition, &source_roles)
@@ -1622,14 +1624,9 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
     }
-    if let Intent::AddRule {
-        premise,
-        conclusion,
-    } = intent
-        && !premise.condition_refs.is_empty()
-    {
+    if guarded_relation_rule_parser(intent).is_some() {
         return guarded_relation_rule_source(text)?
-            .filter(|source| &source.premise == premise && &source.conclusion == conclusion)
+            .filter(|source| &source.intent == intent)
             .map(|source| source.roles)
             .ok_or_else(|| {
                 failure(
@@ -3582,8 +3579,7 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 struct GuardedRelationRuleSource {
-    premise: Proposition,
-    conclusion: Proposition,
+    intent: Intent,
     roles: BTreeMap<String, Vec<SourceSpan>>,
 }
 
@@ -3592,15 +3588,19 @@ struct GuardedRelationRuleClause {
     roles: BTreeMap<String, Vec<SourceSpan>>,
 }
 
-fn guarded_relation_rule_separator(statement: &str) -> Option<(usize, usize)> {
+const GUARDED_RULE_IMPLICATION_SEPARATORS: &[&str] = &["ならば", "なら", "であれば"];
+const GUARDED_RULE_PREMISE_SEPARATORS: &[&str] = &["かつ", "且つ"];
+
+fn guarded_relation_rule_separator(statement: &str, separators: &[&str]) -> Option<(usize, usize)> {
     let mut in_qualifier = false;
     for (position, character) in statement.char_indices() {
         match character {
             '[' => in_qualifier = true,
             ']' => in_qualifier = false,
-            'な' | 'で' if !in_qualifier => {
-                if let Some(separator) = ["ならば", "なら", "であれば"]
-                    .into_iter()
+            _ if !in_qualifier => {
+                if let Some(separator) = separators
+                    .iter()
+                    .copied()
                     .find(|separator| statement[position..].starts_with(*separator))
                 {
                     return Some((position, position + separator.len()));
@@ -3669,10 +3669,23 @@ fn guarded_relation_rule_source(text: &str) -> Result<Option<GuardedRelationRule
         return Ok(None);
     }
     let statement = source.strip_prefix("もし").unwrap_or(source).trim_start();
-    let Some((left, right)) = guarded_relation_rule_separator(statement) else {
+    let Some((left, right)) =
+        guarded_relation_rule_separator(statement, GUARDED_RULE_IMPLICATION_SEPARATORS)
+    else {
         return Ok(None);
     };
-    let premise_clause = statement[..left].trim_end();
+    let antecedents = statement[..left].trim_end();
+    let conjunction = guarded_relation_rule_separator(antecedents, GUARDED_RULE_PREMISE_SEPARATORS);
+    let (premise_clause, premise_role, conclusion_role) = if let Some((first_end, _)) = conjunction
+    {
+        (
+            antecedents[..first_end].trim_end(),
+            "/AddConjunctiveRule/premises/0",
+            "/AddConjunctiveRule/conclusion",
+        )
+    } else {
+        (antecedents, "/AddRule/premise", "/AddRule/conclusion")
+    };
     let conclusion_clause = statement[right..].trim_start_matches(|character: char| {
         character.is_whitespace() || matches!(character, '、' | ',')
     });
@@ -3681,55 +3694,91 @@ fn guarded_relation_rule_source(text: &str) -> Result<Option<GuardedRelationRule
     let Some(GuardedRelationRuleClause {
         proposition: premise,
         mut roles,
-    }) = guarded_relation_rule_clause(text, premise_clause, statement_offset, "/AddRule/premise")?
+    }) = guarded_relation_rule_clause(text, premise_clause, statement_offset, premise_role)?
     else {
         return Ok(None);
     };
     let Some(GuardedRelationRuleClause {
         proposition: conclusion,
         roles: conclusion_roles,
-    }) = guarded_relation_rule_clause(
-        text,
-        conclusion_clause,
-        conclusion_offset,
-        "/AddRule/conclusion",
-    )?
+    }) = guarded_relation_rule_clause(text, conclusion_clause, conclusion_offset, conclusion_role)?
     else {
         return Ok(None);
     };
-    if premise.subject != conclusion.subject
-        || premise.scope != conclusion.scope
-        || premise.condition_refs != conclusion.condition_refs
-        || premise.temporal_scope != conclusion.temporal_scope
-    {
+    if !same_guarded_rule_context(&premise, &conclusion) {
         return Ok(None);
     }
     roles.extend(conclusion_roles);
-    Ok(Some(GuardedRelationRuleSource {
-        premise,
-        conclusion,
-        roles,
-    }))
+    let intent = if let Some((_, second_start)) = conjunction {
+        let second_clause = antecedents[second_start..].trim_start();
+        if guarded_relation_rule_separator(second_clause, GUARDED_RULE_PREMISE_SEPARATORS).is_some()
+        {
+            return Ok(None);
+        }
+        let second_offset = statement_offset + antecedents.len() - second_clause.len();
+        let Some(GuardedRelationRuleClause {
+            proposition: second,
+            roles: second_roles,
+        }) = guarded_relation_rule_clause(
+            text,
+            second_clause,
+            second_offset,
+            "/AddConjunctiveRule/premises/1",
+        )?
+        else {
+            return Ok(None);
+        };
+        if !matches!(premise.subject.as_str(), "$x" | "$y" | "$z")
+            || !same_guarded_rule_context(&premise, &second)
+            || premise == second
+        {
+            return Ok(None);
+        }
+        roles.extend(second_roles);
+        Intent::AddConjunctiveRule {
+            premises: vec![premise, second],
+            conclusion,
+        }
+    } else {
+        Intent::AddRule {
+            premise,
+            conclusion,
+        }
+    };
+    Ok(Some(GuardedRelationRuleSource { intent, roles }))
+}
+
+fn same_guarded_rule_context(first: &Proposition, second: &Proposition) -> bool {
+    first.subject == second.subject
+        && first.scope == second.scope
+        && first.condition_refs == second.condition_refs
+        && first.temporal_scope == second.temporal_scope
+}
+
+fn guarded_relation_rule_parser(intent: &Intent) -> Option<&'static str> {
+    match intent {
+        Intent::AddRule { premise, .. } if !premise.condition_refs.is_empty() => {
+            Some(GUARDED_RELATION_RULE_PARSER_VERSION)
+        }
+        Intent::AddConjunctiveRule { premises, .. }
+            if premises.len() == 2 && !premises[0].condition_refs.is_empty() =>
+        {
+            Some(GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION)
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn verified_guarded_relation_rule_source(bundle: &InputBundle) -> Result<bool> {
-    let Intent::AddRule {
-        premise,
-        conclusion,
-    } = &bundle.meaning.intent
-    else {
-        return Ok(false);
-    };
-    if bundle.meaning.parser_version != GUARDED_RELATION_RULE_PARSER_VERSION
+    if guarded_relation_rule_parser(&bundle.meaning.intent)
+        != Some(bundle.meaning.parser_version.as_str())
         || bundle.meaning.source_kind != "USER_REQUEST"
     {
         return Ok(false);
     }
     Ok(
         guarded_relation_rule_source(&bundle.request.text)?.is_some_and(|source| {
-            &source.premise == premise
-                && &source.conclusion == conclusion
-                && source.roles == bundle.meaning.source_roles
+            source.intent == bundle.meaning.intent && source.roles == bundle.meaning.source_roles
         }),
     )
 }
@@ -3983,18 +4032,26 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = previous_source_question_intent(body)? {
         return Ok(intent);
     }
-    if body.contains("[condition")
-        && (body.starts_with("もし") || guarded_relation_rule_separator(body).is_some())
-    {
-        return Ok(guarded_relation_rule_source(text)?.map_or_else(
-            || Intent::Unknown {
-                reason: "条件付き規則には、同じ主体・条件・範囲・時点を明記した前提と結論を一つずつ指定してください。".into(),
-            },
-            |source| Intent::AddRule {
-                premise: source.premise,
-                conclusion: source.conclusion,
-            },
-        ));
+    if body.contains("[condition") {
+        let implication =
+            guarded_relation_rule_separator(body, GUARDED_RULE_IMPLICATION_SEPARATORS);
+        if body.starts_with("もし") || implication.is_some() {
+            return Ok(guarded_relation_rule_source(text)?.map_or_else(
+                || {
+                    let conjunctive = implication.is_some_and(|(end, _)| {
+                        guarded_relation_rule_separator(&body[..end], GUARDED_RULE_PREMISE_SEPARATORS)
+                            .is_some()
+                    });
+                    let reason = if conjunctive {
+                        "異なる前提を二つと結論を一つ指定し、三つの節で主体変数・条件・範囲・時点をそろえてください。"
+                    } else {
+                        "条件付き規則には、同じ主体・条件・範囲・時点を明記した前提と結論を一つずつ指定してください。"
+                    };
+                    Intent::Unknown { reason: reason.into() }
+                },
+                |source| source.intent,
+            ));
+        }
     }
     if let Some(capture) =
         regex(r"(?is)^(?:もし\s*)?(.+?)(?:ならば|なら|であれば)[、,\s]*(.+)$")?.captures(body)

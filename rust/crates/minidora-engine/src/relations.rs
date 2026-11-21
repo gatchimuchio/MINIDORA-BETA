@@ -1314,14 +1314,26 @@ pub fn add_rule(
 }
 
 pub(crate) fn declared_rule_id(
-    premise: &Proposition,
+    premises: &[Proposition],
     conclusion: &Proposition,
     source_input: &str,
 ) -> Result<String> {
-    Ok(format!(
-        "rule:{}",
-        identity(&("declared-rule-v1", premise, conclusion, source_input))?
-    ))
+    let digest = match premises {
+        [premise] => identity(&("declared-rule-v1", premise, conclusion, source_input))?,
+        [_, _] => identity(&(
+            "declared-conjunctive-rule-v1",
+            premises,
+            conclusion,
+            source_input,
+        ))?,
+        _ => {
+            return Err(failure(
+                "UNSUPPORTED_RULE_PREMISE_COUNT",
+                "a relation rule requires one or two explicit premises",
+            ));
+        }
+    };
+    Ok(format!("rule:{digest}"))
 }
 
 pub fn add_rule_with_premises(
@@ -1406,19 +1418,7 @@ pub fn add_rule_with_premises(
             "a rule needs original input provenance",
         ));
     }
-    let id = if additional_premises.is_empty() {
-        declared_rule_id(premise, &conclusion, source_input)?
-    } else {
-        format!(
-            "rule:{}",
-            identity(&(
-                "declared-conjunctive-rule-v1",
-                &premises,
-                &conclusion,
-                source_input
-            ))?
-        )
-    };
+    let id = declared_rule_id(&premises, &conclusion, source_input)?;
     if let Some(old) = memory.rules.iter().find(|rule| rule.id == id) {
         return Ok(old.clone());
     }
