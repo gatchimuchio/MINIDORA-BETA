@@ -880,6 +880,267 @@ fn calculation_sequence_route_named_correction_preserves_dependency_graph() {
 }
 
 #[test]
+fn calculation_sequence_route_repeated_corrections_keep_active_formulas_and_lineage() {
+    let scratch = Scratch::new();
+    let original_request = "calculation-sequence:\nbase: 2+3\nfinal: @{base}*2";
+    let original_args = ["--input", "original-sequence", original_request];
+    let original = record(&execute(&scratch.0, "owner", &original_args));
+    assert_sequence_artifacts(
+        &scratch.0,
+        &original,
+        original_request,
+        &[
+            sequence_step("base", "2+3", "2+3", "5", &[], &[]),
+            sequence_step("final", "@{base}*2", "(5)*2", "10", &["base"], &["base"]),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let assert_goal = |result: &Value, request: &str, context: &Value, predicate: &str| {
+        basic_raw_result(&scratch.0, result, request, None);
+        assert_eq!(result["content_plan"]["guarantee"], "COMPUTED");
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(
+            saved["bundle"]["meaning"]["context_result_ref"],
+            context["id"]
+        );
+        let goal = sequence_artifact(&store, &saved["goal_sha256"]);
+        assert_eq!(
+            goal["required_predicates"],
+            serde_json::json!([predicate, "SUPPORTED_CONTENT", "EXACT_RENDER"])
+        );
+    };
+    let expected_detail = |expression: &str, value: &str, final_value: &str| {
+        [
+            format!("手順 base の元の式: {expression}"),
+            format!("手順 base の結果: {expression} = {value}"),
+            "手順 final の元の式: @{base}*2".into(),
+            format!("代入した先行手順の値: base = {value}"),
+            format!("手順 final の結果: ({value})*2 = {final_value}"),
+            format!("最終結果: {final_value}"),
+        ]
+        .join("\n")
+    };
+    let detail = |input: &str, selected: &Value, active: &Value, budget: &str, text: &str| {
+        let args = [
+            "--input",
+            input,
+            "--context",
+            selected["id"].as_str().unwrap(),
+            "--max-actions",
+            budget,
+            "詳しく説明して",
+        ];
+        let result = record(&execute(&scratch.0, "owner", &args));
+        let predicate = if active["id"] == original["id"] {
+            "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V1"
+        } else {
+            "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V3"
+        };
+        assert_goal(&result, "詳しく説明して", selected, predicate);
+        assert_eq!(result["text"], text);
+        assert_eq!(result["calculation"], active["calculation"]);
+        let mut dependencies = vec![selected["id"].clone()];
+        if selected["id"] != active["id"] {
+            dependencies.push(active["id"].clone());
+        }
+        dependencies.extend_from_slice(active["dependencies"].as_array().unwrap());
+        assert_eq!(result["dependencies"], Value::Array(dependencies));
+        assert_eq!(record(&execute(&scratch.0, "owner", &args)), result);
+        result
+    };
+
+    let first_request = "計算手順の base を訂正: 4+3";
+    let first_args = [
+        "--input",
+        "first-correction",
+        "--context",
+        original["id"].as_str().unwrap(),
+        "--max-actions",
+        "7",
+        first_request,
+    ];
+    let first = record(&execute(&scratch.0, "owner", &first_args));
+    assert_goal(
+        &first,
+        first_request,
+        &original,
+        "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1",
+    );
+    assert_eq!(
+        first["text"],
+        "訂正した手順: base\nbase: 4+3 = 7\nfinal: (7)*2 = 14"
+    );
+    assert_eq!(first["dependencies"].as_array().unwrap().len(), 5);
+    assert_eq!(first["dependencies"][0], original["id"]);
+    let first_span = serde_json::json!({"start": first_request.find("4+3").unwrap(),
+        "end": first_request.len(), "text": "4+3"});
+    let first_base = sequence_artifact(&store, &first["dependencies"][2]);
+    assert_eq!(first_base["source_expression"], first_span);
+    let first_detail = detail(
+        "first-detail",
+        &first,
+        &first,
+        "7",
+        &expected_detail("4+3", "7", "14"),
+    );
+
+    let second_request = "計算手順の base を訂正: 8+1";
+    let second_args = [
+        "--input",
+        "second-correction",
+        "--context",
+        first_detail["id"].as_str().unwrap(),
+        "--max-actions",
+        "10",
+        second_request,
+    ];
+    let second = record(&execute(&scratch.0, "owner", &second_args));
+    assert_goal(
+        &second,
+        second_request,
+        &first_detail,
+        "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2",
+    );
+    assert_eq!(
+        second["text"],
+        "訂正した手順: base\nbase: 8+1 = 9\nfinal: (9)*2 = 18"
+    );
+    let second_dependencies = second["dependencies"].as_array().unwrap();
+    assert_eq!(second_dependencies.len(), 6);
+    assert_eq!(
+        &second_dependencies[..2],
+        &[first_detail["id"].clone(), first["id"].clone()]
+    );
+    let second_span = serde_json::json!({"start": second_request.find("8+1").unwrap(),
+        "end": second_request.len(), "text": "8+1"});
+    let mut proof_dependencies = vec![first_detail["id"].clone(), first["id"].clone()];
+    proof_dependencies.extend_from_slice(first["dependencies"].as_array().unwrap());
+    assert_eq!(
+        sequence_artifact(&store, &second_dependencies[2]),
+        serde_json::json!([
+            "minidora-calculation-sequence-correction-v2",
+            first_detail["id"],
+            original["id"],
+            minidora_domain::digest(first_request.as_bytes()),
+            second["id"],
+            minidora_domain::digest(second_request.as_bytes()),
+            "base",
+            first_span,
+            second_span,
+            proof_dependencies
+        ])
+    );
+    let second_base = sequence_artifact(&store, &second_dependencies[3]);
+    let second_final = sequence_artifact(&store, &second_dependencies[4]);
+    assert_eq!(second_base["source_expression"], second_span);
+    assert_eq!(second_base["calculation"]["exact_value"], "9");
+    assert_eq!(second_final["evaluated_expression"], "(9)*2");
+    assert_eq!(
+        second_final["consumed"][0]["artifact_sha256"],
+        second_dependencies[3]
+    );
+    assert_eq!(
+        second_final["source_expression"],
+        sequence_artifact(&store, &original["dependencies"][1])["source_expression"]
+    );
+    let second_detail = detail(
+        "second-detail",
+        &second,
+        &second,
+        "10",
+        &expected_detail("8+1", "9", "18"),
+    );
+    let repeated_detail = detail(
+        "repeated-detail",
+        &second_detail,
+        &second,
+        "11",
+        &expected_detail("8+1", "9", "18"),
+    );
+    let old_detail = detail(
+        "original-history-detail",
+        &original,
+        &original,
+        "5",
+        &expected_detail("2+3", "5", "10"),
+    );
+    assert_eq!(record(&execute(&scratch.0, "owner", &first_args)), first);
+    assert_eq!(record(&execute(&scratch.0, "owner", &second_args)), second);
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &original_args)),
+        original
+    );
+    assert_eq!(
+        inspect_normal_case(&scratch.0, "owner")["result"],
+        old_detail
+    );
+
+    let completed = sequence_stored_step_ids(&scratch.0);
+    for (input, selected, budget, request) in [
+        ("first-correction-budget", &original, "6", first_request),
+        ("corrected-detail-budget", &first, "6", "詳しく説明して"),
+        (
+            "repeat-correction-budget",
+            &first_detail,
+            "9",
+            second_request,
+        ),
+    ] {
+        let args = [
+            "--input",
+            input,
+            "--context",
+            selected["id"].as_str().unwrap(),
+            "--max-actions",
+            budget,
+            request,
+        ];
+        let result = stopped(&execute(&scratch.0, "owner", &args), 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("ACTION_BUDGET_EXHAUSTED:")
+        );
+        assert_eq!(result["guarantee"], "UNKNOWN");
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        for field in [
+            "calculation",
+            "content_plan",
+            "render",
+            "execution_graph_ref",
+        ] {
+            assert!(result[field].is_null());
+        }
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(saved["result"], result);
+        assert_eq!(
+            saved["bundle"]["meaning"]["context_result_ref"],
+            selected["id"]
+        );
+    }
+    assert_eq!(sequence_stored_step_ids(&scratch.0), completed);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    for prior in [
+        &original,
+        &first,
+        &first_detail,
+        &second,
+        &second_detail,
+        &repeated_detail,
+        &old_detail,
+    ] {
+        assert_eq!(
+            saved["prior_results"][prior["id"].as_str().unwrap()],
+            *prior
+        );
+    }
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");
