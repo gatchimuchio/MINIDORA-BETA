@@ -107,6 +107,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::InspectRuleSource { .. }
                         | Intent::InspectDeclaredRuleSource { .. }
                         | Intent::InspectPreviousRuleSource
+                        | Intent::InspectPreviousComposedRuleSource
                         | Intent::InspectComposedRuleSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
@@ -2712,6 +2713,10 @@ fn verify_record_source_result(
             "RECOVERY_PREVIOUS_RULE_SOURCE_MISMATCH",
             "RECOVERY_RULE_SOURCE_CHANGED",
         ),
+        Intent::InspectPreviousComposedRuleSource => (
+            "RECOVERY_PREVIOUS_COMPOSED_RULE_SOURCE_MISMATCH",
+            "RECOVERY_COMPOSED_RULE_SOURCE_CHANGED",
+        ),
         Intent::InspectComposedRuleSource { .. } => (
             "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH",
             "RECOVERY_COMPOSED_RULE_SOURCE_CHANGED",
@@ -2723,19 +2728,22 @@ fn verify_record_source_result(
     };
     verify_registered_input(store, bundle, mismatch)?;
     crate::core::check_record_source_actions(goal)?;
-    let target = crate::core::record_source_target(store, bundle, &state.prior_results).map_err(
-        |error| match error {
-            Error::Contract { code, message }
-                if matches!(
-                    code.as_str(),
-                    "PREVIOUS_RULE_SOURCE_UNAVAILABLE" | "PREVIOUS_RULE_SOURCE_AMBIGUOUS"
-                ) =>
-            {
-                failure(mismatch, &message)
-            }
-            error => error,
-        },
-    )?;
+    let context_mismatch = |error| match error {
+        Error::Contract { code, message }
+            if matches!(
+                code.as_str(),
+                "PREVIOUS_RULE_SOURCE_UNAVAILABLE"
+                    | "PREVIOUS_RULE_SOURCE_AMBIGUOUS"
+                    | "PREVIOUS_COMPOSED_RULE_SOURCE_UNAVAILABLE"
+                    | "PREVIOUS_COMPOSED_RULE_SOURCE_AMBIGUOUS"
+            ) =>
+        {
+            failure(mismatch, &message)
+        }
+        error => error,
+    };
+    let target = crate::core::record_source_target(store, bundle, &state.prior_results)
+        .map_err(context_mismatch)?;
     let actor = &bundle.request.actor_id;
     let case = &bundle.request.case_id;
     let revision = result.actor_memory_revision.ok_or_else(|| {
@@ -2758,7 +2766,9 @@ fn verify_record_source_result(
             "the sealed record is absent from its original actor-memory revision",
         )
     })?;
-    let readout = target.readout(record, store, actor, revision, goal)?;
+    let readout = target
+        .readout(record, store, actor, revision, goal)
+        .map_err(context_mismatch)?;
     let proof_ref = digest(&readout.proof);
     let mut expected_dependencies = readout.dependencies;
     expected_dependencies.push(proof_ref.clone());
@@ -4366,12 +4376,17 @@ fn inspect(
             | crate::input::RULE_SOURCE_PARSER_VERSION
             | crate::input::DECLARED_RULE_SOURCE_PARSER_VERSION
             | crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION
+            | crate::input::PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION
             | crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
     if source_contract.map(|(parser, _)| parser) != sealed_source_parser {
         let code = if sealed_source_parser
-            == Some(crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION)
+            == Some(crate::input::PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION)
+            || matches!(goal.intent, Intent::InspectPreviousComposedRuleSource)
+        {
+            "RECOVERY_PREVIOUS_COMPOSED_RULE_SOURCE_MISMATCH"
+        } else if sealed_source_parser == Some(crate::input::PREVIOUS_RULE_SOURCE_PARSER_VERSION)
             || matches!(goal.intent, Intent::InspectPreviousRuleSource)
         {
             "RECOVERY_PREVIOUS_RULE_SOURCE_MISMATCH"

@@ -66,6 +66,8 @@ pub(crate) const DECLARED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v138-declared-rule-source";
 pub(crate) const PREVIOUS_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v139-previous-rule-source";
+pub(crate) const PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION: &str =
+    "declarative-ja-en-v140-previous-composed-rule-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -349,6 +351,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::InspectDeclaredRuleSource { .. } => DECLARED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectComposedRuleSource { .. } => COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectPreviousRuleSource => PREVIOUS_RULE_SOURCE_PARSER_VERSION,
+        Intent::InspectPreviousComposedRuleSource => PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
             CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
@@ -3888,20 +3891,28 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
 
 fn interpret(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
-    if statement.starts_with("前の回答で使った規則の出典") {
-        return Ok(
-            if matches!(
-                statement,
-                "前の回答で使った規則の出典" | "前の回答で使った規則の出典を教えて"
-            ) && !text.trim().contains(['?', '？', '\r', '\n'])
+    for (label, composed) in [
+        ("前の回答で使った規則の出典", false),
+        ("前の回答で使った合成規則の出典", true),
+    ] {
+        if let Some(suffix) = statement.strip_prefix(label) {
+            if matches!(suffix, "" | "を教えて") && !text.trim().contains(['?', '？', '\r', '\n'])
             {
-                Intent::InspectPreviousRuleSource
+                return Ok(if composed {
+                    Intent::InspectPreviousComposedRuleSource
+                } else {
+                    Intent::InspectPreviousRuleSource
+                });
+            }
+            let reason = if composed {
+                "前の回答で使った合成規則の出典だけを指定してください。"
             } else {
-                Intent::Unknown {
-                    reason: "前の回答で使った規則の出典だけを指定してください。".into(),
-                }
-            },
-        );
+                "前の回答で使った規則の出典だけを指定してください。"
+            };
+            return Ok(Intent::Unknown {
+                reason: reason.into(),
+            });
+        }
     }
     for (label, composed) in [("規則の出典", false), ("合成規則の出典", true)] {
         if let Some(rule_id) = source_inspection_payload(statement, label) {

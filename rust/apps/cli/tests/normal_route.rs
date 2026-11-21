@@ -5002,6 +5002,47 @@ fn composed_rule_source_follows_the_actual_explanation_to_both_guarded_declarati
         command.get(span.start..span.end),
         Some(shortcut.id.as_str())
     );
+    let why_id = why["id"].as_str().unwrap();
+    let contextual = run(&[
+        "--input",
+        "previous-composed-source",
+        "--max-actions",
+        "7",
+        "　前の回答で使った合成規則の出典を教えて。　",
+    ]);
+    assert_eq!(
+        contextual["text"].as_str().unwrap(),
+        format!(
+            "参照した理由説明ID: {why_id}\n{}",
+            report["text"].as_str().unwrap()
+        )
+    );
+    let contextual_deps = contextual["dependencies"].as_array().unwrap();
+    assert_eq!(contextual_deps[0], why_id);
+    assert_eq!(contextual_deps[2..7], deps[..5]);
+    let contextual_proof = sequence_artifact(&store, &contextual_deps[7]);
+    assert_eq!(
+        contextual_proof[0],
+        "minidora-previous-composed-rule-source-v1"
+    );
+    assert_eq!(contextual_proof[1], why_id);
+    assert_eq!(contextual_proof[4], contextual_deps[1]);
+    assert_eq!(contextual_proof[5], proof);
+    let ambiguous = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--context", why_id, "前の回答で使った規則の出典"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        ambiguous["reason"]
+            .as_str()
+            .unwrap()
+            .contains("PREVIOUS_RULE_SOURCE_AMBIGUOUS")
+    );
     assert_eq!(store.load_memory("owner").unwrap(), memory);
     assert!(store.actions("owner", "source").unwrap().is_empty());
 }
