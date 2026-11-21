@@ -101,6 +101,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::ExplainCalculationSequenceStep { .. }
                         | Intent::EvaluateCondition { .. }
                         | Intent::EvaluateConditionDetailed { .. }
+                        | Intent::InspectFactSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -2557,6 +2558,77 @@ struct RetainedRelationProof {
     projection: (MemoryState, crate::relations::QueryOutcome),
 }
 
+fn verify_fact_source_result(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    const CODE: &str = "RECOVERY_FACT_SOURCE_MISMATCH";
+    verify_registered_input(store, bundle, CODE)?;
+    crate::core::check_fact_source_actions(goal)?;
+    let Intent::InspectFactSource { fact_id } = &goal.intent else {
+        return Err(failure(CODE, "the sealed Fact-source goal is missing"));
+    };
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let revision = result.actor_memory_revision.ok_or_else(|| {
+        failure(
+            CODE,
+            "the Fact-source result has no retained actor-memory revision",
+        )
+    })?;
+    let snapshot = store
+        .load_memory_revision(actor, revision)?
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_REVISION_MISSING",
+                "the original Fact source memory is unavailable",
+            )
+        })?;
+    let fact = snapshot
+        .facts
+        .iter()
+        .find(|fact| &fact.id == fact_id)
+        .ok_or_else(|| {
+            failure(
+                CODE,
+                "the sealed Fact is absent from its original actor-memory revision",
+            )
+        })?;
+    let readout = crate::core::fact_source_readout(store, actor, revision, fact, goal)?;
+    let proof_ref = digest(&readout.proof);
+    let expected_dependencies = [
+        fact.id.clone(),
+        fact.source_input.clone(),
+        proof_ref.clone(),
+    ];
+    if result.dependencies != expected_dependencies
+        || result.guarantee != Guarantee::Computed
+        || plan.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.required_units != readout.units
+        || result.text != readout.units.join("\n")
+        || plan.text != result.text
+        || store.get_bytes(actor, case, &proof_ref)? != readout.proof
+    {
+        return Err(failure(
+            CODE,
+            "the retained Fact source differs from its sealed proof and surface",
+        ));
+    }
+    let (_, current) = crate::core::fact_source_at_head(store, actor, fact_id)?;
+    if current != *fact {
+        return Err(failure(
+            "RECOVERY_FACT_SOURCE_CHANGED",
+            "the current Fact or its validity differs from the adopted Fact-source result",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_condition_evaluation_result(
     store: &Store,
     bundle: &InputBundle,
@@ -4111,6 +4183,14 @@ fn inspect(
         ));
     }
     let requires_condition_evaluation = condition_contract.is_some();
+    let requires_fact_source =
+        bundle.meaning.parser_version == crate::input::FACT_SOURCE_PARSER_VERSION;
+    if matches!(goal.intent, Intent::InspectFactSource { .. }) != requires_fact_source {
+        return Err(failure(
+            "RECOVERY_FACT_SOURCE_MISMATCH",
+            "the Fact-source intent differs from its sealed parser contract",
+        ));
+    }
     let requires_sequence_edit = matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::SEQUENCE_CORRECTION_PARSER_VERSION
@@ -4196,6 +4276,7 @@ fn inspect(
             || requires_generated_calculation
             || requires_verified_correction
             || requires_condition_evaluation
+            || requires_fact_source
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
@@ -4512,6 +4593,9 @@ fn inspect(
         }
         verify_condition_evaluation_result(store, bundle, result, plan, &goal)?;
     }
+    if requires_fact_source {
+        verify_fact_source_result(store, bundle, result, plan, &goal)?;
+    }
     if let Some(hypothesis) = crate::core::previous_group_mean_hypothesis(store, state)? {
         if result.guarantee != Guarantee::Hypothesis
             || result.dependencies != hypothesis.dependencies
@@ -4524,7 +4608,7 @@ fn inspect(
         }
         hypothesis.verify_artifacts(store, actor, case)?;
     }
-    let original_relation = if requires_condition_evaluation {
+    let original_relation = if requires_condition_evaluation || requires_fact_source {
         None
     } else {
         verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?
@@ -8645,6 +8729,75 @@ mod tests {
                 modified
             );
         }
+    }
+
+    #[test]
+    fn fact_source_reconciles_original_input_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let asserted = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "assertion", "alice", "[scope=実験室]ユリは校正済み"),
+            )
+            .unwrap();
+        assert_eq!(asserted.lifecycle, Lifecycle::Commit, "{asserted:?}");
+        let command = format!("Factの出典: {}", asserted.dependencies[0]);
+        let mut request = RequestEnvelope::new("case", "provenance", "alice", &command);
+        request.budget.max_actions = 6;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.dependencies[1], asserted.id);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let retained = state.result.as_ref().unwrap();
+        let mut changed = retained.clone();
+        changed.dependencies[1] = changed.dependencies[0].clone();
+        let error = inspect(&engine.store, "alice", &state, &changed).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_FACT_SOURCE_MISMATCH"),
+            "{error:?}"
+        );
+        let unrelated = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "other",
+                    "unrelated",
+                    "alice",
+                    "[scope=archive]ナナは記録済み",
+                ),
+            )
+            .unwrap();
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+        let recovered = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(
+            recovered.actor_memory_revision,
+            result.actor_memory_revision
+        );
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
     }
 
     #[test]

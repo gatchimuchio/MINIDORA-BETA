@@ -47,6 +47,7 @@ pub(crate) const CONDITION_EVALUATION_PARSER_VERSION: &str =
     "declarative-ja-en-v127-condition-evaluation";
 pub(crate) const CONDITION_EVALUATION_DETAIL_PARSER_VERSION: &str =
     "declarative-ja-en-v128-condition-evaluation-detail";
+pub(crate) const FACT_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v129-fact-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -306,6 +307,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::DefineCondition { .. } => CONDITION_DEFINITION_PARSER_VERSION,
         Intent::EvaluateCondition { .. } => CONDITION_EVALUATION_PARSER_VERSION,
         Intent::EvaluateConditionDetailed { .. } => CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
+        Intent::InspectFactSource { .. } => FACT_SOURCE_PARSER_VERSION,
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
         Intent::CsvSelectIndex { .. } => CSV_POSITIONAL_SELECTION_PARSER_VERSION,
@@ -1620,6 +1622,28 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
+    }
+    if let Intent::InspectFactSource { fact_id } = intent {
+        let trimmed = terminal_trim(text);
+        let payload = fact_source_payload(trimmed)
+            .filter(|payload| *payload == fact_id)
+            .ok_or_else(|| {
+                failure(
+                    "FACT_SOURCE_SPAN",
+                    "the Fact identity does not match the original request",
+                )
+            })?;
+        let start = text.len() - text.trim_start().len() + trimmed.len() - payload.len();
+        let span = source_span_at(text, start, start + payload.len()).ok_or_else(|| {
+            failure(
+                "FACT_SOURCE_SPAN",
+                "the Fact identity is outside the original request",
+            )
+        })?;
+        return Ok(BTreeMap::from([(
+            "/InspectFactSource/fact_id".into(),
+            vec![span],
+        )]));
     }
     let condition_role = match intent {
         Intent::EvaluateCondition { .. } => Some("EvaluateCondition"),
@@ -3520,6 +3544,26 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(fact_id) = fact_source_payload(terminal_trim(text)) {
+        return Ok(
+            if !text.contains(['?', '？'])
+                && fact_id.strip_prefix("fact:").is_some_and(|digest| {
+                    digest.len() == 64
+                        && digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                })
+            {
+                Intent::InspectFactSource {
+                    fact_id: fact_id.into(),
+                }
+            } else {
+                Intent::Unknown {
+                    reason: "出典を照会するFact IDを一つ指定してください。".into(),
+                }
+            },
+        );
+    }
     if condition_evaluation_payload(terminal_trim(text)).is_some() {
         return Ok(condition_evaluation_qualifiers(text)
             .and_then(|(_, detailed, qualifiers)| {
@@ -4938,6 +4982,12 @@ fn ordinary_relation_proposition(text: &str) -> Result<Option<Proposition>> {
 fn condition_definition_payload(text: &str) -> Option<&str> {
     text.strip_prefix("条件定義:")
         .or_else(|| text.strip_prefix("条件定義："))
+        .map(str::trim_start)
+}
+
+fn fact_source_payload(text: &str) -> Option<&str> {
+    text.strip_prefix("Factの出典:")
+        .or_else(|| text.strip_prefix("Factの出典："))
         .map(str::trim_start)
 }
 

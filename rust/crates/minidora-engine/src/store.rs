@@ -132,6 +132,23 @@ impl VerifiedCaseHistory<'_> {
             .read_input_result(self.connection, self.case, input, version)
     }
 
+    pub(crate) fn contains_committed_result(&self, result: &ResultRecord) -> Result<bool> {
+        let mut statement = sql(self.connection.prepare(
+            "SELECT state_sha256 FROM case_revision WHERE case_id=?1 AND lifecycle='COMMIT' ORDER BY revision DESC",
+        ))?;
+        let rows = sql(statement.query_map([self.case], |row| row.get::<_, String>(0)))?;
+        for row in rows {
+            let revision: CaseRevision = self.store.read_blob(&sql(row)?)?;
+            if revision.lifecycle == Lifecycle::Commit
+                && revision.input_fingerprint.as_deref() == Some(result.id.as_str())
+                && revision.result.as_ref() == Some(result)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(crate) fn suspended_result_revision(
         &self,
         result: &ResultRecord,
@@ -1712,6 +1729,31 @@ impl Store {
         Ok(previous.result)
     }
 
+    /// Locate the original input key for a fingerprint owned by this actor.
+    /// Consumers still verify the sealed input and result in its case history.
+    pub(crate) fn owned_source_input_key(
+        &self,
+        actor: &str,
+        fingerprint: &str,
+    ) -> Result<Option<(String, String, u64)>> {
+        let source_key: Option<(String, String, i64)> = sql(self.connection.query_row(
+            "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2 ORDER BY i.rowid LIMIT 1",
+            params![actor, fingerprint],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional())?;
+        source_key
+            .map(|(case, input, version)| {
+                let version = u64::try_from(version).map_err(|_| {
+                    failure(
+                        "SOURCE_EVIDENCE_IDENTITY",
+                        "fact source evidence has a negative input version",
+                    )
+                })?;
+                Ok((case, input, version))
+            })
+            .transpose()
+    }
+
     /// Load the exact immutable sealed input for one retained case input.
     /// Actor/case/input identity and content-derived bundle fields are
     /// rechecked before a consumer can use the original interpretation.
@@ -2182,23 +2224,14 @@ impl Store {
                 }
                 continue;
             }
-            let source_key: Option<(String, String, i64)> = sql(self.connection.query_row(
-                "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2 ORDER BY i.rowid LIMIT 1",
-                params![actor, fact.source_input],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).optional())?;
-            let Some((case, input, version)) = source_key else {
+            let Some((case, input, version)) =
+                self.owned_source_input_key(actor, &fact.source_input)?
+            else {
                 return Err(failure(
                     "SOURCE_EVIDENCE_UNOWNED",
                     "fact source evidence does not resolve to an actor-owned sealed input",
                 ));
             };
-            let version = u64::try_from(version).map_err(|_| {
-                failure(
-                    "SOURCE_EVIDENCE_IDENTITY",
-                    "fact source evidence has a negative input version",
-                )
-            })?;
             let case_verified = verified_cases.contains(&case);
             let original = if case_verified {
                 self.read_input_bundle(&self.connection, actor, &case, &input, version)?

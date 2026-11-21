@@ -510,6 +510,9 @@ pub enum Intent {
         scope: String,
         temporal_scope: Option<String>,
     },
+    InspectFactSource {
+        fact_id: String,
+    },
     AssertPreviousRelation {
         proposition: Proposition,
         explicit_scope: Option<String>,

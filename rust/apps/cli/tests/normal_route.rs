@@ -4481,6 +4481,75 @@ fn condition_evaluation_reports_four_states_without_writing_memory() {
 }
 
 #[test]
+fn fact_source_resolves_exact_saved_input_across_owned_cases() {
+    let scratch = Scratch::new();
+    let source = "[scope=実験室]ユリは停止中ではない";
+    let asserted = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--case", "observations", "--input", "inspection", source],
+    ));
+    let id = asserted["dependencies"][0].as_str().unwrap();
+    let command = format!("　Factの出典： {id}。　");
+    let report = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "provenance", "--max-actions", "5", &command],
+    ));
+    assert_eq!(report["dependencies"][0], id);
+    assert_eq!(report["dependencies"][1], asserted["id"]);
+    let text = report["text"].as_str().unwrap();
+    assert!(text.contains("記憶状態: 有効"));
+    assert!(text.contains("出典ケース: \"observations\"、入力ID: \"inspection\"、版: 1"));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &report["dependencies"][2]);
+    assert_eq!(proof[0], "minidora-fact-source-v1");
+    assert_eq!(proof[1], report["actor_memory_revision"]);
+    assert_eq!(proof[2]["proposition"]["negative"], true);
+    assert_eq!(
+        proof[2]["source_evidence"]["raw_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    let roles = proof[2]["source_evidence"]["source_roles"]
+        .as_object()
+        .unwrap();
+    assert!(roles.contains_key("/Assert/proposition/negation"));
+    for spans in roles.values() {
+        for span in spans.as_array().unwrap() {
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert_eq!(source.get(start..end), span["text"].as_str());
+        }
+    }
+    let foreign = stopped(
+        &execute(&scratch.0, "other", &["--case", "foreign", &command]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        foreign["reason"]
+            .as_str()
+            .unwrap()
+            .contains("FACT_SOURCE_NOT_FOUND")
+    );
+    let missing_command = format!("Factの出典: fact:{}", "0".repeat(64));
+    let missing = stopped(
+        &execute(
+            &scratch.0,
+            "other",
+            &["--case", "foreign", &missing_command],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert_eq!(foreign["reason"], missing["reason"]);
+    assert_eq!(foreign["text"], missing["text"]);
+    assert!(foreign["content_plan"].is_null());
+    assert!(foreign["render"].is_null());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
