@@ -756,6 +756,21 @@ fn calculation_sequence_route_retry_explanation_and_version_history() {
         inspect_normal_case(&scratch.0, "owner")["bundle"]["meaning"]["context_result_ref"],
         first["id"]
     );
+    let mut preceding = explanation;
+    for input in ["sequence-detail-again", "sequence-detail-third"] {
+        let repeated = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", input, "詳しく説明して"],
+        ));
+        assert_eq!(repeated["lifecycle"], "COMMIT");
+        assert_eq!(repeated["calculation"], first["calculation"]);
+        assert_eq!(repeated["text"], units.join("\n"));
+        let mut expected = vec![preceding["id"].clone()];
+        expected.extend(dependencies.iter().cloned());
+        assert_eq!(repeated["dependencies"].as_array().unwrap(), &expected);
+        preceding = repeated;
+    }
     let changed = request.replace("2+3", "4+3");
     let expected = [
         sequence_step("u", "4+3", "4+3", "7", &[], &[]),

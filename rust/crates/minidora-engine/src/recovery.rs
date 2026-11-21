@@ -7,11 +7,11 @@
 //! authentication and trusted ownership of ancestor directories remain required.
 use crate::{
     core::{
-        GENERATED_RELATION_EXPLANATION_PREDICATE, RELATION_COMPARISON_PREDICATE,
-        RELATION_EXPLANATION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE, calculation_sequence_nodes,
-        explain_calculation_sequence, goal_predicates, previous_calculation_sequence,
-        run_calculation_sequence, store_execution_graph, validate_goal_render, validate_render,
-        verify_goal_content,
+        CHAINED_SEQUENCE_EXPLANATION_PREDICATE, GENERATED_RELATION_EXPLANATION_PREDICATE,
+        RELATION_COMPARISON_PREDICATE, RELATION_EXPLANATION_PREDICATE,
+        SEQUENCE_EXPLANATION_PREDICATE, calculation_sequence_nodes, explain_calculation_sequence,
+        goal_predicates, previous_calculation_sequence, run_calculation_sequence,
+        store_execution_graph, validate_goal_render, validate_render, verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -4015,11 +4015,18 @@ fn inspect(
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
     let requires_generated_why = crate::input::uses_generated_relation_explanation(&bundle.meaning);
-    let explains_sequence = goal
-        .required_predicates
-        .iter()
-        .any(|predicate| predicate == SEQUENCE_EXPLANATION_PREDICATE);
-    if goal.required_predicates != goal_predicates(&bundle.meaning, true, explains_sequence)
+    let sequence_predicate =
+        goal.required_predicates
+            .iter()
+            .map(String::as_str)
+            .find(|predicate| {
+                matches!(
+                    *predicate,
+                    SEQUENCE_EXPLANATION_PREDICATE | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
+                )
+            });
+    let explains_sequence = sequence_predicate.is_some();
+    if goal.required_predicates != goal_predicates(&bundle.meaning, true, sequence_predicate)
         && (requires_generated_comparison
             || requires_generated_calculation
             || requires_generated_why
@@ -4031,7 +4038,10 @@ fn inspect(
             "unrecognized completion predicates remain unresolved",
         ));
     }
-    let previous_sequence = if explains_sequence {
+    // V1 measured the original replay from the first calculation step.
+    let sequence_started =
+        (sequence_predicate == Some(CHAINED_SEQUENCE_EXPLANATION_PREDICATE)).then(Instant::now);
+    let previous_sequence = if let Some(predicate) = sequence_predicate {
         let invalid = || {
             failure(
                 "RECOVERY_CALCULATION_SEQUENCE_CONTEXT_INVALID",
@@ -4049,9 +4059,16 @@ fn inspect(
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(invalid)?;
-        let original =
-            previous_calculation_sequence(store, bundle, previous)?.ok_or_else(invalid)?;
-        Some((previous, original))
+        let context = previous_calculation_sequence(
+            store,
+            bundle,
+            previous,
+            &state.prior_results,
+            sequence_started,
+        )?
+        .filter(|context| context.predicate() == predicate)
+        .ok_or_else(invalid)?;
+        Some(context)
     } else {
         None
     };
@@ -5349,7 +5366,7 @@ fn inspect(
     }
     let sequence_intent = previous_sequence
         .as_ref()
-        .map_or(&goal.intent, |(_, original)| &original.meaning.intent);
+        .map_or(&goal.intent, |context| &context.input.meaning.intent);
     if let Intent::CalculateSequence { steps } = sequence_intent {
         let sequence_nodes = calculation_sequence_nodes(steps);
         sources.extend(sequence_nodes.iter().map(|node| node.id.clone()));
@@ -5383,16 +5400,23 @@ fn inspect(
             "graph differs from this verifier's supported artifact topology",
         ));
     }
+    if previous_sequence.as_ref().is_some_and(|context| {
+        nodes.len() + context.context_actions() > goal.budget.max_actions as usize
+    }) {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "the original allowance does not cover the explanation history and required nodes",
+        ));
+    }
     let mut graph = Scheduler::new(nodes, goal.budget.max_actions)?;
     let mut source_refs = BTreeMap::new();
-    if let Some((previous, original)) = &previous_sequence {
+    if let Some(context) = &previous_sequence {
         let explanation = explain_calculation_sequence(
             store,
-            previous,
-            original,
+            context,
             &mut graph,
             &goal.budget,
-            Instant::now(),
+            sequence_started.unwrap_or_else(Instant::now),
         )?;
         if result.calculation.as_ref() != Some(&explanation.calculation)
             || result.guarantee != Guarantee::Computed
@@ -7048,6 +7072,15 @@ mod tests {
 
     #[test]
     fn previous_calculation_sequence_explanation_reconciles_exact_steps_and_file() {
+        assert_sequence_explanation_file_recovery(false);
+    }
+
+    #[test]
+    fn chained_calculation_sequence_explanation_reconciles_exact_steps_and_file() {
+        assert_sequence_explanation_file_recovery(true);
+    }
+
+    fn assert_sequence_explanation_file_recovery(chained: bool) {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
         let original = engine
@@ -7062,8 +7095,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(original.lifecycle, Lifecycle::Commit);
+        let mut expected = Vec::new();
+        if chained {
+            let first = engine
+                .execute(
+                    "alice",
+                    RequestEnvelope::new("case", "first-detail", "alice", "詳しく説明して"),
+                )
+                .unwrap();
+            assert_eq!(first.lifecycle, Lifecycle::Commit);
+            expected.push(first.id);
+        }
         let mut request = RequestEnvelope::new("case", "detail", "alice", "詳しく説明して");
-        request.budget.max_actions = 7;
+        request.budget.max_actions = if chained { 8 } else { 7 };
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -7078,7 +7122,7 @@ mod tests {
                 .contains("代入した先行手順の値: base = 5、base = 5")
         );
         assert_eq!(detail.calculation, original.calculation);
-        let mut expected = vec![original.id.clone()];
+        expected.push(original.id.clone());
         expected.extend(original.dependencies);
         assert_eq!(detail.dependencies, expected);
         let bytes = fs::read(&fixture.target).unwrap();
@@ -7088,6 +7132,22 @@ mod tests {
         let token = retain_attempted_prefix(&fixture.state);
         let store = Store::open(&fixture.state).unwrap();
         let state = store.load_case("alice", "case").unwrap().unwrap();
+        if chained {
+            let mut missing_original = state.clone();
+            assert!(
+                missing_original
+                    .prior_results
+                    .remove(&original.id)
+                    .is_some()
+            );
+            let retained = state.result.as_ref().unwrap();
+            let error = inspect(&store, "alice", &missing_original, retained).unwrap_err();
+            assert!(error.to_string().contains("CALCULATION_CONTEXT_INVALID"));
+            assert_eq!(
+                store.actions("alice", "case").unwrap()[0].phase,
+                EffectPhase::Unknown
+            );
+        }
         let mut changed = state.result.as_ref().unwrap().clone();
         changed.dependencies.swap(1, 2);
         let error = inspect(&store, "alice", &state, &changed).unwrap_err();

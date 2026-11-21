@@ -205,11 +205,33 @@ pub(crate) fn run_calculation_sequence(
     })
 }
 
-pub(crate) fn previous_calculation_sequence(
+pub(crate) struct PreviousCalculationSequence<'a> {
+    pub(crate) input: InputBundle,
+    original: &'a ResultRecord,
+    details: Vec<&'a ResultRecord>,
+}
+
+impl PreviousCalculationSequence<'_> {
+    pub(crate) fn predicate(&self) -> &'static str {
+        if self.details.is_empty() {
+            SEQUENCE_EXPLANATION_PREDICATE
+        } else {
+            CHAINED_SEQUENCE_EXPLANATION_PREDICATE
+        }
+    }
+
+    pub(crate) fn context_actions(&self) -> usize {
+        self.details.len()
+    }
+}
+
+pub(crate) fn previous_calculation_sequence<'a>(
     store: &Store,
     followup: &InputBundle,
-    previous: &ResultRecord,
-) -> Result<Option<InputBundle>> {
+    previous: &'a ResultRecord,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    started: Option<Instant>,
+) -> Result<Option<PreviousCalculationSequence<'a>>> {
     if previous.lifecycle != Lifecycle::Commit || previous.calculation.is_none() {
         return Ok(None);
     }
@@ -221,24 +243,105 @@ pub(crate) fn previous_calculation_sequence(
                 "前回の計算を同じケースの封印入力と確定結果に結び付けられません。",
             )
         };
-        let (_, original) = history
-            .input_bundle(&previous.input_id, previous.input_version)?
-            .ok_or_else(invalid)?;
-        if !matches!(original.meaning.intent, Intent::CalculateSequence { .. }) {
-            return Ok(None);
-        }
-        if identity(&original.request)? != previous.id
-            || followup.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        if followup.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
             || followup.context_sha256 != identity(&Some(previous))?
-            || history
-                .input_result(&previous.input_id, previous.input_version)?
+            || request
+                .context_ref
                 .as_ref()
-                != Some(previous)
+                .is_some_and(|id| id != &previous.id)
         {
             return Err(invalid());
         }
-        Ok(Some(original))
+        let mut current = previous;
+        let mut details = Vec::new();
+        let mut visited = BTreeSet::new();
+        loop {
+            if started.is_some_and(|start| {
+                start.elapsed().as_millis() >= u128::from(request.budget.deadline_ms)
+            }) {
+                return Err(failure(
+                    "DEADLINE",
+                    "前回の計算を照合中に締切へ達しました。",
+                ));
+            }
+            let (_, input) = history
+                .input_bundle(&current.input_id, current.input_version)?
+                .ok_or_else(invalid)?;
+            if identity(&input.request)? != current.id
+                || current.lifecycle != Lifecycle::Commit
+                || !visited.insert(current.id.as_str())
+            {
+                return Err(invalid());
+            }
+            if matches!(input.meaning.intent, Intent::CalculateSequence { .. }) {
+                if history
+                    .input_result(&current.input_id, current.input_version)?
+                    .as_ref()
+                    != Some(current)
+                {
+                    return Err(invalid());
+                }
+                return Ok(Some(PreviousCalculationSequence {
+                    input,
+                    original: current,
+                    details,
+                }));
+            }
+            if details.is_empty()
+                && (!matches!(input.meaning.intent, Intent::ExplainPrevious)
+                    || current.dependencies.len() == 1
+                        && current.calculation.as_ref().is_some_and(|calculation| {
+                            current.content_plan.as_ref().is_some_and(|plan| {
+                                plan.required_units == calculation_detail_units(calculation)
+                            })
+                        }))
+            {
+                return Ok(None);
+            }
+            if !matches!(input.meaning.intent, Intent::ExplainPrevious)
+                || history
+                    .input_result(&current.input_id, current.input_version)?
+                    .as_ref()
+                    != Some(current)
+            {
+                return Err(invalid());
+            }
+            if details.len() >= request.budget.max_actions as usize {
+                return Err(failure(
+                    "ACTION_BUDGET_EXHAUSTED",
+                    "前回の詳説を照合するための行動予算が不足しています。",
+                ));
+            }
+            let parent = input
+                .meaning
+                .context_result_ref
+                .as_ref()
+                .and_then(|reference| {
+                    prior_results
+                        .get(reference)
+                        .filter(|parent| &parent.id == reference)
+                })
+                .ok_or_else(invalid)?;
+            if input.context_sha256 != identity(&Some(parent))?
+                || input
+                    .request
+                    .context_ref
+                    .as_ref()
+                    .is_some_and(|id| id != &parent.id)
+            {
+                return Err(invalid());
+            }
+            details.push(current);
+            current = parent;
+        }
     })
+}
+
+fn calculation_detail_units(calculation: &Calculation) -> Vec<String> {
+    let mut units = vec![format!("計算式: {}", calculation.expression)];
+    units.extend(calculation.steps.iter().cloned());
+    units.push(format!("計算結果: {}", calculation.exact_value));
+    units
 }
 
 pub(crate) struct CalculationSequenceExplanation {
@@ -249,8 +352,7 @@ pub(crate) struct CalculationSequenceExplanation {
 
 pub(crate) fn explain_calculation_sequence(
     store: &Store,
-    previous: &ResultRecord,
-    original: &InputBundle,
+    context: &PreviousCalculationSequence<'_>,
     graph: &mut Scheduler,
     budget: &ResourceBudget,
     started: Instant,
@@ -261,10 +363,11 @@ pub(crate) fn explain_calculation_sequence(
             "前回の計算手順、参照順または保存された成果物が一致しません。",
         )
     };
-    let Intent::CalculateSequence { steps } = &original.meaning.intent else {
+    let previous = context.original;
+    let Intent::CalculateSequence { steps } = &context.input.meaning.intent else {
         return Err(invalid());
     };
-    let request = &original.request;
+    let request = &context.input.request;
     let mut remaining_bytes = budget.max_evidence_bytes;
     let mut retained = previous.dependencies.iter();
     let mut dependencies = vec![previous.id.clone()];
@@ -317,11 +420,41 @@ pub(crate) fn explain_calculation_sequence(
         ));
     }
     units.push(format!("最終結果: {}", observed.calculation.exact_value));
-    if units.join("\n").len() > budget.max_evidence_bytes {
+    let text = units.join("\n");
+    if text.len() > budget.max_evidence_bytes {
         return Err(failure(
             "RESOURCE_LIMIT",
             "計算手順の説明が要求の証拠予算を超えています。",
         ));
+    }
+    let mut parent = previous;
+    for detail in context.details.iter().rev().copied() {
+        if started.elapsed().as_millis() >= u128::from(budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "前回の詳説を照合中に締切へ達しました。",
+            ));
+        }
+        let mut expected = dependencies.clone();
+        if parent.id != previous.id {
+            expected.insert(0, parent.id.clone());
+        }
+        let plan = detail.content_plan.as_ref().ok_or_else(invalid)?;
+        if detail.dependencies != expected
+            || detail.calculation.as_ref() != Some(&observed.calculation)
+            || detail.guarantee != Guarantee::Computed
+            || !detail.evidence.is_empty()
+            || detail.text != text
+            || plan.guarantee != Guarantee::Computed
+            || plan.required_units != units
+            || plan.text != text
+        {
+            return Err(invalid());
+        }
+        parent = detail;
+    }
+    if parent.id != previous.id {
+        dependencies.insert(0, parent.id.clone());
     }
     Ok(CalculationSequenceExplanation {
         calculation: observed.calculation,
@@ -385,11 +518,13 @@ const GROUP_MEAN_HYPOTHESIS_PREDICATE: &str = "GROUP_MEAN_HYPOTHESIS_RESULT_V1";
 
 pub(crate) const RELATION_COMPARISON_PREDICATE: &str = "GENERATED_RELATION_COMPARISON_V1";
 pub(crate) const SEQUENCE_EXPLANATION_PREDICATE: &str = "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V1";
+pub(crate) const CHAINED_SEQUENCE_EXPLANATION_PREDICATE: &str =
+    "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V2";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
     requires_file: bool,
-    explains_sequence: bool,
+    sequence_explanation: Option<&str>,
 ) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
@@ -401,8 +536,8 @@ pub(crate) fn goal_predicates(
         }
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
-        Intent::ExplainPrevious if explains_sequence => {
-            predicates.push(SEQUENCE_EXPLANATION_PREDICATE.into());
+        Intent::ExplainPrevious => {
+            predicates.extend(sequence_explanation.map(str::to_owned));
         }
         Intent::AskWhy { .. } if input::uses_generated_relation_explanation(meaning) => {
             predicates.push(GENERATED_RELATION_EXPLANATION_PREDICATE.into());
@@ -445,6 +580,7 @@ fn verify_report_goal_content(
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
                 | SEQUENCE_EXPLANATION_PREDICATE
+                | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -4233,17 +4369,26 @@ impl Engine {
         };
         let previous_sequence = if has_compute_budget
             && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
-            && let Some(prior) = previous
+            && let (Some(prior), Some(prior_case)) = (previous, latest.as_ref())
         {
-            match previous_calculation_sequence(&self.store, &bundle, prior) {
-                Ok(original) => original.map(|original| (prior, original)),
+            match previous_calculation_sequence(
+                &self.store,
+                &bundle,
+                prior,
+                &prior_case.prior_results,
+                Some(started),
+            ) {
+                Ok(context) => context,
                 Err(error) => {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "CALCULATION_CONTEXT_INVALID",
-                        &error.to_string(),
-                    );
+                    let code = match &error {
+                        Error::Contract { code, .. }
+                            if matches!(code.as_str(), "DEADLINE" | "ACTION_BUDGET_EXHAUSTED") =>
+                        {
+                            code.as_str()
+                        }
+                        _ => "CALCULATION_CONTEXT_INVALID",
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
                 }
             }
         } else {
@@ -4858,8 +5003,8 @@ impl Engine {
         }
         let sequence_intent = previous_sequence
             .as_ref()
-            .map_or(&bundle.meaning.intent, |(_, original)| {
-                &original.meaning.intent
+            .map_or(&bundle.meaning.intent, |context| {
+                &context.input.meaning.intent
             });
         if let Intent::CalculateSequence { steps } = sequence_intent {
             let sequence_nodes = calculation_sequence_nodes(steps);
@@ -4891,7 +5036,10 @@ impl Engine {
             });
         }
         let required_graph_ref = self.store.put_artifact(actor, &request.case_id, &nodes)?;
-        let required_actions = nodes.len();
+        let required_actions = nodes.len()
+            + previous_sequence
+                .as_ref()
+                .map_or(0, PreviousCalculationSequence::context_actions);
         let mut graph = Scheduler::new(nodes, request.budget.max_actions)?;
         let goal = GoalContract {
             input_fingerprint: fingerprint.clone(),
@@ -4903,7 +5051,9 @@ impl Engine {
             required_predicates: goal_predicates(
                 &bundle.meaning,
                 request.output_path.is_some(),
-                previous_sequence.is_some(),
+                previous_sequence
+                    .as_ref()
+                    .map(PreviousCalculationSequence::predicate),
             ),
             renderer_version: Some(output::RENDERER_VERSION.into()),
         };
@@ -6054,13 +6204,12 @@ impl Engine {
                 state.result = Some(result.clone());
             }
             Intent::ExplainPrevious if previous_sequence.is_some() => {
-                let (prior, original) = previous_sequence
+                let context = previous_sequence
                     .as_ref()
                     .expect("sequence context checked");
                 let explanation = match explain_calculation_sequence(
                     &self.store,
-                    prior,
-                    original,
+                    context,
                     &mut graph,
                     &goal.budget,
                     started,
@@ -6076,7 +6225,7 @@ impl Engine {
                 result.dependencies = explanation.dependencies;
                 result.guarantee = Guarantee::Computed;
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: SEQUENCE_EXPLANATION_PREDICATE,
+                    predicate: context.predicate(),
                     guarantee: Guarantee::Computed,
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
@@ -6193,9 +6342,7 @@ impl Engine {
                     None
                 };
                 if let Some(ref calculation) = prior.calculation {
-                    units.push(format!("計算式: {}", calculation.expression));
-                    units.extend(calculation.steps.clone());
-                    units.push(format!("計算結果: {}", calculation.exact_value));
+                    units.extend(calculation_detail_units(calculation));
                     approved_surfaces =
                         Some(language::calculation_explanation_surfaces(calculation));
                     result.calculation = Some(calculation.clone());
