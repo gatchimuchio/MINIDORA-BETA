@@ -1596,6 +1596,7 @@ pub(crate) const CONDITION_SOURCE_PREDICATE: &str = "EXACT_CONDITION_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
 pub(crate) const RULE_SOURCE_PREDICATE: &str = "EXACT_RULE_SOURCE_V1";
+pub(crate) const DECLARED_RULE_SOURCE_PREDICATE: &str = "EXACT_DECLARED_RULE_SOURCE_V1";
 pub(crate) const COMPOSED_RULE_SOURCE_PREDICATE: &str = "EXACT_COMPOSED_RULE_SOURCE_V1";
 pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 pub(crate) const GUARDED_CONJUNCTIVE_RULE_PREDICATE: &str = "EXACT_GUARDED_CONJUNCTIVE_RULE_V1";
@@ -1648,6 +1649,10 @@ pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &
         Intent::InspectRuleSource { .. } => {
             Some((input::RULE_SOURCE_PARSER_VERSION, RULE_SOURCE_PREDICATE))
         }
+        Intent::InspectDeclaredRuleSource { .. } => Some((
+            input::DECLARED_RULE_SOURCE_PARSER_VERSION,
+            DECLARED_RULE_SOURCE_PREDICATE,
+        )),
         Intent::InspectComposedRuleSource { .. } => Some((
             input::COMPOSED_RULE_SOURCE_PARSER_VERSION,
             COMPOSED_RULE_SOURCE_PREDICATE,
@@ -1706,6 +1711,7 @@ pub(crate) fn goal_predicates(
         | Intent::InspectConditionSource { .. }
         | Intent::InspectConditionSourceByDefinition { .. }
         | Intent::InspectRuleSource { .. }
+        | Intent::InspectDeclaredRuleSource { .. }
         | Intent::InspectComposedRuleSource { .. }) => {
             if let Some((parser, predicate)) = record_source_contract(intent)
                 && parser == meaning.parser_version
@@ -11043,6 +11049,7 @@ impl Engine {
             | Intent::InspectConditionSource { .. }
             | Intent::InspectConditionSourceByDefinition { .. }
             | Intent::InspectRuleSource { .. }
+            | Intent::InspectDeclaredRuleSource { .. }
             | Intent::InspectComposedRuleSource { .. }) => {
                 let report = check_record_source_actions(&goal).and_then(|()| {
                     let memory = record_source_memory_at_head(&self.store, actor)?;
@@ -17113,7 +17120,7 @@ impl SourceMemoryRecord<'_> {
                         format!("記憶状態: {}", if fact.valid { "有効" } else { "失効" }),
                         format!("命題: {}", describe(&fact.proposition)),
                     ],
-                    &evidence.source_roles,
+                    Some(&evidence.source_roles),
                     "Factの出典と表示が要求の証拠予算を超えています。",
                 )
             }
@@ -17164,20 +17171,20 @@ impl SourceMemoryRecord<'_> {
                         &bundle.meaning.source_roles,
                     ))?,
                     units,
-                    &bundle.meaning.source_roles,
+                    Some(&bundle.meaning.source_roles),
                     "条件定義の出典と表示が要求の証拠予算を超えています。",
                 )
             }
             Self::Rule(rule) => {
+                const LIMIT_MESSAGE: &str = "規則の出典と表示が要求の証拠予算を超えています。";
                 let roles = &bundle.meaning.source_roles;
-                if !verified_declared_rule(rule, &bundle)?
-                    || roles.is_empty()
-                    || !input::verified_guarded_relation_rule_source(&bundle)?
-                {
+                if !verified_declared_rule(rule, &bundle)? {
                     return Err(unavailable());
                 }
-                (
-                    canonical(&(
+                let (proof, roles) = if !roles.is_empty()
+                    && input::verified_guarded_relation_rule_source(&bundle)?
+                {
+                    let proof = canonical(&(
                         "minidora-rule-source-v1",
                         revision,
                         rule,
@@ -17187,11 +17194,27 @@ impl SourceMemoryRecord<'_> {
                         &bundle_ref,
                         &bundle.raw_sha256,
                         roles,
-                    ))?,
-                    rule_source_units("規則", rule),
-                    roles,
-                    "規則の出典と表示が要求の証拠予算を超えています。",
-                )
+                    ))?;
+                    (proof, Some(roles))
+                } else if matches!(goal.intent, Intent::InspectDeclaredRuleSource { .. })
+                    && input::verified_plain_rule_source(&bundle)?
+                {
+                    let proof = canonical(&(
+                        "minidora-plain-rule-source-v1",
+                        revision,
+                        rule,
+                        &source_case,
+                        &input_id,
+                        version,
+                        &bundle_ref,
+                        &bundle.raw_sha256,
+                        &bundle.meaning.parser_version,
+                    ))?;
+                    (proof, None)
+                } else {
+                    return Err(unavailable());
+                };
+                (proof, rule_source_units("規則", rule), roles, LIMIT_MESSAGE)
             }
             Self::ComposedRule { .. } => unreachable!("composed rule source handled above"),
         };
@@ -17200,13 +17223,17 @@ impl SourceMemoryRecord<'_> {
             format!("元の結果ID: {origin}"),
             format!("原文SHA-256: {}", bundle.raw_sha256),
         ]);
-        for (role, spans) in source_roles {
-            for span in spans {
-                units.push(format!(
-                    "原文 {role} [{}, {}): {:?}",
-                    span.start, span.end, span.text
-                ));
+        if let Some(roles) = source_roles {
+            for (role, spans) in roles {
+                for span in spans {
+                    units.push(format!(
+                        "原文 {role} [{}, {}): {:?}",
+                        span.start, span.end, span.text
+                    ));
+                }
             }
+        } else {
+            units.push(format!("原文: {:?}", bundle.request.text));
         }
         RecordSourceReadout {
             proof,
@@ -17327,7 +17354,9 @@ pub(crate) fn check_record_source_actions(goal: &GoalContract) -> Result<()> {
     if goal.budget.max_actions < reads + 3 + u32::from(goal.output_path.is_some()) {
         let message = match &goal.intent {
             Intent::InspectFactSource { .. } => "Factと元入力を照合する行動予算が不足しています。",
-            Intent::InspectRuleSource { .. } => "規則と元入力を照合する行動予算が不足しています。",
+            Intent::InspectRuleSource { .. } | Intent::InspectDeclaredRuleSource { .. } => {
+                "規則と元入力を照合する行動予算が不足しています。"
+            }
             Intent::InspectComposedRuleSource { .. } => {
                 "合成規則と親規則の元入力を照合する行動予算が不足しています。"
             }
@@ -17379,17 +17408,19 @@ pub(crate) fn lookup_source_record<'a>(
             .find(|record| &record.id == record_id)
             .map(SourceMemoryRecord::Condition)
             .ok_or_else(condition_not_found),
-        Intent::InspectRuleSource { rule_id } => memory
-            .rules
-            .iter()
-            .find(|rule| &rule.id == rule_id)
-            .map(SourceMemoryRecord::Rule)
-            .ok_or_else(|| {
-                failure(
-                    "RULE_SOURCE_NOT_FOUND",
-                    "指定した規則を利用者の保存記録から確認できません。",
-                )
-            }),
+        Intent::InspectRuleSource { rule_id } | Intent::InspectDeclaredRuleSource { rule_id } => {
+            memory
+                .rules
+                .iter()
+                .find(|rule| &rule.id == rule_id)
+                .map(SourceMemoryRecord::Rule)
+                .ok_or_else(|| {
+                    failure(
+                        "RULE_SOURCE_NOT_FOUND",
+                        "指定した規則を利用者の保存記録から確認できません。",
+                    )
+                })
+        }
         Intent::InspectComposedRuleSource { rule_id } => {
             let find_rule = |id: &str| memory.rules.iter().find(|rule| rule.id == id);
             let rule = find_rule(rule_id).ok_or_else(|| {

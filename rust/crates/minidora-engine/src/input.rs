@@ -62,6 +62,8 @@ pub(crate) const MULTI_CONDITION_RULE_PARSER_VERSION: &str =
 pub(crate) const RULE_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v136-rule-source";
 pub(crate) const COMPOSED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v137-composed-rule-source";
+pub(crate) const DECLARED_RULE_SOURCE_PARSER_VERSION: &str =
+    "declarative-ja-en-v138-declared-rule-source";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -342,6 +344,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::EvaluateConditionDetailed { .. } => CONDITION_EVALUATION_DETAIL_PARSER_VERSION,
         Intent::InspectFactSource { .. } => FACT_SOURCE_PARSER_VERSION,
         Intent::InspectRuleSource { .. } => RULE_SOURCE_PARSER_VERSION,
+        Intent::InspectDeclaredRuleSource { .. } => DECLARED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectComposedRuleSource { .. } => COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
@@ -1690,6 +1693,13 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
             "規則の出典",
             rule_id,
             "/InspectRuleSource/rule_id",
+            "RULE_SOURCE_SPAN",
+            "rule",
+        )),
+        Intent::InspectDeclaredRuleSource { rule_id } => Some((
+            "規則の出典",
+            rule_id,
+            "/InspectDeclaredRuleSource/rule_id",
             "RULE_SOURCE_SPAN",
             "rule",
         )),
@@ -3892,7 +3902,7 @@ fn interpret(text: &str) -> Result<Intent> {
             return Ok(if composed {
                 Intent::InspectComposedRuleSource { rule_id }
             } else {
-                Intent::InspectRuleSource { rule_id }
+                Intent::InspectDeclaredRuleSource { rule_id }
             });
         }
     }

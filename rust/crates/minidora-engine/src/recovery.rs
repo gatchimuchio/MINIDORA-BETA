@@ -105,6 +105,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::InspectConditionSource { .. }
                         | Intent::InspectConditionSourceByDefinition { .. }
                         | Intent::InspectRuleSource { .. }
+                        | Intent::InspectDeclaredRuleSource { .. }
                         | Intent::InspectComposedRuleSource { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
@@ -2701,7 +2702,7 @@ fn verify_record_source_result(
             "RECOVERY_FACT_SOURCE_MISMATCH",
             "RECOVERY_FACT_SOURCE_CHANGED",
         ),
-        Intent::InspectRuleSource { .. } => (
+        Intent::InspectRuleSource { .. } | Intent::InspectDeclaredRuleSource { .. } => (
             "RECOVERY_RULE_SOURCE_MISMATCH",
             "RECOVERY_RULE_SOURCE_CHANGED",
         ),
@@ -4344,6 +4345,7 @@ fn inspect(
             | crate::input::CONDITION_SOURCE_PARSER_VERSION
             | crate::input::CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
             | crate::input::RULE_SOURCE_PARSER_VERSION
+            | crate::input::DECLARED_RULE_SOURCE_PARSER_VERSION
             | crate::input::COMPOSED_RULE_SOURCE_PARSER_VERSION
     )
     .then_some(bundle.meaning.parser_version.as_str());
@@ -4353,9 +4355,16 @@ fn inspect(
             || matches!(goal.intent, Intent::InspectComposedRuleSource { .. })
         {
             "RECOVERY_COMPOSED_RULE_SOURCE_MISMATCH"
-        } else if sealed_source_parser == Some(crate::input::RULE_SOURCE_PARSER_VERSION)
-            || matches!(goal.intent, Intent::InspectRuleSource { .. })
-        {
+        } else if matches!(
+            sealed_source_parser,
+            Some(
+                crate::input::RULE_SOURCE_PARSER_VERSION
+                    | crate::input::DECLARED_RULE_SOURCE_PARSER_VERSION
+            )
+        ) || matches!(
+            goal.intent,
+            Intent::InspectRuleSource { .. } | Intent::InspectDeclaredRuleSource { .. }
+        ) {
             "RECOVERY_RULE_SOURCE_MISMATCH"
         } else if sealed_source_parser == Some(crate::input::FACT_SOURCE_PARSER_VERSION)
             || matches!(goal.intent, Intent::InspectFactSource { .. })
@@ -9309,17 +9318,27 @@ mod tests {
 
     #[test]
     fn rule_source_reconciles_the_original_declaration_without_resend() {
+        assert_rule_source_reconciliation(
+            "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可",
+            "minidora-rule-source-v1",
+        );
+    }
+
+    #[test]
+    fn plain_rule_source_reconciles_the_original_declaration_without_resend() {
+        assert_rule_source_reconciliation(
+            "もし[scope=実験室]Xは研究員なら[scope=実験室]Xは入室可",
+            "minidora-plain-rule-source-v1",
+        );
+    }
+
+    fn assert_rule_source_reconciliation(declaration: &str, proof_version: &str) {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
         let declared = engine
             .execute(
                 "alice",
-                RequestEnvelope::new(
-                    "case",
-                    "declaration",
-                    "alice",
-                    "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可",
-                ),
+                RequestEnvelope::new("case", "declaration", "alice", declaration),
             )
             .unwrap();
         assert_eq!(declared.lifecycle, Lifecycle::Commit, "{declared:?}");
@@ -9334,6 +9353,14 @@ mod tests {
         let report = engine.execute("alice", request.clone()).unwrap();
         assert_eq!(report.lifecycle, Lifecycle::Commit, "{report:?}");
         assert_eq!(report.dependencies[1], declared.id);
+        let proof: serde_json::Value = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", &report.dependencies[2])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(proof[0], proof_version);
         let bytes = fs::read(&fixture.target).unwrap();
         let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
         drop(engine);
@@ -9342,6 +9369,25 @@ mod tests {
         let mut engine = Engine::open(&fixture.state).unwrap();
         let state = engine.store.load_case("alice", "case").unwrap().unwrap();
         let retained = state.result.as_ref().unwrap();
+        let mut goal: GoalContract = serde_json::from_slice(
+            &engine
+                .store
+                .get_bytes("alice", "case", state.goal_sha256.as_deref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            goal.required_predicates[0],
+            crate::core::DECLARED_RULE_SOURCE_PREDICATE
+        );
+        goal.required_predicates[0] = crate::core::RULE_SOURCE_PREDICATE.into();
+        let mut downgraded = state.clone();
+        downgraded.goal_sha256 = Some(engine.store.put_artifact("alice", "case", &goal).unwrap());
+        let error = inspect(&engine.store, "alice", &downgraded, retained).unwrap_err();
+        assert!(
+            error.to_string().contains("UNSUPPORTED_RECOVERY_GOAL"),
+            "{error:?}"
+        );
         let mut altered = retained.clone();
         altered.dependencies[1] = altered.dependencies[0].clone();
         let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();

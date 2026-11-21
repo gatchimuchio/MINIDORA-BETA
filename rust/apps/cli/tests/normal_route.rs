@@ -4801,14 +4801,70 @@ fn rule_source_resolves_the_exact_guarded_declaration_across_owned_cases() {
     let bundle = saved.bundle.unwrap();
     assert_eq!(
         bundle.meaning.parser_version,
-        "declarative-ja-en-v136-rule-source"
+        "declarative-ja-en-v138-declared-rule-source"
     );
     assert_eq!(bundle.meaning.source_roles.len(), 1);
-    let request_span = &bundle.meaning.source_roles["/InspectRuleSource/rule_id"][0];
+    let request_span = &bundle.meaning.source_roles["/InspectDeclaredRuleSource/rule_id"][0];
     assert_eq!(
         command.get(request_span.start..request_span.end),
         Some(rule_id)
     );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn plain_rule_source_follows_a_derived_answer_to_the_exact_prior_input_version() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let declaration = concat!(
+        "　もし[scope=実験室]Xは研究員 かつ ",
+        "[scope=実験室]Xは当番なら、[scope=実験室]Xは入室可。　"
+    );
+    let registered = run(&[
+        "--case",
+        "declarations",
+        "--input",
+        "access",
+        "--version",
+        "2",
+        declaration,
+    ]);
+    run(&[
+        "--case",
+        "declarations",
+        "--input",
+        "access",
+        "--version",
+        "3",
+        "もし[scope=別室]Xは研究員なら[scope=別室]Xは記録済み",
+    ]);
+    run(&["[scope=実験室]ユリは研究員"]);
+    run(&["[scope=実験室]ユリは当番"]);
+    let why = run(&["なぜ[scope=実験室]ユリは入室可ですか"]);
+    assert_eq!(why["guarantee"], "DERIVED");
+    let rule_id = registered["dependencies"][0].as_str().unwrap();
+    assert!(
+        why["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&registered["dependencies"][0])
+    );
+
+    let command = format!("規則の出典: {rule_id}");
+    let report = run(&["--max-actions", "5", &command]);
+    assert_eq!(report["guarantee"], "COMPUTED");
+    assert_eq!(report["dependencies"][0], rule_id);
+    assert_eq!(report["dependencies"][1], registered["id"]);
+    let text = report["text"].as_str().unwrap();
+    assert!(text.contains("出典ケース: \"declarations\"、入力ID: \"access\"、版: 2"));
+    assert!(text.contains(&format!("原文: {declaration:?}")));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &report["dependencies"][2]);
+    assert_eq!(proof[0], "minidora-plain-rule-source-v1");
+    assert_eq!(proof[2]["additional_premises"][0]["object"], "当番");
+    assert_eq!(proof[6].as_str().unwrap().len(), 64);
+    assert_eq!(proof[7], minidora_domain::digest(declaration.as_bytes()));
+    assert_eq!(proof[8], "declarative-ja-en-v89-sealed-relation-boundary");
     assert!(store.actions("owner", "normal-route").unwrap().is_empty());
 }
 
