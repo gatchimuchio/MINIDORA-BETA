@@ -279,6 +279,12 @@ pub enum Intent {
         anchor_id: String,
         before: bool,
     },
+    InsertCalculationSequenceStep {
+        step_id: String,
+        anchor_id: String,
+        before: bool,
+        expression: SourceSpan,
+    },
     CorrectCalculation {
         operand_index: usize,
         replacement: String,

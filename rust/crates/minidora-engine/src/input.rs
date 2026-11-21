@@ -26,6 +26,8 @@ pub(crate) const SEQUENCE_REMOVE_PARSER_VERSION: &str =
     "declarative-ja-en-v122-calculation-sequence-remove";
 pub(crate) const SEQUENCE_MOVE_PARSER_VERSION: &str =
     "declarative-ja-en-v123-calculation-sequence-move";
+pub(crate) const SEQUENCE_INSERT_PARSER_VERSION: &str =
+    "declarative-ja-en-v124-calculation-sequence-insert";
 pub(crate) const MAX_CALCULATION_SEQUENCE_STEPS: usize = 16;
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
@@ -273,7 +275,8 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CorrectCalculationSequenceStep { .. }
         | Intent::AppendCalculationSequenceStep { .. }
         | Intent::RemoveCalculationSequenceStep { .. }
-        | Intent::MoveCalculationSequenceStep { .. } => {
+        | Intent::MoveCalculationSequenceStep { .. }
+        | Intent::InsertCalculationSequenceStep { .. } => {
             sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
@@ -1907,8 +1910,53 @@ pub(crate) fn sequence_edit_parser(intent: &Intent) -> Option<&'static str> {
         Intent::AppendCalculationSequenceStep { .. } => Some(SEQUENCE_APPEND_PARSER_VERSION),
         Intent::RemoveCalculationSequenceStep { .. } => Some(SEQUENCE_REMOVE_PARSER_VERSION),
         Intent::MoveCalculationSequenceStep { .. } => Some(SEQUENCE_MOVE_PARSER_VERSION),
+        Intent::InsertCalculationSequenceStep { .. } => Some(SEQUENCE_INSERT_PARSER_VERSION),
         _ => None,
     }
+}
+
+fn calculation_sequence_insert_intent(text: &str) -> Result<Option<Intent>> {
+    let trimmed = text.trim();
+    let header = trimmed.lines().next().unwrap_or_default();
+    if !header.starts_with("計算手順の")
+        || !header.split_once("に挿入").is_some_and(|(_, suffix)| {
+            let suffix = suffix.strip_prefix("して").unwrap_or(suffix);
+            suffix.trim_start().starts_with([':', '：']) || terminal_trim(suffix).is_empty()
+        })
+    {
+        return Ok(None);
+    }
+    if text.contains(['?', '？']) {
+        return Ok(Some(Intent::Unknown {
+            reason: "手順を挿入する場合は、疑問形を使わずに指示してください。".into(),
+        }));
+    }
+    let unsupported = || {
+        Intent::Unknown {
+        reason: "「計算手順の fee を final の前に挿入: @{base}+2」の形式で、手順ID・挿入位置・式を指定してください。".into(),
+    }
+    };
+    let pattern = regex(
+        r"^計算手順の[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*の(前|後)に挿入(?:して)?[:：][ \t]*([^\r\n]+)$",
+    )?;
+    let Some(captures) = pattern.captures(trimmed) else {
+        return Ok(Some(unsupported()));
+    };
+    let expression = captures.get(4).expect("formula capture exists");
+    if expression.len() > 8192 {
+        return Ok(Some(unsupported()));
+    }
+    let offset = text.len() - text.trim_start().len();
+    let Some(span) = source_span_at(text, offset + expression.start(), offset + expression.end())
+    else {
+        return Ok(Some(unsupported()));
+    };
+    Ok(Some(Intent::InsertCalculationSequenceStep {
+        step_id: captures[1].to_owned(),
+        anchor_id: captures[2].to_owned(),
+        before: &captures[3] == "前",
+        expression: span,
+    }))
 }
 
 fn calculation_sequence_move_intent(text: &str) -> Result<Option<Intent>> {
@@ -3426,6 +3474,9 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(intent) = calculation_sequence_insert_intent(text)? {
+        return Ok(intent);
+    }
     if let Some(intent) = calculation_sequence_move_intent(text)? {
         return Ok(intent);
     }

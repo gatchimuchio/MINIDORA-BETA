@@ -1844,6 +1844,120 @@ fn calculation_sequence_route_moves_stage_only_when_dependencies_stay_earlier() 
 }
 
 #[test]
+fn calculation_sequence_route_inserts_stage_with_only_earlier_references() {
+    let scratch = Scratch::new();
+    let source = "calculation-sequence:\nbase: 2+3\nfinal: @{base}*2";
+    let original_args = ["--input", "insert-source", source];
+    let original = record(&execute(&scratch.0, "owner", &original_args));
+    let selected = original["id"].as_str().unwrap();
+    let request = "計算手順の fee を final の前に挿入: @{base}+2";
+    let args = [
+        "--input",
+        "insert-fee",
+        "--context",
+        selected,
+        "--max-actions",
+        "8",
+        request,
+    ];
+    let inserted = record(&execute(&scratch.0, "owner", &args));
+    assert_eq!(inserted["calculation"]["exact_value"], "10");
+    assert_eq!(
+        inserted["text"],
+        "挿入した手順: fee\nbase: 2+3 = 5\nfee: (5)+2 = 7\nfinal: (5)*2 = 10"
+    );
+    let dependencies = inserted["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 6);
+    assert_eq!(dependencies[0], original["id"]);
+    assert_eq!(dependencies[2], original["dependencies"][0]);
+    assert_eq!(dependencies[4], original["dependencies"][1]);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &dependencies[1]);
+    assert_eq!(proof["kind"], "minidora-calculation-sequence-insert-v1");
+    assert_eq!(proof["insert_input_id"], inserted["id"]);
+    assert_eq!(
+        proof["insert_raw_sha256"],
+        minidora_domain::digest(request.as_bytes())
+    );
+    assert_eq!(proof["anchor_step_id"], "final");
+    assert_eq!(proof["before"], true);
+    assert_eq!(proof["inserted_step"]["expression"]["text"], "@{base}+2");
+    assert_eq!(
+        proof["inserted_step"]["requires"],
+        serde_json::json!(["base"])
+    );
+    assert_eq!(
+        proof["previous_step_order"],
+        serde_json::json!(["base", "final"])
+    );
+    assert_eq!(
+        proof["revised_step_order"],
+        serde_json::json!(["base", "fee", "final"])
+    );
+    let step = sequence_artifact(&store, &dependencies[3]);
+    assert_eq!(
+        step["consumed"][0]["artifact_sha256"],
+        original["dependencies"][0]
+    );
+
+    let target = scratch.0.join("forward-insertion.txt");
+    let path = target.to_str().unwrap();
+    let blocked = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "insert-forward",
+                "--context",
+                selected,
+                "--output",
+                path,
+                "--allow-write",
+                path,
+                "計算手順の total を final の前に挿入: @{final}+2",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        blocked["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SEQUENCE_INSERT_FORWARD_REFERENCE")
+    );
+    assert!(!target.exists());
+
+    let after = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "insert-after",
+            "--context",
+            selected,
+            "--max-actions",
+            "8",
+            "計算手順の total を final の後に挿入: @{final}+2",
+        ],
+    ));
+    assert_eq!(after["calculation"]["exact_value"], "12");
+    let after_proof = sequence_artifact(&store, &after["dependencies"][1]);
+    assert_eq!(
+        after_proof["kind"],
+        "minidora-calculation-sequence-insert-v1"
+    );
+    assert_eq!(after_proof["before"], false);
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), inserted);
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &original_args)),
+        original
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");
