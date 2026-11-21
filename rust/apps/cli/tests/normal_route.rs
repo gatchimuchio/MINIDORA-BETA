@@ -2978,7 +2978,11 @@ fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() 
 
     let question = "なぜ[scope=実験室][condition=監視]ユリは観測可能ですか";
     let limited = stopped(
-        &execute(&scratch.0, actor, &["--input", "budget-stop", question]),
+        &execute(
+            &scratch.0,
+            actor,
+            &["--input", "budget-stop", "--max-actions", "30", question],
+        ),
         2,
         "SUSPEND",
     );
@@ -2992,7 +2996,7 @@ fn composite_condition_from_ordinary_input_binds_and_invalidates_dependencies() 
     let actual = record(&execute(
         &scratch.0,
         actor,
-        &["--input", "with-compound", "--max-actions", "128", question],
+        &["--input", "with-compound", question],
     ));
     let proof = assert_why_generation(&scratch.0, actor, "normal-route", &actual);
     assert!(

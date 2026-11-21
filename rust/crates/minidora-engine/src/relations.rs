@@ -340,9 +340,60 @@ struct ConditionEvaluationState {
     reason: Option<String>,
 }
 
-struct ConditionEvaluationBudget<'a> {
+type ConditionEvidenceKey<'a> = (&'a str, &'a str, &'a str, &'a str);
+
+struct ConditionEvaluationBudget<'a, 'memory> {
     max_steps: u32,
     steps: &'a mut u32,
+    evidence: Option<BTreeMap<ConditionEvidenceKey<'memory>, Vec<&'memory Fact>>>,
+}
+
+impl<'memory> ConditionEvaluationBudget<'_, 'memory> {
+    fn matching_evidence(
+        &mut self,
+        memory: &'memory MemoryState,
+        target: &Proposition,
+        allowed_hypotheses: Option<&BTreeSet<String>>,
+        key: ConditionEvidenceKey<'memory>,
+    ) -> Result<Vec<&'memory Fact>> {
+        if self.evidence.is_none() {
+            // One charged pass for this query's immutable facts. A fact's
+            // own conditions are checked later on the active recursion path.
+            let mut index = BTreeMap::<_, Vec<_>>::new();
+            for fact in &memory.facts {
+                charge_step(self.steps, self.max_steps)?;
+                let proposition = &fact.proposition;
+                if !fact.valid
+                    || fact.guarantee == Guarantee::Unknown
+                    || (fact.guarantee == Guarantee::Hypothesis
+                        && !allowed_hypotheses.is_some_and(|ids| ids.contains(&fact.id)))
+                    || proposition.temporal_scope != target.temporal_scope
+                    || fact
+                        .dependencies
+                        .iter()
+                        .any(|id| !active_memory_dependency(memory, id))
+                {
+                    continue;
+                }
+                index
+                    .entry((
+                        proposition.subject.as_str(),
+                        proposition.predicate.as_str(),
+                        proposition.object.as_str(),
+                        proposition.scope.as_str(),
+                    ))
+                    .or_default()
+                    .push(fact);
+            }
+            self.evidence = Some(index);
+        }
+        Ok(self
+            .evidence
+            .as_ref()
+            .and_then(|index| index.get(&key))
+            .cloned()
+            .unwrap_or_default())
+    }
 }
 
 pub(crate) fn valid_utc_instant(value: &str) -> bool {
@@ -643,13 +694,13 @@ fn active_memory_dependency(memory: &MemoryState, id: &str) -> bool {
             .any(|record| record.id == id && record.valid)
 }
 
-fn evaluate_condition_expression(
-    memory: &MemoryState,
-    expression: &ConditionExpression,
-    definition: &ConditionDefinition,
-    target: &Proposition,
+fn evaluate_condition_expression<'memory>(
+    memory: &'memory MemoryState,
+    expression: &'memory ConditionExpression,
+    definition: &'memory ConditionDefinition,
+    target: &'memory Proposition,
     allowed_hypotheses: Option<&BTreeSet<String>>,
-    budget: &mut ConditionEvaluationBudget<'_>,
+    budget: &mut ConditionEvaluationBudget<'_, 'memory>,
     visiting: &mut BTreeSet<String>,
 ) -> Result<ConditionEvaluationState> {
     charge_step(budget.steps, budget.max_steps)?;
@@ -664,24 +715,13 @@ fn evaluate_condition_expression(
             let mut false_support = false;
             let mut uncertain_evidence = false;
             let mut result = ConditionEvaluationState::default();
-            for fact in &memory.facts {
-                charge_step(budget.steps, budget.max_steps)?;
-                if !fact.valid
-                    || matches!(fact.guarantee, Guarantee::Unknown)
-                    || (fact.guarantee == Guarantee::Hypothesis
-                        && !allowed_hypotheses.is_some_and(|ids| ids.contains(&fact.id)))
-                    || fact
-                        .dependencies
-                        .iter()
-                        .any(|id| !active_memory_dependency(memory, id))
-                    || fact.proposition.subject != evidence_subject
-                    || fact.proposition.predicate != *predicate
-                    || fact.proposition.object != *object
-                    || fact.proposition.scope != definition.scope
-                    || fact.proposition.temporal_scope != target.temporal_scope
-                {
-                    continue;
-                }
+            let key = (
+                evidence_subject,
+                predicate.as_str(),
+                object.as_str(),
+                definition.scope.as_str(),
+            );
+            for fact in budget.matching_evidence(memory, target, allowed_hypotheses, key)? {
                 let mut fact_conditions = ConditionStatus::True;
                 for condition_id in &fact.proposition.condition_refs {
                     let evaluated = evaluate_condition(
@@ -799,12 +839,12 @@ fn evaluate_condition_expression(
     }
 }
 
-fn evaluate_condition(
-    memory: &MemoryState,
+fn evaluate_condition<'memory>(
+    memory: &'memory MemoryState,
     condition_id: &str,
-    target: &Proposition,
+    target: &'memory Proposition,
     allowed_hypotheses: Option<&BTreeSet<String>>,
-    budget: &mut ConditionEvaluationBudget<'_>,
+    budget: &mut ConditionEvaluationBudget<'_, 'memory>,
     visiting: &mut BTreeSet<String>,
 ) -> Result<ConditionEvaluationState> {
     charge_step(budget.steps, budget.max_steps)?;
@@ -939,7 +979,11 @@ fn evaluate_condition_refs(
     let mut overall = ConditionStatus::True;
     let mut evaluations = Vec::with_capacity(target.condition_refs.len());
     let mut dependencies = BTreeSet::new();
-    let mut budget = ConditionEvaluationBudget { max_steps, steps };
+    let mut budget = ConditionEvaluationBudget {
+        max_steps,
+        steps,
+        evidence: None,
+    };
     for condition_id in &target.condition_refs {
         let state = evaluate_condition(
             memory,
@@ -2668,6 +2712,57 @@ mod tests {
             condition_refs: Default::default(),
         }
     }
+
+    #[test]
+    fn condition_evidence_reuse_keeps_guard_evaluation_on_the_active_path() {
+        let mut memory = MemoryState::default();
+        for (condition_id, object) in [("a", "calibrated"), ("b", "powered")] {
+            define_condition(
+                &mut memory,
+                ConditionDefinition {
+                    condition_id: condition_id.into(),
+                    subject: "sensor".into(),
+                    scope: "premise-world".into(),
+                    expression: ConditionExpression::Fact {
+                        predicate: "is".into(),
+                        object: object.into(),
+                    },
+                    valid_from: None,
+                    valid_until: None,
+                    dependencies: BTreeSet::new(),
+                },
+                condition_id,
+            )
+            .unwrap();
+        }
+        let mut guarded_calibration = p("sensor", "calibrated");
+        guarded_calibration.condition_refs.insert("b".into());
+        assert_fact(&mut memory, guarded_calibration, "guarded-calibration").unwrap();
+        let calibration =
+            assert_fact(&mut memory, p("sensor", "calibrated"), "calibration").unwrap();
+        let mut guarded_power = p("sensor", "powered");
+        guarded_power.condition_refs.insert("a".into());
+        let power = assert_fact(&mut memory, guarded_power, "guarded-power").unwrap();
+        let mut target = p("sensor", "ready");
+        target.condition_refs.extend(["a".into(), "b".into()]);
+        let fact = assert_fact(&mut memory, target.clone(), "ready").unwrap();
+
+        let answer = query(&memory, &target, 128).unwrap();
+        assert_eq!(answer.status, "SUPPORTED");
+        assert_eq!(answer.facts, vec![fact]);
+        assert_eq!(answer.condition_status, Some(ConditionStatus::True));
+        let [a, b] = answer.condition_evaluations.as_slice() else {
+            panic!("expected both condition evaluations");
+        };
+        assert_eq!(a.status, ConditionStatus::True);
+        assert_eq!(a.evidence_fact_ids, vec![calibration.id.clone()]);
+        // The nested evaluation of b under a encounters a cycle. The
+        // top-level b must evaluate again with an empty visiting set.
+        assert_eq!(b.status, ConditionStatus::True);
+        assert!(b.evidence_fact_ids.contains(&power.id));
+        assert!(b.evidence_fact_ids.contains(&calibration.id));
+    }
+
     #[test]
     fn older_direct_fact_without_optional_source_evidence_remains_wire_compatible() {
         let old_json = serde_json::json!({
