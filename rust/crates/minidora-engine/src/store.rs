@@ -2061,6 +2061,7 @@ impl Store {
                 "condition IDs must be unique and distinct from memory record IDs",
             ));
         }
+        let mut verified_sources = BTreeSet::new();
         for (source, dependencies) in memory
             .facts
             .iter()
@@ -2087,16 +2088,21 @@ impl Store {
             if source == "derived:proof-composition-v1" && !dependencies.is_empty() {
                 continue;
             }
-            let owned:bool = sql(self.connection.query_row(
+            if verified_sources.contains(source.as_str()) {
+                continue;
+            }
+            let mut ownership = sql(self.connection.prepare_cached(
                 "SELECT EXISTS(SELECT 1 FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2)",
-                params![actor,source],|r|r.get(0),
             ))?;
+            let owned: bool = sql(ownership.query_row(params![actor, source], |row| row.get(0)))?;
             if !owned {
                 return Err(failure(
                     "ACCESS_DENIED",
                     "memory provenance is not an original input owned by this actor",
                 ));
             }
+            // Only reuse successful ownership checks within this actor snapshot.
+            verified_sources.insert(source.as_str());
         }
         for condition in &memory.conditions {
             crate::relations::validate_condition_definition(&condition.definition)?;
@@ -4321,6 +4327,42 @@ mod tests {
             rules: vec![rule],
             conditions: vec![condition],
         };
+        let mut bad_dependency = original.clone();
+        bad_dependency.rules[0].dependencies = vec!["fact:missing".into()];
+        assert!(matches!(
+            store.save_memory("alice", &bad_dependency),
+            Err(minidora_domain::Error::Contract { code, message })
+                if code == "ACCESS_DENIED" && message.contains("dependency outside")
+        ));
+
+        let foreign = RequestEnvelope::new("case-b", "input-a", "bob", "2+3");
+        let foreign_source = identity(&foreign).unwrap();
+        assert!(
+            store
+                .register_input("bob", &foreign, &foreign_source)
+                .unwrap()
+        );
+        for source in [foreign_source, digest(b"unregistered source")] {
+            let mut bad_source = original.clone();
+            bad_source.conditions[0].source_input = source;
+            assert!(matches!(
+                store.save_memory("alice", &bad_source),
+                Err(minidora_domain::Error::Contract { code, message })
+                    if code == "ACCESS_DENIED" && message.contains("provenance is not")
+            ));
+        }
+
+        let mut derived = original.clone();
+        let derived_source = "derived:proof-composition-v1";
+        derived.rules[0].source_input = derived_source.into();
+        derived.rules[0].dependencies = vec![original.facts[0].id.clone()];
+        derived.conditions[0].source_input = derived_source.into();
+        assert!(matches!(
+            store.save_memory("alice", &derived),
+            Err(minidora_domain::Error::Contract { code, message })
+                if code == "ACCESS_DENIED" && message.contains("provenance is not")
+        ));
+
         let original_bytes = canonical(&original).unwrap();
         store.save_memory("alice", &original).unwrap();
         assert_eq!(
