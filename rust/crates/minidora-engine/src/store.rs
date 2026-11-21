@@ -545,8 +545,10 @@ fn memory_index_fields(value: &IndexedMemoryValue) -> Result<MemoryIndexFields> 
     }
 }
 
+const MEMORY_INDEX_UPSERT: &str = "INSERT INTO memory_index_record(actor_id,record_id,record_kind,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(actor_id,record_id) DO UPDATE SET record_kind=excluded.record_kind,ordinal=excluded.ordinal,payload_json=excluded.payload_json,payload_sha256=excluded.payload_sha256,valid=excluded.valid,subject=excluded.subject,predicate=excluded.predicate,object=excluded.object,negative=excluded.negative,scope=excluded.scope,temporal_scope=excluded.temporal_scope,condition_refs=excluded.condition_refs,condition_id=excluded.condition_id";
+
 fn memory_index_record(
-    transaction: &Transaction<'_>,
+    statement: &mut rusqlite::Statement<'_>,
     actor: &str,
     ordinal: usize,
     value: &IndexedMemoryValue,
@@ -556,29 +558,29 @@ fn memory_index_record(
         IndexedMemoryValue::Rule(record) => canonical(record)?,
         IndexedMemoryValue::Condition(record) => canonical(record)?,
     };
-    let payload_json = String::from_utf8(bytes.clone())
+    let payload_json = String::from_utf8(bytes)
         .map_err(|error| failure("INTEGRITY_FAILURE", error.to_string()))?;
     let fields = memory_index_fields(value)?;
-    sql(transaction.execute(
-        "INSERT INTO memory_index_record(actor_id,record_id,record_kind,ordinal,payload_json,payload_sha256,valid,subject,predicate,object,negative,scope,temporal_scope,condition_refs,condition_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(actor_id,record_id) DO UPDATE SET record_kind=excluded.record_kind,ordinal=excluded.ordinal,payload_json=excluded.payload_json,payload_sha256=excluded.payload_sha256,valid=excluded.valid,subject=excluded.subject,predicate=excluded.predicate,object=excluded.object,negative=excluded.negative,scope=excluded.scope,temporal_scope=excluded.temporal_scope,condition_refs=excluded.condition_refs,condition_id=excluded.condition_id",
-        params![
-            actor,
-            value.id(),
-            fields.kind,
-            integer(u64::try_from(ordinal).map_err(|_| failure("MEMORY_INDEX_CORRUPT", "memory index ordinal exceeds its representation"))?)?,
-            payload_json,
-            digest(&bytes),
-            fields.valid,
-            fields.subject,
-            fields.predicate,
-            fields.object,
-            fields.negative,
-            fields.scope,
-            fields.temporal_scope,
-            fields.condition_refs,
-            fields.condition_id,
-        ],
-    ))?;
+    sql(statement.execute(params![
+        actor,
+        value.id(),
+        fields.kind,
+        integer(u64::try_from(ordinal).map_err(|_| failure(
+            "MEMORY_INDEX_CORRUPT",
+            "memory index ordinal exceeds its representation"
+        ))?)?,
+        payload_json,
+        digest(payload_json.as_bytes()),
+        fields.valid,
+        fields.subject,
+        fields.predicate,
+        fields.object,
+        fields.negative,
+        fields.scope,
+        fields.temporal_scope,
+        fields.condition_refs,
+        fields.condition_id,
+    ]))?;
     Ok(())
 }
 
@@ -587,9 +589,10 @@ fn index_memory_state_records(
     actor: &str,
     memory: &MemoryState,
 ) -> Result<()> {
+    let mut statement = sql(transaction.prepare(MEMORY_INDEX_UPSERT))?;
     for (ordinal, record) in memory.facts.iter().enumerate() {
         memory_index_record(
-            transaction,
+            &mut statement,
             actor,
             ordinal,
             &IndexedMemoryValue::Fact(record.clone()),
@@ -597,7 +600,7 @@ fn index_memory_state_records(
     }
     for (ordinal, record) in memory.rules.iter().enumerate() {
         memory_index_record(
-            transaction,
+            &mut statement,
             actor,
             ordinal,
             &IndexedMemoryValue::Rule(record.clone()),
@@ -605,7 +608,7 @@ fn index_memory_state_records(
     }
     for (ordinal, record) in memory.conditions.iter().enumerate() {
         memory_index_record(
-            transaction,
+            &mut statement,
             actor,
             ordinal,
             &IndexedMemoryValue::Condition(record.clone()),
@@ -631,13 +634,14 @@ fn sync_memory_index(
         previous.is_some_and(|previous| indexed_revision == integer(previous.revision).ok());
     if can_update_incrementally {
         let previous = previous.expect("incremental index update requires a previous snapshot");
+        let mut statement = sql(transaction.prepare(MEMORY_INDEX_UPSERT))?;
         macro_rules! update_records {
             ($field:ident, $variant:ident) => {{
                 for (ordinal, (old, new)) in previous.$field.iter().zip(&memory.$field).enumerate()
                 {
                     if old.valid != new.valid {
                         memory_index_record(
-                            transaction,
+                            &mut statement,
                             actor,
                             ordinal,
                             &IndexedMemoryValue::$variant(new.clone()),
@@ -646,7 +650,7 @@ fn sync_memory_index(
                 }
                 for (ordinal, new) in memory.$field.iter().enumerate().skip(previous.$field.len()) {
                     memory_index_record(
-                        transaction,
+                        &mut statement,
                         actor,
                         ordinal,
                         &IndexedMemoryValue::$variant(new.clone()),
