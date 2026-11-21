@@ -28,6 +28,8 @@ pub(crate) const SEQUENCE_MOVE_PARSER_VERSION: &str =
     "declarative-ja-en-v123-calculation-sequence-move";
 pub(crate) const SEQUENCE_INSERT_PARSER_VERSION: &str =
     "declarative-ja-en-v124-calculation-sequence-insert";
+pub(crate) const SEQUENCE_HISTORY_PARSER_VERSION: &str =
+    "declarative-ja-en-v125-calculation-sequence-history";
 pub(crate) const MAX_CALCULATION_SEQUENCE_STEPS: usize = 16;
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
@@ -306,6 +308,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             PARSER_VERSION
         }
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
+        Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource
         | Intent::SummarizePreviousSourceConstrained { .. }
@@ -3474,6 +3477,19 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if matches!(
+        terminal_trim(text),
+        "計算手順の変更履歴を表示" | "計算手順の変更履歴を表示して"
+    ) {
+        return Ok(if text.contains(['?', '？']) {
+            Intent::Unknown {
+                reason: "計算手順の変更履歴を表示する場合は、疑問形を使わずに指示してください。"
+                    .into(),
+            }
+        } else {
+            Intent::ShowCalculationSequenceHistory
+        });
+    }
     if let Some(intent) = calculation_sequence_insert_intent(text)? {
         return Ok(intent);
     }

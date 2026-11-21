@@ -1958,6 +1958,114 @@ fn calculation_sequence_route_inserts_stage_with_only_earlier_references() {
 }
 
 #[test]
+fn calculation_sequence_route_history_shows_only_edits_of_selected_edition() {
+    let scratch = Scratch::new();
+    let source = "calculation-sequence:\nbase: 2+3\nfinal: @{base}*2";
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "history-root", source],
+    ));
+    let root_id = original["id"].as_str().unwrap();
+    let inserted = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "history-insert",
+            "--context",
+            root_id,
+            "--max-actions",
+            "8",
+            "計算手順の fee を final の前に挿入: @{base}+2",
+        ],
+    ));
+    let inserted_id = inserted["id"].as_str().unwrap();
+    let command = "計算手順の変更履歴を表示";
+    let root_row = format!("元の計算: 最終段 final = 10 [結果ID: {root_id}]");
+    let expected =
+        format!("{root_row}\n1. 挿入 fee (final の前): 最終段 final = 10 [結果ID: {inserted_id}]",);
+    let history = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "history-show",
+            "--context",
+            inserted_id,
+            "--max-actions",
+            "8",
+            command,
+        ],
+    ));
+    assert_eq!(history["calculation"]["exact_value"], "10");
+    assert_eq!(history["text"], expected);
+    assert_eq!(
+        history["content_plan"]["required_units"],
+        serde_json::json!(expected.lines().collect::<Vec<_>>())
+    );
+    assert_eq!(history["dependencies"][0], inserted_id);
+
+    let repeated = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "history-repeat",
+            "--context",
+            history["id"].as_str().unwrap(),
+            "--max-actions",
+            "9",
+            "計算手順の変更履歴を表示して。",
+        ],
+    ));
+    assert_eq!(repeated["text"], expected);
+    assert_eq!(repeated["dependencies"][0], history["id"]);
+    assert_eq!(repeated["dependencies"][1], inserted_id);
+    let older = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "history-older",
+            "--context",
+            root_id,
+            "--max-actions",
+            "5",
+            command,
+        ],
+    ));
+    assert_eq!(older["text"], root_row);
+    assert_eq!(older["dependencies"][0], root_id);
+
+    let low = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "history-low",
+                "--context",
+                inserted_id,
+                "--max-actions",
+                "7",
+                command,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        low["reason"]
+            .as_str()
+            .unwrap()
+            .contains("ACTION_BUDGET_EXHAUSTED")
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");

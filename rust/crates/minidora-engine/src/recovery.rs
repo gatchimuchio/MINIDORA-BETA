@@ -14,11 +14,12 @@ use crate::{
         REPEATED_SEQUENCE_CORRECTION_PREDICATE, REVISED_SEQUENCE_EXPLANATION_PREDICATE,
         REWIRED_SEQUENCE_CORRECTION_PREDICATE, REWIRED_SEQUENCE_EXPLANATION_PREDICATE,
         SEQUENCE_APPEND_PREDICATE, SEQUENCE_CORRECTION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE,
-        SEQUENCE_INSERT_PREDICATE, SEQUENCE_MOVE_PREDICATE, SEQUENCE_REMOVE_PREDICATE,
-        calculation_sequence_nodes, corrected_calculation_from_context, exact_calculation_unit,
-        explain_calculation_sequence, goal_predicates, prepare_sequence_edit,
-        previous_calculation_sequence, run_calculation_sequence, run_sequence_edit,
-        store_execution_graph, validate_goal_render, validate_render, verify_goal_content,
+        SEQUENCE_HISTORY_PREDICATE, SEQUENCE_INSERT_PREDICATE, SEQUENCE_MOVE_PREDICATE,
+        SEQUENCE_REMOVE_PREDICATE, calculation_sequence_nodes, corrected_calculation_from_context,
+        exact_calculation_unit, explain_calculation_sequence, goal_predicates,
+        prepare_sequence_edit, previous_calculation_sequence, run_calculation_sequence,
+        run_sequence_edit, show_calculation_sequence_history, store_execution_graph,
+        validate_goal_render, validate_render, verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -95,6 +96,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::RemoveCalculationSequenceStep { .. }
                         | Intent::MoveCalculationSequenceStep { .. }
                         | Intent::InsertCalculationSequenceStep { .. }
+                        | Intent::ShowCalculationSequenceHistory
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -4045,6 +4047,14 @@ fn inspect(
             "the sequence edit intent differs from the sealed parser contract",
         ));
     }
+    let shows_sequence_history =
+        bundle.meaning.parser_version == crate::input::SEQUENCE_HISTORY_PARSER_VERSION;
+    if shows_sequence_history != matches!(goal.intent, Intent::ShowCalculationSequenceHistory) {
+        return Err(failure(
+            "RECOVERY_CALCULATION_SEQUENCE_CONTEXT_INVALID",
+            "the history intent differs from the sealed parser contract",
+        ));
+    }
     let requires_generated_why = crate::input::uses_generated_relation_explanation(&bundle.meaning);
     let sequence_goal_predicate =
         goal.required_predicates
@@ -4078,6 +4088,7 @@ fn inspect(
                 Intent::InsertCalculationSequenceStep { .. } => {
                     *predicate == SEQUENCE_INSERT_PREDICATE
                 }
+                Intent::ShowCalculationSequenceHistory => *predicate == SEQUENCE_HISTORY_PREDICATE,
                 _ => false,
             });
     let sequence_predicate = sequence_goal_predicate.filter(|_| !requires_sequence_edit);
@@ -4087,6 +4098,7 @@ fn inspect(
             || requires_generated_calculation
             || requires_verified_correction
             || requires_sequence_edit
+            || shows_sequence_history
             || requires_generated_why
             || explains_sequence
             || goal.required_predicates != legacy_predicates)
@@ -4107,6 +4119,7 @@ fn inspect(
                 | REMOVED_SEQUENCE_EXPLANATION_PREDICATE
                 | MOVED_SEQUENCE_EXPLANATION_PREDICATE
                 | INSERTED_SEQUENCE_EXPLANATION_PREDICATE
+                | SEQUENCE_HISTORY_PREDICATE
         )
     )
     .then(Instant::now);
@@ -4135,7 +4148,7 @@ fn inspect(
             &state.prior_results,
             sequence_started,
         )?
-        .filter(|context| context.predicate() == predicate)
+        .filter(|context| shows_sequence_history || context.predicate() == predicate)
         .ok_or_else(invalid)?;
         Some(context)
     } else {
@@ -5103,7 +5116,9 @@ fn inspect(
         let authorized_surfaces = match &emission.authorized_surfaces {
             Some(surfaces) => {
                 let expected_surfaces = match (&goal.intent, result.calculation.as_ref()) {
-                    (Intent::ExplainPrevious, Some(_)) if explains_sequence => {
+                    (Intent::ExplainPrevious | Intent::ShowCalculationSequenceHistory, Some(_))
+                        if explains_sequence =>
+                    {
                         Some(vec![plan.required_units.join("\n")])
                     }
                     (Intent::ExplainPrevious, Some(calculation)) => {
@@ -5590,13 +5605,23 @@ fn inspect(
         }
         source_refs.clone_from(graph.observed());
     } else if let Some(context) = &previous_sequence {
-        let explanation = explain_calculation_sequence(
-            store,
-            context,
-            &mut graph,
-            &goal.budget,
-            sequence_started.unwrap_or_else(Instant::now),
-        )?;
+        let explanation = if shows_sequence_history {
+            show_calculation_sequence_history(
+                store,
+                context,
+                &mut graph,
+                &goal.budget,
+                sequence_started.unwrap_or_else(Instant::now),
+            )
+        } else {
+            explain_calculation_sequence(
+                store,
+                context,
+                &mut graph,
+                &goal.budget,
+                sequence_started.unwrap_or_else(Instant::now),
+            )
+        }?;
         if result.calculation.as_ref() != Some(&explanation.calculation)
             || result.guarantee != Guarantee::Computed
             || plan.guarantee != Guarantee::Computed
@@ -8113,6 +8138,162 @@ mod tests {
         assert_eq!(engine.reconcile("alice", "case").unwrap(), recovered);
         assert_eq!(engine.execute("alice", original_request).unwrap(), original);
         assert_eq!(read_graph(&engine.store, &original), original_graph);
+        assert_eq!(engine.store.actions("alice", "case").unwrap(), confirmed);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn calculation_sequence_history_reconciles_ordered_units_without_resend() {
+        let read_graph = |store: &Store, result: &ResultRecord| -> serde_json::Value {
+            serde_json::from_slice(
+                &store
+                    .get_bytes(
+                        "alice",
+                        "case",
+                        result.execution_graph_ref.as_ref().unwrap(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let original_request = RequestEnvelope::new(
+            "case",
+            "sequence",
+            "alice",
+            "計算手順を実行して:\nbase: 2+3\nfinal: @{base}*2",
+        );
+        let original = engine.execute("alice", original_request.clone()).unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+        let inserted = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "insert",
+                    "alice",
+                    "計算手順の fee を final の前に挿入: @{base}+2",
+                ),
+            )
+            .unwrap();
+        assert_eq!(inserted.lifecycle, Lifecycle::Commit, "{inserted:?}");
+        let mut request =
+            RequestEnvelope::new("case", "history", "alice", "計算手順の変更履歴を表示");
+        request.budget.max_actions = 9;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.calculation, inserted.calculation);
+        assert!(result.dependencies.contains(&original.id));
+        assert!(result.dependencies.contains(&inserted.id));
+        let units = &result.content_plan.as_ref().unwrap().required_units;
+        assert!(units.iter().any(|unit| unit.contains("fee")));
+        assert_eq!(units.join("\n"), result.text);
+        let history_graph = read_graph(&engine.store, &result);
+        assert_eq!(history_graph.as_array().unwrap().len(), 6);
+        let order: Vec<_> = history_graph[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| node["id"].as_str())
+            .filter(|id| id.starts_with("sequence-"))
+            .collect();
+        assert_eq!(order, ["sequence-base", "sequence-fee", "sequence-final"]);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        let bundle = state.bundle.as_ref().unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            crate::input::SEQUENCE_HISTORY_PARSER_VERSION
+        );
+        assert!(matches!(
+            bundle.meaning.intent,
+            Intent::ShowCalculationSequenceHistory
+        ));
+        let goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", state.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.required_predicates[0], SEQUENCE_HISTORY_PREDICATE);
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        let retained = state.result.as_ref().unwrap();
+        let mut wrong_units = retained.clone();
+        let units = &mut wrong_units.content_plan.as_mut().unwrap().required_units;
+        assert_ne!(units[0], units[1]);
+        units.swap(0, 1);
+        assert!(inspect(&store, "alice", &state, &wrong_units).is_err());
+        let mut wrong_dependencies = retained.clone();
+        wrong_dependencies.dependencies.swap(0, 1);
+        let error = inspect(&store, "alice", &state, &wrong_dependencies).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_CALCULATION_SEQUENCE_CONTEXT_INVALID"),
+            "{error:?}"
+        );
+        for marker in [Some(INSERTED_SEQUENCE_EXPLANATION_PREDICATE), None] {
+            let mut wrong_marker = state.clone();
+            let mut wrong_goal = goal.clone();
+            if let Some(marker) = marker {
+                wrong_goal.required_predicates[0] = marker.into();
+            } else {
+                wrong_goal.required_predicates.remove(0);
+            }
+            wrong_marker.goal_sha256 =
+                Some(store.put_artifact("alice", "case", &wrong_goal).unwrap());
+            let error = inspect(&store, "alice", &wrong_marker, retained).unwrap_err();
+            assert!(
+                error.to_string().contains("UNSUPPORTED_RECOVERY_GOAL"),
+                "{error:?}"
+            );
+        }
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.calculation, result.calculation);
+        assert_eq!(recovered.dependencies, result.dependencies);
+        assert_eq!(recovered.content_plan, result.content_plan);
+        assert_eq!(recovered.render, result.render);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let mut expected_graph = history_graph;
+        expected_graph[1]["file"] = digest(&canonical(&recovered.receipts[0]).unwrap()).into();
+        assert_eq!(read_graph(&store, &recovered), expected_graph);
+        let confirmed = store.actions("alice", "case").unwrap();
+        assert_eq!(confirmed.len(), 1);
+        assert_eq!(confirmed[0].phase, EffectPhase::Confirmed);
+        drop(store);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.reconcile("alice", "case").unwrap(), recovered);
+        assert_eq!(engine.execute("alice", original_request).unwrap(), original);
         assert_eq!(engine.store.actions("alice", "case").unwrap(), confirmed);
         assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
         assert_eq!(

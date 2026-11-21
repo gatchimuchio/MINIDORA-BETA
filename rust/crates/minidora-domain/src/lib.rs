@@ -290,6 +290,7 @@ pub enum Intent {
         replacement: String,
     },
     ExplainPrevious,
+    ShowCalculationSequenceHistory,
     ReplacePreviousText {
         old: String,
         new: String,

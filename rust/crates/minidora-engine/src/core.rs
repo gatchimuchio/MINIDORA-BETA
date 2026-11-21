@@ -361,9 +361,12 @@ pub(crate) fn previous_calculation_sequence<'a>(
                 }));
             }
             let edit_parser = input::sequence_edit_parser(&input.meaning.intent);
+            let shows_history =
+                matches!(input.meaning.intent, Intent::ShowCalculationSequenceHistory);
             let detail = matches!(input.meaning.intent, Intent::ExplainPrevious);
             if followups.is_empty()
                 && edit_parser.is_none()
+                && !shows_history
                 && (!detail
                     || current.dependencies.len() == 1
                         && current.calculation.as_ref().is_some_and(|calculation| {
@@ -374,7 +377,10 @@ pub(crate) fn previous_calculation_sequence<'a>(
             {
                 return Ok(None);
             }
-            if !(detail || edit_parser == Some(input.meaning.parser_version.as_str()))
+            if !(detail
+                || shows_history
+                    && input.meaning.parser_version == input::SEQUENCE_HISTORY_PARSER_VERSION
+                || edit_parser == Some(input.meaning.parser_version.as_str()))
                 || history
                     .input_result(&current.input_id, current.input_version)?
                     .as_ref()
@@ -898,6 +904,7 @@ struct ReplayedCalculationSequence<'a> {
     remaining_bytes: usize,
     observed: CalculationSequenceResult,
     units: Vec<String>,
+    history_units: Option<Vec<String>>,
 }
 
 impl<'a> ReplayedCalculationSequence<'a> {
@@ -1101,12 +1108,77 @@ impl<'a> ReplayedCalculationSequence<'a> {
     }
 }
 
+fn sequence_history_edit_label(intent: &Intent) -> Result<String> {
+    let label = match intent {
+        Intent::CorrectCalculationSequenceStep {
+            step_id,
+            change_dependencies,
+            ..
+        } => {
+            let label = if *change_dependencies {
+                "参照先も訂正"
+            } else {
+                "訂正"
+            };
+            format!("{label} {step_id}")
+        }
+        Intent::AppendCalculationSequenceStep { step_id, .. } => format!("追加 {step_id}"),
+        Intent::RemoveCalculationSequenceStep { step_id } => format!("削除 {step_id}"),
+        Intent::MoveCalculationSequenceStep {
+            step_id,
+            anchor_id,
+            before,
+        }
+        | Intent::InsertCalculationSequenceStep {
+            step_id,
+            anchor_id,
+            before,
+            ..
+        } => {
+            let label = if matches!(intent, Intent::MoveCalculationSequenceStep { .. }) {
+                "移動"
+            } else {
+                "挿入"
+            };
+            let side = if *before { "前" } else { "後" };
+            format!("{label} {step_id} ({anchor_id} の{side})")
+        }
+        _ => return Err(invalid_sequence_proof()),
+    };
+    Ok(label)
+}
+
+fn append_sequence_history_row(
+    units: &mut Vec<String>,
+    remaining: &mut usize,
+    label: &str,
+    calculation: &Calculation,
+    final_step: &CalculationSequenceStep,
+    result: &ResultRecord,
+) -> Result<()> {
+    let row = format!(
+        "{label}: 最終段 {} = {} [結果ID: {}]",
+        final_step.id, calculation.exact_value, result.id,
+    );
+    *remaining = remaining
+        .checked_sub(row.len() + usize::from(!units.is_empty()))
+        .ok_or_else(|| {
+            failure(
+                "RESOURCE_LIMIT",
+                "変更履歴の表示が要求の証拠予算を超えています。",
+            )
+        })?;
+    units.push(row);
+    Ok(())
+}
+
 fn replay_calculation_sequence<'a>(
     store: &Store,
     context: &'a PreviousCalculationSequence<'_>,
     graph: &mut Scheduler,
     budget: &ResourceBudget,
     started: Instant,
+    show_history: bool,
 ) -> Result<ReplayedCalculationSequence<'a>> {
     let original = context.original;
     let mut remaining_bytes = budget.max_evidence_bytes;
@@ -1137,6 +1209,31 @@ fn replay_calculation_sequence<'a>(
     }
     observed.verify_content(original, plan)?;
     let units = sequence_explanation_units(&observed, budget)?;
+    let history_until = if show_history {
+        Some(context.followups.len())
+    } else {
+        context.followups.iter().rposition(|entry| {
+            matches!(
+                entry.bundle.meaning.intent,
+                Intent::ShowCalculationSequenceHistory
+            )
+        })
+    };
+    let mut remaining_history_bytes = budget.max_evidence_bytes;
+    let history_units = if history_until.is_some() {
+        let mut history = Vec::new();
+        append_sequence_history_row(
+            &mut history,
+            &mut remaining_history_bytes,
+            "元の計算",
+            &observed.calculation,
+            steps.last().ok_or_else(invalid_sequence_proof)?,
+            original,
+        )?;
+        Some(history)
+    } else {
+        None
+    };
     let mut replay = ReplayedCalculationSequence {
         original,
         selected: original,
@@ -1146,9 +1243,10 @@ fn replay_calculation_sequence<'a>(
         remaining_bytes,
         observed,
         units,
+        history_units,
     };
     let mut edits_left = context.edits;
-    for followup in &context.followups {
+    for (index, followup) in context.followups.iter().enumerate() {
         sequence_history_time(budget, started)?;
         let result = followup.result;
         let plan = result
@@ -1173,21 +1271,44 @@ fn replay_calculation_sequence<'a>(
                 return Err(invalid_sequence_proof());
             }
             observed.verify_content(result, plan)?;
+            if history_until.is_some_and(|end| index < end)
+                && let Some(history) = replay.history_units.as_mut()
+            {
+                let change = sequence_history_edit_label(&followup.bundle.meaning.intent)?;
+                let label = format!("{}. {change}", history.len());
+                append_sequence_history_row(
+                    history,
+                    &mut remaining_history_bytes,
+                    &label,
+                    &observed.calculation,
+                    replay.steps.last().ok_or_else(invalid_sequence_proof)?,
+                    result,
+                )?;
+            }
             replay.units = sequence_explanation_units(&observed, budget)?;
             replay.observed = observed;
             replay.active = result;
-        } else if result.dependencies != replay.dependencies()
-            || result.calculation.as_ref() != Some(&replay.observed.calculation)
-            || result.guarantee != Guarantee::Computed
-            || plan.guarantee != Guarantee::Computed
-            || plan.required_units != replay.units
-            || plan.text
-                != replay.units.join(
-                    "
-",
-                )
-        {
-            return Err(invalid_sequence_proof());
+        } else {
+            let units = if matches!(
+                followup.bundle.meaning.intent,
+                Intent::ShowCalculationSequenceHistory
+            ) {
+                replay
+                    .history_units
+                    .as_ref()
+                    .ok_or_else(invalid_sequence_proof)?
+            } else {
+                &replay.units
+            };
+            if result.dependencies != replay.dependencies()
+                || result.calculation.as_ref() != Some(&replay.observed.calculation)
+                || result.guarantee != Guarantee::Computed
+                || plan.guarantee != Guarantee::Computed
+                || &plan.required_units != units
+                || plan.text != units.join("\n")
+            {
+                return Err(invalid_sequence_proof());
+            }
         }
         replay.selected = result;
     }
@@ -1201,11 +1322,27 @@ pub(crate) fn explain_calculation_sequence(
     budget: &ResourceBudget,
     started: Instant,
 ) -> Result<CalculationSequenceExplanation> {
-    let replay = replay_calculation_sequence(store, context, graph, budget, started)?;
+    let replay = replay_calculation_sequence(store, context, graph, budget, started, false)?;
     let dependencies = replay.dependencies();
     Ok(CalculationSequenceExplanation {
         calculation: replay.observed.calculation,
         units: replay.units,
+        dependencies,
+    })
+}
+
+pub(crate) fn show_calculation_sequence_history(
+    store: &Store,
+    context: &PreviousCalculationSequence<'_>,
+    graph: &mut Scheduler,
+    budget: &ResourceBudget,
+    started: Instant,
+) -> Result<CalculationSequenceExplanation> {
+    let replay = replay_calculation_sequence(store, context, graph, budget, started, true)?;
+    let dependencies = replay.dependencies();
+    Ok(CalculationSequenceExplanation {
+        calculation: replay.observed.calculation,
+        units: replay.history_units.ok_or_else(invalid_sequence_proof)?,
         dependencies,
     })
 }
@@ -1298,8 +1435,14 @@ pub(crate) fn run_sequence_edit(
 ) -> Result<CalculationSequenceResult> {
     let budget = &bundle.request.budget;
     let mut prior_graph = sequence_proof_graph(context.baseline.effective_steps(), budget)?;
-    let mut replay =
-        replay_calculation_sequence(store, &context.baseline, &mut prior_graph, budget, started)?;
+    let mut replay = replay_calculation_sequence(
+        store,
+        &context.baseline,
+        &mut prior_graph,
+        budget,
+        started,
+        false,
+    )?;
     replay.revise(
         bundle,
         Some(graph),
@@ -1390,6 +1533,7 @@ pub(crate) const MOVED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V7";
 pub(crate) const INSERTED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V8";
+pub(crate) const SEQUENCE_HISTORY_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_HISTORY_V1";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1445,6 +1589,11 @@ pub(crate) fn goal_predicates(
         Intent::ExplainPrevious => {
             predicates.extend(sequence_predicate.map(str::to_owned));
         }
+        Intent::ShowCalculationSequenceHistory
+            if meaning.parser_version == input::SEQUENCE_HISTORY_PARSER_VERSION =>
+        {
+            predicates.push(SEQUENCE_HISTORY_PREDICATE.into());
+        }
         Intent::AskWhy { .. } if input::uses_generated_relation_explanation(meaning) => {
             predicates.push(GENERATED_RELATION_EXPLANATION_PREDICATE.into());
         }
@@ -1494,6 +1643,7 @@ fn verify_report_goal_content(
                 | REMOVED_SEQUENCE_EXPLANATION_PREDICATE
                 | MOVED_SEQUENCE_EXPLANATION_PREDICATE
                 | INSERTED_SEQUENCE_EXPLANATION_PREDICATE
+                | SEQUENCE_HISTORY_PREDICATE
         )
     }) else {
         return Ok(());
@@ -1606,7 +1756,8 @@ pub(crate) fn corrected_calculation_from_context(
                     | Intent::AppendCalculationSequenceStep { .. }
                     | Intent::RemoveCalculationSequenceStep { .. }
                     | Intent::MoveCalculationSequenceStep { .. }
-                    | Intent::InsertCalculationSequenceStep { .. } => {
+                    | Intent::InsertCalculationSequenceStep { .. }
+                    | Intent::ShowCalculationSequenceHistory => {
                         return Err(failure(
                             "SEQUENCE_CORRECTION_REQUIRES_STEP",
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
@@ -5406,7 +5557,10 @@ impl Engine {
             Vec::new()
         };
         let previous_sequence = if has_compute_budget
-            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+            && matches!(
+                bundle.meaning.intent,
+                Intent::ExplainPrevious | Intent::ShowCalculationSequenceHistory
+            )
             && let (Some(prior), Some(prior_case)) = (previous, latest.as_ref())
         {
             match previous_calculation_sequence(
@@ -7318,33 +7472,51 @@ impl Engine {
                 result.guarantee = Guarantee::SourceReport;
                 state.result = Some(result.clone());
             }
-            Intent::ExplainPrevious if previous_sequence.is_some() => {
+            Intent::ExplainPrevious | Intent::ShowCalculationSequenceHistory
+                if previous_sequence.is_some() =>
+            {
                 let context = previous_sequence
                     .as_ref()
                     .expect("sequence context checked");
-                let explanation = match explain_calculation_sequence(
-                    &self.store,
-                    context,
-                    &mut graph,
-                    &goal.budget,
-                    started,
-                ) {
-                    Ok(explanation) => explanation,
-                    Err(Error::Contract { code, message }) => {
-                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
-                    }
-                    Err(error) => return Err(error),
+                let show_history = matches!(
+                    bundle.meaning.intent,
+                    Intent::ShowCalculationSequenceHistory
+                );
+                let report = if show_history {
+                    show_calculation_sequence_history
+                } else {
+                    explain_calculation_sequence
                 };
+                let explanation =
+                    match report(&self.store, context, &mut graph, &goal.budget, started) {
+                        Ok(explanation) => explanation,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
                 units = explanation.units;
                 result.calculation = Some(explanation.calculation);
                 result.dependencies = explanation.dependencies;
                 result.guarantee = Guarantee::Computed;
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: context.predicate(),
+                    predicate: if show_history {
+                        SEQUENCE_HISTORY_PREDICATE
+                    } else {
+                        context.predicate()
+                    },
                     guarantee: Guarantee::Computed,
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
                 });
+            }
+            Intent::ShowCalculationSequenceHistory => {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "SEQUENCE_HISTORY_CONTEXT_REQUIRED",
+                    "変更履歴を表示するには、同じケースの確定済み連続計算が必要です。",
+                );
             }
             Intent::ExplainPrevious => {
                 let Some(prior) = previous.filter(|p| p.lifecycle == Lifecycle::Commit) else {
