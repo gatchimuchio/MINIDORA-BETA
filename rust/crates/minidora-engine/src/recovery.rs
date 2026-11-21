@@ -1357,11 +1357,19 @@ fn result_memory_snapshot(
     actor: &str,
     result: &ResultRecord,
 ) -> Result<Option<MemoryState>> {
+    Ok(result_memory_snapshot_with_digest(store, actor, result)?.map(|(memory, _)| memory))
+}
+
+fn result_memory_snapshot_with_digest(
+    store: &Store,
+    actor: &str,
+    result: &ResultRecord,
+) -> Result<Option<(MemoryState, String)>> {
     let Some(revision) = result.actor_memory_revision else {
         return Ok(None);
     };
     store
-        .load_memory_revision(actor, revision)?
+        .load_memory_revision_with_digest(actor, revision)?
         .map(Some)
         .ok_or_else(|| {
             failure(
@@ -2493,24 +2501,39 @@ fn verify_explain_previous_relation_profile_answer_result(
     Ok(())
 }
 
+fn uses_snapshot_relation_index(state: &CaseRevision, proposition: &Proposition) -> bool {
+    !proposition.condition_refs.is_empty()
+        && state
+            .bundle
+            .as_ref()
+            .is_some_and(|bundle| bundle.meaning.source_kind == "USER_REQUEST")
+}
+
+#[cfg(test)]
+thread_local! {
+    static RECOVERY_SNAPSHOT_QUERIES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 fn query_recovery_snapshot(
     state: &CaseRevision,
     memory: MemoryState,
     proposition: &Proposition,
     max_actions: u32,
 ) -> Result<(MemoryState, crate::relations::QueryOutcome)> {
-    if !proposition.condition_refs.is_empty()
-        && state
-            .bundle
-            .as_ref()
-            .is_some_and(|bundle| bundle.meaning.source_kind == "USER_REQUEST")
-    {
+    if uses_snapshot_relation_index(state, proposition) {
         return Store::with_snapshot_relation_index(&state.actor_id, &memory, |index| {
+            #[cfg(test)]
+            RECOVERY_SNAPSHOT_QUERIES.with(|calls| calls.set(calls.get() + 1));
             crate::relations::query_active_relation(index, proposition, max_actions)
         });
     }
     let answer = crate::relations::query(&memory, proposition, max_actions)?;
     Ok((memory, answer))
+}
+
+struct RetainedRelationProof {
+    snapshot_sha256: String,
+    projection: (MemoryState, crate::relations::QueryOutcome),
 }
 
 fn verify_result_memory_provenance(
@@ -2521,8 +2544,9 @@ fn verify_result_memory_provenance(
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
-) -> Result<Option<(MemoryState, crate::relations::QueryOutcome)>> {
-    let Some(memory) = result_memory_snapshot(store, actor, result)? else {
+) -> Result<Option<RetainedRelationProof>> {
+    let Some((memory, snapshot_sha256)) = result_memory_snapshot_with_digest(store, actor, result)?
+    else {
         return Ok(None);
     };
     match &goal.intent {
@@ -2539,7 +2563,10 @@ fn verify_result_memory_provenance(
                 ));
             }
             if matches!(goal.intent, Intent::AskWhy { .. }) {
-                return Ok(Some((memory, answer)));
+                return Ok(Some(RetainedRelationProof {
+                    snapshot_sha256,
+                    projection: (memory, answer),
+                }));
             }
         }
         Intent::AskRelationObjects {
@@ -4318,16 +4345,40 @@ fn inspect(
         // newly different answer during mere effect reconciliation. Use a
         // current revision-matched Goal projection when available; cold/stale
         // indexes retain the authenticated full-snapshot path.
+        let evaluated;
         let (memory, answer) = match crate::core::indexed_relation_query_from_store(
             store,
             actor,
             proposition,
             goal.budget.max_actions,
         )? {
-            Some((projected_memory, answer)) => (projected_memory, answer?),
+            Some((projected_memory, answer)) => {
+                evaluated = (projected_memory, answer?);
+                &evaluated
+            }
             None => {
-                let memory = store.load_memory(actor)?;
-                query_recovery_snapshot(state, memory, proposition, goal.budget.max_actions)?
+                // Validate the current memory and its input evidence first.
+                // Only the projection and proof of the exact same artifact
+                // can be reused, for this same actor and sealed query.
+                let (memory, reference) = store.load_memory_with_reference(actor)?;
+                let same_snapshot = original_relation.as_ref().filter(|proof| {
+                    uses_snapshot_relation_index(state, proposition)
+                        && reference.as_ref().is_some_and(|(revision, sha256)| {
+                            u64::try_from(*revision).ok() == Some(proof.projection.0.revision)
+                                && *sha256 == proof.snapshot_sha256
+                        })
+                });
+                if let Some(proof) = same_snapshot {
+                    &proof.projection
+                } else {
+                    evaluated = query_recovery_snapshot(
+                        state,
+                        memory,
+                        proposition,
+                        goal.budget.max_actions,
+                    )?;
+                    &evaluated
+                }
             }
         };
         if matches!(goal.intent, Intent::AskWhy { .. }) {
@@ -4338,10 +4389,10 @@ fn inspect(
                 plan,
                 proposition,
                 crate::core::RelationRecoveryProofs {
-                    current: (&memory, &answer),
+                    current: (memory, answer),
                     original: original_relation
                         .as_ref()
-                        .map(|(memory, answer)| (memory, answer)),
+                        .map(|proof| (&proof.projection.0, &proof.projection.1)),
                 },
                 &goal.budget,
             )?;
@@ -4381,7 +4432,7 @@ fn inspect(
                     | "declarative-ja-en-v70-generic-transitive-verbs"
             );
         let dependencies = if current_proof_contract {
-            crate::relations::answer_dependencies(&answer)
+            crate::relations::answer_dependencies(answer)
         } else {
             // Preserve recovery for records produced before the v46 lineage
             // and guarantee contract.
@@ -4390,7 +4441,7 @@ fn inspect(
             legacy
         };
         let guarantee_matches = !current_proof_contract
-            || result.guarantee == crate::relations::answer_guarantee(&answer);
+            || result.guarantee == crate::relations::answer_guarantee(answer);
         if !matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED")
             || dependencies != result.dependencies
             || !guarantee_matches
@@ -4879,7 +4930,7 @@ fn inspect(
                     (Intent::AskWhy { proposition }, None) => {
                         let fallback;
                         let (memory, answer) = if let Some(proof) = original_relation.as_ref() {
-                            proof
+                            &proof.projection
                         } else {
                             fallback = query_recovery_snapshot(
                                 state,
@@ -12589,6 +12640,21 @@ mod tests {
         let token = retain_attempted_prefix(&fixture.state);
 
         let mut engine = Engine::open(&fixture.state).unwrap();
+        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
+        database
+            .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
+            .unwrap();
+        let pending = engine.store.load_case("alice", "case").unwrap().unwrap();
+        RECOVERY_SNAPSHOT_QUERIES.with(|calls| calls.set(0));
+        inspect(
+            &engine.store,
+            "alice",
+            &pending,
+            pending.result.as_ref().unwrap(),
+        )
+        .unwrap();
+        RECOVERY_SNAPSHOT_QUERIES.with(|calls| assert_eq!(calls.get(), 1));
+
         let later = engine
             .execute(
                 "alice",
@@ -12603,12 +12669,13 @@ mod tests {
         assert_eq!(later.lifecycle, Lifecycle::Commit);
         let current = engine.store.load_memory("alice").unwrap();
         assert!(current.revision > original.revision);
-        let database = Connection::open(fixture.state.join("state.sqlite3")).unwrap();
         database
             .execute("DELETE FROM memory_index_state WHERE actor_id='alice'", [])
             .unwrap();
 
+        RECOVERY_SNAPSHOT_QUERIES.with(|calls| calls.set(0));
         let recovered = engine.reconcile("alice", "case").unwrap();
+        RECOVERY_SNAPSHOT_QUERIES.with(|calls| assert_eq!(calls.get(), 2));
         assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
         assert_eq!(recovered.id, saved.id);
         assert_eq!(recovered.dependencies, saved.dependencies);

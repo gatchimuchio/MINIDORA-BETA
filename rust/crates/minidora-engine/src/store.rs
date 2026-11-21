@@ -2237,16 +2237,25 @@ impl Store {
     }
 
     pub fn load_memory(&self, actor: &str) -> Result<MemoryState> {
+        Ok(self.load_memory_with_reference(actor)?.0)
+    }
+
+    pub(crate) fn load_memory_with_reference(
+        &self,
+        actor: &str,
+    ) -> Result<(MemoryState, Option<(i64, String)>)> {
         valid_id(actor)?;
-        let sha: Option<String> = sql(self.connection.query_row(
-            "SELECT record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1", [actor], |r| r.get(0),
+        let reference: Option<(i64, String)> = sql(self.connection.query_row(
+            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
+            [actor], |row| Ok((row.get(0)?,row.get(1)?)),
         ).optional())?;
-        let memory = sha
-            .map(|sha| self.read_blob(&sha))
+        let memory = reference
+            .as_ref()
+            .map(|(_, sha)| self.read_blob(sha))
             .transpose()?
             .unwrap_or_default();
         self.validate_memory_scope(actor, &memory)?;
-        Ok(memory)
+        Ok((memory, reference))
     }
 
     /// Loads one retained actor-memory snapshot without substituting the
@@ -2254,6 +2263,16 @@ impl Store {
     /// version consumed by Core before checking that version against today's
     /// still-valid proof.
     pub fn load_memory_revision(&self, actor: &str, revision: u64) -> Result<Option<MemoryState>> {
+        Ok(self
+            .load_memory_revision_with_digest(actor, revision)?
+            .map(|(memory, _)| memory))
+    }
+
+    pub(crate) fn load_memory_revision_with_digest(
+        &self,
+        actor: &str,
+        revision: u64,
+    ) -> Result<Option<(MemoryState, String)>> {
         valid_id(actor)?;
         let revision = integer(revision)?;
         let sha: Option<String> = sql(self
@@ -2277,7 +2296,7 @@ impl Store {
             ));
         }
         self.validate_memory_scope(actor, &memory)?;
-        Ok(Some(memory))
+        Ok(Some((memory, sha)))
     }
 
     fn validate_memory_evolution(previous: &MemoryState, next: &MemoryState) -> Result<()> {
