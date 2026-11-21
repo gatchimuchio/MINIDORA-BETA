@@ -235,6 +235,13 @@ impl PreviousCalculationSequence<'_> {
         if self.followups.iter().any(|entry| {
             matches!(
                 entry.bundle.meaning.intent,
+                Intent::RemoveCalculationSequenceStep { .. }
+            )
+        }) {
+            REMOVED_SEQUENCE_EXPLANATION_PREDICATE
+        } else if self.followups.iter().any(|entry| {
+            matches!(
+                entry.bundle.meaning.intent,
                 Intent::AppendCalculationSequenceStep { .. }
             )
         }) {
@@ -324,9 +331,8 @@ pub(crate) fn previous_calculation_sequence<'a>(
                     if input::sequence_edit_parser(&entry.bundle.meaning.intent).is_some() {
                         // The current graph already charges the latest edition.
                         context_actions += effective_steps.len();
-                        let (target, revised) =
-                            sequence_step_edit(&effective_steps, &entry.bundle)?;
-                        apply_sequence_step_edit(&mut effective_steps, target, revised);
+                        sequence_step_edit(&effective_steps, &entry.bundle)?
+                            .apply(&mut effective_steps);
                     } else {
                         context_actions += 1;
                     }
@@ -570,13 +576,46 @@ fn revised_calculation_step(
 fn sequence_step_edit(
     steps: &[CalculationSequenceStep],
     bundle: &InputBundle,
-) -> Result<(usize, CalculationSequenceStep)> {
+) -> Result<SequenceStepEdit> {
+    if let Intent::RemoveCalculationSequenceStep { step_id } = &bundle.meaning.intent {
+        let target = steps
+            .iter()
+            .position(|step| &step.id == step_id)
+            .ok_or_else(|| {
+                failure(
+                    "SEQUENCE_REMOVE_STEP_UNKNOWN",
+                    format!("手順 {step_id} は定義されていません。"),
+                )
+            })?;
+        if steps.len() == 1 {
+            return Err(failure(
+                "SEQUENCE_REMOVE_LAST_STEP",
+                "連続計算には少なくとも1手順が必要です。",
+            ));
+        }
+        let consumers = steps
+            .iter()
+            .filter(|step| step.requires.contains(step_id))
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>();
+        if !consumers.is_empty() {
+            return Err(failure(
+                "SEQUENCE_REMOVE_STEP_IN_USE",
+                format!(
+                    "手順 {} が {step_id} を参照しています。先に参照先を訂正してください。",
+                    consumers.join("、")
+                ),
+            ));
+        }
+        return Ok(SequenceStepEdit::Remove { target });
+    }
     let Intent::AppendCalculationSequenceStep {
         step_id,
         expression,
     } = &bundle.meaning.intent
     else {
-        return revised_calculation_step(steps, bundle);
+        let (target, step) = revised_calculation_step(steps, bundle)?;
+        return Ok(SequenceStepEdit::Replace { target, step });
     };
     if steps.iter().any(|step| &step.id == step_id) {
         return Err(failure(
@@ -610,25 +649,37 @@ fn sequence_step_edit(
             requires.push(reference);
         }
     }
-    Ok((
-        steps.len(),
-        CalculationSequenceStep {
+    Ok(SequenceStepEdit::Append {
+        step: CalculationSequenceStep {
             id: step_id.clone(),
             expression: expression.clone(),
             requires,
         },
-    ))
+    })
 }
 
-fn apply_sequence_step_edit(
-    steps: &mut Vec<CalculationSequenceStep>,
-    target: usize,
-    step: CalculationSequenceStep,
-) {
-    if target == steps.len() {
-        steps.push(step);
-    } else {
-        steps[target] = step;
+enum SequenceStepEdit {
+    Replace {
+        target: usize,
+        step: CalculationSequenceStep,
+    },
+    Append {
+        step: CalculationSequenceStep,
+    },
+    Remove {
+        target: usize,
+    },
+}
+
+impl SequenceStepEdit {
+    fn apply(self, steps: &mut Vec<CalculationSequenceStep>) {
+        match self {
+            Self::Replace { target, step } => steps[target] = step,
+            Self::Append { step } => steps.push(step),
+            Self::Remove { target } => {
+                steps.remove(target);
+            }
+        }
     }
 }
 
@@ -657,6 +708,21 @@ struct SequenceAppendArtifact<'a> {
     append_raw_sha256: &'a str,
     previous_final_step_id: &'a str,
     appended_step: &'a CalculationSequenceStep,
+    dependencies: &'a [String],
+}
+
+#[derive(serde::Serialize)]
+struct SequenceRemoveArtifact<'a> {
+    kind: &'static str,
+    selected_result_id: &'a str,
+    original_result_id: &'a str,
+    removal_input_id: &'a str,
+    removal_raw_sha256: &'a str,
+    removed_step_source_input_id: &'a str,
+    removed_step_source_sha256: &'a str,
+    removed_step: &'a CalculationSequenceStep,
+    previous_final_step_id: &'a str,
+    revised_final_step_id: &'a str,
     dependencies: &'a [String],
 }
 
@@ -690,64 +756,96 @@ impl<'a> ReplayedCalculationSequence<'a> {
         dependencies: &mut Vec<String>,
         mut artifact_ref: impl FnMut(&[u8]) -> Result<String>,
     ) -> Result<CalculationSequenceResult> {
-        let (target, revised_step) = sequence_step_edit(&self.steps, bundle)?;
-        let id = &revised_step.id;
+        let edit = sequence_step_edit(&self.steps, bundle)?;
         let proof = self.dependencies();
         let edit_id = identity(&bundle.request)?;
-        let (revision, description) = if let Some(preceding) = self.steps.get(target) {
-            let source = self.sources[id];
-            let revision = if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION
-            {
-                canonical(&SequenceDependencyRevision {
-                    kind: "minidora-calculation-sequence-correction-v3",
+        let (revision, description) = match &edit {
+            SequenceStepEdit::Replace { target, step } => {
+                let preceding = &self.steps[*target];
+                let id = &step.id;
+                let source = self.sources[id];
+                let revision =
+                    if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
+                        canonical(&SequenceDependencyRevision {
+                            kind: "minidora-calculation-sequence-correction-v3",
+                            selected_result_id: &self.selected.id,
+                            original_result_id: &self.original.id,
+                            previous_raw_sha256: &source.raw_sha256,
+                            correction_input_id: &edit_id,
+                            correction_raw_sha256: &bundle.raw_sha256,
+                            step_id: id,
+                            previous_expression: &preceding.expression,
+                            revised_expression: &step.expression,
+                            previous_requires: &preceding.requires,
+                            revised_requires: &step.requires,
+                            dependencies: &proof,
+                        })?
+                    } else {
+                        let kind = if self.active.id == self.original.id {
+                            "minidora-calculation-sequence-correction-v1"
+                        } else {
+                            "minidora-calculation-sequence-correction-v2"
+                        };
+                        canonical(&(
+                            kind,
+                            bundle.meaning.context_result_ref.as_deref(),
+                            &self.original.id,
+                            &source.raw_sha256,
+                            &edit_id,
+                            &bundle.raw_sha256,
+                            id,
+                            &preceding.expression,
+                            &step.expression,
+                            &proof,
+                        ))?
+                    };
+                self.sources.insert(id.clone(), bundle);
+                (revision, format!("訂正した手順: {id}"))
+            }
+            SequenceStepEdit::Append { step } => {
+                let preceding = self.steps.last().ok_or_else(invalid_sequence_proof)?;
+                let revision = canonical(&SequenceAppendArtifact {
+                    kind: "minidora-calculation-sequence-append-v1",
                     selected_result_id: &self.selected.id,
                     original_result_id: &self.original.id,
-                    previous_raw_sha256: &source.raw_sha256,
-                    correction_input_id: &edit_id,
-                    correction_raw_sha256: &bundle.raw_sha256,
-                    step_id: id,
-                    previous_expression: &preceding.expression,
-                    revised_expression: &revised_step.expression,
-                    previous_requires: &preceding.requires,
-                    revised_requires: &revised_step.requires,
+                    append_input_id: &edit_id,
+                    append_raw_sha256: &bundle.raw_sha256,
+                    previous_final_step_id: &preceding.id,
+                    appended_step: step,
                     dependencies: &proof,
-                })?
-            } else {
-                let kind = if self.active.id == self.original.id {
-                    "minidora-calculation-sequence-correction-v1"
-                } else {
-                    "minidora-calculation-sequence-correction-v2"
-                };
-                canonical(&(
-                    kind,
-                    bundle.meaning.context_result_ref.as_deref(),
-                    &self.original.id,
-                    &source.raw_sha256,
-                    &edit_id,
-                    &bundle.raw_sha256,
-                    id,
-                    &preceding.expression,
-                    &revised_step.expression,
-                    &proof,
-                ))?
-            };
-            (revision, format!("訂正した手順: {id}"))
-        } else {
-            let preceding = self.steps.last().ok_or_else(invalid_sequence_proof)?;
-            let revision = canonical(&SequenceAppendArtifact {
-                kind: "minidora-calculation-sequence-append-v1",
-                selected_result_id: &self.selected.id,
-                original_result_id: &self.original.id,
-                append_input_id: &edit_id,
-                append_raw_sha256: &bundle.raw_sha256,
-                previous_final_step_id: &preceding.id,
-                appended_step: &revised_step,
-                dependencies: &proof,
-            })?;
-            (revision, format!("追加した手順: {id}"))
+                })?;
+                self.sources.insert(step.id.clone(), bundle);
+                (revision, format!("追加した手順: {}", step.id))
+            }
+            SequenceStepEdit::Remove { target } => {
+                let removed = &self.steps[*target];
+                let source = self.sources[&removed.id];
+                let preceding = self.steps.last().ok_or_else(invalid_sequence_proof)?;
+                let revised = self
+                    .steps
+                    .iter()
+                    .rev()
+                    .find(|step| step.id != removed.id)
+                    .ok_or_else(invalid_sequence_proof)?;
+                let source_id = identity(&source.request)?;
+                let revision = canonical(&SequenceRemoveArtifact {
+                    kind: "minidora-calculation-sequence-remove-v1",
+                    selected_result_id: &self.selected.id,
+                    original_result_id: &self.original.id,
+                    removal_input_id: &edit_id,
+                    removal_raw_sha256: &bundle.raw_sha256,
+                    removed_step_source_input_id: &source_id,
+                    removed_step_source_sha256: &source.raw_sha256,
+                    removed_step: removed,
+                    previous_final_step_id: &preceding.id,
+                    revised_final_step_id: &revised.id,
+                    dependencies: &proof,
+                })?;
+                self.sources.remove(&removed.id);
+                (revision, format!("削除した手順: {}", removed.id))
+            }
         };
-        self.sources.insert(id.clone(), bundle);
-        apply_sequence_step_edit(&mut self.steps, target, revised_step);
+        edit.apply(&mut self.steps);
         let mut private_graph;
         let graph = if let Some(graph) = graph {
             graph
@@ -905,16 +1003,19 @@ impl SequenceEdit<'_> {
 }
 
 fn sequence_edit_context_requirement(intent: &Intent) -> (&'static str, &'static str) {
-    if matches!(intent, Intent::AppendCalculationSequenceStep { .. }) {
-        (
+    match intent {
+        Intent::AppendCalculationSequenceStep { .. } => (
             "SEQUENCE_APPEND_CONTEXT_REQUIRED",
             "追加対象となる同じケースの確定済み連続計算が必要です。",
-        )
-    } else {
-        (
+        ),
+        Intent::RemoveCalculationSequenceStep { .. } => (
+            "SEQUENCE_REMOVE_CONTEXT_REQUIRED",
+            "削除対象となる同じケースの確定済み連続計算が必要です。",
+        ),
+        _ => (
             "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
             "訂正対象となる同じケースの確定済み連続計算が必要です。",
-        )
+        ),
     }
 }
 
@@ -937,10 +1038,10 @@ pub(crate) fn prepare_sequence_edit<'a>(
                 failure(code, message)
             })?;
     let mut steps = baseline.effective_steps().to_vec();
-    let (target, revised) = sequence_step_edit(&steps, bundle)?;
-    apply_sequence_step_edit(&mut steps, target, revised);
+    sequence_step_edit(&steps, bundle)?.apply(&mut steps);
     let predicate = match bundle.meaning.parser_version.as_str() {
         input::SEQUENCE_APPEND_PARSER_VERSION => SEQUENCE_APPEND_PREDICATE,
+        input::SEQUENCE_REMOVE_PARSER_VERSION => SEQUENCE_REMOVE_PREDICATE,
         input::SEQUENCE_REWIRE_PARSER_VERSION => REWIRED_SEQUENCE_CORRECTION_PREDICATE,
         _ if baseline.edits > 0 => REPEATED_SEQUENCE_CORRECTION_PREDICATE,
         _ => SEQUENCE_CORRECTION_PREDICATE,
@@ -1030,6 +1131,7 @@ pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
 pub(crate) const REWIRED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V3";
 pub(crate) const SEQUENCE_APPEND_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_APPEND_V1";
+pub(crate) const SEQUENCE_REMOVE_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_REMOVE_V1";
 const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 pub(crate) const GENERATED_RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V2";
@@ -1046,6 +1148,8 @@ pub(crate) const REWIRED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V4";
 pub(crate) const APPENDED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V5";
+pub(crate) const REMOVED_SEQUENCE_EXPLANATION_PREDICATE: &str =
+    "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V6";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1071,6 +1175,11 @@ pub(crate) fn goal_predicates(
             if meaning.parser_version == input::SEQUENCE_APPEND_PARSER_VERSION =>
         {
             predicates.push(SEQUENCE_APPEND_PREDICATE.into());
+        }
+        Intent::RemoveCalculationSequenceStep { .. }
+            if meaning.parser_version == input::SEQUENCE_REMOVE_PARSER_VERSION =>
+        {
+            predicates.push(SEQUENCE_REMOVE_PREDICATE.into());
         }
         Intent::CorrectCalculationSequenceStep { .. }
             if input::sequence_edit_parser(&meaning.intent)
@@ -1132,6 +1241,7 @@ fn verify_report_goal_content(
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
                 | REWIRED_SEQUENCE_EXPLANATION_PREDICATE
                 | APPENDED_SEQUENCE_EXPLANATION_PREDICATE
+                | REMOVED_SEQUENCE_EXPLANATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -1241,7 +1351,8 @@ pub(crate) fn corrected_calculation_from_context(
                     }
                     Intent::CalculateSequence { .. }
                     | Intent::CorrectCalculationSequenceStep { .. }
-                    | Intent::AppendCalculationSequenceStep { .. } => {
+                    | Intent::AppendCalculationSequenceStep { .. }
+                    | Intent::RemoveCalculationSequenceStep { .. } => {
                         return Err(failure(
                             "SEQUENCE_CORRECTION_REQUIRES_STEP",
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
@@ -5999,7 +6110,8 @@ impl Engine {
                 sequence_result = Some(observed);
             }
             Intent::CorrectCalculationSequenceStep { .. }
-            | Intent::AppendCalculationSequenceStep { .. } => {
+            | Intent::AppendCalculationSequenceStep { .. }
+            | Intent::RemoveCalculationSequenceStep { .. } => {
                 let context = sequence_edit.as_ref().ok_or_else(|| {
                     let (code, message) = sequence_edit_context_requirement(&bundle.meaning.intent);
                     failure(code, message)

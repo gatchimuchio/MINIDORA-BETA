@@ -9,14 +9,15 @@ use crate::{
     core::{
         APPENDED_SEQUENCE_EXPLANATION_PREDICATE, CHAINED_SEQUENCE_EXPLANATION_PREDICATE,
         GENERATED_RELATION_EXPLANATION_PREDICATE, RELATION_COMPARISON_PREDICATE,
-        RELATION_EXPLANATION_PREDICATE, REPEATED_SEQUENCE_CORRECTION_PREDICATE,
-        REVISED_SEQUENCE_EXPLANATION_PREDICATE, REWIRED_SEQUENCE_CORRECTION_PREDICATE,
-        REWIRED_SEQUENCE_EXPLANATION_PREDICATE, SEQUENCE_APPEND_PREDICATE,
-        SEQUENCE_CORRECTION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE, calculation_sequence_nodes,
-        corrected_calculation_from_context, exact_calculation_unit, explain_calculation_sequence,
-        goal_predicates, prepare_sequence_edit, previous_calculation_sequence,
-        run_calculation_sequence, run_sequence_edit, store_execution_graph, validate_goal_render,
-        validate_render, verify_goal_content,
+        RELATION_EXPLANATION_PREDICATE, REMOVED_SEQUENCE_EXPLANATION_PREDICATE,
+        REPEATED_SEQUENCE_CORRECTION_PREDICATE, REVISED_SEQUENCE_EXPLANATION_PREDICATE,
+        REWIRED_SEQUENCE_CORRECTION_PREDICATE, REWIRED_SEQUENCE_EXPLANATION_PREDICATE,
+        SEQUENCE_APPEND_PREDICATE, SEQUENCE_CORRECTION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE,
+        SEQUENCE_REMOVE_PREDICATE, calculation_sequence_nodes, corrected_calculation_from_context,
+        exact_calculation_unit, explain_calculation_sequence, goal_predicates,
+        prepare_sequence_edit, previous_calculation_sequence, run_calculation_sequence,
+        run_sequence_edit, store_execution_graph, validate_goal_render, validate_render,
+        verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -90,6 +91,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                     Intent::CalculateSequence { .. }
                         | Intent::CorrectCalculationSequenceStep { .. }
                         | Intent::AppendCalculationSequenceStep { .. }
+                        | Intent::RemoveCalculationSequenceStep { .. }
                         | Intent::FetchPreviousSearchCandidate { .. }
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
@@ -4028,6 +4030,7 @@ fn inspect(
         crate::input::SEQUENCE_CORRECTION_PARSER_VERSION
             | crate::input::SEQUENCE_REWIRE_PARSER_VERSION
             | crate::input::SEQUENCE_APPEND_PARSER_VERSION
+            | crate::input::SEQUENCE_REMOVE_PARSER_VERSION
     );
     if crate::input::sequence_edit_parser(&goal.intent)
         != requires_sequence_edit.then_some(bundle.meaning.parser_version.as_str())
@@ -4050,6 +4053,7 @@ fn inspect(
                         | REVISED_SEQUENCE_EXPLANATION_PREDICATE
                         | REWIRED_SEQUENCE_EXPLANATION_PREDICATE
                         | APPENDED_SEQUENCE_EXPLANATION_PREDICATE
+                        | REMOVED_SEQUENCE_EXPLANATION_PREDICATE
                 ),
                 Intent::CorrectCalculationSequenceStep { .. } => matches!(
                     *predicate,
@@ -4059,6 +4063,9 @@ fn inspect(
                 ),
                 Intent::AppendCalculationSequenceStep { .. } => {
                     *predicate == SEQUENCE_APPEND_PREDICATE
+                }
+                Intent::RemoveCalculationSequenceStep { .. } => {
+                    *predicate == SEQUENCE_REMOVE_PREDICATE
                 }
                 _ => false,
             });
@@ -4086,6 +4093,7 @@ fn inspect(
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
                 | REWIRED_SEQUENCE_EXPLANATION_PREDICATE
                 | APPENDED_SEQUENCE_EXPLANATION_PREDICATE
+                | REMOVED_SEQUENCE_EXPLANATION_PREDICATE
         )
     )
     .then(Instant::now);
@@ -7609,6 +7617,159 @@ mod tests {
         assert_eq!(read_graph(&store, &recovered), expected_graph);
         let confirmed = store.actions("alice", "case").unwrap();
         assert_eq!(confirmed.len(), 1);
+        drop(store);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+        assert_eq!(engine.reconcile("alice", "case").unwrap(), recovered);
+        assert_eq!(engine.execute("alice", original_request).unwrap(), original);
+        assert_eq!(engine.store.actions("alice", "case").unwrap(), confirmed);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn removed_sequence_step_reconciles_reduced_graph_without_resend() {
+        let read_graph = |store: &Store, result: &ResultRecord| -> serde_json::Value {
+            serde_json::from_slice(
+                &store
+                    .get_bytes(
+                        "alice",
+                        "case",
+                        result.execution_graph_ref.as_ref().unwrap(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let original_request = RequestEnvelope::new(
+            "case",
+            "sequence",
+            "alice",
+            "計算手順を実行して:\nbase: 2+3\nspare: 8/4\nfinal: @{base}*2",
+        );
+        let original = engine.execute("alice", original_request.clone()).unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+        let original_graph = read_graph(&engine.store, &original);
+        assert!(original_graph[1].get("sequence-spare").is_some());
+        let mut request =
+            RequestEnvelope::new("case", "remove", "alice", "計算手順の spare を削除");
+        request.budget.max_actions = 9;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        assert_eq!(result.calculation.as_ref().unwrap().exact_value, "10");
+        let reduced_graph = read_graph(&engine.store, &result);
+        assert_eq!(reduced_graph.as_array().unwrap().len(), 6);
+        assert!(reduced_graph[1].get("sequence-spare").is_none());
+        for id in ["sequence-base", "sequence-final"] {
+            assert_eq!(reduced_graph[1][id], original_graph[1][id]);
+        }
+        assert_eq!(
+            reduced_graph[5]["sequence-final"]["sequence-base"],
+            reduced_graph[1]["sequence-base"]
+        );
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        let bundle = state.bundle.as_ref().unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            crate::input::SEQUENCE_REMOVE_PARSER_VERSION
+        );
+        assert!(matches!(
+            bundle.meaning.intent,
+            Intent::RemoveCalculationSequenceStep { .. }
+        ));
+        let goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", state.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.required_predicates[0], SEQUENCE_REMOVE_PREDICATE);
+        let mut nodes: Vec<GoalNode> = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", &goal.required_graph_ref)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!nodes.iter().any(|node| node.id == "sequence-spare"));
+        nodes.push(GoalNode {
+            id: "sequence-spare".into(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: Vec::new(),
+        });
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        let retained = state.result.as_ref().unwrap();
+        let mut wrong_graph = state.clone();
+        let mut wrong_goal = goal.clone();
+        wrong_goal.required_graph_ref = store.put_artifact("alice", "case", &nodes).unwrap();
+        wrong_graph.goal_sha256 = Some(store.put_artifact("alice", "case", &wrong_goal).unwrap());
+        let error = inspect(&store, "alice", &wrong_graph, retained).unwrap_err();
+        assert!(
+            error.to_string().contains("UNSUPPORTED_RECOVERY_GRAPH"),
+            "{error:?}"
+        );
+        let mut wrong_marker = state.clone();
+        let mut wrong_goal = goal;
+        wrong_goal.required_predicates[0] = SEQUENCE_APPEND_PREDICATE.into();
+        wrong_marker.goal_sha256 = Some(store.put_artifact("alice", "case", &wrong_goal).unwrap());
+        let error = inspect(&store, "alice", &wrong_marker, retained).unwrap_err();
+        assert!(
+            error.to_string().contains("UNSUPPORTED_RECOVERY_GOAL"),
+            "{error:?}"
+        );
+        let mut malformed_history = state.clone();
+        malformed_history
+            .prior_results
+            .get_mut(&original.id)
+            .unwrap()
+            .dependencies
+            .swap(0, 1);
+        let error = inspect(&store, "alice", &malformed_history, retained).unwrap_err();
+        assert!(
+            error.to_string().contains("CALCULATION_CONTEXT_"),
+            "{error:?}"
+        );
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.calculation, result.calculation);
+        assert_eq!(recovered.dependencies, result.dependencies);
+        assert_eq!(recovered.content_plan, result.content_plan);
+        assert_eq!(recovered.render, result.render);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let mut expected_graph = reduced_graph;
+        expected_graph[1]["file"] = digest(&canonical(&recovered.receipts[0]).unwrap()).into();
+        assert_eq!(read_graph(&store, &recovered), expected_graph);
+        let confirmed = store.actions("alice", "case").unwrap();
+        assert_eq!(confirmed.len(), 1);
+        assert_eq!(confirmed[0].phase, EffectPhase::Confirmed);
         drop(store);
         let mut engine = Engine::open(&fixture.state).unwrap();
         assert_eq!(engine.execute("alice", request).unwrap(), recovered);

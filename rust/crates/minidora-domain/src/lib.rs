@@ -271,6 +271,9 @@ pub enum Intent {
         step_id: String,
         expression: SourceSpan,
     },
+    RemoveCalculationSequenceStep {
+        step_id: String,
+    },
     CorrectCalculation {
         operand_index: usize,
         replacement: String,

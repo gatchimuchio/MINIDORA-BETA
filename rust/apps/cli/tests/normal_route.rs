@@ -1637,6 +1637,108 @@ fn calculation_sequence_route_appends_a_stage_using_the_actual_previous_result()
 }
 
 #[test]
+fn calculation_sequence_route_removes_only_an_unreferenced_stage() {
+    let scratch = Scratch::new();
+    let source = "calculation-sequence:\nbase: 2+3\nspare: 40+2\nfinal: @{base}*2";
+    let original_args = ["--input", "remove-source", source];
+    let original = record(&execute(&scratch.0, "owner", &original_args));
+    let selected = original["id"].as_str().unwrap();
+    let remove = |input, text| {
+        execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                input,
+                "--context",
+                selected,
+                "--max-actions",
+                "8",
+                text,
+            ],
+        )
+    };
+
+    let request = "計算手順の spare を削除";
+    let removed = record(&remove("remove-spare", request));
+    assert_eq!(removed["calculation"]["exact_value"], "10");
+    assert_eq!(
+        removed["text"],
+        "削除した手順: spare\nbase: 2+3 = 5\nfinal: (5)*2 = 10"
+    );
+    assert_eq!(removed["dependencies"][0], original["id"]);
+    assert_eq!(removed["dependencies"][2], original["dependencies"][0]);
+    assert_eq!(removed["dependencies"][3], original["dependencies"][2]);
+    assert_eq!(removed["dependencies"].as_array().unwrap().len(), 5);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &removed["dependencies"][1]);
+    assert_eq!(proof["kind"], "minidora-calculation-sequence-remove-v1");
+    assert_eq!(proof["removed_step_source_input_id"], original["id"]);
+    assert_eq!(
+        proof["removed_step_source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    assert_eq!(proof["removal_input_id"], removed["id"]);
+    assert_eq!(
+        proof["removal_raw_sha256"],
+        minidora_domain::digest(request.as_bytes())
+    );
+    assert_eq!(proof["removed_step"]["id"], "spare");
+    assert_eq!(proof["removed_step"]["expression"]["text"], "40+2");
+    assert_eq!(proof["previous_final_step_id"], "final");
+    assert_eq!(proof["revised_final_step_id"], "final");
+    let graph = sequence_artifact(&store, &removed["execution_graph_ref"]);
+    assert!(
+        !graph[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["id"] == "sequence-spare")
+    );
+
+    let terminal = record(&remove("remove-terminal", "計算手順の final を削除"));
+    assert_eq!(terminal["calculation"]["exact_value"], "42");
+    let terminal_proof = sequence_artifact(&store, &terminal["dependencies"][1]);
+    assert_eq!(terminal_proof["previous_final_step_id"], "final");
+    assert_eq!(terminal_proof["revised_final_step_id"], "spare");
+    assert_eq!(record(&remove("remove-spare", request)), removed);
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &original_args)),
+        original
+    );
+
+    let blocked = stopped(
+        &remove("remove-consumed", "計算手順の base を削除"),
+        2,
+        "SUSPEND",
+    );
+    let reason = blocked["reason"].as_str().unwrap();
+    assert!(reason.starts_with("SEQUENCE_REMOVE_STEP_IN_USE:") && reason.contains("final"));
+    let target = scratch.0.join("question-output.txt");
+    let path = target.to_str().unwrap();
+    let question = execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "remove-question",
+            "--context",
+            selected,
+            "--output",
+            path,
+            "--allow-write",
+            path,
+            "計算手順の spare を削除？。",
+        ],
+    );
+    let unresolved = stopped(&question, 2, "SUSPEND");
+    let reason = unresolved["reason"].as_str().unwrap();
+    assert!(reason.contains("CAPABILITY_UNAVAILABLE") && reason.contains("疑問形"));
+    assert!(!target.exists());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");

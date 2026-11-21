@@ -22,6 +22,8 @@ pub(crate) const SEQUENCE_REWIRE_PARSER_VERSION: &str =
     "declarative-ja-en-v120-calculation-sequence-rewire";
 pub(crate) const SEQUENCE_APPEND_PARSER_VERSION: &str =
     "declarative-ja-en-v121-calculation-sequence-append";
+pub(crate) const SEQUENCE_REMOVE_PARSER_VERSION: &str =
+    "declarative-ja-en-v122-calculation-sequence-remove";
 pub(crate) const MAX_CALCULATION_SEQUENCE_STEPS: usize = 16;
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
@@ -267,7 +269,8 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
         Intent::CorrectCalculationSequenceStep { .. }
-        | Intent::AppendCalculationSequenceStep { .. } => {
+        | Intent::AppendCalculationSequenceStep { .. }
+        | Intent::RemoveCalculationSequenceStep { .. } => {
             sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
@@ -1899,8 +1902,33 @@ pub(crate) fn sequence_edit_parser(intent: &Intent) -> Option<&'static str> {
         } => Some(SEQUENCE_REWIRE_PARSER_VERSION),
         Intent::CorrectCalculationSequenceStep { .. } => Some(SEQUENCE_CORRECTION_PARSER_VERSION),
         Intent::AppendCalculationSequenceStep { .. } => Some(SEQUENCE_APPEND_PARSER_VERSION),
+        Intent::RemoveCalculationSequenceStep { .. } => Some(SEQUENCE_REMOVE_PARSER_VERSION),
         _ => None,
     }
+}
+
+fn calculation_sequence_remove_intent(text: &str) -> Result<Option<Intent>> {
+    let command = terminal_trim(text);
+    if !command.starts_with("計算手順の")
+        || !(command.ends_with("を削除") || command.ends_with("を削除して"))
+    {
+        return Ok(None);
+    }
+    if text.contains(['?', '？']) {
+        return Ok(Some(Intent::Unknown {
+            reason: "手順を削除する場合は、疑問形を使わずに指示してください。".into(),
+        }));
+    }
+    let expression =
+        regex(r"^計算手順の[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を削除(?:して)?$")?;
+    Ok(Some(match expression.captures(command) {
+        Some(captures) => Intent::RemoveCalculationSequenceStep {
+            step_id: captures[1].to_owned(),
+        },
+        None => Intent::Unknown {
+            reason: "「計算手順の spare を削除」の形式で、手順IDを一つ指定してください。".into(),
+        },
+    }))
 }
 
 fn calculation_sequence_append_intent(text: &str) -> Result<Option<Intent>> {
@@ -3367,6 +3395,9 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(intent) = calculation_sequence_remove_intent(text)? {
+        return Ok(intent);
+    }
     if let Some(intent) = calculation_sequence_append_intent(text)? {
         return Ok(intent);
     }
