@@ -2158,10 +2158,26 @@ impl Store {
                 ));
             }
         }
-        for fact in &memory.facts {
-            let Some(evidence) = &fact.source_evidence else {
-                continue;
-            };
+        let mut evidence_facts = memory
+            .facts
+            .iter()
+            .filter_map(|fact| Some((fact, fact.source_evidence.as_ref()?)))
+            .peekable();
+        if evidence_facts.peek().is_none() {
+            return Ok(());
+        }
+        // All source lookups and case proofs use this connection's read
+        // snapshot. A caller inside a transaction already owns that snapshot.
+        let transaction = if self.connection.is_autocommit() {
+            Some(sql(Transaction::new_unchecked(
+                &self.connection,
+                TransactionBehavior::Deferred,
+            ))?)
+        } else {
+            None
+        };
+        let mut verified_cases = BTreeSet::new();
+        for (fact, evidence) in evidence_facts {
             let source_key: Option<(String, String, i64)> = sql(self.connection.query_row(
                 "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2 ORDER BY i.rowid LIMIT 1",
                 params![actor, fact.source_input],
@@ -2179,7 +2195,13 @@ impl Store {
                     "fact source evidence has a negative input version",
                 )
             })?;
-            let Some((_, bundle)) = self.get_input_bundle(actor, &case, &input, version)? else {
+            let case_verified = verified_cases.contains(&case);
+            let original = if case_verified {
+                self.read_input_bundle(&self.connection, actor, &case, &input, version)?
+            } else {
+                self.get_input_bundle(actor, &case, &input, version)?
+            };
+            let Some((_, bundle)) = original else {
                 return Err(failure(
                     "SOURCE_EVIDENCE_UNSEALED",
                     "fact source evidence does not resolve to a retained sealed input",
@@ -2191,6 +2213,12 @@ impl Store {
                     "fact source evidence differs from its immutable sealed input",
                 ));
             }
+            if !case_verified {
+                verified_cases.insert(case);
+            }
+        }
+        if let Some(transaction) = transaction {
+            sql(transaction.commit())?;
         }
         Ok(())
     }
@@ -2877,6 +2905,62 @@ mod tests {
                 .unwrap(),
             Some(original)
         );
+    }
+
+    #[test]
+    fn memory_source_validation_shares_case_history_only_within_one_read() {
+        let directory = Directory::new();
+        let mut engine = crate::core::Engine::open(&directory.0).unwrap();
+        for (input, text) in [("input-a", "隼は鳥"), ("input-b", "梟は鳥")] {
+            let request = RequestEnvelope::new("case-a", input, "alice", text);
+            let result = engine.execute("alice", request).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit);
+        }
+        drop(engine);
+
+        let store = Store::open(&directory.0).unwrap();
+        let memory = store.load_memory("alice").unwrap();
+        assert_eq!(memory.facts.len(), 2);
+        assert!(
+            memory
+                .facts
+                .iter()
+                .all(|fact| fact.source_evidence.is_some())
+        );
+        assert_ne!(memory.facts[0].source_input, memory.facts[1].source_input);
+        store
+            .with_verified_case_history("alice", "case-a", |_| {
+                assert_eq!(store.load_memory("alice")?, memory);
+                assert_eq!(
+                    store.load_memory_revision("alice", memory.revision)?,
+                    Some(memory.clone())
+                );
+                assert!(!store.connection.is_autocommit());
+                Ok(())
+            })
+            .unwrap();
+
+        let mut forged = memory.clone();
+        forged.facts[1]
+            .source_evidence
+            .as_mut()
+            .unwrap()
+            .semantic_signature
+            .clear();
+        assert!(matches!(
+            store.save_memory("alice", &forged),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "SOURCE_EVIDENCE_MISMATCH"
+        ));
+        assert!(store.connection.is_autocommit());
+        assert_eq!(store.load_memory("alice").unwrap(), memory);
+
+        let head = store.latest_case_ref("case-a").unwrap().unwrap();
+        fs::write(store.blobs.join(head), b"corrupt case revision").unwrap();
+        assert!(matches!(
+            store.load_memory("alice"),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "INTEGRITY_FAILURE"
+        ));
+        assert!(store.connection.is_autocommit());
     }
 
     #[test]
