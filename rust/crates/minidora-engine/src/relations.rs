@@ -2683,54 +2683,56 @@ pub fn invalidate(memory: &mut MemoryState, id: &str) -> Result<Vec<String>> {
             "no fact or rule has the requested identity",
         ));
     }
-    let mut invalid = BTreeSet::from([id.to_string()]);
-    loop {
-        let before = invalid.len();
-        for (record_id, dependencies) in memory
-            .facts
-            .iter()
-            .map(|fact| (&fact.id, &fact.dependencies))
-            .chain(
-                memory
-                    .rules
-                    .iter()
-                    .map(|rule| (&rule.id, &rule.dependencies)),
-            )
-            .chain(
-                memory
-                    .conditions
-                    .iter()
-                    .map(|condition| (&condition.id, &condition.dependencies)),
-            )
-        {
-            if dependencies
+    let mut dependents = BTreeMap::<&str, Vec<&str>>::new();
+    for (record_id, dependencies) in memory
+        .facts
+        .iter()
+        .map(|fact| (&fact.id, &fact.dependencies))
+        .chain(
+            memory
+                .rules
                 .iter()
-                .any(|dependency| invalid.contains(dependency))
-            {
-                invalid.insert(record_id.clone());
-            }
-        }
-        if invalid.len() == before {
-            break;
+                .map(|rule| (&rule.id, &rule.dependencies)),
+        )
+        .chain(
+            memory
+                .conditions
+                .iter()
+                .map(|condition| (&condition.id, &condition.dependencies)),
+        )
+    {
+        for dependency in dependencies {
+            dependents.entry(dependency).or_default().push(record_id);
         }
     }
+    // Already inactive records still carry the dependency path to later records.
+    let mut invalid = BTreeSet::from([id]);
+    let mut pending = VecDeque::from([id]);
+    while let Some(dependency) = pending.pop_front() {
+        for &record_id in dependents.get(dependency).into_iter().flatten() {
+            if invalid.insert(record_id) {
+                pending.push_back(record_id);
+            }
+        }
+    }
+    let invalid: Vec<String> = invalid.into_iter().map(str::to_owned).collect();
     for fact in &mut memory.facts {
-        if invalid.contains(&fact.id) {
+        if invalid.binary_search(&fact.id).is_ok() {
             fact.valid = false;
         }
     }
     for rule in &mut memory.rules {
-        if invalid.contains(&rule.id) {
+        if invalid.binary_search(&rule.id).is_ok() {
             rule.valid = false;
         }
     }
     for condition in &mut memory.conditions {
-        if invalid.contains(&condition.id) {
+        if invalid.binary_search(&condition.id).is_ok() {
             condition.valid = false;
         }
     }
     bump(memory)?;
-    Ok(invalid.into_iter().collect())
+    Ok(invalid)
 }
 
 pub fn format_proposition(proposition: &Proposition) -> String {
@@ -2791,6 +2793,86 @@ mod tests {
             scope: "premise-world".into(),
             temporal_scope: None,
             condition_refs: Default::default(),
+        }
+    }
+
+    #[test]
+    fn invalidation_follows_record_dependencies_through_inactive_and_cyclic_paths() {
+        let mut memory = MemoryState::default();
+        let ready = ConditionDefinition {
+            condition_id: "ready".into(),
+            subject: "sensor".into(),
+            scope: "premise-world".into(),
+            expression: ConditionExpression::Fact {
+                predicate: "is".into(),
+                object: "ready".into(),
+            },
+            valid_from: None,
+            valid_until: None,
+            dependencies: BTreeSet::new(),
+        };
+        let root = define_condition(&mut memory, ready.clone(), "root-input").unwrap();
+        let dependent = define_condition(
+            &mut memory,
+            ConditionDefinition {
+                condition_id: "monitored".into(),
+                expression: ConditionExpression::ConditionRef {
+                    condition_id: "ready".into(),
+                },
+                dependencies: BTreeSet::from(["ready".into()]),
+                ..ready
+            },
+            "dependent-input",
+        )
+        .unwrap();
+        let rule = add_rule(&mut memory, p("$x", "ready"), p("$x", "seen"), "rule-input").unwrap();
+        memory.rules[0].dependencies.push(dependent.id.clone());
+        memory.rules[0].valid = false;
+
+        let mut guarded = p("sensor", "recorded");
+        guarded.condition_refs.insert("ready".into());
+        assert_fact(&mut memory, guarded, "guarded-input").unwrap();
+        let fact_id = |index| format!("chain:{index:03}");
+        for index in (0..128).rev() {
+            let dependencies = if index == 0 {
+                // The bridge reaches a cycle between the first and last Facts.
+                vec![rule.id.clone(), fact_id(127), rule.id.clone()]
+            } else {
+                vec![fact_id(index - 1)]
+            };
+            memory.facts.push(Fact {
+                id: fact_id(index),
+                proposition: p("sensor", "seen"),
+                guarantee: Guarantee::Derived,
+                source_input: "chain-input".into(),
+                source_evidence: None,
+                dependencies,
+                valid: true,
+            });
+        }
+
+        let before = memory.clone();
+        assert!(matches!(
+            invalidate(&mut memory, "unknown"),
+            Err(Error::Contract { code, .. }) if code == "UNKNOWN_MEMORY_ID"
+        ));
+        assert_eq!(memory, before);
+
+        let mut affected = vec![root.id.clone(), dependent.id.clone(), rule.id];
+        affected.extend((0..128).map(fact_id));
+        affected.sort();
+        let mut expected = before;
+        expected
+            .conditions
+            .iter_mut()
+            .for_each(|record| record.valid = false);
+        expected.facts[1..]
+            .iter_mut()
+            .for_each(|record| record.valid = false);
+        for _ in 0..2 {
+            expected.revision += 1;
+            assert_eq!(invalidate(&mut memory, &root.id).unwrap(), affected);
+            assert_eq!(memory, expected);
         }
     }
 
