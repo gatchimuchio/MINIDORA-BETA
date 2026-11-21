@@ -2177,7 +2177,17 @@ impl Store {
             None
         };
         let mut verified_cases = BTreeSet::new();
+        let mut verified_evidence = BTreeMap::new();
         for (fact, evidence) in evidence_facts {
+            if let Some(verified) = verified_evidence.get(fact.source_input.as_str()) {
+                if *verified != evidence {
+                    return Err(failure(
+                        "SOURCE_EVIDENCE_MISMATCH",
+                        "fact source evidence differs from its immutable sealed input",
+                    ));
+                }
+                continue;
+            }
             let source_key: Option<(String, String, i64)> = sql(self.connection.query_row(
                 "SELECT i.case_id,i.input_id,i.input_version FROM input_identity i JOIN case_registry c ON c.case_id=i.case_id WHERE c.actor_id=?1 AND i.fingerprint=?2 ORDER BY i.rowid LIMIT 1",
                 params![actor, fact.source_input],
@@ -2216,6 +2226,9 @@ impl Store {
             if !case_verified {
                 verified_cases.insert(case);
             }
+            // Borrow the Fact's exact evidence only after comparing it to the
+            // sealed input in this actor's current read snapshot.
+            verified_evidence.insert(fact.source_input.as_str(), evidence);
         }
         if let Some(transaction) = transaction {
             sql(transaction.commit())?;
@@ -2961,6 +2974,68 @@ mod tests {
             Err(minidora_domain::Error::Contract { code, .. }) if code == "INTEGRITY_FAILURE"
         ));
         assert!(store.connection.is_autocommit());
+    }
+
+    #[test]
+    fn correction_facts_share_verified_input_but_each_must_match_its_evidence() {
+        let directory = Directory::new();
+        let premise =
+            RequestEnvelope::new("case-a", "premise", "alice", "[scope=別室]補助計器は携帯型");
+        let correction = RequestEnvelope::new(
+            "case-a",
+            "correction",
+            "alice",
+            "[scope=別室]訂正: 補助計器は携帯型ではなく据置型です",
+        );
+        let fingerprint = identity(&correction).unwrap();
+        let mut engine = crate::core::Engine::open(&directory.0).unwrap();
+        for request in [premise, correction] {
+            let result = engine.execute("alice", request).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        }
+        drop(engine);
+
+        let store = Store::open(&directory.0).unwrap();
+        let memory = store.load_memory("alice").unwrap();
+        let [first, second] = memory
+            .facts
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, fact)| (fact.source_input == fingerprint).then_some(ordinal))
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("the correction records both negation and replacement");
+        assert!(memory.facts[first].source_evidence.is_some());
+        assert_eq!(
+            memory.facts[first].source_evidence,
+            memory.facts[second].source_evidence
+        );
+
+        let mut forged = memory.clone();
+        forged.facts[second]
+            .source_evidence
+            .as_mut()
+            .unwrap()
+            .raw_sha256 = digest(b"not the correction");
+        assert!(matches!(
+            store.save_memory("alice", &forged),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "SOURCE_EVIDENCE_MISMATCH"
+        ));
+        assert_eq!(store.load_memory("alice").unwrap(), memory);
+
+        let request_sha: String = store
+            .connection
+            .query_row(
+                "SELECT request_sha256 FROM input_identity WHERE case_id='case-a' AND input_id='correction'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        fs::write(store.blobs.join(request_sha), b"corrupt correction input").unwrap();
+        assert!(matches!(
+            store.load_memory("alice"),
+            Err(minidora_domain::Error::Contract { code, .. }) if code == "INTEGRITY_FAILURE"
+        ));
     }
 
     #[test]
