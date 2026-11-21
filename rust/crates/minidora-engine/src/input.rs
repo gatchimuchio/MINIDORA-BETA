@@ -23,6 +23,7 @@ const TIMED_CONDITION_DEFINITION_PARSER_VERSION: &str =
     "declarative-ja-en-v115-timed-condition-definition";
 const COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION: &str =
     "declarative-ja-en-v116-composite-condition-definition";
+const INLINE_FACT_CONDITION_PARSER_VERSION: &str = "declarative-ja-en-v117-inline-fact-condition";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -256,6 +257,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
+        Intent::DefineCondition { .. }
+            if source_roles.iter().any(|(role, spans)| {
+                role.ends_with("/kind") && spans.iter().any(|span| span.text == "fact")
+            }) =>
+        {
+            INLINE_FACT_CONDITION_PARSER_VERSION
+        }
         Intent::DefineCondition { definition } if !definition.dependencies.is_empty() => {
             COMPOSITE_CONDITION_DEFINITION_PARSER_VERSION
         }
@@ -4526,7 +4534,7 @@ fn relation_qualifiers(
     while let Some(opened) = body.strip_prefix('[') {
         if matches!(context, QualifierContext::ConditionDefinition)
             && qualifiers.subject.is_some()
-            && opened.starts_with("ref=")
+            && (opened.starts_with("ref=") || opened.starts_with("fact="))
         {
             break;
         }
@@ -4612,9 +4620,11 @@ struct CompositeConditionSource {
 struct ConditionExpressionSource<'a> {
     text: &'a str,
     remaining: &'a str,
+    subject: &'a str,
     end: usize,
     nodes_left: usize,
     roles: BTreeMap<String, Vec<SourceSpan>>,
+    fact_subjects: Vec<SourceSpan>,
     references: BTreeMap<String, Vec<SourceSpan>>,
 }
 
@@ -4631,6 +4641,47 @@ impl ConditionExpressionSource<'_> {
         self.nodes_left = self.nodes_left.checked_sub(1)?;
         self.remaining = self.remaining.trim_start();
         let start = self.end - self.remaining.len();
+        if let Some(fact) = self.remaining.strip_prefix("[fact=") {
+            let (raw_clause, rest) = fact.split_once(']')?;
+            let clause = terminal_trim(raw_clause);
+            if raw_clause.contains(['[', '?', '？'])
+                || raw_clause.chars().any(char::is_control)
+                || clause.ends_with('か')
+                || ["じゃない", "じゃありません", "じゃ無い"]
+                    .into_iter()
+                    .any(|marker| clause.contains(marker))
+            {
+                return None;
+            }
+            let proposition = parse_proposition(clause, false).ok()??;
+            if proposition.subject != self.subject
+                || proposition.negative
+                || !crate::relations::is_ground(&proposition)
+            {
+                return None;
+            }
+            let clause_start = self.end - fact.trim_start().len();
+            let mut roles = japanese_qualified_source_roles(
+                self.text,
+                clause,
+                clause_start,
+                clause_start,
+                &RelationQualifiers::default(),
+                &proposition,
+                role,
+            )
+            .ok()??;
+            self.fact_subjects
+                .extend(roles.remove(&format!("{role}/subject"))?);
+            self.roles.extend(roles);
+            let marker = source_span_at(self.text, start + 1, start + "[fact".len())?;
+            self.roles.insert(format!("{role}/kind"), vec![marker]);
+            self.remaining = rest;
+            return Some(ConditionExpression::Fact {
+                predicate: proposition.predicate,
+                object: proposition.object,
+            });
+        }
         if let Some(reference) = self.remaining.strip_prefix("[ref=") {
             let (raw, rest) = reference.split_once(']')?;
             let condition_id = raw.trim();
@@ -4695,9 +4746,11 @@ fn composite_condition_source(
     let mut source = ConditionExpressionSource {
         text,
         remaining: body,
+        subject,
         end: body_offset + body.len(),
         nodes_left: crate::relations::MAX_CONDITION_EXPRESSION_NODES,
         roles: BTreeMap::new(),
+        fact_subjects: Vec::new(),
         references: BTreeMap::new(),
     };
     let expression = source.expression(&format!("{CONDITION_ROLE_ROOT}/expression"))?;
@@ -4737,6 +4790,10 @@ fn composite_condition_source(
             .roles
             .insert(format!("{CONDITION_ROLE_ROOT}/dependencies/{index}"), spans);
     }
+    source
+        .roles
+        .get_mut(&format!("{CONDITION_ROLE_ROOT}/subject"))?
+        .extend(source.fact_subjects);
     Some(CompositeConditionSource {
         definition,
         roles: source.roles,
@@ -4767,7 +4824,7 @@ fn condition_definition_intent(text: &str) -> Result<Option<Intent>> {
             composite_condition_source(payload, body, statement.len() - body.len(), 0, &qualifiers)
                 .map_or_else(
                     || Intent::Unknown {
-                        reason: "複合条件は [subject=...] と [ref=条件ID]、AND(...), OR(...), NOT(...) で指定してください。".into(),
+                        reason: "複合条件は [subject=...] と [ref=条件ID] または同じ主体の [fact=主体は値] を使い、AND(...), OR(...), NOT(...) で指定してください。否定は NOT を使います。".into(),
                     },
                     |source| Intent::DefineCondition { definition: source.definition },
                 ),
@@ -5003,6 +5060,71 @@ mod tests {
     }
 
     #[test]
+    fn inline_condition_facts_seal_scoped_atoms_and_exact_source_roles() {
+        let text = "　条件定義： [scope=作業室][condition=運転可][subject=ユリ] AND([fact= ユリは校正済み ], OR([ref=点検済], NOT([fact=ユリが停止中])))。　";
+        let bundle = seal(&RequestEnvelope::new("c", "inline", "actor", text), None).unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            INLINE_FACT_CONDITION_PARSER_VERSION
+        );
+        let Intent::DefineCondition { definition } = &bundle.meaning.intent else {
+            panic!("{:?}", bundle.meaning.intent);
+        };
+        assert_eq!(definition.subject, "ユリ");
+        assert_eq!(definition.scope, "作業室");
+        assert_eq!(definition.dependencies, ["点検済".into()].into());
+        let fact = |object: &str| ConditionExpression::Fact {
+            predicate: "is".into(),
+            object: object.into(),
+        };
+        assert_eq!(
+            definition.expression,
+            ConditionExpression::And {
+                operands: vec![
+                    fact("校正済み"),
+                    ConditionExpression::Or {
+                        operands: vec![
+                            ConditionExpression::ConditionRef {
+                                condition_id: "点検済".into()
+                            },
+                            ConditionExpression::Not {
+                                operand: Box::new(fact("停止中"))
+                            },
+                        ],
+                    },
+                ],
+            }
+        );
+        for (role, value) in [
+            ("expression/operands/0/predicate", "は"),
+            ("expression/operands/0/object", "校正済み"),
+            ("expression/operands/1/operands/1/operand/predicate", "が"),
+            ("expression/operands/1/operands/1/operand/object", "停止中"),
+            ("dependencies/0", "点検済"),
+        ] {
+            let start = text.find(value).unwrap();
+            assert_eq!(
+                bundle.meaning.source_roles[&format!("{CONDITION_ROLE_ROOT}/{role}")],
+                [SourceSpan {
+                    start,
+                    end: start + value.len(),
+                    text: value.into()
+                }]
+            );
+        }
+        let subject_spans = &bundle.meaning.source_roles[&format!("{CONDITION_ROLE_ROOT}/subject")];
+        assert_eq!(
+            subject_spans
+                .iter()
+                .map(|span| span.start)
+                .collect::<Vec<_>>(),
+            text.match_indices("ユリ")
+                .map(|(start, _)| start)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn composite_condition_requires_complete_bounded_expression() {
         let declaration =
             |expression: &str| format!("条件定義: [condition=監視][subject=ユリ] {expression}");
@@ -5017,6 +5139,16 @@ mod tests {
             "AND([ref=校正] [ref=点検])",
             "NOT([ref= ])",
             "NOT([ref=[校正])",
+            "AND([fact=サクラは校正済み], [ref=点検])",
+            "AND([fact=ユリは校正済みではない], [ref=点検])",
+            "AND([fact=ユリは校正済みじゃないです], [ref=点検])",
+            "AND([fact=ユリは校正済みじゃありません], [ref=点検])",
+            "AND([fact=[scope=他室]ユリは校正済み], [ref=点検])",
+            "AND([fact=ユリは校正済み？], [ref=点検])",
+            "AND([fact=ユリは校正済みか], [ref=点検])",
+            "AND([fact=ユリは校正済みでしょうか], [ref=点検])",
+            "AND([fact=ユリは校正済みなのか], [ref=点検])",
+            "AND([fact=ユリは校正済みかどうか], [ref=点検])",
             "「NOT([ref=校正])」",
             &deep,
             &wide,
@@ -5031,6 +5163,8 @@ mod tests {
         }
         for text in [
             "条件定義: [condition=監視] AND([ref=校正], [ref=点検])",
+            "条件定義: [condition=監視] [fact=ユリは校正済み]",
+            "条件定義: [condition=監視][subject=$subject] [fact=$subjectは校正済み]",
             "条件定義: [condition=監視][subject=ユリ] NOT([ref=校正])？",
             "条件定義: [condition=監視][subject=それ] NOT([ref=校正])",
             "[subject=ユリ] ユリは校正済み",
@@ -5042,7 +5176,13 @@ mod tests {
         }
         let widest = format!("OR({})", ["[ref=校正]"; 16].join(","));
         let deepest = format!("{}[ref=校正]{}", "NOT(".repeat(63), ")".repeat(63));
-        for expression in ["[ref=校正]", &widest, &deepest] {
+        for expression in [
+            "[ref=校正]",
+            "[fact=ユリは校正済み]",
+            "NOT([fact=ユリは校正済み])",
+            &widest,
+            &deepest,
+        ] {
             assert!(
                 matches!(
                     interpret(&declaration(expression)).unwrap(),
