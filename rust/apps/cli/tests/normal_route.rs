@@ -1739,6 +1739,111 @@ fn calculation_sequence_route_removes_only_an_unreferenced_stage() {
 }
 
 #[test]
+fn calculation_sequence_route_moves_stage_only_when_dependencies_stay_earlier() {
+    let scratch = Scratch::new();
+    let source = "calculation-sequence:\nbase: 2+3\nspare: 40+2\nfinal: @{base}*2";
+    let original_args = ["--input", "move-source", source];
+    let original = record(&execute(&scratch.0, "owner", &original_args));
+    let selected = original["id"].as_str().unwrap();
+    let request = "計算手順の spare を final の後に移動";
+    let args = [
+        "--input",
+        "move-spare",
+        "--context",
+        selected,
+        "--max-actions",
+        "9",
+        request,
+    ];
+    let moved = record(&execute(&scratch.0, "owner", &args));
+    assert_eq!(moved["calculation"]["exact_value"], "42");
+    assert_eq!(
+        moved["text"],
+        "移動した手順: spare\nbase: 2+3 = 5\nfinal: (5)*2 = 10\nspare: 40+2 = 42"
+    );
+    let dependencies = moved["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 6);
+    assert_eq!(dependencies[0], original["id"]);
+    assert_eq!(
+        &dependencies[2..5],
+        &[
+            original["dependencies"][0].clone(),
+            original["dependencies"][2].clone(),
+            original["dependencies"][1].clone()
+        ]
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof = sequence_artifact(&store, &dependencies[1]);
+    assert_eq!(proof["kind"], "minidora-calculation-sequence-move-v1");
+    assert_eq!(proof["move_input_id"], moved["id"]);
+    assert_eq!(
+        proof["move_raw_sha256"],
+        minidora_domain::digest(request.as_bytes())
+    );
+    assert_eq!(proof["step_id"], "spare");
+    assert_eq!(proof["anchor_step_id"], "final");
+    assert_eq!(proof["before"], false);
+    assert_eq!(
+        proof["previous_step_order"],
+        serde_json::json!(["base", "spare", "final"])
+    );
+    assert_eq!(
+        proof["revised_step_order"],
+        serde_json::json!(["base", "final", "spare"])
+    );
+    let graph = sequence_artifact(&store, &moved["execution_graph_ref"]);
+    assert_eq!(graph[0][1]["id"], "sequence-final");
+    assert_eq!(
+        graph[0][1]["requires"],
+        serde_json::json!(["sequence-base"])
+    );
+    assert_eq!(graph[0][2]["id"], "sequence-spare");
+    assert_eq!(record(&execute(&scratch.0, "owner", &args)), moved);
+    assert_eq!(
+        record(&execute(&scratch.0, "owner", &original_args)),
+        original
+    );
+
+    let target = scratch.0.join("disallowed-move.txt");
+    let path = target.to_str().unwrap();
+    for (input, text, code) in [
+        (
+            "move-prerequisite",
+            "計算手順の base を final の後に移動",
+            "SEQUENCE_MOVE_DEPENDENCY_ORDER",
+        ),
+        (
+            "move-question",
+            "計算手順の spare を final の後に移動？。",
+            "CAPABILITY_UNAVAILABLE",
+        ),
+    ] {
+        let status = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    input,
+                    "--context",
+                    selected,
+                    "--output",
+                    path,
+                    "--allow-write",
+                    path,
+                    text,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert!(status["reason"].as_str().unwrap().contains(code));
+        assert!(!target.exists());
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn calculation_sequence_route_file_effect_is_confirmed_once() {
     let scratch = Scratch::new();
     let path = scratch.0.join("sequence-result.txt");

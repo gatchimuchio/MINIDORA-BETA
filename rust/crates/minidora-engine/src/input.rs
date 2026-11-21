@@ -24,6 +24,8 @@ pub(crate) const SEQUENCE_APPEND_PARSER_VERSION: &str =
     "declarative-ja-en-v121-calculation-sequence-append";
 pub(crate) const SEQUENCE_REMOVE_PARSER_VERSION: &str =
     "declarative-ja-en-v122-calculation-sequence-remove";
+pub(crate) const SEQUENCE_MOVE_PARSER_VERSION: &str =
+    "declarative-ja-en-v123-calculation-sequence-move";
 pub(crate) const MAX_CALCULATION_SEQUENCE_STEPS: usize = 16;
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
@@ -270,7 +272,8 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
         Intent::CorrectCalculationSequenceStep { .. }
         | Intent::AppendCalculationSequenceStep { .. }
-        | Intent::RemoveCalculationSequenceStep { .. } => {
+        | Intent::RemoveCalculationSequenceStep { .. }
+        | Intent::MoveCalculationSequenceStep { .. } => {
             sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
@@ -1903,8 +1906,36 @@ pub(crate) fn sequence_edit_parser(intent: &Intent) -> Option<&'static str> {
         Intent::CorrectCalculationSequenceStep { .. } => Some(SEQUENCE_CORRECTION_PARSER_VERSION),
         Intent::AppendCalculationSequenceStep { .. } => Some(SEQUENCE_APPEND_PARSER_VERSION),
         Intent::RemoveCalculationSequenceStep { .. } => Some(SEQUENCE_REMOVE_PARSER_VERSION),
+        Intent::MoveCalculationSequenceStep { .. } => Some(SEQUENCE_MOVE_PARSER_VERSION),
         _ => None,
     }
+}
+
+fn calculation_sequence_move_intent(text: &str) -> Result<Option<Intent>> {
+    let command = terminal_trim(text);
+    if !command.starts_with("計算手順の")
+        || !(command.ends_with("に移動") || command.ends_with("に移動して"))
+    {
+        return Ok(None);
+    }
+    if text.contains(['?', '？']) {
+        return Ok(Some(Intent::Unknown {
+            reason: "手順を移動する場合は、疑問形を使わずに指示してください。".into(),
+        }));
+    }
+    let pattern = regex(
+        r"^計算手順の[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*の(前|後)に移動(?:して)?$",
+    )?;
+    Ok(Some(match pattern.captures(command) {
+        Some(captures) => Intent::MoveCalculationSequenceStep {
+            step_id: captures[1].to_owned(),
+            anchor_id: captures[2].to_owned(),
+            before: &captures[3] == "前",
+        },
+        None => Intent::Unknown {
+            reason: "「計算手順の spare を final の後に移動」の形式で、移動する手順とその基準を指定してください。".into(),
+        },
+    }))
 }
 
 fn calculation_sequence_remove_intent(text: &str) -> Result<Option<Intent>> {
@@ -3395,6 +3426,9 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(intent) = calculation_sequence_move_intent(text)? {
+        return Ok(intent);
+    }
     if let Some(intent) = calculation_sequence_remove_intent(text)? {
         return Ok(intent);
     }

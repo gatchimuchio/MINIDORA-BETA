@@ -274,6 +274,11 @@ pub enum Intent {
     RemoveCalculationSequenceStep {
         step_id: String,
     },
+    MoveCalculationSequenceStep {
+        step_id: String,
+        anchor_id: String,
+        before: bool,
+    },
     CorrectCalculation {
         operand_index: usize,
         replacement: String,
