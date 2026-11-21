@@ -1334,6 +1334,62 @@ fn explicit_operand_correction_creates_a_new_version_linked_to_the_actual_result
 }
 
 #[test]
+fn operand_correction_requires_a_step_when_the_context_originated_in_a_sequence() {
+    let scratch = Scratch::new();
+    let sequence = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "sequence",
+            "計算手順を実行して:\nbase: 1 km + 500 m\nfinal: 100 m + @{base}",
+        ],
+    ));
+    assert_eq!(sequence["lifecycle"], "COMMIT");
+    assert_eq!(sequence["calculation"]["exact_value"], "1600 m");
+    let detail = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "detail", "詳しく説明して"],
+    ));
+    let repeated = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "detail-again", "詳しく説明して"],
+    ));
+    for (input, context) in [
+        ("correct-original", sequence),
+        ("correct-detail", detail),
+        ("correct-detail-again", repeated),
+    ] {
+        assert_eq!(context["lifecycle"], "COMMIT");
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    input,
+                    "--context",
+                    context["id"].as_str().unwrap(),
+                    "第二項を600 mに変更して",
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        let reason = result["reason"].as_str().unwrap();
+        assert!(reason.starts_with("SEQUENCE_CORRECTION_REQUIRES_STEP:"));
+        assert_eq!(
+            reason.matches("SEQUENCE_CORRECTION_REQUIRES_STEP").count(),
+            1
+        );
+        assert!(result["calculation"].is_null());
+        assert!(result["receipts"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn explicit_operand_correction_recomputes_other_bounded_binary_operators() {
     for (expression, replacement, expected_expression, expected_initial, expected_corrected) in [
         ("2 * 3", "第二項を4に変更して", "2 * 4", "6", "8"),

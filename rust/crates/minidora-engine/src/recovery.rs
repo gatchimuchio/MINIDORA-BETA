@@ -9,7 +9,8 @@ use crate::{
     core::{
         CHAINED_SEQUENCE_EXPLANATION_PREDICATE, GENERATED_RELATION_EXPLANATION_PREDICATE,
         RELATION_COMPARISON_PREDICATE, RELATION_EXPLANATION_PREDICATE,
-        SEQUENCE_EXPLANATION_PREDICATE, calculation_sequence_nodes, explain_calculation_sequence,
+        SEQUENCE_EXPLANATION_PREDICATE, calculation_sequence_nodes,
+        corrected_calculation_from_context, exact_calculation_unit, explain_calculation_sequence,
         goal_predicates, previous_calculation_sequence, run_calculation_sequence,
         store_execution_graph, validate_goal_render, validate_render, verify_goal_content,
     },
@@ -4014,6 +4015,8 @@ fn inspect(
     let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
+    let requires_verified_correction =
+        bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
     let requires_generated_why = crate::input::uses_generated_relation_explanation(&bundle.meaning);
     let sequence_predicate =
         goal.required_predicates
@@ -4029,6 +4032,7 @@ fn inspect(
     if goal.required_predicates != goal_predicates(&bundle.meaning, true, sequence_predicate)
         && (requires_generated_comparison
             || requires_generated_calculation
+            || requires_verified_correction
             || requires_generated_why
             || explains_sequence
             || goal.required_predicates != legacy_predicates)
@@ -4090,6 +4094,41 @@ fn inspect(
             "actual retained rendering unavailable",
         )
     })?;
+    if requires_verified_correction {
+        let started = Instant::now();
+        let invalid = || {
+            failure(
+                "RECOVERY_CALCULATION_CORRECTION_MISMATCH",
+                "the adopted correction differs from the exact sealed operand and its prior result",
+            )
+        };
+        verify_registered_input(store, bundle, "RECOVERY_CALCULATION_CORRECTION_MISMATCH")?;
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        let calculation = corrected_calculation_from_context(
+            store,
+            bundle,
+            previous,
+            &state.prior_results,
+            started,
+        )?;
+        let unit = exact_calculation_unit(&calculation);
+        if result.calculation.as_ref() != Some(&calculation)
+            || result.guarantee != Guarantee::Computed
+            || plan.guarantee != Guarantee::Computed
+            || result.dependencies.as_slice() != std::slice::from_ref(&previous.id)
+            || !result.evidence.is_empty()
+            || plan.required_units.as_slice() != std::slice::from_ref(&unit)
+            || plan.text != unit
+            || result.text != unit
+        {
+            return Err(invalid());
+        }
+    }
     let saved_comparison_explanation = matches!(&goal.intent, Intent::ExplainPrevious)
         && bundle
             .meaning
@@ -6983,6 +7022,83 @@ mod tests {
             "統計 [0.1,0.2,0.3]",
             "statistics-explanation.txt",
         )
+    }
+
+    #[test]
+    fn operand_correction_recovery_verifies_sealed_change_and_context() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let original = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "original", "alice", "1 km + 500 m"),
+            )
+            .unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit);
+        let detail = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "detail", "alice", "詳しく説明して"),
+            )
+            .unwrap();
+        assert_eq!(detail.lifecycle, Lifecycle::Commit);
+        let mut request =
+            RequestEnvelope::new("case", "correction", "alice", "第二項を600 mに変更して");
+        request.budget.max_actions = 5;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let corrected = engine.execute("alice", request).unwrap();
+        assert_eq!(corrected.lifecycle, Lifecycle::Commit, "{corrected:?}");
+        assert_eq!(corrected.text, "1 km + 600 m = 1600 m");
+        assert_eq!(corrected.dependencies, [detail.id]);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        let mut changed = state.result.as_ref().unwrap().clone();
+        changed.calculation = Some(language::calculate("1 km + 700 m").unwrap());
+        let error = inspect(&store, "alice", &state, &changed).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("RECOVERY_CALCULATION_CORRECTION_MISMATCH")
+        );
+        let mut without_original = state.clone();
+        assert!(
+            without_original
+                .prior_results
+                .remove(&original.id)
+                .is_some()
+        );
+        let error = inspect(
+            &store,
+            "alice",
+            &without_original,
+            state.result.as_ref().unwrap(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("CORRECTION_SOURCE_MISMATCH"));
+        assert_eq!(
+            store.actions("alice", "case").unwrap()[0].phase,
+            EffectPhase::Unknown
+        );
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, corrected.dependencies);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]

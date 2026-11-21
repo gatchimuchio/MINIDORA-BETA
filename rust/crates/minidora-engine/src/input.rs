@@ -14,6 +14,8 @@ const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v87-formatted-relation-comparison";
 pub(crate) const COMPARISON_PARSER_VERSION: &str = "declarative-ja-en-v91-comparison-source-roles";
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
+pub(crate) const CALCULATION_CORRECTION_PARSER_VERSION: &str =
+    "declarative-ja-en-v118-verified-calculation-correction";
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
@@ -256,6 +258,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     let parser_version = match &intent {
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
+        Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. }
             if source_roles.iter().any(|(role, spans)| {

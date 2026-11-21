@@ -510,6 +510,8 @@ const DIRECT_RELATION_COMPARISON_KIND: &str = "CORE_TYPED_RELATION_COMPARISON_V1
 const DIRECT_RELATION_COMPARISON_PARSER: &str = "core-typed-relation-comparison-v1";
 const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
 pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
+pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
+    "EXACT_PREVIOUS_CALCULATION_CORRECTION_V1";
 const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 pub(crate) const GENERATED_RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V2";
@@ -535,6 +537,11 @@ pub(crate) fn goal_predicates(
             predicates.push(GENERATED_CALCULATION_PREDICATE.into());
         }
         Intent::Calculate { .. } => predicates.push(EXACT_CALCULATION_PREDICATE.into()),
+        Intent::CorrectCalculation { .. }
+            if meaning.parser_version == input::CALCULATION_CORRECTION_PARSER_VERSION =>
+        {
+            predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
+        }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::ExplainPrevious => {
             predicates.extend(sequence_explanation.map(str::to_owned));
@@ -579,6 +586,7 @@ fn verify_report_goal_content(
                 | GROUP_MEAN_HYPOTHESIS_PREDICATE
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
+                | CALCULATION_CORRECTION_PREDICATE
                 | SEQUENCE_EXPLANATION_PREDICATE
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
         )
@@ -605,8 +613,128 @@ fn verify_report_goal_content(
     Ok(())
 }
 
-fn exact_calculation_unit(calculation: &Calculation) -> String {
+pub(crate) fn exact_calculation_unit(calculation: &Calculation) -> String {
     format!("{} = {}", calculation.expression, calculation.exact_value)
+}
+
+pub(crate) fn corrected_calculation_from_context(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    started: Instant,
+) -> Result<Calculation> {
+    let invalid = || {
+        failure(
+            "CORRECTION_SOURCE_MISMATCH",
+            "訂正対象を同じケースの封印済み計算と確定結果に結び付けられません。",
+        )
+    };
+    let Intent::CorrectCalculation {
+        operand_index,
+        replacement,
+    } = &bundle.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    let request = &bundle.request;
+    let check_context = |input: &InputBundle, prior: &ResultRecord| -> Result<()> {
+        if input.meaning.context_result_ref.as_deref() != Some(prior.id.as_str())
+            || input.context_sha256 != identity(&Some(prior))?
+            || input
+                .request
+                .context_ref
+                .as_ref()
+                .is_some_and(|id| id != &prior.id)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    };
+    let check_deadline = || {
+        if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
+            return Err(failure("DEADLINE", "訂正対象の確認中に締切へ達しました。"));
+        }
+        Ok(())
+    };
+    check_context(bundle, previous)?;
+    let insufficient = || {
+        failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "訂正に必要な計算と履歴を照合する行動予算が不足しています。",
+        )
+    };
+    let context_actions = request
+        .budget
+        .max_actions
+        .checked_sub(3 + u32::from(request.output_path.is_some()))
+        .ok_or_else(insufficient)? as usize;
+    let calculation =
+        store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
+            let mut current = previous;
+            let mut visited = BTreeSet::new();
+            let mut links = Vec::new();
+            let mut value = loop {
+                check_deadline()?;
+                let (_, input) = history
+                    .input_bundle(&current.input_id, current.input_version)?
+                    .ok_or_else(invalid)?;
+                if identity(&input.request)? != current.id
+                    || current.lifecycle != Lifecycle::Commit
+                    || current.guarantee != Guarantee::Computed
+                    || !visited.insert(current.id.as_str())
+                    || history.input_result(&current.input_id, current.input_version)?.as_ref()
+                        != Some(current)
+                {
+                    return Err(invalid());
+                }
+                match &input.meaning.intent {
+                    Intent::Calculate { expression } => {
+                        let value = language::calculate(expression)?;
+                        if current.calculation.as_ref() != Some(&value) {
+                            return Err(invalid());
+                        }
+                        break value;
+                    }
+                    Intent::CalculateSequence { .. } => {
+                        return Err(failure(
+                            "SEQUENCE_CORRECTION_REQUIRES_STEP",
+                            "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
+                        ));
+                    }
+                    Intent::ExplainPrevious | Intent::CorrectCalculation { .. } => {}
+                    _ => return Err(invalid()),
+                }
+                if links.len() >= context_actions {
+                    return Err(insufficient());
+                }
+                let parent = input
+                    .meaning
+                    .context_result_ref
+                    .as_ref()
+                    .and_then(|id| prior_results.get(id).filter(|parent| &parent.id == id))
+                    .ok_or_else(invalid)?;
+                check_context(&input, parent)?;
+                links.push((current, input.meaning.intent, &parent.id));
+                current = parent;
+            };
+            for (result, intent, parent_id) in links.into_iter().rev() {
+                check_deadline()?;
+                if let Intent::CorrectCalculation { operand_index, replacement } = intent {
+                    value = language::correct_binary_operand(&value, operand_index, &replacement)?;
+                }
+                if result.calculation.as_ref() != Some(&value)
+                    || result.dependencies.as_slice() != std::slice::from_ref(parent_id)
+                {
+                    return Err(invalid());
+                }
+            }
+            Ok(value)
+        })?;
+    check_deadline()?;
+    let corrected = language::correct_binary_operand(&calculation, *operand_index, replacement)?;
+    check_deadline()?;
+    Ok(corrected)
 }
 
 pub(crate) fn verify_goal_content(
@@ -5284,10 +5412,7 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
                 sequence_result = Some(observed);
             }
-            Intent::CorrectCalculation {
-                operand_index,
-                replacement,
-            } => {
+            Intent::CorrectCalculation { .. } => {
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
                 else {
                     return self.stop(
@@ -5297,37 +5422,41 @@ impl Engine {
                         "訂正対象となる実際の計算結果がありません。",
                     );
                 };
-                let Some(prior_calculation) = prior.calculation.as_ref() else {
+                if prior.calculation.is_none() {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "MISSING_ACTUAL_CALCULATION",
                         "直前の採用済み成果に計算式がありません。",
                     );
-                };
-                match language::correct_binary_operand(
-                    prior_calculation,
-                    *operand_index,
-                    replacement,
+                }
+                match corrected_calculation_from_context(
+                    &self.store,
+                    &bundle,
+                    prior,
+                    &state.prior_results,
+                    started,
                 ) {
                     Ok(calculation) => {
-                        units.push(format!(
-                            "{} = {}",
-                            calculation.expression, calculation.exact_value
-                        ));
+                        units.push(exact_calculation_unit(&calculation));
                         result.dependencies.push(prior.id.clone());
                         result.calculation = Some(calculation);
                         result.guarantee = Guarantee::Computed;
+                        report_goal_content = Some(ReportGoalContent {
+                            predicate: CALCULATION_CORRECTION_PREDICATE,
+                            guarantee: Guarantee::Computed,
+                            dependencies: result.dependencies.clone(),
+                            units: units.clone(),
+                        });
+                    }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
                     }
                     Err(error) => {
-                        let stop_code = match &error {
-                            minidora_domain::Error::Contract { code, .. } => code.as_str(),
-                            _ => "CORRECTION_UNSUPPORTED",
-                        };
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
-                            stop_code,
+                            "CORRECTION_UNSUPPORTED",
                             &error.to_string(),
                         );
                     }
