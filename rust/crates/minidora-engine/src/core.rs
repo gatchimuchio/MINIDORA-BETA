@@ -209,7 +209,8 @@ pub(crate) struct PreviousCalculationSequence<'a> {
     input: InputBundle,
     original: &'a ResultRecord,
     followups: Vec<CalculationSequenceFollowup<'a>>,
-    corrections: usize,
+    edits: usize,
+    context_actions: usize,
     effective_steps: Vec<CalculationSequenceStep>,
 }
 
@@ -232,10 +233,17 @@ impl PreviousCalculationSequence<'_> {
 
     pub(crate) fn predicate(&self) -> &'static str {
         if self.followups.iter().any(|entry| {
+            matches!(
+                entry.bundle.meaning.intent,
+                Intent::AppendCalculationSequenceStep { .. }
+            )
+        }) {
+            APPENDED_SEQUENCE_EXPLANATION_PREDICATE
+        } else if self.followups.iter().any(|entry| {
             entry.bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION
         }) {
             REWIRED_SEQUENCE_EXPLANATION_PREDICATE
-        } else if self.corrections > 0 {
+        } else if self.edits > 0 {
             REVISED_SEQUENCE_EXPLANATION_PREDICATE
         } else if self.followups.is_empty() {
             SEQUENCE_EXPLANATION_PREDICATE
@@ -245,7 +253,7 @@ impl PreviousCalculationSequence<'_> {
     }
 
     pub(crate) fn context_actions(&self) -> usize {
-        self.followups.len() - self.corrections + self.corrections * self.effective_steps.len()
+        self.context_actions
     }
 }
 
@@ -278,7 +286,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
         }
         let mut current = previous;
         let mut followups: Vec<CalculationSequenceFollowup<'_>> = Vec::new();
-        let mut corrections = 0;
+        let mut edits = 0;
         let mut visited = BTreeSet::new();
         loop {
             if started.is_some_and(|start| {
@@ -308,28 +316,34 @@ pub(crate) fn previous_calculation_sequence<'a>(
                 }
                 followups.reverse();
                 let mut effective_steps = steps.clone();
+                let mut context_actions = 0;
                 for entry in &followups {
                     if let Some(started) = started {
                         sequence_history_time(&request.budget, started)?;
                     }
-                    if input::sequence_correction_parser(&entry.bundle.meaning.intent).is_some() {
+                    if input::sequence_edit_parser(&entry.bundle.meaning.intent).is_some() {
+                        // The current graph already charges the latest edition.
+                        context_actions += effective_steps.len();
                         let (target, revised) =
-                            revised_calculation_step(&effective_steps, &entry.bundle)?;
-                        effective_steps[target] = revised;
+                            sequence_step_edit(&effective_steps, &entry.bundle)?;
+                        apply_sequence_step_edit(&mut effective_steps, target, revised);
+                    } else {
+                        context_actions += 1;
                     }
                 }
                 return Ok(Some(PreviousCalculationSequence {
                     input,
                     original: current,
                     followups,
-                    corrections,
+                    edits,
+                    context_actions,
                     effective_steps,
                 }));
             }
-            let correction_parser = input::sequence_correction_parser(&input.meaning.intent);
+            let edit_parser = input::sequence_edit_parser(&input.meaning.intent);
             let detail = matches!(input.meaning.intent, Intent::ExplainPrevious);
             if followups.is_empty()
-                && correction_parser.is_none()
+                && edit_parser.is_none()
                 && (!detail
                     || current.dependencies.len() == 1
                         && current.calculation.as_ref().is_some_and(|calculation| {
@@ -340,7 +354,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
             {
                 return Ok(None);
             }
-            if !(detail || correction_parser == Some(input.meaning.parser_version.as_str()))
+            if !(detail || edit_parser == Some(input.meaning.parser_version.as_str()))
                 || history
                     .input_result(&current.input_id, current.input_version)?
                     .as_ref()
@@ -373,7 +387,7 @@ pub(crate) fn previous_calculation_sequence<'a>(
             {
                 return Err(invalid());
             }
-            corrections += usize::from(correction_parser.is_some());
+            edits += usize::from(edit_parser.is_some());
             followups.push(CalculationSequenceFollowup {
                 bundle: input,
                 result: current,
@@ -553,6 +567,71 @@ fn revised_calculation_step(
     Ok((target, revised))
 }
 
+fn sequence_step_edit(
+    steps: &[CalculationSequenceStep],
+    bundle: &InputBundle,
+) -> Result<(usize, CalculationSequenceStep)> {
+    let Intent::AppendCalculationSequenceStep {
+        step_id,
+        expression,
+    } = &bundle.meaning.intent
+    else {
+        return revised_calculation_step(steps, bundle);
+    };
+    if steps.iter().any(|step| &step.id == step_id) {
+        return Err(failure(
+            "SEQUENCE_APPEND_DUPLICATE_STEP",
+            format!("手順 {step_id} は既に定義されています。"),
+        ));
+    }
+    if steps.len() >= input::MAX_CALCULATION_SEQUENCE_STEPS {
+        return Err(failure(
+            "SEQUENCE_APPEND_STEP_LIMIT",
+            "連続計算には16手順まで定義できます。",
+        ));
+    }
+    let references = input::calculation_step_references(&expression.text)
+        .map_err(|message| failure("SEQUENCE_APPEND_REFERENCE_INVALID", message))?;
+    let mut requires = Vec::new();
+    for reference in references {
+        if &reference == step_id {
+            return Err(failure(
+                "SEQUENCE_APPEND_SELF_REFERENCE",
+                format!("手順 {step_id} は自分自身を参照できません。"),
+            ));
+        }
+        if !steps.iter().any(|step| step.id == reference) {
+            return Err(failure(
+                "SEQUENCE_APPEND_REFERENCE_UNKNOWN",
+                format!("参照先の手順 {reference} はありません。"),
+            ));
+        }
+        if !requires.contains(&reference) {
+            requires.push(reference);
+        }
+    }
+    Ok((
+        steps.len(),
+        CalculationSequenceStep {
+            id: step_id.clone(),
+            expression: expression.clone(),
+            requires,
+        },
+    ))
+}
+
+fn apply_sequence_step_edit(
+    steps: &mut Vec<CalculationSequenceStep>,
+    target: usize,
+    step: CalculationSequenceStep,
+) {
+    if target == steps.len() {
+        steps.push(step);
+    } else {
+        steps[target] = step;
+    }
+}
+
 #[derive(serde::Serialize)]
 struct SequenceDependencyRevision<'a> {
     kind: &'static str,
@@ -566,6 +645,18 @@ struct SequenceDependencyRevision<'a> {
     revised_expression: &'a SourceSpan,
     previous_requires: &'a [String],
     revised_requires: &'a [String],
+    dependencies: &'a [String],
+}
+
+#[derive(serde::Serialize)]
+struct SequenceAppendArtifact<'a> {
+    kind: &'static str,
+    selected_result_id: &'a str,
+    original_result_id: &'a str,
+    append_input_id: &'a str,
+    append_raw_sha256: &'a str,
+    previous_final_step_id: &'a str,
+    appended_step: &'a CalculationSequenceStep,
     dependencies: &'a [String],
 }
 
@@ -599,48 +690,64 @@ impl<'a> ReplayedCalculationSequence<'a> {
         dependencies: &mut Vec<String>,
         mut artifact_ref: impl FnMut(&[u8]) -> Result<String>,
     ) -> Result<CalculationSequenceResult> {
-        let (target, revised_step) = revised_calculation_step(&self.steps, bundle)?;
-        let preceding = &self.steps[target];
-        let id = preceding.id.clone();
-        let source = self.sources[&id];
+        let (target, revised_step) = sequence_step_edit(&self.steps, bundle)?;
+        let id = &revised_step.id;
         let proof = self.dependencies();
-        let correction_id = identity(&bundle.request)?;
-        let revision = if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
-            canonical(&SequenceDependencyRevision {
-                kind: "minidora-calculation-sequence-correction-v3",
+        let edit_id = identity(&bundle.request)?;
+        let (revision, description) = if let Some(preceding) = self.steps.get(target) {
+            let source = self.sources[id];
+            let revision = if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION
+            {
+                canonical(&SequenceDependencyRevision {
+                    kind: "minidora-calculation-sequence-correction-v3",
+                    selected_result_id: &self.selected.id,
+                    original_result_id: &self.original.id,
+                    previous_raw_sha256: &source.raw_sha256,
+                    correction_input_id: &edit_id,
+                    correction_raw_sha256: &bundle.raw_sha256,
+                    step_id: id,
+                    previous_expression: &preceding.expression,
+                    revised_expression: &revised_step.expression,
+                    previous_requires: &preceding.requires,
+                    revised_requires: &revised_step.requires,
+                    dependencies: &proof,
+                })?
+            } else {
+                let kind = if self.active.id == self.original.id {
+                    "minidora-calculation-sequence-correction-v1"
+                } else {
+                    "minidora-calculation-sequence-correction-v2"
+                };
+                canonical(&(
+                    kind,
+                    bundle.meaning.context_result_ref.as_deref(),
+                    &self.original.id,
+                    &source.raw_sha256,
+                    &edit_id,
+                    &bundle.raw_sha256,
+                    id,
+                    &preceding.expression,
+                    &revised_step.expression,
+                    &proof,
+                ))?
+            };
+            (revision, format!("訂正した手順: {id}"))
+        } else {
+            let preceding = self.steps.last().ok_or_else(invalid_sequence_proof)?;
+            let revision = canonical(&SequenceAppendArtifact {
+                kind: "minidora-calculation-sequence-append-v1",
                 selected_result_id: &self.selected.id,
                 original_result_id: &self.original.id,
-                previous_raw_sha256: &source.raw_sha256,
-                correction_input_id: &correction_id,
-                correction_raw_sha256: &bundle.raw_sha256,
-                step_id: &id,
-                previous_expression: &preceding.expression,
-                revised_expression: &revised_step.expression,
-                previous_requires: &preceding.requires,
-                revised_requires: &revised_step.requires,
+                append_input_id: &edit_id,
+                append_raw_sha256: &bundle.raw_sha256,
+                previous_final_step_id: &preceding.id,
+                appended_step: &revised_step,
                 dependencies: &proof,
-            })?
-        } else {
-            let kind = if self.active.id == self.original.id {
-                "minidora-calculation-sequence-correction-v1"
-            } else {
-                "minidora-calculation-sequence-correction-v2"
-            };
-            canonical(&(
-                kind,
-                bundle.meaning.context_result_ref.as_deref(),
-                &self.original.id,
-                &source.raw_sha256,
-                &correction_id,
-                &bundle.raw_sha256,
-                &id,
-                &preceding.expression,
-                &revised_step.expression,
-                &proof,
-            ))?
+            })?;
+            (revision, format!("追加した手順: {id}"))
         };
-        self.steps[target] = revised_step;
         self.sources.insert(id.clone(), bundle);
+        apply_sequence_step_edit(&mut self.steps, target, revised_step);
         let mut private_graph;
         let graph = if let Some(graph) = graph {
             graph
@@ -667,7 +774,7 @@ impl<'a> ReplayedCalculationSequence<'a> {
             dependencies,
             retain,
         )?;
-        revised.units.insert(0, format!("訂正した手順: {id}"));
+        revised.units.insert(0, description);
         Ok(revised)
     }
 }
@@ -683,7 +790,7 @@ fn replay_calculation_sequence<'a>(
     let mut remaining_bytes = budget.max_evidence_bytes;
     let base = &context.input;
     let steps = context.root_steps();
-    let mut prior_graph = (context.corrections != 0)
+    let mut prior_graph = (context.edits != 0)
         .then(|| sequence_proof_graph(steps, budget))
         .transpose()?;
     let mut dependencies = Vec::new();
@@ -718,7 +825,7 @@ fn replay_calculation_sequence<'a>(
         observed,
         units,
     };
-    let mut corrections_left = context.corrections;
+    let mut edits_left = context.edits;
     for followup in &context.followups {
         sequence_history_time(budget, started)?;
         let result = followup.result;
@@ -729,15 +836,12 @@ fn replay_calculation_sequence<'a>(
         if result.text != plan.text || !result.evidence.is_empty() {
             return Err(invalid_sequence_proof());
         }
-        if matches!(
-            followup.bundle.meaning.intent,
-            Intent::CorrectCalculationSequenceStep { .. }
-        ) {
-            corrections_left -= 1;
+        if input::sequence_edit_parser(&followup.bundle.meaning.intent).is_some() {
+            edits_left -= 1;
             let mut dependencies = Vec::new();
             let observed = replay.revise(
                 &followup.bundle,
-                (corrections_left == 0).then_some(&mut *graph),
+                (edits_left == 0).then_some(&mut *graph),
                 budget,
                 started,
                 &mut dependencies,
@@ -784,15 +888,15 @@ pub(crate) fn explain_calculation_sequence(
     })
 }
 
-pub(crate) struct SequenceCorrection<'a> {
+pub(crate) struct SequenceEdit<'a> {
     baseline: PreviousCalculationSequence<'a>,
     pub(crate) steps: Vec<CalculationSequenceStep>,
     predicate: &'static str,
 }
 
-impl SequenceCorrection<'_> {
+impl SequenceEdit<'_> {
     pub(crate) fn verification_actions(&self) -> usize {
-        self.steps.len() + self.baseline.context_actions()
+        self.baseline.effective_steps().len() + self.baseline.context_actions()
     }
 
     pub(crate) fn predicate(&self) -> &'static str {
@@ -800,14 +904,28 @@ impl SequenceCorrection<'_> {
     }
 }
 
-pub(crate) fn prepare_sequence_correction<'a>(
+fn sequence_edit_context_requirement(intent: &Intent) -> (&'static str, &'static str) {
+    if matches!(intent, Intent::AppendCalculationSequenceStep { .. }) {
+        (
+            "SEQUENCE_APPEND_CONTEXT_REQUIRED",
+            "追加対象となる同じケースの確定済み連続計算が必要です。",
+        )
+    } else {
+        (
+            "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
+            "訂正対象となる同じケースの確定済み連続計算が必要です。",
+        )
+    }
+}
+
+pub(crate) fn prepare_sequence_edit<'a>(
     store: &Store,
     bundle: &InputBundle,
     previous: &'a ResultRecord,
     prior_results: &'a BTreeMap<String, ResultRecord>,
     started: Instant,
-) -> Result<SequenceCorrection<'a>> {
-    if input::sequence_correction_parser(&bundle.meaning.intent)
+) -> Result<SequenceEdit<'a>> {
+    if input::sequence_edit_parser(&bundle.meaning.intent)
         != Some(bundle.meaning.parser_version.as_str())
     {
         return Err(invalid_sequence_proof());
@@ -815,32 +933,29 @@ pub(crate) fn prepare_sequence_correction<'a>(
     let baseline =
         previous_calculation_sequence(store, bundle, previous, prior_results, Some(started))?
             .ok_or_else(|| {
-                failure(
-                    "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
-                    "訂正対象となる同じケースの確定済み連続計算が必要です。",
-                )
+                let (code, message) = sequence_edit_context_requirement(&bundle.meaning.intent);
+                failure(code, message)
             })?;
     let mut steps = baseline.effective_steps().to_vec();
-    let (target, revised) = revised_calculation_step(&steps, bundle)?;
-    steps[target] = revised;
-    let predicate = if bundle.meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
-        REWIRED_SEQUENCE_CORRECTION_PREDICATE
-    } else if baseline.corrections > 0 {
-        REPEATED_SEQUENCE_CORRECTION_PREDICATE
-    } else {
-        SEQUENCE_CORRECTION_PREDICATE
+    let (target, revised) = sequence_step_edit(&steps, bundle)?;
+    apply_sequence_step_edit(&mut steps, target, revised);
+    let predicate = match bundle.meaning.parser_version.as_str() {
+        input::SEQUENCE_APPEND_PARSER_VERSION => SEQUENCE_APPEND_PREDICATE,
+        input::SEQUENCE_REWIRE_PARSER_VERSION => REWIRED_SEQUENCE_CORRECTION_PREDICATE,
+        _ if baseline.edits > 0 => REPEATED_SEQUENCE_CORRECTION_PREDICATE,
+        _ => SEQUENCE_CORRECTION_PREDICATE,
     };
-    Ok(SequenceCorrection {
+    Ok(SequenceEdit {
         baseline,
         steps,
         predicate,
     })
 }
 
-pub(crate) fn run_sequence_correction(
+pub(crate) fn run_sequence_edit(
     store: &Store,
     bundle: &InputBundle,
-    context: &SequenceCorrection<'_>,
+    context: &SequenceEdit<'_>,
     graph: &mut Scheduler,
     started: Instant,
     dependencies: &mut Vec<String>,
@@ -914,6 +1029,7 @@ pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2";
 pub(crate) const REWIRED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V3";
+pub(crate) const SEQUENCE_APPEND_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_APPEND_V1";
 const GENERATED_CALCULATION_KIND: &str = "minidora.exact-calculation-content.v1";
 pub(crate) const RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V1";
 pub(crate) const GENERATED_RELATION_EXPLANATION_PREDICATE: &str = "RELATION_PROOF_EXPLANATION_V2";
@@ -928,6 +1044,8 @@ pub(crate) const REVISED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V3";
 pub(crate) const REWIRED_SEQUENCE_EXPLANATION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V4";
+pub(crate) const APPENDED_SEQUENCE_EXPLANATION_PREDICATE: &str =
+    "EXACT_PREVIOUS_CALCULATION_SEQUENCE_V5";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -949,8 +1067,13 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        Intent::AppendCalculationSequenceStep { .. }
+            if meaning.parser_version == input::SEQUENCE_APPEND_PARSER_VERSION =>
+        {
+            predicates.push(SEQUENCE_APPEND_PREDICATE.into());
+        }
         Intent::CorrectCalculationSequenceStep { .. }
-            if input::sequence_correction_parser(&meaning.intent)
+            if input::sequence_edit_parser(&meaning.intent)
                 == Some(meaning.parser_version.as_str()) =>
         {
             let predicate = if meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
@@ -1008,6 +1131,7 @@ fn verify_report_goal_content(
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
                 | REWIRED_SEQUENCE_EXPLANATION_PREDICATE
+                | APPENDED_SEQUENCE_EXPLANATION_PREDICATE
         )
     }) else {
         return Ok(());
@@ -1115,7 +1239,9 @@ pub(crate) fn corrected_calculation_from_context(
                         }
                         break value;
                     }
-                    Intent::CalculateSequence { .. } | Intent::CorrectCalculationSequenceStep { .. } => {
+                    Intent::CalculateSequence { .. }
+                    | Intent::CorrectCalculationSequenceStep { .. }
+                    | Intent::AppendCalculationSequenceStep { .. } => {
                         return Err(failure(
                             "SEQUENCE_CORRECTION_REQUIRES_STEP",
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
@@ -4941,20 +5067,14 @@ impl Engine {
         } else {
             None
         };
-        let sequence_correction = if has_compute_budget
-            && matches!(
-                bundle.meaning.intent,
-                Intent::CorrectCalculationSequenceStep { .. }
-            ) {
+        let sequence_edit = if has_compute_budget
+            && input::sequence_edit_parser(&bundle.meaning.intent).is_some()
+        {
             let Some((prior, prior_case)) = previous.zip(latest.as_ref()) else {
-                return self.stop(
-                    &mut state,
-                    Lifecycle::Suspend,
-                    "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
-                    "訂正対象となる同じケースの確定済み連続計算が必要です。",
-                );
+                let (code, message) = sequence_edit_context_requirement(&bundle.meaning.intent);
+                return self.stop(&mut state, Lifecycle::Suspend, code, message);
             };
-            match prepare_sequence_correction(
+            match prepare_sequence_edit(
                 &self.store,
                 &bundle,
                 prior,
@@ -5584,7 +5704,7 @@ impl Engine {
             });
             compute_requires.push(summary_id);
         }
-        let sequence_steps = sequence_correction
+        let sequence_steps = sequence_edit
             .as_ref()
             .map(|context| context.steps.as_slice())
             .or_else(|| {
@@ -5630,9 +5750,9 @@ impl Engine {
             + previous_sequence
                 .as_ref()
                 .map_or(0, PreviousCalculationSequence::context_actions)
-            + sequence_correction
+            + sequence_edit
                 .as_ref()
-                .map_or(0, SequenceCorrection::verification_actions);
+                .map_or(0, SequenceEdit::verification_actions);
         let mut graph = Scheduler::new(nodes, request.budget.max_actions)?;
         let goal = GoalContract {
             input_fingerprint: fingerprint.clone(),
@@ -5647,9 +5767,7 @@ impl Engine {
                 previous_sequence
                     .as_ref()
                     .map(PreviousCalculationSequence::predicate)
-                    .or(sequence_correction
-                        .as_ref()
-                        .map(SequenceCorrection::predicate)),
+                    .or(sequence_edit.as_ref().map(SequenceEdit::predicate)),
             ),
             renderer_version: Some(output::RENDERER_VERSION.into()),
         };
@@ -5880,14 +5998,13 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
                 sequence_result = Some(observed);
             }
-            Intent::CorrectCalculationSequenceStep { .. } => {
-                let context = sequence_correction.as_ref().ok_or_else(|| {
-                    failure(
-                        "SEQUENCE_CORRECTION_CONTEXT_REQUIRED",
-                        "訂正対象の連続計算がありません。",
-                    )
+            Intent::CorrectCalculationSequenceStep { .. }
+            | Intent::AppendCalculationSequenceStep { .. } => {
+                let context = sequence_edit.as_ref().ok_or_else(|| {
+                    let (code, message) = sequence_edit_context_requirement(&bundle.meaning.intent);
+                    failure(code, message)
                 })?;
-                let observed = match run_sequence_correction(
+                let observed = match run_sequence_edit(
                     &self.store,
                     &bundle,
                     context,

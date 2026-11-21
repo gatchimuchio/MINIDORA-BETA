@@ -20,6 +20,9 @@ pub(crate) const SEQUENCE_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v119-calculation-sequence-correction";
 pub(crate) const SEQUENCE_REWIRE_PARSER_VERSION: &str =
     "declarative-ja-en-v120-calculation-sequence-rewire";
+pub(crate) const SEQUENCE_APPEND_PARSER_VERSION: &str =
+    "declarative-ja-en-v121-calculation-sequence-append";
+pub(crate) const MAX_CALCULATION_SEQUENCE_STEPS: usize = 16;
 const LEGACY_RELATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v88-generated-relation-explanation";
 pub(crate) const RELATION_EXPLANATION_PARSER_VERSION: &str =
@@ -263,8 +266,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
-        Intent::CorrectCalculationSequenceStep { .. } => {
-            sequence_correction_parser(&intent).expect("sequence correction parser")
+        Intent::CorrectCalculationSequenceStep { .. }
+        | Intent::AppendCalculationSequenceStep { .. } => {
+            sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
         Intent::DefineCondition { .. }
@@ -1887,19 +1891,52 @@ pub(crate) fn calculation_step_references(
     Ok(references)
 }
 
-pub(crate) fn sequence_correction_parser(intent: &Intent) -> Option<&'static str> {
-    let Intent::CorrectCalculationSequenceStep {
-        change_dependencies,
-        ..
-    } = intent
-    else {
-        return None;
+pub(crate) fn sequence_edit_parser(intent: &Intent) -> Option<&'static str> {
+    match intent {
+        Intent::CorrectCalculationSequenceStep {
+            change_dependencies: true,
+            ..
+        } => Some(SEQUENCE_REWIRE_PARSER_VERSION),
+        Intent::CorrectCalculationSequenceStep { .. } => Some(SEQUENCE_CORRECTION_PARSER_VERSION),
+        Intent::AppendCalculationSequenceStep { .. } => Some(SEQUENCE_APPEND_PARSER_VERSION),
+        _ => None,
+    }
+}
+
+fn calculation_sequence_append_intent(text: &str) -> Result<Option<Intent>> {
+    let trimmed = text.trim();
+    let header = trimmed.lines().next().unwrap_or_default();
+    if !header.starts_with("計算手順の末尾に")
+        || !header.split_once("を追加").is_some_and(|(_, suffix)| {
+            suffix.trim_start().starts_with([':', '：']) || suffix.trim().is_empty()
+        })
+    {
+        return Ok(None);
+    }
+    let unsupported = || {
+        Intent::Unknown {
+        reason: "「計算手順の末尾に total を追加: @{final}+2」の形式で、新しい手順IDと式を指定してください。".into(),
+    }
     };
-    Some(if *change_dependencies {
-        SEQUENCE_REWIRE_PARSER_VERSION
-    } else {
-        SEQUENCE_CORRECTION_PARSER_VERSION
-    })
+    let Some(captures) = regex(
+        r"^計算手順の末尾に[ \t]*([A-Za-z][A-Za-z0-9_-]{0,31})[ \t]*を追加[:：][ \t]*([^\r\n]+)$",
+    )?
+    .captures(trimmed) else {
+        return Ok(Some(unsupported()));
+    };
+    let expression = captures.get(2).expect("formula capture exists");
+    let offset = text.len() - text.trim_start().len();
+    if expression.len() > 8192 {
+        return Ok(Some(unsupported()));
+    }
+    let Some(span) = source_span_at(text, offset + expression.start(), offset + expression.end())
+    else {
+        return Ok(Some(unsupported()));
+    };
+    Ok(Some(Intent::AppendCalculationSequenceStep {
+        step_id: captures[1].to_owned(),
+        expression: span,
+    }))
 }
 
 fn calculation_sequence_correction_intent(text: &str) -> Result<Option<Intent>> {
@@ -1967,7 +2004,7 @@ fn calculation_sequence_intent(text: &str, header: &str) -> Result<Option<Intent
             line_start += raw_line.len();
             continue;
         }
-        if steps.len() == 16 {
+        if steps.len() == MAX_CALCULATION_SEQUENCE_STEPS {
             return Ok(Some(Intent::Unknown {
                 reason: "calculation sequence supports at most 16 declared steps".into(),
             }));
@@ -3330,6 +3367,9 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
 }
 
 fn interpret(text: &str) -> Result<Intent> {
+    if let Some(intent) = calculation_sequence_append_intent(text)? {
+        return Ok(intent);
+    }
     if let Some(intent) = calculation_sequence_correction_intent(text)? {
         return Ok(intent);
     }
