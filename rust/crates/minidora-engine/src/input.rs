@@ -51,6 +51,8 @@ pub(crate) const FACT_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v129-fact
 pub(crate) const CONDITION_SOURCE_PARSER_VERSION: &str = "declarative-ja-en-v130-condition-source";
 pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION: &str =
     "declarative-ja-en-v131-condition-source-by-definition";
+pub(crate) const GUARDED_RELATION_RULE_PARSER_VERSION: &str =
+    "declarative-ja-en-v132-guarded-relation-rule";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
@@ -292,6 +294,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             sequence_edit_parser(&intent).expect("sequence edit parser")
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
+        Intent::AddRule { premise, .. } if !premise.condition_refs.is_empty() => {
+            GUARDED_RELATION_RULE_PARSER_VERSION
+        }
         Intent::DefineCondition { definition } => {
             condition_definition_parser_version(definition, &source_roles)
         }
@@ -1616,6 +1621,22 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
+    }
+    if let Intent::AddRule {
+        premise,
+        conclusion,
+    } = intent
+        && !premise.condition_refs.is_empty()
+    {
+        return guarded_relation_rule_source(text)?
+            .filter(|source| &source.premise == premise && &source.conclusion == conclusion)
+            .map(|source| source.roles)
+            .ok_or_else(|| {
+                failure(
+                    "GUARDED_RULE_SOURCE_SPAN",
+                    "guarded rule clauses do not match the original request",
+                )
+            });
     }
     let source_inspection = match intent {
         Intent::InspectFactSource { fact_id } => Some((
@@ -3560,6 +3581,159 @@ fn conjunctive_rule_premises(text: &str) -> Result<Option<Vec<Proposition>>> {
     Ok(Some(vec![first, second]))
 }
 
+struct GuardedRelationRuleSource {
+    premise: Proposition,
+    conclusion: Proposition,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+struct GuardedRelationRuleClause {
+    proposition: Proposition,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+fn guarded_relation_rule_separator(statement: &str) -> Option<(usize, usize)> {
+    let mut in_qualifier = false;
+    for (position, character) in statement.char_indices() {
+        match character {
+            '[' => in_qualifier = true,
+            ']' => in_qualifier = false,
+            'な' | 'で' if !in_qualifier => {
+                if let Some(separator) = ["ならば", "なら", "であれば"]
+                    .into_iter()
+                    .find(|separator| statement[position..].starts_with(*separator))
+                {
+                    return Some((position, position + separator.len()));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn guarded_relation_rule_clause(
+    text: &str,
+    clause: &str,
+    offset: usize,
+    role_root: &str,
+) -> Result<Option<GuardedRelationRuleClause>> {
+    let Some((body, qualifiers)) = relation_qualifiers(clause, QualifierContext::Relation) else {
+        return Ok(None);
+    };
+    let (Some((scope, _)), Some((condition_id, _))) = (qualifiers.scope, qualifiers.condition)
+    else {
+        return Ok(None);
+    };
+    let Some(mut proposition) = parse_proposition(body, false)? else {
+        return Ok(None);
+    };
+    if singular_previous_subject(&proposition.subject)
+        || matches!(proposition.subject.as_str(), "*" | "＊")
+        || proposition.subject.starts_with('$')
+        || proposition.object.starts_with('$')
+    {
+        return Ok(None);
+    }
+    proposition.scope = scope.into();
+    proposition.temporal_scope = qualifiers.time.map(|(time, _)| time.into());
+    proposition.condition_refs.insert(condition_id.into());
+    if crate::relations::validate(&proposition).is_err() {
+        return Ok(None);
+    }
+
+    let body_offset = offset + clause.len() - body.len();
+    let Some(roles) = japanese_qualified_source_roles(
+        text,
+        body,
+        offset,
+        body_offset,
+        &qualifiers,
+        &proposition,
+        role_root,
+    )?
+    else {
+        return Ok(None);
+    };
+    mark_rule_variable(&mut proposition.subject);
+    mark_rule_variable(&mut proposition.object);
+    Ok(Some(GuardedRelationRuleClause { proposition, roles }))
+}
+
+fn guarded_relation_rule_source(text: &str) -> Result<Option<GuardedRelationRuleSource>> {
+    let source = terminal_trim(text);
+    if text.trim().contains(['?', '？', '\r', '\n'])
+        || starts_quoted_source(source)
+        || source.ends_with('か')
+    {
+        return Ok(None);
+    }
+    let statement = source.strip_prefix("もし").unwrap_or(source).trim_start();
+    let Some((left, right)) = guarded_relation_rule_separator(statement) else {
+        return Ok(None);
+    };
+    let premise_clause = statement[..left].trim_end();
+    let conclusion_clause = statement[right..].trim_start_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '、' | ',')
+    });
+    let statement_offset = text.len() - text.trim_start().len() + source.len() - statement.len();
+    let conclusion_offset = statement_offset + statement.len() - conclusion_clause.len();
+    let Some(GuardedRelationRuleClause {
+        proposition: premise,
+        mut roles,
+    }) = guarded_relation_rule_clause(text, premise_clause, statement_offset, "/AddRule/premise")?
+    else {
+        return Ok(None);
+    };
+    let Some(GuardedRelationRuleClause {
+        proposition: conclusion,
+        roles: conclusion_roles,
+    }) = guarded_relation_rule_clause(
+        text,
+        conclusion_clause,
+        conclusion_offset,
+        "/AddRule/conclusion",
+    )?
+    else {
+        return Ok(None);
+    };
+    if premise.subject != conclusion.subject
+        || premise.scope != conclusion.scope
+        || premise.condition_refs != conclusion.condition_refs
+        || premise.temporal_scope != conclusion.temporal_scope
+    {
+        return Ok(None);
+    }
+    roles.extend(conclusion_roles);
+    Ok(Some(GuardedRelationRuleSource {
+        premise,
+        conclusion,
+        roles,
+    }))
+}
+
+pub(crate) fn verified_guarded_relation_rule_source(bundle: &InputBundle) -> Result<bool> {
+    let Intent::AddRule {
+        premise,
+        conclusion,
+    } = &bundle.meaning.intent
+    else {
+        return Ok(false);
+    };
+    if bundle.meaning.parser_version != GUARDED_RELATION_RULE_PARSER_VERSION
+        || bundle.meaning.source_kind != "USER_REQUEST"
+    {
+        return Ok(false);
+    }
+    Ok(
+        guarded_relation_rule_source(&bundle.request.text)?.is_some_and(|source| {
+            &source.premise == premise
+                && &source.conclusion == conclusion
+                && source.roles == bundle.meaning.source_roles
+        }),
+    )
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     if let Some(fact_id) = source_inspection_payload(terminal_trim(text), "Factの出典") {
         return Ok(
@@ -3808,6 +3982,19 @@ fn interpret(text: &str) -> Result<Intent> {
     }
     if let Some(intent) = previous_source_question_intent(body)? {
         return Ok(intent);
+    }
+    if body.contains("[condition")
+        && (body.starts_with("もし") || guarded_relation_rule_separator(body).is_some())
+    {
+        return Ok(guarded_relation_rule_source(text)?.map_or_else(
+            || Intent::Unknown {
+                reason: "条件付き規則には、同じ主体・条件・範囲・時点を明記した前提と結論を一つずつ指定してください。".into(),
+            },
+            |source| Intent::AddRule {
+                premise: source.premise,
+                conclusion: source.conclusion,
+            },
+        ));
     }
     if let Some(capture) =
         regex(r"(?is)^(?:もし\s*)?(.+?)(?:ならば|なら|であれば)[、,\s]*(.+)$")?.captures(body)
@@ -4893,9 +5080,7 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
     }
     if variables {
         for term in [&mut subject, &mut object] {
-            if matches!(term.as_str(), "X" | "Y" | "Z") {
-                *term = format!("${}", term.to_lowercase());
-            }
+            mark_rule_variable(term);
         }
     }
     Ok(Some(Proposition {
@@ -4907,6 +5092,12 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         temporal_scope: None,
         condition_refs: Default::default(),
     }))
+}
+
+fn mark_rule_variable(term: &mut String) {
+    if matches!(term.as_str(), "X" | "Y" | "Z") {
+        *term = format!("${}", term.to_lowercase());
+    }
 }
 
 #[derive(Default)]

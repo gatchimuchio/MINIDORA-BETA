@@ -4750,6 +4750,108 @@ fn condition_source_by_definition_resolves_withdrawn_record_from_exact_qualifier
 }
 
 #[test]
+fn condition_rule_registration_derives_only_while_its_guard_is_supported() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+    let declaration = "　もし [scope=実験室][condition=点検]Xは研究員ならば、[condition=点検][scope=実験室]Xは入室可。　";
+    let file = scratch.0.join("ungranted.txt");
+    let denied = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--case",
+                "unauthorized-rule",
+                "--output",
+                file.to_str().unwrap(),
+                declaration,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .contains("WRITE_PERMISSION_MISSING")
+    );
+    assert!(!file.exists());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.load_memory("owner").unwrap().rules.is_empty());
+
+    let definition = run(&["条件定義: [scope=実験室][condition=点検] ユリは点検済み"]);
+    let premise = run(&["[scope=実験室][condition=点検]ユリは研究員"]);
+    let rule = run(&["--case", "guard-rule", "--max-actions", "3", declaration]);
+    assert_eq!(rule["guarantee"], "USER_PREMISE");
+    let saved = store.load_case("owner", "guard-rule").unwrap().unwrap();
+    let bundle = saved.bundle.unwrap();
+    assert_eq!(
+        bundle.meaning.parser_version,
+        "declarative-ja-en-v132-guarded-relation-rule"
+    );
+    let spans = &bundle.meaning.source_roles;
+    for role in ["premise", "conclusion"] {
+        for (field, value) in [
+            ("subject", "X"),
+            ("scope", "実験室"),
+            ("condition_refs/0", "点検"),
+        ] {
+            let source = &spans[&format!("/AddRule/{role}/{field}")][0];
+            assert_eq!(declaration.get(source.start..source.end), Some(value));
+        }
+    }
+    let query = "[scope=実験室][condition=点検]ユリは入室可ですか";
+    let suspended =
+        |command: &str| stopped(&execute(&scratch.0, "owner", &[command]), 2, "SUSPEND");
+    assert!(
+        suspended(query)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_UNKNOWN")
+    );
+    let evidence = run(&["[scope=実験室]ユリは点検済み"]);
+    let derived = run(&[query]);
+    assert_eq!(derived["guarantee"], "DERIVED");
+    for source in [definition, premise, rule, evidence] {
+        assert!(
+            derived["dependencies"]
+                .as_array()
+                .unwrap()
+                .contains(&source["dependencies"][0])
+        );
+    }
+    assert!(
+        suspended("[scope=実験室]ユリは入室可ですか")["reason"]
+            .as_str()
+            .unwrap()
+            .contains("MISSING_PREMISES")
+    );
+    let opposite = run(&["[scope=実験室]ユリは点検済みではない"]);
+    assert!(
+        suspended(query)["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_CONFLICT")
+    );
+    run(&[&format!(
+        "{}を無効化して",
+        opposite["dependencies"][0].as_str().unwrap()
+    )]);
+    assert_eq!(run(&[query])["dependencies"], derived["dependencies"]);
+    let condition_record = store.load_memory("owner").unwrap().conditions[0].id.clone();
+    run(&[&format!("{condition_record}を無効化して")]);
+    let stopped_after = suspended(query);
+    assert!(
+        stopped_after["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONDITION_UNKNOWN")
+    );
+    assert!(stopped_after["render"].is_null());
+}
+
+#[test]
 fn condition_evaluation_detail_exposes_conflict_and_missing_operands() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

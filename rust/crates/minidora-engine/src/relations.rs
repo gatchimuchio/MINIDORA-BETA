@@ -1313,6 +1313,17 @@ pub fn add_rule(
     add_rule_with_premises(memory, vec![premise], conclusion, source_input)
 }
 
+pub(crate) fn declared_rule_id(
+    premise: &Proposition,
+    conclusion: &Proposition,
+    source_input: &str,
+) -> Result<String> {
+    Ok(format!(
+        "rule:{}",
+        identity(&("declared-rule-v1", premise, conclusion, source_input))?
+    ))
+}
+
 pub fn add_rule_with_premises(
     memory: &mut MemoryState,
     premises: Vec<Proposition>,
@@ -1396,10 +1407,7 @@ pub fn add_rule_with_premises(
         ));
     }
     let id = if additional_premises.is_empty() {
-        format!(
-            "rule:{}",
-            identity(&("declared-rule-v1", premise, &conclusion, source_input))?
-        )
+        declared_rule_id(premise, &conclusion, source_input)?
     } else {
         format!(
             "rule:{}",
@@ -1638,7 +1646,13 @@ fn permitted_rule<'a>(
     rules: &BTreeMap<&str, &'a RelationRule>,
     seen: &mut BTreeSet<String>,
 ) -> bool {
-    if !rule.valid || !seen.insert(rule.id.clone()) {
+    // The guard evaluation belongs to the requested subject. It cannot
+    // discharge a premise or a shortcut parent with a different subject.
+    let guard_keeps_subject = rule.conclusion.condition_refs.is_empty()
+        || std::iter::once(&rule.premise)
+            .chain(&rule.additional_premises)
+            .all(|premise| premise.subject == rule.conclusion.subject);
+    if !rule.valid || !guard_keeps_subject || !seen.insert(rule.id.clone()) {
         return false;
     }
     let valid = rule.dependencies.iter().all(|id| {
@@ -3057,6 +3071,59 @@ mod tests {
             temporal_scope: None,
             condition_refs: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_guarded_rule_cannot_reuse_the_conclusion_subjects_condition_for_a_different_premise() {
+        let mut memory = MemoryState::default();
+        let guard = |subject, object| Proposition {
+            condition_refs: BTreeSet::from(["ready".into()]),
+            ..p(subject, object)
+        };
+        define_condition(
+            &mut memory,
+            ConditionDefinition {
+                condition_id: "ready".into(),
+                subject: "sensor".into(),
+                scope: "premise-world".into(),
+                expression: ConditionExpression::Fact {
+                    predicate: "is".into(),
+                    object: "ready".into(),
+                },
+                valid_from: None,
+                valid_until: None,
+                dependencies: BTreeSet::new(),
+            },
+            "condition",
+        )
+        .unwrap();
+        assert_fact(&mut memory, p("sensor", "ready"), "evidence").unwrap();
+        assert_fact(&mut memory, guard("other", "checked"), "other").unwrap();
+        add_rule(
+            &mut memory,
+            guard("other", "checked"),
+            guard("sensor", "allowed"),
+            "mixed-subject-rule",
+        )
+        .unwrap();
+        let query_target = guard("sensor", "reported");
+        add_rule(
+            &mut memory,
+            guard("$x", "allowed"),
+            guard("$x", "reported"),
+            "same-subject-rule",
+        )
+        .unwrap();
+        assert!(memory.rules.iter().any(|rule| rule.dependencies.len() == 2));
+        let blocked = query(&memory, &query_target, 80).unwrap();
+        assert_eq!(blocked.condition_status, Some(ConditionStatus::True));
+        assert_eq!(blocked.status, "UNKNOWN");
+        assert!(blocked.facts.is_empty());
+        assert_fact(&mut memory, guard("sensor", "allowed"), "own").unwrap();
+        assert_eq!(
+            query(&memory, &query_target, 80).unwrap().status,
+            "SUPPORTED"
+        );
     }
 
     #[test]

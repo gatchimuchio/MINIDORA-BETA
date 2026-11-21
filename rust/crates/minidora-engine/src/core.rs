@@ -1595,6 +1595,7 @@ pub(crate) const FACT_SOURCE_PREDICATE: &str = "EXACT_FACT_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_PREDICATE: &str = "EXACT_CONDITION_SOURCE_V1";
 pub(crate) const CONDITION_SOURCE_BY_DEFINITION_PREDICATE: &str =
     "EXACT_CONDITION_SOURCE_BY_DEFINITION_V1";
+pub(crate) const GUARDED_RELATION_RULE_PREDICATE: &str = "EXACT_GUARDED_RELATION_RULE_V1";
 
 pub(crate) fn record_source_contract(intent: &Intent) -> Option<(&'static str, &'static str)> {
     match intent {
@@ -1649,6 +1650,11 @@ pub(crate) fn goal_predicates(
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
+        Intent::AddRule { .. }
+            if meaning.parser_version == input::GUARDED_RELATION_RULE_PARSER_VERSION =>
+        {
+            predicates.push(GUARDED_RELATION_RULE_PREDICATE.into());
+        }
         intent @ (Intent::InspectFactSource { .. }
         | Intent::InspectConditionSource { .. }
         | Intent::InspectConditionSourceByDefinition { .. }) => {
@@ -1765,6 +1771,7 @@ fn verify_report_goal_content(
                 | FACT_SOURCE_PREDICATE
                 | CONDITION_SOURCE_PREDICATE
                 | CONDITION_SOURCE_BY_DEFINITION_PREDICATE
+                | GUARDED_RELATION_RULE_PREDICATE
         )
     }) else {
         return Ok(());
@@ -9215,6 +9222,30 @@ impl Engine {
                 premise,
                 conclusion,
             } => {
+                let guarded =
+                    bundle.meaning.parser_version == input::GUARDED_RELATION_RULE_PARSER_VERSION;
+                if guarded {
+                    if goal
+                        .output_path
+                        .as_ref()
+                        .is_some_and(|path| !goal.permissions.write_paths.contains(path))
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "WRITE_PERMISSION_MISSING",
+                            "指定ファイルへの書込権限がありません。",
+                        );
+                    }
+                    if goal.budget.max_actions < 3 + u32::from(goal.output_path.is_some()) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "ACTION_BUDGET_EXHAUSTED",
+                            "規則の登録・表示と必要なファイル確認の予算が不足しています。",
+                        );
+                    }
+                }
                 let _ = direct_typed_relation_rule_input(
                     &bundle,
                     std::slice::from_ref(premise),
@@ -9227,16 +9258,27 @@ impl Engine {
                     conclusion.clone(),
                     &fingerprint,
                 )?;
+                units = rule_registration_units(&rule);
+                if guarded && units.join("\n").len() > goal.budget.max_evidence_bytes {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "規則の登録結果が要求の証拠予算を超えています。",
+                    );
+                }
                 self.store.save_memory(actor, &memory)?;
-                units.push(format!(
-                    "条件付き前提を保存しました: {} ならば {}。",
-                    describe(premise),
-                    describe(conclusion)
-                ));
-                units.push(format!("規則ID: {}", rule.id));
-                units.push("保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。".into());
                 result.dependencies.push(rule.id);
                 result.guarantee = Guarantee::UserPremise;
+                if guarded {
+                    result.actor_memory_revision = Some(memory.revision);
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: GUARDED_RELATION_RULE_PREDICATE,
+                        guarantee: Guarantee::UserPremise,
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                }
             }
             Intent::AddConjunctiveRule {
                 premises,
@@ -16587,6 +16629,19 @@ fn describe_without_condition_refs(proposition: &Proposition) -> String {
     let mut without_condition_refs = proposition.clone();
     without_condition_refs.condition_refs.clear();
     describe(&without_condition_refs)
+}
+
+pub(crate) fn rule_registration_units(rule: &RelationRule) -> Vec<String> {
+    vec![
+        format!(
+            "条件付き前提を保存しました: {} ならば {}。",
+            describe(&rule.premise),
+            describe(&rule.conclusion)
+        ),
+        format!("規則ID: {}", rule.id),
+        "保証範囲: 提示された条件付き前提の中でのみ利用します。普遍的事実として学習しません。"
+            .into(),
+    ]
 }
 
 fn condition_reference_label(condition_id: &str) -> String {

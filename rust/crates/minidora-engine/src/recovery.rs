@@ -113,6 +113,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                     crate::input::SOURCE_SUMMARY_PARSER_VERSION
                         | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
                         | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                 )
             })
         {
@@ -2560,6 +2561,73 @@ struct RetainedRelationProof {
     projection: (MemoryState, crate::relations::QueryOutcome),
 }
 
+fn verify_guarded_rule_registration(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    goal: &GoalContract,
+) -> Result<()> {
+    const MISMATCH: &str = "RECOVERY_GUARDED_RULE_MISMATCH";
+    let invalid = || {
+        failure(
+            MISMATCH,
+            "the retained guarded rule differs from its sealed registration",
+        )
+    };
+    verify_registered_input(store, bundle, MISMATCH)?;
+    if !crate::input::verified_guarded_relation_rule_source(bundle)? {
+        return Err(invalid());
+    }
+    let Intent::AddRule {
+        premise,
+        conclusion,
+    } = &goal.intent
+    else {
+        return Err(invalid());
+    };
+    let source_input = identity(&bundle.request)?;
+    let id = crate::relations::declared_rule_id(premise, conclusion, &source_input)?;
+    let actor = &bundle.request.actor_id;
+    let revision = result.actor_memory_revision.ok_or_else(invalid)?;
+    let memory = store
+        .load_memory_revision(actor, revision)?
+        .ok_or_else(invalid)?;
+    let rule = memory
+        .rules
+        .iter()
+        .find(|rule| rule.id == id)
+        .ok_or_else(invalid)?;
+    let units = crate::core::rule_registration_units(rule);
+    if &rule.premise != premise
+        || &rule.conclusion != conclusion
+        || rule.source_input != source_input
+        || !rule.additional_premises.is_empty()
+        || !rule.dependencies.is_empty()
+        || !rule.valid
+        || result.dependencies != [id]
+        || result.guarantee != Guarantee::UserPremise
+        || plan.guarantee != Guarantee::UserPremise
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.required_units != units
+        || result.text != units.join("\n")
+        || plan.text != result.text
+        || result.text.len() > goal.budget.max_evidence_bytes
+        || goal.budget.max_actions < 3 + u32::from(goal.output_path.is_some())
+    {
+        return Err(invalid());
+    }
+    let current = crate::core::record_source_memory_at_head(store, actor)?;
+    if !current.rules.contains(rule) {
+        return Err(failure(
+            "RECOVERY_GUARDED_RULE_CHANGED",
+            "the current guarded rule differs from the adopted registration",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_record_source_result(
     store: &Store,
     bundle: &InputBundle,
@@ -4208,6 +4276,8 @@ fn inspect(
         ));
     }
     let requires_record_source = source_contract.is_some();
+    let requires_guarded_rule =
+        bundle.meaning.parser_version == crate::input::GUARDED_RELATION_RULE_PARSER_VERSION;
     let requires_sequence_edit = matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::SEQUENCE_CORRECTION_PARSER_VERSION
@@ -4294,6 +4364,7 @@ fn inspect(
             || requires_verified_correction
             || requires_condition_evaluation
             || requires_record_source
+            || requires_guarded_rule
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
@@ -4612,6 +4683,9 @@ fn inspect(
     }
     if requires_record_source {
         verify_record_source_result(store, bundle, result, plan, &goal)?;
+    }
+    if requires_guarded_rule {
+        verify_guarded_rule_registration(store, bundle, result, plan, &goal)?;
     }
     if let Some(hypothesis) = crate::core::previous_group_mean_hypothesis(store, state)? {
         if result.guarantee != Guarantee::Hypothesis
@@ -8815,6 +8889,67 @@ mod tests {
         );
         assert_eq!(engine.execute("alice", request).unwrap(), recovered);
         assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn guarded_rule_registration_reconciles_the_exact_persisted_rule_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "guarded-rule",
+            "alice",
+            "もし[scope=実験室][condition=点検]Xは研究員なら[scope=実験室][condition=点検]Xは入室可",
+        );
+        request.budget.max_actions = 4;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let result = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let state = engine.store.load_case("alice", "case").unwrap().unwrap();
+        let mut altered = state.result.as_ref().unwrap().clone();
+        altered.actor_memory_revision = None;
+        let error = inspect(&engine.store, "alice", &state, &altered).unwrap_err();
+        assert!(
+            error.to_string().contains("RECOVERY_GUARDED_RULE_MISMATCH"),
+            "{error:?}"
+        );
+        let unrelated = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("other", "unrelated", "alice", "[scope=別室]ユリは待機中"),
+            )
+            .unwrap();
+        assert_eq!(unrelated.lifecycle, Lifecycle::Commit, "{unrelated:?}");
+        let confirmed = engine.reconcile("alice", "case").unwrap();
+        assert_eq!(confirmed.lifecycle, Lifecycle::Commit, "{confirmed:?}");
+        assert_eq!(confirmed.dependencies, result.dependencies);
+        assert_eq!(
+            confirmed.actor_memory_revision,
+            result.actor_memory_revision
+        );
+        assert_eq!(confirmed.receipts[0].action_id, token);
+        assert_eq!(
+            confirmed.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(engine.execute("alice", request).unwrap(), confirmed);
+        assert_eq!(engine.store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(engine.store.load_memory("alice").unwrap().rules.len(), 1);
     }
 
     #[test]
