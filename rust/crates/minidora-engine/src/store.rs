@@ -2054,13 +2054,13 @@ impl Store {
                 "duplicate actor memory identity",
             ));
         }
-        let condition_ids = memory
+        let condition_records = memory
             .conditions
             .iter()
-            .map(|condition| condition.definition.condition_id.as_str())
-            .collect::<BTreeSet<_>>();
-        if condition_ids.len() != memory.conditions.len()
-            || condition_ids.iter().any(|id| ids.contains(id))
+            .map(|condition| (condition.definition.condition_id.as_str(), condition))
+            .collect::<BTreeMap<_, _>>();
+        if condition_records.len() != memory.conditions.len()
+            || condition_records.keys().any(|id| ids.contains(id))
         {
             return Err(failure(
                 "INTEGRITY_FAILURE",
@@ -2124,33 +2124,27 @@ impl Store {
                     "condition record version, provenance, or dependencies are invalid",
                 ));
             }
+            if !condition.valid {
+                continue;
+            }
             let expected_dependencies = condition
                 .definition
                 .dependencies
                 .iter()
                 .filter_map(|condition_id| {
-                    memory
-                        .conditions
-                        .iter()
-                        .find(|candidate| {
-                            candidate.definition.condition_id == *condition_id && candidate.valid
-                        })
+                    condition_records
+                        .get(condition_id.as_str())
+                        .filter(|record| record.valid)
                         .map(|record| record.id.as_str())
                 })
                 .collect::<BTreeSet<_>>();
-            let actual_dependencies = condition
+            // The recorded IDs are already checked to be strictly sorted.
+            // Every expected ID comes from an active condition record.
+            if !condition
                 .dependencies
                 .iter()
                 .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            if condition.valid
-                && (actual_dependencies != expected_dependencies
-                    || condition.dependencies.iter().any(|id| {
-                        !memory
-                            .conditions
-                            .iter()
-                            .any(|dependency| dependency.id == *id && dependency.valid)
-                    }))
+                .eq(expected_dependencies)
             {
                 return Err(failure(
                     "INTEGRITY_FAILURE",
@@ -4480,6 +4474,96 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
     }
+
+    #[test]
+    fn condition_dependencies_bind_to_active_records_in_the_whole_snapshot() {
+        let directory = Directory::new();
+        let store = Store::open(&directory.0).unwrap();
+        let request = request();
+        register(&store, &request);
+        let source = identity(&request).unwrap();
+        let mut memory = MemoryState::default();
+        let fact = crate::relations::assert_fact(
+            &mut memory,
+            Proposition {
+                subject: "Nera".into(),
+                predicate: "is".into(),
+                object: "ready".into(),
+                negative: false,
+                scope: "lab".into(),
+                condition_refs: BTreeSet::new(),
+                temporal_scope: None,
+            },
+            &source,
+        )
+        .unwrap();
+        let atom = |id: &str| ConditionDefinition {
+            condition_id: id.into(),
+            subject: "Nera".into(),
+            scope: "lab".into(),
+            expression: ConditionExpression::Fact {
+                predicate: "is".into(),
+                object: id.into(),
+            },
+            valid_from: None,
+            valid_until: None,
+            dependencies: BTreeSet::new(),
+        };
+        let ready =
+            crate::relations::define_condition(&mut memory, atom("ready"), &source).unwrap();
+        crate::relations::define_condition(&mut memory, atom("checked"), &source).unwrap();
+        let definition = ConditionDefinition {
+            expression: ConditionExpression::And {
+                operands: ["checked", "ready"]
+                    .into_iter()
+                    .map(|id| ConditionExpression::ConditionRef {
+                        condition_id: id.into(),
+                    })
+                    .collect(),
+            },
+            dependencies: BTreeSet::from(["checked".into(), "ready".into()]),
+            ..atom("approved")
+        };
+        let parent = crate::relations::define_condition(&mut memory, definition, &source).unwrap();
+        memory.conditions.rotate_right(1);
+        memory.revision = 1;
+        store.save_memory("alice", &memory).unwrap();
+        assert_eq!(store.load_memory("alice").unwrap(), memory);
+
+        let mut wrong_kind = memory.clone();
+        wrong_kind.conditions[0].dependencies[0] = fact.id;
+        wrong_kind.conditions[0].dependencies.sort();
+        let mut inactive_dependency = memory.clone();
+        inactive_dependency.conditions[1].valid = false;
+        for invalid in [&wrong_kind, &inactive_dependency] {
+            assert!(matches!(
+                store.validate_memory_scope("alice", invalid),
+                Err(minidora_domain::Error::Contract { code, message })
+                    if code == "INTEGRITY_FAILURE"
+                        && message == "active condition dependency records differ from the definition"
+            ));
+        }
+
+        let mut duplicate_definition = memory.clone();
+        duplicate_definition.conditions[2].definition.condition_id = "ready".into();
+        duplicate_definition.conditions[2].valid = false;
+        assert!(matches!(
+            store.validate_memory_scope("alice", &duplicate_definition),
+            Err(minidora_domain::Error::Contract { code, message })
+                if code == "INTEGRITY_FAILURE"
+                    && message == "condition IDs must be unique and distinct from memory record IDs"
+        ));
+
+        let old = memory.clone();
+        let invalidated = crate::relations::invalidate(&mut memory, &ready.id).unwrap();
+        assert!(invalidated.contains(&parent.id));
+        assert!(!memory.conditions[0].valid);
+        assert_eq!(memory.conditions[0].dependencies, parent.dependencies);
+        store.save_memory("alice", &memory).unwrap();
+        assert_eq!(store.load_memory("alice").unwrap(), memory);
+        assert_eq!(store.load_memory_revision("alice", 1).unwrap(), Some(old));
+    }
+
     #[test]
     fn memory_revision_preserves_immutable_records_and_allows_tombstones() {
         let directory = Directory::new();
