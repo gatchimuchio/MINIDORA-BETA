@@ -92,6 +92,8 @@ pub(crate) const EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v148-explicit-explanation-source-packet-summary";
 pub(crate) const EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v149-explicit-explanation-source-line-summary";
+pub(crate) const IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v150-implicit-explanation-source-line-summary";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -139,12 +141,20 @@ pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v114-explicit-source-explanation-followup";
 
-pub(crate) fn uses_explicit_source_explanation(version: &str) -> bool {
+pub(crate) fn uses_source_explanation_context(version: &str) -> bool {
+    is_explanation_line_summary_version(version)
+        || matches!(
+            version,
+            EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                | EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+        )
+}
+
+pub(crate) fn is_explanation_line_summary_version(version: &str) -> bool {
     matches!(
         version,
-        EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
-            | EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
-            | EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+        EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            | IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
     )
 }
 
@@ -243,6 +253,14 @@ pub(crate) fn verified_multi_condition_relation_source(bundle: &InputBundle) -> 
 }
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
+    seal_with_implicit_explanation(request, previous, false)
+}
+
+pub(crate) fn seal_with_implicit_explanation(
+    request: &RequestEnvelope,
+    previous: Option<&ResultRecord>,
+    implicit_source_explanation: bool,
+) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
         .iter()
         .any(|value| value.trim().is_empty())
@@ -366,12 +384,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Err(error) => return Err(error),
     };
-    let explicit_source_explanation_candidate = request.context_ref.is_some()
-        && previous.is_some_and(|result| {
-            result.lifecycle == Lifecycle::Commit
-                && result.guarantee == Guarantee::Hypothesis
-                && result.evidence.is_empty()
-        });
+    let source_explanation_candidate = previous.is_some_and(|result| {
+        result.lifecycle == Lifecycle::Commit
+            && result.guarantee == Guarantee::Hypothesis
+            && result.evidence.is_empty()
+    });
+    let explicit_source_explanation_candidate =
+        request.context_ref.is_some() && source_explanation_candidate;
     let parser_version = match &intent {
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
@@ -430,6 +449,13 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Intent::SummarizePreviousSourceLines { .. } if explicit_source_explanation_candidate => {
             EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+        }
+        Intent::SummarizePreviousSourceLines { .. }
+            if implicit_source_explanation
+                && request.context_ref.is_none()
+                && source_explanation_candidate =>
+        {
+            IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
         }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource

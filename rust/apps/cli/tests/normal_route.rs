@@ -12790,6 +12790,85 @@ fn source_line_summary_reuses_the_single_body_verified_by_a_historical_explanati
 }
 
 #[test]
+fn source_line_summary_uses_the_immediately_preceding_explanation_without_context_flag() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let stable = "https://example.test/stable";
+    let conflict = "https://example.test/conflict";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_observations(
+        &scratch.0,
+        actor,
+        [
+            (conflict, "初回の観測値です。", 4),
+            (stable, "水温は31度でした。風向は北でした。", 3),
+            (conflict, "もう一つの観測値です。", 4),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet = sequence_artifact(&store, &Value::String(packet_refs[1].clone()));
+    let packet_id = packet["id"].as_str().unwrap();
+    let first = record(&execute(
+        &scratch.0,
+        actor,
+        &[&format!("出典packet: {packet_id} を2行で要約して")],
+    ));
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    let detail_id = detail["id"].as_str().unwrap();
+    let summary = record(&execute(&scratch.0, actor, &["前回の資料を2行で要約して"]));
+    assert_eq!(summary["text"], first["text"]);
+    assert_eq!(summary["dependencies"][0], detail_id);
+    assert_eq!(summary["dependencies"][1], source_id);
+    assert_eq!(summary["dependencies"][2], packet_refs[1]);
+    assert_eq!(summary["dependencies"].as_array().unwrap().len(), 4);
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert!(saved["bundle"]["request"]["context_ref"].is_null());
+    assert_eq!(saved["bundle"]["meaning"]["context_result_ref"], detail_id);
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v150-implicit-explanation-source-line-summary"
+    );
+
+    let later_detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    let later_detail_id = later_detail["id"].as_str().unwrap();
+    let capped = record(&execute(
+        &scratch.0,
+        actor,
+        &["summarize the previous source in up to 3 lines"],
+    ));
+    assert_eq!(capped["text"], first["text"]);
+    assert_eq!(capped["dependencies"][0], later_detail_id);
+    assert_eq!(capped["dependencies"][2], packet_refs[1]);
+
+    record(&execute(&scratch.0, actor, &["2+3"]));
+    let target = scratch.0.join("unrelated-latest-must-not-write.txt");
+    let path = target.to_str().unwrap();
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--output",
+                path,
+                "--allow-write",
+                path,
+                "前回の資料を2行で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("SOURCE_BODY_UNAVAILABLE:")
+    );
+    assert!(result["render"].is_null());
+    assert!(!target.exists());
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_line_summary_reports_ambiguity_for_a_historical_explanation_with_two_sources() {
     let scratch = Scratch::new();
     let actor = "owner";
@@ -12812,6 +12891,28 @@ fn source_line_summary_reports_ambiguity_for_a_historical_explanation_with_two_s
     let detail_id = detail["id"].as_str().unwrap();
     let path = scratch.0.join("ambiguous-source-must-not-be-written.txt");
     let path_arg = path.to_str().unwrap();
+    let implicit = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--output",
+                path_arg,
+                "--allow-write",
+                path_arg,
+                "前回の資料を2行で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        implicit["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("AMBIGUOUS_SOURCE_CONTEXT:")
+    );
+    assert!(implicit["render"].is_null());
     let result = stopped(
         &execute(
             &scratch.0,

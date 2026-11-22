@@ -1697,11 +1697,10 @@ impl Store {
         Ok(None)
     }
 
-    /// Use a verified stopped revision to find the result that was current when
-    /// its input was received, even if it explicitly referred to an older result.
+    /// Find the preceding result at the start of the input in a verified revision.
     pub(crate) fn input_start_predecessor(
         &self,
-        stopped: &CaseRevision,
+        state: &CaseRevision,
     ) -> Result<Option<ResultRecord>> {
         let refs: Option<(String, Option<String>)> = sql(self
             .connection
@@ -1712,7 +1711,7 @@ impl Store {
                ON prior.case_id=received.case_id AND prior.revision=received.parent_revision
              WHERE received.case_id=?1 AND received.revision<?2 AND received.lifecycle='RECEIVED'
              ORDER BY received.revision DESC LIMIT 1",
-                params![stopped.case_id, integer(stopped.revision)?],
+                params![state.case_id, integer(state.revision)?],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional())?;
@@ -1721,7 +1720,7 @@ impl Store {
         };
         let received: CaseRevision = self.read_blob(&received_ref)?;
         if received.lifecycle != Lifecycle::Received
-            || received.input_fingerprint != stopped.input_fingerprint
+            || received.input_fingerprint != state.input_fingerprint
         {
             return Ok(None);
         }

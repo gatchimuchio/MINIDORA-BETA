@@ -5680,9 +5680,23 @@ impl Engine {
         } else if let Some(bundle) = direct_bundle {
             Ok(bundle)
         } else {
-            input::seal(&request, previous)
+            let implicit_source_explanation = implicit_context
+                && has_compute_budget
+                && latest.as_ref().is_some_and(|case| {
+                    case.lifecycle == Lifecycle::Commit
+                        && case.bundle.as_ref().is_some_and(|bundle| {
+                            matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+                        })
+                });
+            input::seal_with_implicit_explanation(&request, previous, implicit_source_explanation)
         };
         let sealed = sealed.and_then(|bundle| {
+            if bundle.meaning.parser_version
+                == input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            {
+                // This version binds the explanation itself before resolving its source.
+                return Ok(bundle);
+            }
             let Some(prior_case) = latest.as_ref().filter(|_| implicit_context) else {
                 return Ok(bundle);
             };

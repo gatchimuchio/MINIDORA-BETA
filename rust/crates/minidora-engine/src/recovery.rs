@@ -124,7 +124,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
-                ) || crate::input::uses_explicit_source_explanation(&bundle.meaning.parser_version)
+                ) || crate::input::uses_source_explanation_context(&bundle.meaning.parser_version)
             })
         {
             store_execution_graph(store, actor, case, &graph)?
@@ -4016,6 +4016,7 @@ fn verify_source_summary_context(
                 | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
         ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
     let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();
@@ -4047,10 +4048,24 @@ fn verify_source_summary_context(
     if matches!(
         goal.intent,
         Intent::SummarizePreviousSourcePacketLines { .. }
-    ) || bundle.meaning.parser_version
-        == crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+    ) || crate::input::is_explanation_line_summary_version(&bundle.meaning.parser_version)
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_SUMMARY_MISMATCH")?;
+    }
+    if bundle.meaning.parser_version
+        == crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+    {
+        let context = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id));
+        if context.is_none() || store.input_start_predecessor(state)?.as_ref() != context {
+            return Err(failure(
+                "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+                "the sealed explanation was not the preceding result when the input was received",
+            ));
+        }
     }
     crate::text_summary::verify_retained_source_summary(
         store,

@@ -2001,13 +2001,15 @@ fn explicit_explanation_source<'a>(
             Some(step) => (&step.derivation_input, referent(&step.derivation_input)?),
             None => (bundle, context),
         };
-        if !crate::input::uses_explicit_source_explanation(&input.meaning.parser_version) {
+        let parser_version = input.meaning.parser_version.as_str();
+        if !crate::input::uses_source_explanation_context(parser_version) {
             break direct_source_followup(store, input, prior_results, detail, Some(history))?
                 .ok_or_else(invalid)?;
         }
-        let reuse_sole_summary_packet = input.meaning.parser_version
-            == crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION;
-        if input.request.context_ref.as_deref() != Some(detail.id.as_str())
+        let expected_request_context = (parser_version
+            != crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION)
+            .then_some(detail.id.as_str());
+        if input.request.context_ref.as_deref() != expected_request_context
             || input.meaning.context_result_ref.as_deref() != Some(detail.id.as_str())
             || input.context_sha256 != identity(&Some(detail))?
             || detail.lifecycle != Lifecycle::Commit
@@ -2044,7 +2046,9 @@ fn explicit_explanation_source<'a>(
             detail_input,
             derivation,
             derivation_input,
-            reuse_sole_summary_packet,
+            reuse_sole_summary_packet: crate::input::is_explanation_line_summary_version(
+                parser_version,
+            ),
         });
     };
 
@@ -2103,7 +2107,7 @@ pub(crate) fn source_followup_context<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     context: &'a ResultRecord,
 ) -> Result<Option<SourceFollowup<'a>>> {
-    if crate::input::uses_explicit_source_explanation(&bundle.meaning.parser_version) {
+    if crate::input::uses_source_explanation_context(&bundle.meaning.parser_version) {
         let request = &bundle.request;
         return store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
             explicit_explanation_source(store, history, bundle, prior_results, context)
@@ -2269,6 +2273,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
     )
     .then_some(version);
     let compatible_line_version = match parser {
@@ -2278,7 +2283,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
                 | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
         ),
         Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
-            version == crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            crate::input::is_explanation_line_summary_version(version)
         }
         _ => false,
     };
@@ -3052,6 +3057,7 @@ fn source_summary_packet_positions(
             | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
