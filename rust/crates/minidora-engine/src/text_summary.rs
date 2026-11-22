@@ -1957,15 +1957,15 @@ fn source_followup_for_replay<'a>(
     source_followup_context(store, bundle, prior_results, prior)
 }
 
-struct SourceExplanationStep<'a> {
-    detail: &'a ResultRecord,
-    detail_input: InputBundle,
+struct SourceContextStep<'a> {
+    context: &'a ResultRecord,
+    detail_input: Option<InputBundle>,
     derivation: &'a ResultRecord,
     derivation_input: InputBundle,
     reuse_sole_summary_packet: bool,
 }
 
-fn explicit_explanation_source<'a>(
+fn derived_source_followup<'a>(
     store: &Store,
     history: &VerifiedCaseHistory<'_>,
     bundle: &InputBundle,
@@ -1975,7 +1975,13 @@ fn explicit_explanation_source<'a>(
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
-            "the explicitly referenced source explanation or its derivation differs from the retained proof",
+            if bundle.meaning.parser_version
+                == crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            {
+                "the preceding source summary differs from the retained proof"
+            } else {
+                "the explicitly referenced source explanation or its derivation differs from the retained proof"
+            },
         )
     };
     let referent = |input: &InputBundle| {
@@ -1992,48 +1998,59 @@ fn explicit_explanation_source<'a>(
             .map(|(_, input)| input)
             .ok_or_else(invalid)
     };
-    let mut steps: Vec<SourceExplanationStep<'a>> = Vec::new();
+    let mut steps: Vec<SourceContextStep<'a>> = Vec::new();
     let mut visited = BTreeSet::new();
     // Resolve the original scope once, then verify each derived display from
-    // oldest to newest. Explicit follow-ups can form a long linear history.
+    // oldest to newest. Related summaries and explanations can alternate.
     let mut scope = loop {
-        let (input, detail) = match steps.last() {
+        let (input, target) = match steps.last() {
             Some(step) => (&step.derivation_input, referent(&step.derivation_input)?),
             None => (bundle, context),
         };
         let parser_version = input.meaning.parser_version.as_str();
-        if !crate::input::uses_source_explanation_context(parser_version) {
-            break direct_source_followup(store, input, prior_results, detail, Some(history))?
+        if !crate::input::uses_derived_source_context(parser_version) {
+            break direct_source_followup(store, input, prior_results, target, Some(history))?
                 .ok_or_else(invalid)?;
         }
-        let expected_request_context = (parser_version
-            != crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION)
-            .then_some(detail.id.as_str());
+        let expected_request_context =
+            (!crate::input::uses_implicit_source_context(parser_version))
+                .then_some(target.id.as_str());
         if input.request.context_ref.as_deref() != expected_request_context
-            || input.meaning.context_result_ref.as_deref() != Some(detail.id.as_str())
-            || input.context_sha256 != identity(&Some(detail))?
-            || detail.lifecycle != Lifecycle::Commit
-            || detail.guarantee != Guarantee::Hypothesis
-            || !detail.evidence.is_empty()
-            || !visited.insert(detail.id.as_str())
+            || input.meaning.context_result_ref.as_deref() != Some(target.id.as_str())
+            || input.context_sha256 != identity(&Some(target))?
+            || target.lifecycle != Lifecycle::Commit
+            || target.guarantee != Guarantee::Hypothesis
+            || !target.evidence.is_empty()
+            || !visited.insert(target.id.as_str())
         {
             return Err(invalid());
         }
-        let detail_input = registered(detail)?;
+        let target_input = registered(target)?;
+        if parser_version == crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION {
+            if !crate::input::is_source_summary_intent(&target_input.meaning.intent) {
+                return Err(invalid());
+            }
+            steps.push(SourceContextStep {
+                context: target,
+                detail_input: None,
+                derivation: target,
+                derivation_input: target_input,
+                reuse_sole_summary_packet: true,
+            });
+            continue;
+        }
+        let detail_input = target_input;
         if !matches!(detail_input.meaning.intent, Intent::ExplainPrevious) {
-            break SourceFollowup::direct(detail);
+            break SourceFollowup::direct(target);
         }
         let derivation = referent(&detail_input)?;
         let derivation_input = registered(derivation)?;
         if !matches!(
             derivation_input.meaning.intent,
             Intent::AskPreviousSourceQuestion { .. }
-                | Intent::SummarizePreviousSource
-                | Intent::SummarizePreviousSourceConstrained { .. }
-                | Intent::SummarizePreviousSourceLines { .. }
-                | Intent::SummarizePreviousSourcePacketLines { .. }
-        ) {
-            break SourceFollowup::direct(detail);
+        ) && !crate::input::is_source_summary_intent(&derivation_input.meaning.intent)
+        {
+            break SourceFollowup::direct(target);
         }
         if detail_input.meaning.context_result_ref.as_deref() != Some(derivation.id.as_str())
             || detail_input.context_sha256 != identity(&Some(derivation))?
@@ -2041,9 +2058,9 @@ fn explicit_explanation_source<'a>(
         {
             return Err(invalid());
         }
-        steps.push(SourceExplanationStep {
-            detail,
-            detail_input,
+        steps.push(SourceContextStep {
+            context: target,
+            detail_input: Some(detail_input),
             derivation,
             derivation_input,
             reuse_sole_summary_packet: crate::input::is_explanation_line_summary_version(
@@ -2054,13 +2071,49 @@ fn explicit_explanation_source<'a>(
 
     for step in steps.iter().rev() {
         let derivation_plan = step.derivation.content_plan.as_ref().ok_or_else(invalid)?;
+        let Some(detail_input) = &step.detail_input else {
+            if history
+                .input_result(&step.context.input_id, step.context.input_version)?
+                .as_ref()
+                != Some(step.context)
+            {
+                return Err(invalid());
+            }
+            let proof = verify_retained_source_summary(
+                store,
+                &step.derivation_input,
+                prior_results,
+                step.derivation,
+                derivation_plan,
+                Some(scope),
+            )?
+            .ok_or_else(invalid)?;
+            crate::document::revalidate_previous_document_render(
+                store,
+                &bundle.request.actor_id,
+                &bundle.request.case_id,
+                step.context,
+                None,
+                "SOURCE_CONTEXT_INVALID",
+                "retrieved source summary",
+            )?;
+            let index = proof.sole_packet_index.ok_or_else(|| {
+                failure(
+                    "AMBIGUOUS_SOURCE_CONTEXT",
+                    "直前の資料要約に複数の出典があり、行数要約の対象を一つに決められません。",
+                )
+            })?;
+            scope.selected_body_index = Some(index);
+            scope.context = step.context;
+            continue;
+        };
         let proof = if matches!(
             step.derivation_input.meaning.intent,
             Intent::AskPreviousSourceQuestion { .. }
         ) {
             previous_source_question_explanation(
                 store,
-                &step.detail_input,
+                detail_input,
                 &step.derivation_input,
                 prior_results,
                 step.derivation,
@@ -2070,7 +2123,7 @@ fn explicit_explanation_source<'a>(
         } else {
             previous_source_summary_explanation(
                 store,
-                &step.detail_input,
+                detail_input,
                 &step.derivation_input,
                 prior_results,
                 step.derivation,
@@ -2079,23 +2132,17 @@ fn explicit_explanation_source<'a>(
             )?
         };
         let Some(proof) = proof.filter(|proof| proof.source_context_ref.is_some()) else {
-            scope = SourceFollowup::direct(step.detail);
+            scope = SourceFollowup::direct(step.context);
             continue;
         };
-        verify_source_explanation_result(
-            store,
-            &step.detail_input,
-            step.detail,
-            &proof,
-            Some(history),
-        )?;
+        verify_source_explanation_result(store, detail_input, step.context, &proof, Some(history))?;
         if step.reuse_sole_summary_packet
             && let Some(index) = proof.sole_summary_packet_index
         {
             // The verified report selected this original packet within the incoming scope.
             scope.selected_body_index = Some(index);
         }
-        scope.context = step.detail;
+        scope.context = step.context;
     }
     Ok(Some(scope))
 }
@@ -2107,10 +2154,10 @@ pub(crate) fn source_followup_context<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     context: &'a ResultRecord,
 ) -> Result<Option<SourceFollowup<'a>>> {
-    if crate::input::uses_source_explanation_context(&bundle.meaning.parser_version) {
+    if crate::input::uses_derived_source_context(&bundle.meaning.parser_version) {
         let request = &bundle.request;
         return store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
-            explicit_explanation_source(store, history, bundle, prior_results, context)
+            derived_source_followup(store, history, bundle, prior_results, context)
         });
     }
     direct_source_followup(store, bundle, prior_results, context, None)
@@ -2274,6 +2321,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
     )
     .then_some(version);
     let compatible_line_version = match parser {
@@ -2284,6 +2332,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
         ),
         Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
             crate::input::is_explanation_line_summary_version(version)
+                || version == crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
         }
         _ => false,
     };
@@ -3058,6 +3107,7 @@ fn source_summary_packet_positions(
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {

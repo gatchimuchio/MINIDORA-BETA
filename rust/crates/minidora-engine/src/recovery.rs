@@ -124,7 +124,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
-                ) || crate::input::uses_source_explanation_context(&bundle.meaning.parser_version)
+                ) || crate::input::uses_derived_source_context(&bundle.meaning.parser_version)
             })
         {
             store_execution_graph(store, actor, case, &graph)?
@@ -4017,6 +4017,7 @@ fn verify_source_summary_context(
                 | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
         ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
     let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();
@@ -4049,12 +4050,11 @@ fn verify_source_summary_context(
         goal.intent,
         Intent::SummarizePreviousSourcePacketLines { .. }
     ) || crate::input::is_explanation_line_summary_version(&bundle.meaning.parser_version)
+        || crate::input::uses_implicit_source_context(&bundle.meaning.parser_version)
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_SUMMARY_MISMATCH")?;
     }
-    if bundle.meaning.parser_version
-        == crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
-    {
+    if crate::input::uses_implicit_source_context(&bundle.meaning.parser_version) {
         let context = bundle
             .meaning
             .context_result_ref
@@ -4063,7 +4063,7 @@ fn verify_source_summary_context(
         if context.is_none() || store.input_start_predecessor(state)?.as_ref() != context {
             return Err(failure(
                 "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-                "the sealed explanation was not the preceding result when the input was received",
+                "the sealed source context was not the preceding result when the input was received",
             ));
         }
     }

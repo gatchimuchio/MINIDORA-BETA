@@ -12869,6 +12869,125 @@ fn source_line_summary_uses_the_immediately_preceding_explanation_without_contex
 }
 
 #[test]
+fn source_line_summary_changes_line_count_using_the_preceding_source_summary() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let selected_uri = "https://example.test/stable";
+    let conflicting_uri = "https://example.test/conflicting";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_observations(
+        &scratch.0,
+        actor,
+        [
+            (conflicting_uri, "一回目の観測です。", 4),
+            (selected_uri, "水温は31度でした。風向は北でした。", 3),
+            (conflicting_uri, "同時刻の別記録です。", 4),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet = sequence_artifact(&store, &Value::String(packet_refs[1].clone()));
+    let packet_id = packet["id"].as_str().unwrap();
+    let original = record(&execute(
+        &scratch.0,
+        actor,
+        &[&format!("出典packet: {packet_id} を2行で要約して")],
+    ));
+    let shorter = record(&execute(
+        &scratch.0,
+        actor,
+        &["前回の資料を1行以内で要約して"],
+    ));
+    let text = shorter["text"].as_str().unwrap();
+    assert_eq!(text.lines().count(), 1);
+    assert!(text.contains(selected_uri));
+    assert_eq!(shorter["dependencies"][0], original["id"]);
+    assert_eq!(shorter["dependencies"][1], source_id);
+    assert_eq!(shorter["dependencies"][2], packet_refs[1]);
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert!(saved["bundle"]["request"]["context_ref"].is_null());
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        original["id"]
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v151-implicit-source-summary-line"
+    );
+
+    let expanded = record(&execute(
+        &scratch.0,
+        actor,
+        &["summarize the previous source in 2 lines"],
+    ));
+    assert_eq!(expanded["text"], original["text"]);
+    assert_eq!(expanded["dependencies"][0], shorter["id"]);
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    assert!(detail["text"].as_str().unwrap().contains(packet_id));
+    let after_detail = record(&execute(&scratch.0, actor, &["前回の資料を1行で要約して"]));
+    assert_eq!(after_detail["text"].as_str().unwrap().lines().count(), 1);
+    assert_eq!(after_detail["dependencies"][0], detail["id"]);
+    let later = record(&execute(&scratch.0, actor, &["前回の資料を2行で要約して"]));
+    assert_eq!(later["text"], original["text"]);
+    assert_eq!(later["dependencies"][0], after_detail["id"]);
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn source_line_summary_stops_after_a_preceding_summary_with_multiple_sources() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    seed_fetched_source_case_with_sources(
+        &scratch.0,
+        actor,
+        &[
+            (
+                "https://example.test/weather",
+                "天気は晴れでした。風は北から吹きました。",
+            ),
+            (
+                "https://example.test/water",
+                "水温は31度でした。水位は一定でした。",
+            ),
+        ],
+    );
+    let broad = record(&execute(&scratch.0, actor, &["前回の資料を要約して"]));
+    assert_eq!(
+        broad["text"]
+            .as_str()
+            .unwrap()
+            .matches("出典packet:")
+            .count(),
+        2
+    );
+    let target = scratch.0.join("unresolved-source-must-not-write.txt");
+    let path = target.to_str().unwrap();
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--output",
+                path,
+                "--allow-write",
+                path,
+                "前回の資料を1行で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("AMBIGUOUS_SOURCE_CONTEXT:")
+    );
+    assert!(result["render"].is_null());
+    assert!(!target.exists());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_line_summary_reports_ambiguity_for_a_historical_explanation_with_two_sources() {
     let scratch = Scratch::new();
     let actor = "owner";

@@ -94,6 +94,8 @@ pub(crate) const EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v149-explicit-explanation-source-line-summary";
 pub(crate) const IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v150-implicit-explanation-source-line-summary";
+pub(crate) const IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
+    "declarative-ja-en-v151-implicit-source-summary-line";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -141,6 +143,24 @@ pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v114-explicit-source-explanation-followup";
 
+pub(crate) enum ImplicitSourceContext {
+    Explanation,
+    Summary,
+}
+
+pub(crate) fn uses_derived_source_context(version: &str) -> bool {
+    version == IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+        || uses_source_explanation_context(version)
+}
+
+pub(crate) fn uses_implicit_source_context(version: &str) -> bool {
+    matches!(
+        version,
+        IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+            | IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+    )
+}
+
 pub(crate) fn uses_source_explanation_context(version: &str) -> bool {
     is_explanation_line_summary_version(version)
         || matches!(
@@ -175,6 +195,16 @@ pub(crate) fn is_legacy_text_summary_explanation_version(version: &str) -> bool 
             | TEXT_LOCATION_EXPLANATION_PARSER_VERSION
             | TEXT_EDIT_EXPLANATION_PARSER_VERSION
             | TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
+    )
+}
+
+pub(crate) fn is_source_summary_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::SummarizePreviousSource
+            | Intent::SummarizePreviousSourceConstrained { .. }
+            | Intent::SummarizePreviousSourceLines { .. }
+            | Intent::SummarizePreviousSourcePacketLines { .. }
     )
 }
 
@@ -253,13 +283,13 @@ pub(crate) fn verified_multi_condition_relation_source(bundle: &InputBundle) -> 
 }
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
-    seal_with_implicit_explanation(request, previous, false)
+    seal_with_implicit_source_context(request, previous, None)
 }
 
-pub(crate) fn seal_with_implicit_explanation(
+pub(crate) fn seal_with_implicit_source_context(
     request: &RequestEnvelope,
     previous: Option<&ResultRecord>,
-    implicit_source_explanation: bool,
+    implicit_source_context: Option<ImplicitSourceContext>,
 ) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
         .iter()
@@ -348,14 +378,7 @@ pub(crate) fn seal_with_implicit_explanation(
             "no actual committed previous search result is available for body retrieval".into(),
         );
     }
-    if matches!(
-        intent,
-        Intent::SummarizePreviousSource
-            | Intent::SummarizePreviousSourceConstrained { .. }
-            | Intent::SummarizePreviousSourceLines { .. }
-            | Intent::SummarizePreviousSourcePacketLines { .. }
-    ) && lacks_source_context()
-    {
+    if is_source_summary_intent(&intent) && lacks_source_context() {
         unresolved.push(
             "no actual committed previous result is available for source summarization".into(),
         );
@@ -391,6 +414,12 @@ pub(crate) fn seal_with_implicit_explanation(
     });
     let explicit_source_explanation_candidate =
         request.context_ref.is_some() && source_explanation_candidate;
+    let implicit_source_line_parser = implicit_source_context
+        .filter(|_| request.context_ref.is_none() && source_explanation_candidate)
+        .map(|context| match context {
+            ImplicitSourceContext::Explanation => IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION,
+            ImplicitSourceContext::Summary => IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION,
+        });
     let parser_version = match &intent {
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
@@ -450,12 +479,8 @@ pub(crate) fn seal_with_implicit_explanation(
         Intent::SummarizePreviousSourceLines { .. } if explicit_source_explanation_candidate => {
             EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
         }
-        Intent::SummarizePreviousSourceLines { .. }
-            if implicit_source_explanation
-                && request.context_ref.is_none()
-                && source_explanation_candidate =>
-        {
-            IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+        Intent::SummarizePreviousSourceLines { .. } if implicit_source_line_parser.is_some() => {
+            implicit_source_line_parser.expect("implicit source line summary parser")
         }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource

@@ -5680,21 +5680,24 @@ impl Engine {
         } else if let Some(bundle) = direct_bundle {
             Ok(bundle)
         } else {
-            let implicit_source_explanation = implicit_context
-                && has_compute_budget
-                && latest.as_ref().is_some_and(|case| {
-                    case.lifecycle == Lifecycle::Commit
-                        && case.bundle.as_ref().is_some_and(|bundle| {
-                            matches!(bundle.meaning.intent, Intent::ExplainPrevious)
-                        })
+            let implicit_source_context = latest
+                .as_ref()
+                .filter(|case| {
+                    implicit_context && has_compute_budget && case.lifecycle == Lifecycle::Commit
+                })
+                .and_then(|case| case.bundle.as_ref())
+                .and_then(|bundle| match &bundle.meaning.intent {
+                    Intent::ExplainPrevious => Some(input::ImplicitSourceContext::Explanation),
+                    intent if input::is_source_summary_intent(intent) => {
+                        Some(input::ImplicitSourceContext::Summary)
+                    }
+                    _ => None,
                 });
-            input::seal_with_implicit_explanation(&request, previous, implicit_source_explanation)
+            input::seal_with_implicit_source_context(&request, previous, implicit_source_context)
         };
         let sealed = sealed.and_then(|bundle| {
-            if bundle.meaning.parser_version
-                == input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
-            {
-                // This version binds the explanation itself before resolving its source.
+            if input::uses_implicit_source_context(&bundle.meaning.parser_version) {
+                // Preserve the derived result itself before resolving its source.
                 return Ok(bundle);
             }
             let Some(prior_case) = latest.as_ref().filter(|_| implicit_context) else {
@@ -5775,6 +5778,9 @@ impl Engine {
                 source,
             ) {
                 Ok(context) => context,
+                Err(Error::Contract { code, message }) if code == "AMBIGUOUS_SOURCE_CONTEXT" => {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
                 Err(error) => {
                     return self.stop(
                         &mut state,
