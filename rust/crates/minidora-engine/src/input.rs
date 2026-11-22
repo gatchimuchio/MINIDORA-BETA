@@ -88,6 +88,8 @@ pub(crate) const SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v146-source-packet-line-summary";
 pub(crate) const SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v147-source-packet-uri-version-scope";
+pub(crate) const EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v148-explicit-explanation-source-packet-summary";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -134,6 +136,14 @@ pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
 
 pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v114-explicit-source-explanation-followup";
+
+pub(crate) fn uses_explicit_source_explanation(version: &str) -> bool {
+    matches!(
+        version,
+        EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+    )
+}
 
 pub(crate) fn is_legacy_text_summary_explanation_version(version: &str) -> bool {
     matches!(
@@ -353,6 +363,12 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         }
         Err(error) => return Err(error),
     };
+    let explicit_source_explanation_candidate = request.context_ref.is_some()
+        && previous.is_some_and(|result| {
+            result.lifecycle == Lifecycle::Commit
+                && result.guarantee == Guarantee::Hypothesis
+                && result.evidence.is_empty()
+        });
     let parser_version = match &intent {
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
@@ -404,15 +420,15 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
         Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,
         Intent::ExplainCalculationSequenceStep { .. } => SEQUENCE_STEP_EXPLANATION_PARSER_VERSION,
+        Intent::SummarizePreviousSourcePacketLines { .. }
+            if explicit_source_explanation_candidate =>
+        {
+            EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+        }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource
         | Intent::SummarizePreviousSourceConstrained { .. }
-            if request.context_ref.is_some()
-                && previous.is_some_and(|result| {
-                    result.lifecycle == Lifecycle::Commit
-                        && result.guarantee == Guarantee::Hypothesis
-                        && result.evidence.is_empty()
-                }) =>
+            if explicit_source_explanation_candidate =>
         {
             EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
         }

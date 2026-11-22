@@ -1997,9 +1997,7 @@ fn explicit_explanation_source<'a>(
             Some(step) => (&step.derivation_input, referent(&step.derivation_input)?),
             None => (bundle, context),
         };
-        if input.meaning.parser_version
-            != crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
-        {
+        if !crate::input::uses_explicit_source_explanation(&input.meaning.parser_version) {
             break direct_source_followup(store, input, prior_results, detail, Some(history))?
                 .ok_or_else(invalid)?;
         }
@@ -2092,9 +2090,7 @@ pub(crate) fn source_followup_context<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     context: &'a ResultRecord,
 ) -> Result<Option<SourceFollowup<'a>>> {
-    if bundle.meaning.parser_version
-        == crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
-    {
+    if crate::input::uses_explicit_source_explanation(&bundle.meaning.parser_version) {
         let request = &bundle.request;
         return store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
             explicit_explanation_source(store, history, bundle, prior_results, context)
@@ -2258,12 +2254,17 @@ pub(crate) fn verify_retained_source_summary<'a>(
         crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
     )
     .then_some(version);
-    let legacy_packet_line = parser
+    let compatible_packet_version = parser
         == Some(crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION)
-        && version == crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION;
-    if parser != sealed_line_version && !legacy_packet_line {
+        && matches!(
+            version,
+            crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+        );
+    if parser != sealed_line_version && !compatible_packet_version {
         return Err(failure(
             "RECOVERY_SOURCE_SUMMARY_MISMATCH",
             "the retained source line summary intent and parser version differ",
@@ -3022,6 +3023,7 @@ fn source_summary_packet_positions(
             | crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
@@ -3030,9 +3032,11 @@ fn source_summary_packet_positions(
     for (_, packet, reference) in packets {
         validate_source_summary_body(packet, reference)?;
     }
-    let final_uri_scope = if parser_version
-        == crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
-    {
+    let final_uri_scope = if matches!(
+        parser_version,
+        crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+    ) {
         let mut uris = packets.iter().filter_map(|(_, packet, _)| {
             (Some(packet.id.as_str()) == requested_packet_id).then_some(packet.final_uri.as_str())
         });

@@ -12643,6 +12643,90 @@ fn source_packet_line_summary_limits_version_conflicts_to_the_selected_uri() {
 }
 
 #[test]
+fn source_packet_line_summary_reuses_an_explicit_historical_source_explanation() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let uri = "https://example.test/stable";
+    let body = "水温は31度でした。風向は北でした。";
+    let conflict_uri = "https://example.test/conflicting";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_observations(
+        &scratch.0,
+        actor,
+        [
+            (conflict_uri, "異なる観測。測定値は1でした。", 3),
+            (uri, body, 2),
+            (conflict_uri, "別の観測。測定値は2でした。", 3),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet = sequence_artifact(&store, &Value::String(packet_refs[1].clone()));
+    let packet_id = packet["id"].as_str().unwrap();
+    let raw = format!("出典packet: {packet_id} を2行で要約して");
+    let original = record(&execute(&scratch.0, actor, &[&raw]));
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    let _ = record(&execute(&scratch.0, actor, &["2+3"]));
+    let detail_id = detail["id"].as_str().unwrap();
+    let followed = record(&execute(&scratch.0, actor, &["--context", detail_id, &raw]));
+    assert_eq!(followed["lifecycle"], "COMMIT");
+    assert_eq!(followed["text"], original["text"]);
+    let dependencies = followed["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies[0], detail_id);
+    assert_eq!(
+        &dependencies[1..],
+        original["dependencies"].as_array().unwrap().as_slice()
+    );
+    assert_eq!(dependencies[1], source_id);
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(saved["bundle"]["request"]["context_ref"], detail_id);
+    assert_eq!(saved["bundle"]["meaning"]["context_result_ref"], detail_id);
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v148-explicit-explanation-source-packet-summary"
+    );
+
+    let later_detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    let later_detail_id = later_detail["id"].as_str().unwrap();
+    let nested = record(&execute(
+        &scratch.0,
+        actor,
+        &["--context", later_detail_id, &raw],
+    ));
+    assert_eq!(nested["text"], original["text"]);
+    assert_eq!(nested["dependencies"][0], later_detail_id);
+    assert_eq!(nested["dependencies"][1], source_id);
+
+    let target = scratch.0.join("unknown-explained-packet.txt");
+    let target_arg = target.to_str().unwrap();
+    let unknown = format!("summarize source packet {} in 2 lines", "0".repeat(64));
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--context",
+                detail_id,
+                "--output",
+                target_arg,
+                "--allow-write",
+                target_arg,
+                &unknown,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("SOURCE_SUMMARY_PACKET_NOT_ACTIVE:")
+    );
+    assert!(result["render"].is_null());
+    assert!(!target.exists());
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_line_summary_keeps_a_single_fetched_body_and_its_spans() {
     let scratch = Scratch::new();
     let actor = "owner";
