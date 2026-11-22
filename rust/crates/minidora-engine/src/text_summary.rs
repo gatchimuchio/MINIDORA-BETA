@@ -1903,8 +1903,27 @@ pub(crate) struct RetainedSourceSummary {
     pub(crate) source_context_ref: String,
     source_result_id: String,
     partial_notice: Option<&'static str>,
-    reports: Vec<SourceExtractiveSummaryCandidates>,
-    sole_packet_index: Option<usize>,
+    reports: Vec<(usize, SourceExtractiveSummaryCandidates)>,
+}
+
+impl RetainedSourceSummary {
+    fn sole_packet_index(&self) -> Option<usize> {
+        match self.reports.as_slice() {
+            [(index, _)] => Some(*index),
+            _ => None,
+        }
+    }
+
+    fn adopted_packet_index(&self, packet_id: &str) -> Result<usize> {
+        let mut matches = self
+            .reports
+            .iter()
+            .filter(|(_, report)| report.source_packet_id == packet_id);
+        match (matches.next(), matches.next()) {
+            (Some((index, _)), None) => Ok(*index),
+            _ => Err(source_summary_packet_not_active()),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1963,6 +1982,7 @@ struct SourceContextStep<'a> {
     derivation: &'a ResultRecord,
     derivation_input: InputBundle,
     reuse_sole_summary_packet: bool,
+    requested_summary_packet: Option<String>,
 }
 
 fn derived_source_followup<'a>(
@@ -1979,7 +1999,8 @@ fn derived_source_followup<'a>(
                 crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION => {
                     "the preceding source summary differs from the retained proof"
                 }
-                crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION => {
+                crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION => {
                     "the explicitly referenced source summary differs from the retained proof"
                 }
                 _ => {
@@ -2034,12 +2055,25 @@ fn derived_source_followup<'a>(
             if !crate::input::is_source_summary_intent(&target_input.meaning.intent) {
                 return Err(invalid());
             }
+            let requested_summary_packet = if parser_version
+                == crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+            {
+                let Intent::SummarizePreviousSourcePacketLines { packet_id, .. } =
+                    &input.meaning.intent
+                else {
+                    return Err(invalid());
+                };
+                Some(packet_id.clone())
+            } else {
+                None
+            };
             steps.push(SourceContextStep {
                 context: target,
                 detail_input: None,
                 derivation: target,
                 derivation_input: target_input,
                 reuse_sole_summary_packet: true,
+                requested_summary_packet,
             });
             continue;
         }
@@ -2070,6 +2104,7 @@ fn derived_source_followup<'a>(
             reuse_sole_summary_packet: crate::input::is_explanation_line_summary_version(
                 parser_version,
             ),
+            requested_summary_packet: None,
         });
     };
 
@@ -2101,18 +2136,22 @@ fn derived_source_followup<'a>(
                 "SOURCE_CONTEXT_INVALID",
                 "retrieved source summary",
             )?;
-            let index = proof.sole_packet_index.ok_or_else(|| {
-                failure(
-                    "AMBIGUOUS_SOURCE_CONTEXT",
-                    if bundle.meaning.parser_version
-                        == crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
-                    {
-                        "指定した資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
-                    } else {
-                        "直前の資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
-                    },
-                )
-            })?;
+            let index = if let Some(packet_id) = &step.requested_summary_packet {
+                proof.adopted_packet_index(packet_id)?
+            } else {
+                proof.sole_packet_index().ok_or_else(|| {
+                    failure(
+                        "AMBIGUOUS_SOURCE_CONTEXT",
+                        if bundle.meaning.parser_version
+                            == crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                        {
+                            "指定した資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
+                        } else {
+                            "直前の資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
+                        },
+                    )
+                })?
+            };
             scope.selected_body_index = Some(index);
             scope.context = step.context;
             continue;
@@ -2333,6 +2372,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
     )
     .then_some(version);
     let compatible_line_version = match parser {
@@ -2340,10 +2380,15 @@ pub(crate) fn verify_retained_source_summary<'a>(
             version,
             crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
         ),
         Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
             crate::input::is_explanation_line_summary_version(version)
-                || crate::input::uses_summary_source_context(version)
+                || matches!(
+                    version,
+                    crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                        | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                )
         }
         _ => false,
     };
@@ -2412,10 +2457,6 @@ pub(crate) fn verify_retained_source_summary<'a>(
             "the constrained source summary requires exactly one selected source",
         ));
     }
-    let sole_packet_index = match active_positions.as_slice() {
-        [position] => Some(source_packets[*position].0),
-        _ => None,
-    };
     let source_packet_refs: Vec<_> = source_packets
         .iter()
         .map(|(index, _, reference)| (*index, reference.clone()))
@@ -2433,7 +2474,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
         units.push(stop.notice().into());
     }
     for position in active_positions {
-        let (_, packet, packet_ref) = &source_packets[position];
+        let (index, packet, packet_ref) = &source_packets[position];
         let report = summarize_fetched_source_for_intent(
             &bundle.meaning.intent,
             &prior.id,
@@ -2467,7 +2508,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
         }
         dependencies.push(report_ref);
         units.push(unit);
-        reports.push(report);
+        reports.push((*index, report));
     }
     if result.id != identity(request)?
         || result.input_id != request.input_id
@@ -2491,7 +2532,6 @@ pub(crate) fn verify_retained_source_summary<'a>(
         source_result_id: prior.id.clone(),
         partial_notice: partial_retrieval_stop(prior).map(PartialRetrievalStop::notice),
         reports,
-        sole_packet_index,
     }))
 }
 
@@ -2581,7 +2621,7 @@ fn previous_source_summary_explanation<'a>(
     if let Some(notice) = proof.partial_notice {
         units.push(notice.into());
     }
-    for (index, report) in proof.reports.iter().enumerate() {
+    for (index, (_, report)) in proof.reports.iter().enumerate() {
         let summary = &report.summary;
         let count_limit = match summary.line_limit {
             Some(SummaryLineLimit::Exact(count)) => format!(
@@ -2645,11 +2685,12 @@ fn previous_source_summary_explanation<'a>(
         ));
     }
     dependencies.extend(summary_result.dependencies.iter().cloned());
+    let sole_summary_packet_index = proof.sole_packet_index();
     Ok(Some(PreviousResultSummaryExplanation {
         units,
         dependencies,
         source_context_ref: Some(proof.source_context_ref),
-        sole_summary_packet_index: proof.sole_packet_index,
+        sole_summary_packet_index,
     }))
 }
 
@@ -3120,6 +3161,7 @@ fn source_summary_packet_positions(
             | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
@@ -3132,6 +3174,7 @@ fn source_summary_packet_positions(
         parser_version,
         crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
     ) {
         let mut uris = packets.iter().filter_map(|(_, packet, _)| {
             (Some(packet.id.as_str()) == requested_packet_id).then_some(packet.final_uri.as_str())

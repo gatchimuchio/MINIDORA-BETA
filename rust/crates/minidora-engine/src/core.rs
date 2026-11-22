@@ -5697,8 +5697,11 @@ impl Engine {
         };
         let sealed = sealed.and_then(|bundle| {
             if has_compute_budget
-                && bundle.meaning.parser_version
-                    == input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+                && matches!(
+                    bundle.meaning.parser_version.as_str(),
+                    input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+                        | input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+                )
                 && let Some(context) = previous
                 && self
                     .store
@@ -5800,7 +5803,12 @@ impl Engine {
                 source,
             ) {
                 Ok(context) => context,
-                Err(Error::Contract { code, message }) if code == "AMBIGUOUS_SOURCE_CONTEXT" => {
+                Err(Error::Contract { code, message })
+                    if matches!(
+                        code.as_str(),
+                        "AMBIGUOUS_SOURCE_CONTEXT" | "SOURCE_SUMMARY_PACKET_NOT_ACTIVE"
+                    ) =>
+                {
                     return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
                 }
                 Err(error) => {

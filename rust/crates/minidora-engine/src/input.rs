@@ -98,6 +98,8 @@ pub(crate) const IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
     "declarative-ja-en-v151-implicit-source-summary-line";
 pub(crate) const EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
     "declarative-ja-en-v152-explicit-source-summary-line";
+pub(crate) const EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION: &str =
+    "declarative-ja-en-v153-explicit-source-summary-packet-line";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -154,7 +156,9 @@ pub(crate) enum SourceContext {
 pub(crate) fn uses_summary_source_context(version: &str) -> bool {
     matches!(
         version,
-        IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION | EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+        IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
     )
 }
 
@@ -480,6 +484,12 @@ pub(crate) fn seal_with_source_context(
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
         Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,
         Intent::ExplainCalculationSequenceStep { .. } => SEQUENCE_STEP_EXPLANATION_PARSER_VERSION,
+        Intent::SummarizePreviousSourcePacketLines { .. }
+            if explicit_source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::Summary)) =>
+        {
+            EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+        }
         Intent::SummarizePreviousSourcePacketLines { .. }
             if explicit_source_explanation_candidate =>
         {
