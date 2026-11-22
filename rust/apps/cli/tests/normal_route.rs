@@ -19291,6 +19291,93 @@ fn extractive_summary_candidate_normal_route_keeps_source_and_unverified_coverag
 }
 
 #[test]
+fn extractive_summary_candidate_normal_route_honors_exact_lines_within_the_character_budget() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let source = "雨風が強い。雨。雪。";
+    let summary = record(&execute(
+        &scratch.0,
+        actor,
+        &[&format!(
+            "text-summary:\n{}",
+            serde_json::json!({
+                "text": source, "line_limit": { "EXACT": 2 }, "max_chars": 6,
+            })
+        )],
+    ));
+    let output = summary["text"].as_str().unwrap();
+    assert_eq!(output, "- 雨。（抽出候補・網羅性未確認）\n- 雪。");
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let report = sequence_artifact(&store, &summary["dependencies"][0]);
+    assert_eq!(
+        report["operation"],
+        "TEXT_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1"
+    );
+    assert_eq!(report["line_limit"], serde_json::json!({"EXACT": 2}));
+    assert_eq!(
+        report["selected_sentence_indices"],
+        serde_json::json!([1, 2])
+    );
+    assert_eq!(report["selected_character_count"], 4);
+    for selected in report["sentences"].as_array().unwrap() {
+        for (text, start, end) in [
+            (source, "source_start", "source_end"),
+            (output, "output_start", "output_end"),
+        ] {
+            let span = selected[start].as_u64().unwrap() as usize
+                ..selected[end].as_u64().unwrap() as usize;
+            assert_eq!(text.get(span), selected["text"].as_str());
+        }
+    }
+    let detailed = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    assert!(
+        detailed["text"]
+            .as_str()
+            .unwrap()
+            .contains("指定行数: 2。実際の行数: 2")
+    );
+
+    let document = |limit| {
+        format!(
+            "文章を要約して:\n{}",
+            serde_json::json!({
+                "text": "水温は12.5度でした。", "line_limit": limit,
+            })
+        )
+    };
+    let capped = record(&execute(
+        &scratch.0,
+        actor,
+        &[&document(serde_json::json!({"AT_MOST": 2}))],
+    ));
+    assert_eq!(
+        capped["text"],
+        "- 水温は12.5度でした。（抽出候補・網羅性未確認）"
+    );
+    let target = scratch.0.join("unsatisfied-summary.txt");
+    let target_arg = target.to_str().unwrap();
+    let exact = document(serde_json::json!({"EXACT": 2}));
+    let unmet = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &["--output", target_arg, "--allow-write", target_arg, &exact],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        unmet["reason"]
+            .as_str()
+            .unwrap()
+            .contains("RESULT_SUMMARY_LINE_COUNT_UNMET")
+    );
+    assert!(unmet["render"].is_null());
+    assert!(!target.exists());
+}
+
+#[test]
 fn text_summary_candidate_explanation_preserves_required_rank_and_escaped_source_evidence() {
     const LABEL: &str = "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
     let source = "猫 shared alpha. shared beta. unique gamma. shared delta.";

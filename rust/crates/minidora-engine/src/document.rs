@@ -969,6 +969,17 @@ fn text_summary_candidate_explanation_lines(
                 "the retained JSON text token does not decode to the source text",
             )
         })?;
+    let count_limit = match report.line_limit {
+        Some(minidora_domain::SummaryLineLimit::Exact(count)) => format!(
+            "指定行数: {count}。実際の行数: {}",
+            report.text.lines().count()
+        ),
+        Some(minidora_domain::SummaryLineLimit::AtMost(count)) => format!(
+            "行数上限: {count}。実際の行数: {}",
+            report.text.lines().count()
+        ),
+        None => format!("文数上限: {}", report.max_sentences),
+    };
     let mut lines = vec![
         "前回の抽出要約候補を、封印済みの原文から再確認しました。".into(),
         format!(
@@ -979,8 +990,8 @@ fn text_summary_candidate_explanation_lines(
             report.length_limited_sentence_indices.len(),
         ),
         format!(
-            "文数上限: {}。選択文の文字数: {} / 上限 {}（書式・注意書きは集計外）。出力書式: {}。",
-            report.max_sentences, report.selected_character_count, report.max_chars, report.format,
+            "{count_limit}。選択文の文字数: {} / 上限 {}（書式・注意書きは集計外）。出力書式: {}。",
+            report.selected_character_count, report.max_chars, report.format,
         ),
         "必須指定の文を先に確保し、残りは語の頻度、先頭文の加点、長文の減点で選びます。同点は元本文の後方を優先し、表示は元本文の順です。".into(),
         format!("依頼JSON SHA-256: {}", report.source_sha256),

@@ -15,6 +15,7 @@ const MAX_TEXT_SCALARS: usize = 100_000;
 const MAX_SENTENCES: usize = 4_096;
 const MAX_ARTIFACT_BYTES: usize = 2_000_000;
 const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4";
+const LINE_OPERATION: &str = "TEXT_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1";
 const ALGORITHM: &str =
     "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_REQUIRED_CONTENT_OUTPUT_FORMAT_V1";
 const LINE_SUMMARY_ALGORITHM: &str =
@@ -27,7 +28,8 @@ const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by 
 #[serde(deny_unknown_fields)]
 struct SummaryRequest {
     text: String,
-    max_sentences: usize,
+    max_sentences: Option<usize>,
+    line_limit: Option<SummaryLineLimit>,
     max_chars: Option<usize>,
     format: Option<String>,
     required_sentence_indices: Option<Vec<usize>>,
@@ -72,6 +74,8 @@ pub struct ExtractiveSummaryCandidates {
     pub sentences: Vec<ExtractedSentence>,
     pub coverage_verified: bool,
     pub guarantee: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_limit: Option<SummaryLineLimit>,
 }
 
 pub(crate) const PREVIOUS_RESULT_SUMMARY_KIND: &str = "minidora.previous-result-summary.v1";
@@ -275,18 +279,31 @@ fn fields<'a>(
     let JsonKind::Object(values) = &node.kind else {
         return Err(schema("summary request must be one JSON object"));
     };
-    let required = ["max_sentences", "text"];
     if !(2..=5).contains(&values.len())
-        || required.iter().any(|key| !values.contains_key(*key))
+        || !values.contains_key("text")
+        || values.contains_key("max_sentences") == values.contains_key("line_limit")
         || values.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "text" | "max_sentences" | "max_chars" | "format" | "required_sentence_indices"
+                "text"
+                    | "max_sentences"
+                    | "line_limit"
+                    | "max_chars"
+                    | "format"
+                    | "required_sentence_indices"
             )
         })
     {
         return Err(schema(
-            "summary request fields must include text and max_sentences; max_chars, format, and required_sentence_indices are optional",
+            "summary request requires text and exactly one of max_sentences or line_limit; max_chars, format, and required_sentence_indices are optional",
+        ));
+    }
+    if values
+        .get("line_limit")
+        .is_some_and(|value| !matches!(value.kind, JsonKind::Object(_)))
+    {
+        return Err(schema(
+            "line_limit must specify EXACT or AT_MOST with an integer from 1 to 8",
         ));
     }
     if values
@@ -945,25 +962,43 @@ fn extractive_summary_candidates_internal(
     {
         return Err(schema("text must be a string"));
     }
-    let max_node = &fields["max_sentences"];
-    if !matches!(max_node.kind, JsonKind::Number) {
+    if fields
+        .get("max_sentences")
+        .is_some_and(|value| !matches!(value.kind, JsonKind::Number))
+    {
         return Err(schema("max_sentences must be an integer from 1 to 8"));
     }
     let SummaryRequest {
         text,
         max_sentences,
+        line_limit,
         max_chars,
         format,
         required_sentence_indices,
     } = serde_json::from_str(document).map_err(|error| schema(error.to_string()))?;
-    if !(1..=8).contains(&max_sentences) {
-        return Err(schema("max_sentences must be an integer from 1 to 8"));
-    }
+    let max_sentences = match (max_sentences, line_limit) {
+        (Some(count), None) if (1..=8).contains(&count) => count,
+        (None, Some(SummaryLineLimit::Exact(count) | SummaryLineLimit::AtMost(count)))
+            if (1..=8).contains(&count) =>
+        {
+            count
+        }
+        (None, Some(_)) => {
+            return Err(schema(
+                "line_limit must specify EXACT or AT_MOST with an integer from 1 to 8",
+            ));
+        }
+        _ => return Err(schema("max_sentences must be an integer from 1 to 8")),
+    };
+    let line_layout = line_layout || line_limit.is_some();
     let max_chars = max_chars.unwrap_or(MAX_TEXT_SCALARS);
     if !(1..=MAX_TEXT_SCALARS).contains(&max_chars) {
         return Err(schema("max_chars must be an integer from 1 to 100000"));
     }
     let format = SummaryFormat::from_request(format.as_deref())?;
+    if line_limit.is_some() && matches!(format, SummaryFormat::Paragraph) {
+        return Err(schema("line_limit requires bullets format"));
+    }
     let mut required_sentence_indices = required_sentence_indices.unwrap_or_default();
     required_sentence_indices.sort_unstable();
     if required_sentence_indices
@@ -1024,21 +1059,51 @@ fn extractive_summary_candidates_internal(
         compare_scores(candidates[*right].score, candidates[*left].score)
             .then_with(|| right.cmp(left))
     });
+    let character_counts: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.text.chars().count())
+        .collect();
+    let exact_fit = if matches!(line_limit, Some(SummaryLineLimit::Exact(_))) {
+        let needed = max_sentences - selected_ranked.len();
+        if candidates.len() < max_sentences {
+            return Err(failure(
+                "RESULT_SUMMARY_LINE_COUNT_UNMET",
+                format!(
+                    "元の本文から抽出できる候補は{}行で、指定された{max_sentences}行に足りません。",
+                    candidates.len()
+                ),
+            ));
+        }
+        let minimum = shortest_suffix_totals(&ranking, &character_counts, &required_set, needed);
+        if minimum[0][needed] > max_chars - selected_character_count {
+            return Err(failure(
+                "RESULT_SUMMARY_LINE_COUNT_UNMET",
+                format!("選択文の文字数上限内で指定された{max_sentences}行を確保できません。"),
+            ));
+        }
+        Some(minimum)
+    } else {
+        None
+    };
     let mut selection_ranks: BTreeMap<usize, usize> = selected_ranked
         .iter()
         .enumerate()
         .map(|(rank, index)| (*index, rank + 1))
         .collect();
     let mut length_limited_sentence_indices = Vec::new();
-    for index in ranking {
+    for (position, index) in ranking.into_iter().enumerate() {
         if selected_ranked.len() == max_sentences {
             break;
         }
         if required_set.contains(&index) {
             continue;
         }
-        let sentence_characters = candidates[index].text.chars().count();
-        if selected_character_count.saturating_add(sentence_characters) <= max_chars {
+        let sentence_characters = character_counts[index];
+        let needed_after = max_sentences - selected_ranked.len() - 1;
+        let reserved = exact_fit
+            .as_ref()
+            .map_or(0, |minimum| minimum[position + 1][needed_after]);
+        if sentence_characters.saturating_add(reserved) <= max_chars - selected_character_count {
             selected_character_count += sentence_characters;
             selection_ranks.insert(index, selected_ranked.len() + 1);
             selected_ranked.push(index);
@@ -1095,7 +1160,12 @@ fn extractive_summary_candidates_internal(
         .collect();
     let output_sha256 = digest(output.as_bytes());
     let report = ExtractiveSummaryCandidates {
-        operation: OPERATION.into(),
+        operation: if line_limit.is_some() {
+            LINE_OPERATION
+        } else {
+            OPERATION
+        }
+        .into(),
         algorithm: if line_layout {
             LINE_SUMMARY_ALGORITHM
         } else {
@@ -1122,6 +1192,7 @@ fn extractive_summary_candidates_internal(
         sentences: spans,
         coverage_verified: false,
         guarantee: GUARANTEE.into(),
+        line_limit,
     };
     if minidora_domain::canonical(&report)?.len() > MAX_ARTIFACT_BYTES {
         return Err(failure(
@@ -1130,6 +1201,29 @@ fn extractive_summary_candidates_internal(
         ));
     }
     Ok(report)
+}
+
+// For an exact count, keep the highest-ranked choice that still permits a
+// completion under the character cap. Each table cell is a minimum suffix cost.
+fn shortest_suffix_totals(
+    ranking: &[usize],
+    character_counts: &[usize],
+    required: &BTreeSet<usize>,
+    needed: usize,
+) -> Vec<[usize; 9]> {
+    let mut minimum = vec![[usize::MAX; 9]; ranking.len() + 1];
+    minimum[ranking.len()][0] = 0;
+    for (position, &index) in ranking.iter().enumerate().rev() {
+        let next = minimum[position + 1];
+        minimum[position] = next;
+        if !required.contains(&index) {
+            for count in 1..=needed {
+                let with_current = next[count - 1].saturating_add(character_counts[index]);
+                minimum[position][count] = next[count].min(with_current);
+            }
+        }
+    }
+    minimum
 }
 
 pub(crate) fn summarize_previous_result_with_limits(

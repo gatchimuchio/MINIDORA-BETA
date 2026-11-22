@@ -7302,6 +7302,11 @@ impl Engine {
             Intent::TextSummaryCandidates { document } => {
                 let value = match crate::text_summary::extractive_summary_candidates(document) {
                     Ok(value) => value,
+                    Err(Error::Contract { code, message })
+                        if code == "RESULT_SUMMARY_LINE_COUNT_UNMET" =>
+                    {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
                     Err(error) => {
                         let code = match &error {
                             Error::Contract { code, .. } => code.as_str(),
