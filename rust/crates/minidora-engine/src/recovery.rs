@@ -4015,6 +4015,7 @@ fn verify_source_summary_context(
                 | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
         ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
     let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();
@@ -4046,7 +4047,9 @@ fn verify_source_summary_context(
     if matches!(
         goal.intent,
         Intent::SummarizePreviousSourcePacketLines { .. }
-    ) {
+    ) || bundle.meaning.parser_version
+        == crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+    {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_SUMMARY_MISMATCH")?;
     }
     crate::text_summary::verify_retained_source_summary(

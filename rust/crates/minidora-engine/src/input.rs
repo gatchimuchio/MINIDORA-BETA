@@ -90,6 +90,8 @@ pub(crate) const SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v147-source-packet-uri-version-scope";
 pub(crate) const EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v148-explicit-explanation-source-packet-summary";
+pub(crate) const EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v149-explicit-explanation-source-line-summary";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -142,6 +144,7 @@ pub(crate) fn uses_explicit_source_explanation(version: &str) -> bool {
         version,
         EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
             | EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
     )
 }
 
@@ -424,6 +427,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             if explicit_source_explanation_candidate =>
         {
             EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+        }
+        Intent::SummarizePreviousSourceLines { .. } if explicit_source_explanation_candidate => {
+            EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
         }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource

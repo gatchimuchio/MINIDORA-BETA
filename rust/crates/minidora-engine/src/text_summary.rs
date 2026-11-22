@@ -1494,6 +1494,7 @@ pub(crate) struct PreviousResultSummaryExplanation {
     pub(crate) units: Vec<String>,
     pub(crate) dependencies: Vec<String>,
     pub(crate) source_context_ref: Option<String>,
+    sole_summary_packet_index: Option<usize>,
 }
 
 pub(crate) fn verify_source_explanation_result(
@@ -1715,6 +1716,7 @@ pub(crate) fn previous_summary_explanation(
         units,
         dependencies,
         source_context_ref: None,
+        sole_summary_packet_index: None,
     }))
 }
 
@@ -1902,6 +1904,7 @@ pub(crate) struct RetainedSourceSummary {
     source_result_id: String,
     partial_notice: Option<&'static str>,
     reports: Vec<SourceExtractiveSummaryCandidates>,
+    sole_packet_index: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -1959,6 +1962,7 @@ struct SourceExplanationStep<'a> {
     detail_input: InputBundle,
     derivation: &'a ResultRecord,
     derivation_input: InputBundle,
+    reuse_sole_summary_packet: bool,
 }
 
 fn explicit_explanation_source<'a>(
@@ -2001,6 +2005,8 @@ fn explicit_explanation_source<'a>(
             break direct_source_followup(store, input, prior_results, detail, Some(history))?
                 .ok_or_else(invalid)?;
         }
+        let reuse_sole_summary_packet = input.meaning.parser_version
+            == crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION;
         if input.request.context_ref.as_deref() != Some(detail.id.as_str())
             || input.meaning.context_result_ref.as_deref() != Some(detail.id.as_str())
             || input.context_sha256 != identity(&Some(detail))?
@@ -2038,6 +2044,7 @@ fn explicit_explanation_source<'a>(
             detail_input,
             derivation,
             derivation_input,
+            reuse_sole_summary_packet,
         });
     };
 
@@ -2078,6 +2085,12 @@ fn explicit_explanation_source<'a>(
             &proof,
             Some(history),
         )?;
+        if step.reuse_sole_summary_packet
+            && let Some(index) = proof.sole_summary_packet_index
+        {
+            // The verified report selected this original packet within the incoming scope.
+            scope.selected_body_index = Some(index);
+        }
         scope.context = step.detail;
     }
     Ok(Some(scope))
@@ -2255,16 +2268,21 @@ pub(crate) fn verify_retained_source_summary<'a>(
             | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
     )
     .then_some(version);
-    let compatible_packet_version = parser
-        == Some(crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION)
-        && matches!(
+    let compatible_line_version = match parser {
+        Some(crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION) => matches!(
             version,
             crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
-        );
-    if parser != sealed_line_version && !compatible_packet_version {
+        ),
+        Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
+            version == crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+        }
+        _ => false,
+    };
+    if parser != sealed_line_version && !compatible_line_version {
         return Err(failure(
             "RECOVERY_SOURCE_SUMMARY_MISMATCH",
             "the retained source line summary intent and parser version differ",
@@ -2329,6 +2347,10 @@ pub(crate) fn verify_retained_source_summary<'a>(
             "the constrained source summary requires exactly one selected source",
         ));
     }
+    let sole_packet_index = match active_positions.as_slice() {
+        [position] => Some(source_packets[*position].0),
+        _ => None,
+    };
     let source_packet_refs: Vec<_> = source_packets
         .iter()
         .map(|(index, _, reference)| (*index, reference.clone()))
@@ -2404,6 +2426,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
         source_result_id: prior.id.clone(),
         partial_notice: partial_retrieval_stop(prior).map(PartialRetrievalStop::notice),
         reports,
+        sole_packet_index,
     }))
 }
 
@@ -2482,6 +2505,7 @@ fn previous_source_summary_explanation<'a>(
             units: vec![summary_result.text.clone()],
             dependencies,
             source_context_ref: None,
+            sole_summary_packet_index: None,
         }));
     }
 
@@ -2560,6 +2584,7 @@ fn previous_source_summary_explanation<'a>(
         units,
         dependencies,
         source_context_ref: Some(proof.source_context_ref),
+        sole_summary_packet_index: proof.sole_packet_index,
     }))
 }
 
@@ -2693,6 +2718,7 @@ fn previous_source_question_explanation<'a>(
             units: vec![question_result.text.clone()],
             dependencies,
             source_context_ref: None,
+            sole_summary_packet_index: None,
         }));
     }
 
@@ -2786,6 +2812,7 @@ fn previous_source_question_explanation<'a>(
         units,
         dependencies,
         source_context_ref: Some(proof.source_context_ref),
+        sole_summary_packet_index: None,
     }))
 }
 
@@ -3024,6 +3051,7 @@ fn source_summary_packet_positions(
             | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {

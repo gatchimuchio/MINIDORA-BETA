@@ -12727,6 +12727,121 @@ fn source_packet_line_summary_reuses_an_explicit_historical_source_explanation()
 }
 
 #[test]
+fn source_line_summary_reuses_the_single_body_verified_by_a_historical_explanation() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let uri = "https://example.test/stable";
+    let conflict_uri = "https://example.test/conflict";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_observations(
+        &scratch.0,
+        actor,
+        [
+            (conflict_uri, "一回目の観測結果です。", 3),
+            (uri, "水温は31度でした。風向は北でした。", 2),
+            (conflict_uri, "二回目の観測結果です。", 3),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet = sequence_artifact(&store, &Value::String(packet_refs[1].clone()));
+    let packet_id = packet["id"].as_str().unwrap();
+    let named_request = format!("出典packet: {packet_id} を2行で要約して");
+    let first = record(&execute(&scratch.0, actor, &[&named_request]));
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    record(&execute(&scratch.0, actor, &["2+3"]));
+    let detail_id = detail["id"].as_str().unwrap();
+    let summary = record(&execute(
+        &scratch.0,
+        actor,
+        &["--context", detail_id, "前回の資料を2行で要約して"],
+    ));
+    assert_eq!(summary["lifecycle"], "COMMIT");
+    assert_eq!(summary["text"], first["text"]);
+    assert_eq!(
+        summary["dependencies"],
+        serde_json::json!([
+            detail_id,
+            source_id,
+            packet_refs[1],
+            first["dependencies"][4]
+        ])
+    );
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(saved["bundle"]["meaning"]["context_result_ref"], detail_id);
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v149-explicit-explanation-source-line-summary"
+    );
+
+    let next_detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    let next_detail_id = next_detail["id"].as_str().unwrap();
+    let next = record(&execute(
+        &scratch.0,
+        actor,
+        &[
+            "--context",
+            next_detail_id,
+            "summarize the previous source in up to 3 lines",
+        ],
+    ));
+    assert_eq!(next["lifecycle"], "COMMIT");
+    assert_eq!(next["text"], first["text"]);
+    assert_eq!(next["dependencies"][0], next_detail_id);
+    assert_eq!(next["dependencies"][2], packet_refs[1]);
+}
+
+#[test]
+fn source_line_summary_reports_ambiguity_for_a_historical_explanation_with_two_sources() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    seed_fetched_source_case_with_sources(
+        &scratch.0,
+        actor,
+        &[
+            (
+                "https://example.test/weather",
+                "天気は晴れでした。風は北から吹きました。",
+            ),
+            (
+                "https://example.test/water",
+                "水温は31度でした。水位は一定でした。",
+            ),
+        ],
+    );
+    record(&execute(&scratch.0, actor, &["前回の資料を要約して"]));
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    let detail_id = detail["id"].as_str().unwrap();
+    let path = scratch.0.join("ambiguous-source-must-not-be-written.txt");
+    let path_arg = path.to_str().unwrap();
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--context",
+                detail_id,
+                "--output",
+                path_arg,
+                "--allow-write",
+                path_arg,
+                "前回の資料を2行以内で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("AMBIGUOUS_SOURCE_CONTEXT:")
+    );
+    assert!(result["render"].is_null());
+    assert!(!path.exists());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_line_summary_keeps_a_single_fetched_body_and_its_spans() {
     let scratch = Scratch::new();
     let actor = "owner";
