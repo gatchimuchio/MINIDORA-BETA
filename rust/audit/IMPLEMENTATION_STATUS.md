@@ -3291,3 +3291,23 @@ Debian 13 Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。�
 - 認証HTTPは既存プロフィールのCLI要約への接続を近接検査した。全workspace実行試験、厳格Clippy、新規ネット取得、今回の機能のHTTP・ブラウザー経由、製品規模の資源計測、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
 
 復旧2世代は `660972d` と `a389a81`。当該単位の資産は11件。保持9件（Domain・Input・Core・Recovery・要約・通常CLI試験、実装記録・要求トレース・原典読解台帳）、保留2件、保管済み・稼働中・ゴミ箱移動済みは各0件。独立検証の `/workspace/.minidora-cloud/b225-selected-source-packet.maHben` は2,622ファイル、22ディレクトリ（根を含む）、39,705,300論理バイト、ファイル割当46,206,976バイト。揮発性のビルド・試験用 `/dev/shm/minidora-b225.Umv4JV` は2,023ファイルの場所と372ディレクトリ（根を含む。ハードリンク重複を除く2,005ファイル）、661,572,650論理バイト、ファイル割当667,852,800バイト。LinuxでWindows標準ゴミ箱の処置が成立しないため現位置で保留。最終処分待ち0件、廃棄による容量回収0。Windows保管とオンライン専用化は非該当。
+
+## 2026-11-22 JST B226 — D3-C E6 明示出典の版競合を同一最終URIに限定
+
+着工点は `025d481fa751ceae12415bb6740dbc9fff95eed0`。共通指示1.1、D3-C §5、R2 §7・§13・§14、E5 B114合同判定を照合した。現行三点セットのSHA-256はD2仕様 `de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0`、D2工程 `d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a`、D3-C指示 `fa4bfbb6d4c897df943fcebe64e2eb1e766834fabcf7187d9e78598d7e7445e3`。採用記録は `270b6482dff22cef7559363776f52806a0074fb0fd7fd0081b7772e62c2b9ef5`。
+
+基線の実CLIでは、取得完了の同一結果に異なる2つの最終URIを保持したとき、片方の本文が同時刻に競合すると別URIの一意な有効版を明示しても `SOURCE_VERSION_AMBIGUOUS` で停止した。不存在IDでも同じ競合が先に報告された。根因は全URIの版判定をID解決より先に実行したこと。固定fixtureは指定URIの旧版・新版と、別URIに同じ400 msで観測した異なる2本文を保持した。基線5要求の停止・同一ID再実行と作用0を確認した。
+
+新しい明示指定要約を `declarative-ja-en-v147-source-packet-uri-version-scope` で封印する。取得結果内で対象packet IDの最終URIを求め、そのURI内だけで既存の有効版選択を適用する。競合が指定先自体にあれば `SOURCE_VERSION_AMBIGUOUS`、不存在や失効した版は `SOURCE_SUMMARY_PACKET_NOT_ACTIVE`。取得未完了、保存本文の不整合・取得不能、予算・権限はいずれも従来の検査を通す。取得結果と検査した全本文の参照は保持し、要約文と詳説に使う本文は選択したpacketに限定した。保存済みv146は当時の全URI選択を専用版で再生し、指定なしのv145も従来の全URI選択を使う。
+
+凍結版 `1c546e77007afa0a9eeb3a44f07da99d84c383eb`・census・配布時SHA-256を照合し、`統合入出力.py`、`製品版/能力レジストリ.py`、`製品版/変換.py`、`製品版/抽出.py`、`hds並列作業状態.py`、`hds多時間尺度.py`、`HDS統一状態循環.py`、`hds適応候補調停.py` の8件（1,142行、44,982バイト）を全文読解した。旧製品のテキスト変換と参照受渡し、提案調停、循環の実consumerと保存記録の境界を記録した。旧原典の実行・元upstream treeの直接照合・Rustとの意味等価は未確認。原典読解は351/416件。正式受入93件は `UNVERIFIED`、E6は継続中。
+
+Debian 13 Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。実CLIのSHA-256は基線 `b005997a277e455ac349fdf85e4eec2f455a5d5fd7f1736f267d5edb409767bb`、検査対象 `7bcb9b1a5cd6885067055fb438679f2029b1efeae5bfdb74897cd3842cd2e4f9`。Input・Recovery・要約・通常CLI試験の `git diff --binary` SHA-256は `f53779edd60d55cd0585ff1f6abb9ff073cc7131e5acc6c3ac9b351cdc16a170`、`Cargo.lock` は `b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc`。ビルドと試験のtargetは `/dev/shm`、デバッグ情報なし、増分コンパイル無効。
+
+- 入力・要約・復旧150件、通常経路20件の計170件がPASS。指定先以外の競合、指定先内の競合、旧版・不存在ID、指定なしの競合、詳説、停止時作用0を通常CLIで検証。 `cargo fmt --all -- --check`、`cargo build -p minidora-cli --locked`、`cargo check --workspace --all-targets --locked`、`git diff --check` は終了0。
+- 独立CLIは明示・暗黙の表示2件、実ファイル要約と詳説2件、通常停止9件、証拠予算不足1件を確認した。3.14と絵文字を含む原文・表示UTF-8範囲と、非競合の基線対照と同じ表示・要約成果物SHA-256を照合した。別URIの保存本文参照が切れた場合は `SOURCE_EVIDENCE_UNAVAILABLE`。証拠予算2,998バイトで成立、2,997バイトで停止した。基線ログは `8f97a48e2184fcfd93665c80b8bc3af588197637328d37fc8392286a9b9fa455`、候補ログは `829d51a02663364824bec8fb6ce4a2748a587e7d3cdb6796fbf2978cd6c11856`。SQLite `quick_check` は9件PASS。
+- 旧v146とv147の要約と詳説、各348・1,140バイトの計4ファイルを真正な `ATTEMPTED` から `LOCAL_FILE_RECONCILED_NO_RESEND` で復旧した。作用ID・内容・SHA-256・inode・mtimeを照合。基線の同一ID 5停止と2成果も再生した。
+- 認証付きループバックHTTPのJSON・SSEで2件 `COMMIT`。対象競合と不存在は出力前に停止し、SSEの競合は暫定イベント→無効化→終端 `SUSPEND`。英語出力指定 `locale=en` は既存の `SEMANTIC_VERIFIER_UNAVAILABLE` を確認。トークン欠落401、actor不一致403はいずれも入力登録前に停止し、ファイル作用0。初回の検査はこの英語出力停止を成功扱いにした期待値が原因で終了1。既存Coreの契約を照合し、日本語出力の正例と英語出力の停止例を明示して再実行し、終了0。HTTPログSHA-256は `c554df2a4a2b7da96cb4dd8b7f16e238d601e55c0bdeaeadb3cc41862435dbef`。
+- 全workspace実行試験、厳格Clippy、新規ネット取得、ブラウザー画面、製品規模の資源計測、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
+
+復旧2世代は `025d481` と `660972d`。資産は9件。保持7件（Input・Recovery・要約・通常CLI試験、実装記録・要求トレース・原典読解台帳）、保留2件、保管済み・稼働中・ゴミ箱移動済みは各0件。独立検証の `/dev/shm/b226-source-family.xvakPo` は1,157ファイル、20ディレクトリ、28,429,311論理バイト、ファイル割当31,469,568バイト。ビルド・HTTP試験用 `/dev/shm/minidora-b226.bDnDOL` は2,208ファイルの場所と380ディレクトリ（ハードリンク重複を除く2,190ファイル）、664,078,540論理バイト、ファイル割当671,096,832バイト。いずれも根を含み、Linux揮発領域に保留。Windows標準ゴミ箱は利用できず、移動・最終処分待ち各0件、容量回収0バイト。Windows保管とオンライン専用化は非該当。

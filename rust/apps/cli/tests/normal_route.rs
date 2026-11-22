@@ -52,6 +52,21 @@ fn seed_fetched_source_case_with_sources(
     actor: &str,
     sources: &[(&str, &str)],
 ) -> (String, Vec<String>, Vec<String>) {
+    seed_fetched_source_case_with_observations(
+        directory,
+        actor,
+        sources
+            .iter()
+            .enumerate()
+            .map(|(index, &(uri, text))| (uri, text, index as u64 + 1)),
+    )
+}
+
+fn seed_fetched_source_case_with_observations<'a>(
+    directory: &Path,
+    actor: &str,
+    sources: impl IntoIterator<Item = (&'a str, &'a str, u64)>,
+) -> (String, Vec<String>, Vec<String>) {
     use minidora_domain::{
         CaseRevision, EvidencePacket, GoalContract, Guarantee, Lifecycle, RequestEnvelope,
         ResultRecord, SCHEMA_VERSION, digest, identity,
@@ -66,23 +81,23 @@ fn seed_fetched_source_case_with_sources(
     let mut packets = Vec::new();
     let mut packet_refs = Vec::new();
     let mut texts = Vec::new();
-    for (index, (uri, extracted_text)) in sources.iter().enumerate() {
+    for (uri, extracted_text, observed_at_unix_ms) in sources {
         let raw_body = extracted_text.as_bytes().to_vec();
         let mut packet = EvidencePacket {
             id: String::new(),
             mode: "FIXTURE".into(),
             packet_kind: "FETCHED_BODY".into(),
-            request_uri: (*uri).into(),
-            final_uri: (*uri).into(),
-            redirect_chain: vec![(*uri).into()],
-            observed_at_unix_ms: index as u64 + 1,
+            request_uri: uri.into(),
+            final_uri: uri.into(),
+            redirect_chain: vec![uri.into()],
+            observed_at_unix_ms,
             provider_id: "normal-route-test-fixture".into(),
             http_status: 200,
             raw_sha256: digest(&raw_body),
             raw_body,
-            extracted_text: Some((*extracted_text).into()),
+            extracted_text: Some(extracted_text.into()),
             parser_version: "fixture-exact-text-v1".into(),
-            independence_group: (*uri).into(),
+            independence_group: uri.into(),
             failure: None,
             retry_after: None,
         };
@@ -102,7 +117,7 @@ fn seed_fetched_source_case_with_sources(
         .unwrap();
         packet_refs.push(store.put_artifact(actor, case, &packet).unwrap());
         packets.push(packet);
-        texts.push((*extracted_text).into());
+        texts.push(extracted_text.into());
     }
     let graph_ref = store
         .put_artifact(
@@ -12491,7 +12506,7 @@ fn source_packet_line_summary_selects_the_requested_body_from_two_sources() {
     let sealed = inspect_normal_case(&scratch.0, actor);
     assert_eq!(
         sealed["bundle"]["meaning"]["parser_version"],
-        "declarative-ja-en-v146-source-packet-line-summary"
+        "declarative-ja-en-v147-source-packet-uri-version-scope"
     );
     let raw_span = &sealed["bundle"]["meaning"]["source_roles"]["/SummarizePreviousSourcePacketLines/packet_id"]
         [0];
@@ -12542,6 +12557,89 @@ fn source_packet_line_summary_selects_the_requested_body_from_two_sources() {
     );
     assert!(stopped["render"].is_null());
     assert!(!target.exists());
+}
+
+#[test]
+fn source_packet_line_summary_limits_version_conflicts_to_the_selected_uri() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let stable_uri = "https://example.test/stable";
+    let conflicting_uri = "https://example.test/conflicting";
+    let body = "日中の記録は31度でした。風向は北でした。";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_observations(
+        &scratch.0,
+        actor,
+        [
+            (conflicting_uri, "異なる観測。測定値は1でした。", 4),
+            (stable_uri, "過去の温度記録です。", 3),
+            (stable_uri, body, 4),
+            (conflicting_uri, "別の観測。測定値は2でした。", 4),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let id = |index: usize| {
+        let packet = sequence_artifact(&store, &Value::String(packet_refs[index].clone()));
+        packet["id"].as_str().unwrap().to_owned()
+    };
+    let requested = format!("出典packet: {} を2行で要約して", id(2));
+    let summary = record(&execute(&scratch.0, actor, &[&requested]));
+    let output = summary["text"].as_str().unwrap();
+    assert_eq!(summary["lifecycle"], "COMMIT");
+    assert_eq!(output.lines().count(), 2);
+    assert!(output.contains(stable_uri));
+    assert!(!output.contains(conflicting_uri));
+    let deps = summary["dependencies"].as_array().unwrap();
+    assert_eq!(deps[0], source_id);
+    assert_eq!(&deps[1..=4], packet_refs);
+    let proof = sequence_artifact(&store, &deps[5]);
+    assert_eq!(proof["source_packet_ref"], packet_refs[2]);
+    assert_eq!(proof["summary"]["source_text"], body);
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    assert_eq!(detail["lifecycle"], "COMMIT");
+    assert!(detail["text"].as_str().unwrap().contains(&id(2)));
+
+    let target = scratch.0.join("version-review-stop.txt");
+    let target_arg = target.to_str().unwrap();
+    for (request, code) in [
+        (
+            format!("summarize source packet {} in 2 lines", id(0)),
+            "SOURCE_VERSION_AMBIGUOUS",
+        ),
+        (
+            format!("summarize source packet {} in 2 lines", id(1)),
+            "SOURCE_SUMMARY_PACKET_NOT_ACTIVE",
+        ),
+        (
+            format!("summarize source packet {} in 2 lines", "0".repeat(64)),
+            "SOURCE_SUMMARY_PACKET_NOT_ACTIVE",
+        ),
+        (
+            "取得した資料を2行で要約して".into(),
+            "SOURCE_VERSION_AMBIGUOUS",
+        ),
+    ] {
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                actor,
+                &[
+                    "--context",
+                    &source_id,
+                    "--output",
+                    target_arg,
+                    "--allow-write",
+                    target_arg,
+                    &request,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert!(result["render"].is_null());
+        assert!(!target.exists());
+    }
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
 }
 
 #[test]

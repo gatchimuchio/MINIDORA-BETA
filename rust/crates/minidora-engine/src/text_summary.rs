@@ -3,8 +3,8 @@
 use crate::ports::{JsonKind, strict_json_document};
 use crate::store::{Store, VerifiedCaseHistory};
 use minidora_domain::{
-    ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, MeaningIR, Result,
-    ResultRecord, SummaryLineLimit, canonical, digest, failure, identity,
+    ContentPlan, Error, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, MeaningIR,
+    Result, ResultRecord, SummaryLineLimit, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -786,7 +786,7 @@ pub(crate) fn answer_fetched_source_question_v2(
         active_packet_indices,
         source_versions,
         superseded_version_count,
-    } = select_source_versions(packets)?;
+    } = select_source_versions(packets, None)?;
 
     let mut ordered = Vec::<(usize, usize, usize, SourceQuestionCandidate)>::new();
     let mut matched_sentence_count = 0usize;
@@ -1737,9 +1737,13 @@ struct SourceVersionSelection {
 
 fn select_source_versions(
     packets: &[(usize, &EvidencePacket, String)],
+    final_uri_scope: Option<&str>,
 ) -> Result<SourceVersionSelection> {
     let mut source_groups = Vec::<(String, Vec<usize>)>::new();
     for (packet_index, (_, packet, _)) in packets.iter().enumerate() {
+        if final_uri_scope.is_some_and(|scope| scope != packet.final_uri) {
+            continue;
+        }
         if let Some((_, indices)) = source_groups
             .iter_mut()
             .find(|(source_uri, _)| source_uri == &packet.final_uri)
@@ -2253,9 +2257,13 @@ pub(crate) fn verify_retained_source_summary<'a>(
         version,
         crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
     )
     .then_some(version);
-    if parser != sealed_line_version {
+    let legacy_packet_line = parser
+        == Some(crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION)
+        && version == crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION;
+    if parser != sealed_line_version && !legacy_packet_line {
         return Err(failure(
             "RECOVERY_SOURCE_SUMMARY_MISMATCH",
             "the retained source line summary intent and parser version differ",
@@ -3003,15 +3011,17 @@ pub(crate) fn partial_retrieval_stop(result: &ResultRecord) -> Option<PartialRet
     .then_some(stop)
 }
 
-pub(crate) fn source_summary_packet_positions(
+fn source_summary_packet_positions(
     packets: &[(usize, &EvidencePacket, String)],
     parser_version: &str,
+    requested_packet_id: Option<&str>,
 ) -> Result<Vec<usize>> {
     if !matches!(
         parser_version,
         crate::input::SOURCE_SUMMARY_PARSER_VERSION
             | crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
             | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
@@ -3020,27 +3030,50 @@ pub(crate) fn source_summary_packet_positions(
     for (_, packet, reference) in packets {
         validate_source_summary_body(packet, reference)?;
     }
-    Ok(select_source_versions(packets)?.active_packet_indices)
+    let final_uri_scope = if parser_version
+        == crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+    {
+        let mut uris = packets.iter().filter_map(|(_, packet, _)| {
+            (Some(packet.id.as_str()) == requested_packet_id).then_some(packet.final_uri.as_str())
+        });
+        let uri = uris.next().ok_or_else(source_summary_packet_not_active)?;
+        if uris.any(|other| other != uri) {
+            return Err(source_summary_packet_not_active());
+        }
+        Some(uri)
+    } else {
+        None
+    };
+    Ok(select_source_versions(packets, final_uri_scope)?.active_packet_indices)
 }
 
 pub(crate) fn selected_source_summary_positions(
     packets: &[(usize, &EvidencePacket, String)],
     meaning: &MeaningIR,
 ) -> Result<Vec<usize>> {
-    let positions = source_summary_packet_positions(packets, &meaning.parser_version)?;
-    let Intent::SummarizePreviousSourcePacketLines { packet_id, .. } = &meaning.intent else {
+    let requested_packet_id = match &meaning.intent {
+        Intent::SummarizePreviousSourcePacketLines { packet_id, .. } => Some(packet_id.as_str()),
+        _ => None,
+    };
+    let positions =
+        source_summary_packet_positions(packets, &meaning.parser_version, requested_packet_id)?;
+    let Some(packet_id) = requested_packet_id else {
         return Ok(positions);
     };
     let mut matches = positions
         .into_iter()
-        .filter(|position| &packets[*position].1.id == packet_id);
+        .filter(|position| packets[*position].1.id == packet_id);
     match (matches.next(), matches.next()) {
         (Some(position), None) => Ok(vec![position]),
-        _ => Err(failure(
-            "SOURCE_SUMMARY_PACKET_NOT_ACTIVE",
-            "指定した出典packetを、参照した取得結果の現行本文から一意に選べません。",
-        )),
+        _ => Err(source_summary_packet_not_active()),
     }
+}
+
+fn source_summary_packet_not_active() -> Error {
+    failure(
+        "SOURCE_SUMMARY_PACKET_NOT_ACTIVE",
+        "指定した出典packetを、参照した取得結果の現行本文から一意に選べません。",
+    )
 }
 
 pub(crate) fn constrained_source_summary_limits(intent: &Intent) -> Option<(usize, Option<usize>)> {
@@ -3348,12 +3381,15 @@ mod tests {
         let error = answer_fetched_source_question_v2(&"a".repeat(64), "photosynthesis", &packets)
             .unwrap_err();
         assert!(error.to_string().contains("SOURCE_VERSION_AMBIGUOUS"));
-        let error =
-            source_summary_packet_positions(&packets, crate::input::SOURCE_SUMMARY_PARSER_VERSION)
-                .unwrap_err();
+        let error = source_summary_packet_positions(
+            &packets,
+            crate::input::SOURCE_SUMMARY_PARSER_VERSION,
+            None,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("SOURCE_VERSION_AMBIGUOUS"));
         assert_eq!(
-            source_summary_packet_positions(&packets, crate::input::PARSER_VERSION).unwrap(),
+            source_summary_packet_positions(&packets, crate::input::PARSER_VERSION, None).unwrap(),
             vec![0, 1]
         );
 

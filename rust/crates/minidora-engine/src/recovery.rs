@@ -4014,6 +4014,7 @@ fn verify_source_summary_context(
             bundle.meaning.parser_version.as_str(),
             crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
         ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
     let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();

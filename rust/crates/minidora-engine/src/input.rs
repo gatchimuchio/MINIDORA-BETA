@@ -86,6 +86,8 @@ pub(crate) const SOURCE_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v145-source-line-summary";
 pub(crate) const SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v146-source-packet-line-summary";
+pub(crate) const SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v147-source-packet-uri-version-scope";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -157,7 +159,7 @@ pub(crate) fn source_line_summary_parser(intent: &Intent) -> Option<&'static str
     match intent {
         Intent::SummarizePreviousSourceLines { .. } => Some(SOURCE_LINE_SUMMARY_PARSER_VERSION),
         Intent::SummarizePreviousSourcePacketLines { .. } => {
-            Some(SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION)
+            Some(SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION)
         }
         _ => None,
     }
