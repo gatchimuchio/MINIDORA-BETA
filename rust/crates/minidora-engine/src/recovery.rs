@@ -4197,7 +4197,26 @@ fn verify_previous_result_summary_context(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<Option<crate::text_summary::RetainedPreviousResultSummary>> {
-    if !matches!(goal.intent, Intent::SummarizePreviousResult { .. }) {
+    let sealed_line = state.bundle.as_ref().is_some_and(|bundle| {
+        bundle.meaning.parser_version == crate::input::PREVIOUS_RESULT_LINE_SUMMARY_PARSER_VERSION
+            || matches!(
+                bundle.meaning.intent,
+                Intent::SummarizePreviousResultLines { .. }
+            )
+    });
+    let goal_line = matches!(goal.intent, Intent::SummarizePreviousResultLines { .. });
+    if (sealed_line || goal_line)
+        && state
+            .bundle
+            .as_ref()
+            .is_none_or(|bundle| !goal_line || bundle.meaning.intent != goal.intent)
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the retained Goal differs from the sealed line summary requirement",
+        ));
+    }
+    if crate::text_summary::PreviousResultSummaryLimits::from_intent(&goal.intent).is_none() {
         return Ok(None);
     }
     let bundle = state
@@ -4850,6 +4869,7 @@ fn inspect(
                 Intent::SummarizePreviousSource
                     | Intent::SummarizePreviousSourceConstrained { .. }
                     | Intent::SummarizePreviousResult { .. }
+                    | Intent::SummarizePreviousResultLines { .. }
                     | Intent::AskPreviousSourceQuestion { .. }
                     | Intent::CompareRelationInventories { .. }
                     | Intent::DraftRelationProfile { .. }

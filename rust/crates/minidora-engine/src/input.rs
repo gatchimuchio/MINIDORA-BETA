@@ -74,6 +74,8 @@ pub(crate) const PREVIOUS_RULE_LIST_PARSER_VERSION: &str =
     "declarative-ja-en-v142-previous-rule-list";
 pub(crate) const LISTED_RULE_SOURCE_PARSER_VERSION: &str =
     "declarative-ja-en-v143-listed-rule-source";
+pub(crate) const PREVIOUS_RESULT_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v144-previous-result-line-summary";
 const PREVIOUS_RULE_SOURCE_LABEL: &str = "前の回答で使った規則の出典";
 const LISTED_RULE_SOURCE_LABEL: &str = "一覧の規則の出典";
 const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallback";
@@ -307,8 +309,10 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
             "no actual committed previous result is available for source summarization".into(),
         );
     }
-    if matches!(intent, Intent::SummarizePreviousResult { .. })
-        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    if matches!(
+        intent,
+        Intent::SummarizePreviousResult { .. } | Intent::SummarizePreviousResultLines { .. }
+    ) && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
     {
         unresolved
             .push("no actual committed previous result is available for summarization".into());
@@ -363,6 +367,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::InspectPreviousComposedRuleSource => PREVIOUS_COMPOSED_RULE_SOURCE_PARSER_VERSION,
         Intent::ListPreviousRules => PREVIOUS_RULE_LIST_PARSER_VERSION,
         Intent::AskListedRuleSource { .. } => LISTED_RULE_SOURCE_PARSER_VERSION,
+        Intent::SummarizePreviousResultLines { .. } => PREVIOUS_RESULT_LINE_SUMMARY_PARSER_VERSION,
         Intent::InspectConditionSource { .. } => CONDITION_SOURCE_PARSER_VERSION,
         Intent::InspectConditionSourceByDefinition { .. } => {
             CONDITION_SOURCE_BY_DEFINITION_PARSER_VERSION
@@ -4173,6 +4178,9 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = previous_result_summary_intent(body)? {
         return Ok(intent);
     }
+    if let Some(intent) = previous_result_line_summary_intent(body)? {
+        return Ok(intent);
+    }
     if regex(r"(?i)^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))(?:を)?要約(?:してください|して|せよ)$|^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document)$")?.is_match(body) {
         return Ok(Intent::SummarizePreviousSource);
     }
@@ -4514,6 +4522,30 @@ fn previous_result_summary_intent(text: &str) -> Result<Option<Intent>> {
         max_sentences,
         max_chars,
     }))
+}
+
+fn previous_result_line_summary_intent(text: &str) -> Result<Option<Intent>> {
+    let japanese = regex(
+        r"^(?:(?:前回|前|直前)(?:の)?(?:結果|回答|比較|説明)|その(?:結果|回答|比較|説明))(?:を)?([1-8])行(以内)?(?:で)?要約(?:してください|して|せよ)$",
+    )?;
+    let english = regex(
+        r"(?i)^summari[sz]e (?:the )?(?:previous|prior|last) (?:result|answer|comparison) in (up to )?([1-8]) lines?$",
+    )?;
+    let line_summary = |count: &str, at_most| {
+        let count = count.parse().expect("line count captures one ASCII digit");
+        let limit = if at_most {
+            SummaryLineLimit::AtMost(count)
+        } else {
+            SummaryLineLimit::Exact(count)
+        };
+        Intent::SummarizePreviousResultLines { limit }
+    };
+    if let Some(captures) = japanese.captures(text) {
+        return Ok(Some(line_summary(&captures[1], captures.get(2).is_some())));
+    }
+    Ok(english
+        .captures(text)
+        .map(|captures| line_summary(&captures[2], captures.get(1).is_some())))
 }
 
 fn meaning_comparison_intent(text: &str) -> Result<Option<Intent>> {
@@ -7659,6 +7691,62 @@ mod tests {
             interpret("前回の比較を要約して").unwrap(),
             Intent::SummarizePreviousResult { .. }
         ));
+    }
+
+    #[test]
+    fn previous_result_line_summary_seals_exact_or_maximum_line_count() {
+        for (text, limit) in [
+            (
+                "　直前の回答を2行で要約してください。　",
+                SummaryLineLimit::Exact(2),
+            ),
+            ("その比較を8行以内で要約して", SummaryLineLimit::AtMost(8)),
+            (
+                "Summarize the previous result in 1 line",
+                SummaryLineLimit::Exact(1),
+            ),
+            (
+                "summarise last comparison in up to 3 lines",
+                SummaryLineLimit::AtMost(3),
+            ),
+        ] {
+            let request = RequestEnvelope::new("c", "i", "actor", text);
+            let bundle = seal(&request, None).unwrap();
+            assert_eq!(
+                bundle.meaning.parser_version,
+                PREVIOUS_RESULT_LINE_SUMMARY_PARSER_VERSION
+            );
+            assert_eq!(
+                bundle.meaning.intent,
+                Intent::SummarizePreviousResultLines { limit }
+            );
+            assert_eq!(bundle.meaning.spans[0].text, text);
+            assert_eq!(bundle.meaning.spans[0].end, text.len());
+            assert_eq!(bundle.meaning.context_result_ref, None);
+            assert_eq!(
+                bundle.meaning.unresolved,
+                ["no actual committed previous result is available for summarization"]
+            );
+        }
+        for text in [
+            "前回の結果を0行で要約して",
+            "直前の回答を9行以内で要約して",
+            "前回の資料を2行で要約して",
+            "前回の結果を2行以内、20字以内で要約して",
+            "「前回の結果を2行で要約して」",
+            "Summarize the previous result in up to 9 lines",
+            "Summarize the previous result in 2 lines and 15 characters",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+        let old = RequestEnvelope::new("c", "i", "actor", "前回の回答を2点以内で要約して");
+        assert_eq!(
+            seal(&old, None).unwrap().meaning.parser_version,
+            PARSER_VERSION
+        );
     }
 
     #[test]

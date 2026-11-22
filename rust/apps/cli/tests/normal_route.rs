@@ -10220,6 +10220,103 @@ fn imported_text_with_a_result_summary_heading_keeps_its_user_premise_explanatio
 }
 
 #[test]
+fn previous_result_summary_distinguishes_exact_lines_from_a_line_limit() {
+    let scratch = Scratch::new();
+    let actor = "line-summary-owner";
+    record(&execute(&scratch.0, actor, &["ココは鳥"]));
+    record(&execute(&scratch.0, actor, &["ミケは鳥"]));
+    let prior = record(&execute(
+        &scratch.0,
+        actor,
+        &["ココとミケの共通点は何ですか"],
+    ));
+    let prior_id = prior["id"].as_str().unwrap();
+    let prior_text = prior["text"].as_str().unwrap();
+
+    let exact = record(&execute(&scratch.0, actor, &["前の結果を2行で要約して"]));
+    let exact_text = exact["text"].as_str().unwrap();
+    assert_eq!(exact_text.lines().count(), 2);
+    assert_eq!(exact["guarantee"], "HYPOTHESIS");
+    assert!(exact_text.contains("抽出候補・網羅性未確認"));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof: Value = serde_json::from_slice(
+        &store
+            .get_bytes(
+                actor,
+                "normal-route",
+                exact["dependencies"][0].as_str().unwrap(),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(proof["line_limit"], serde_json::json!({ "EXACT": 2 }));
+    assert_eq!(proof["source_result_id"], prior_id);
+    assert_eq!(
+        proof["summary_unit_sha256"],
+        minidora_domain::digest(exact_text.as_bytes())
+    );
+    for selected in proof["summary"]["sentences"].as_array().unwrap() {
+        for (text, start, end) in [
+            (prior_text, "source_start", "source_end"),
+            (exact_text, "output_start", "output_end"),
+        ] {
+            let span = selected[start].as_u64().unwrap() as usize
+                ..selected[end].as_u64().unwrap() as usize;
+            assert_eq!(text.get(span), selected["text"].as_str());
+        }
+    }
+    let explanation = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    assert!(explanation["text"].as_str().unwrap().contains("元結果byte"));
+
+    let one_sentence = record(&execute(
+        &scratch.0,
+        actor,
+        &["text-import:\n{\"text\":\"水温は12.5度でした。\",\"protected\":[],\"max_chars\":128}"],
+    ));
+    let one_sentence_id = one_sentence["id"].as_str().unwrap();
+    let capped = record(&execute(
+        &scratch.0,
+        actor,
+        &[
+            "--input",
+            "capped",
+            "--context",
+            one_sentence_id,
+            "summarize the previous result in up to 2 lines",
+        ],
+    ));
+    let capped_text = capped["text"].as_str().unwrap();
+    assert_eq!(capped_text.lines().count(), 1);
+    assert!(capped_text.contains("水温は12.5度でした。"));
+    let target = scratch.0.join("unmet-lines.txt");
+    let target_arg = target.to_str().unwrap();
+    let unmet = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--input",
+                "unmet",
+                "--context",
+                one_sentence_id,
+                "--output",
+                target_arg,
+                "--allow-write",
+                target_arg,
+                "前の結果を2行で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    let reason = unmet["reason"].as_str().unwrap();
+    assert_eq!(reason.matches("RESULT_SUMMARY_LINE_COUNT_UNMET").count(), 1);
+    assert!(unmet["content_plan"].is_null());
+    assert!(unmet["receipts"].as_array().unwrap().is_empty());
+    assert!(!target.exists());
+}
+
+#[test]
 fn previous_result_summary_stops_when_source_scan_exceeds_action_budget() {
     let scratch = Scratch::new();
     let source = serde_json::json!({

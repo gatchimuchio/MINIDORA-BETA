@@ -6162,10 +6162,8 @@ impl Engine {
         } else {
             None
         };
-        let previous_result_summary = if let Intent::SummarizePreviousResult {
-            max_sentences,
-            max_chars,
-        } = &bundle.meaning.intent
+        let previous_result_summary = if let Some(limits) =
+            crate::text_summary::PreviousResultSummaryLimits::from_intent(&bundle.meaning.intent)
         {
             let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) else {
                 return self.stop(
@@ -6241,8 +6239,7 @@ impl Engine {
                 &plan.id,
                 &render.actual_sha256,
                 &prior.text,
-                max_sentences.unwrap_or(3),
-                *max_chars,
+                limits,
             ) {
                 Ok(value) => value,
                 Err(error) => {
@@ -6250,7 +6247,14 @@ impl Engine {
                         Error::Contract { code, .. } => code.as_str(),
                         _ => "RESULT_SUMMARY_FAILED",
                     };
-                    return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    let message = match (limits, &error) {
+                        (
+                            crate::text_summary::PreviousResultSummaryLimits::Lines(_),
+                            Error::Contract { message, .. },
+                        ) => message.clone(),
+                        _ => error.to_string(),
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, code, &message);
                 }
             };
             if artifact.summary.sentence_count
@@ -6263,8 +6267,7 @@ impl Engine {
                     "前回結果の候補文数が今回の推論予算を超えています。",
                 );
             }
-            let output_unit =
-                crate::text_summary::previous_result_summary_unit(&prior.id, &artifact.summary);
+            let output_unit = artifact.output_unit();
             let artifact_bytes = canonical(&artifact)?;
             if artifact_bytes.len().saturating_add(output_unit.len())
                 > request.budget.max_evidence_bytes
@@ -8901,7 +8904,8 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Hypothesis;
             }
-            Intent::SummarizePreviousResult { .. } => {
+            Intent::SummarizePreviousResult { .. }
+            | Intent::SummarizePreviousResultLines { .. } => {
                 let Some((prior_id, content_ref, render_ref, artifact_bytes, output_unit)) =
                     &previous_result_summary
                 else {

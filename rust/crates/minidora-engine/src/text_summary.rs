@@ -4,7 +4,7 @@ use crate::ports::{JsonKind, strict_json_document};
 use crate::store::{Store, VerifiedCaseHistory};
 use minidora_domain::{
     ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, Result, ResultRecord,
-    canonical, digest, failure, identity,
+    SummaryLineLimit, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +17,8 @@ const MAX_ARTIFACT_BYTES: usize = 2_000_000;
 const OPERATION: &str = "TEXT_EXTRACTIVE_SUMMARY_CANDIDATES_V4";
 const ALGORITHM: &str =
     "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_REQUIRED_CONTENT_OUTPUT_FORMAT_V1";
+const LINE_SUMMARY_ALGORITHM: &str =
+    "TOKEN_FREQUENCY_FIRST_SENTENCE_LONG_SENTENCE_PENALTY_LINE_OUTPUT_V1";
 pub(crate) const EXTRACTIVE_SUMMARY_LABEL: &str =
     "抽出候補です。文の頻度と位置で選択しました。目的・意味・条件・否定の網羅は検証していません。";
 const GUARANTEE: &str = "deterministic extractive sentence candidates ranked by token frequency, a first-sentence prior, and a long-sentence penalty; caller-required source sentences are retained before ranked fill, and every retained sentence is copied verbatim with decoded-source byte offsets in the requested bullets or paragraph layout. Relevance, completeness, purpose, meaning, conditions, negation, factual truth, and writing quality are not verified";
@@ -73,7 +75,34 @@ pub struct ExtractiveSummaryCandidates {
 }
 
 pub(crate) const PREVIOUS_RESULT_SUMMARY_KIND: &str = "minidora.previous-result-summary.v1";
+const PREVIOUS_RESULT_LINE_SUMMARY_KIND: &str = "minidora.previous-result-line-summary.v1";
 pub(crate) const PREVIOUS_RESULT_SUMMARY_HEADER: &str = "前回結果からの抽出候補";
+const LINE_SUMMARY_NOTE: &str = "（抽出候補・網羅性未確認）";
+
+#[derive(Clone, Copy)]
+pub(crate) enum PreviousResultSummaryLimits {
+    Sentences {
+        max_sentences: usize,
+        max_chars: Option<usize>,
+    },
+    Lines(SummaryLineLimit),
+}
+
+impl PreviousResultSummaryLimits {
+    pub(crate) fn from_intent(intent: &Intent) -> Option<Self> {
+        match intent {
+            Intent::SummarizePreviousResult {
+                max_sentences,
+                max_chars,
+            } => Some(Self::Sentences {
+                max_sentences: max_sentences.unwrap_or(3),
+                max_chars: *max_chars,
+            }),
+            Intent::SummarizePreviousResultLines { limit } => Some(Self::Lines(*limit)),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +115,8 @@ pub(crate) struct PreviousResultSummaryArtifact {
     pub source_text_sha256: String,
     pub summary_unit_sha256: String,
     pub summary: ExtractiveSummaryCandidates,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_limit: Option<SummaryLineLimit>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,11 +360,18 @@ fn push_sentence(
     Ok(())
 }
 
-fn sentence_candidates(text: &str) -> Result<Vec<Candidate>> {
+fn sentence_candidates(text: &str, line_layout: bool) -> Result<Vec<Candidate>> {
     let mut sentences = Vec::new();
     let mut start = 0usize;
     let mut chars = text.char_indices().peekable();
     while let Some((at, character)) = chars.next() {
+        if line_layout
+            && character == '.'
+            && text[..at].chars().next_back().is_some_and(char::is_numeric)
+            && chars.peek().is_some_and(|(_, next)| next.is_numeric())
+        {
+            continue;
+        }
         if matches!(character, '。' | '！' | '？' | '!' | '?' | '.') {
             let mut end = at + character.len_utf8();
             while chars
@@ -345,7 +383,9 @@ fn sentence_candidates(text: &str) -> Result<Vec<Candidate>> {
             }
             push_sentence(text, start, end, &mut sentences)?;
             start = end;
-        } else if matches!(character, '\n' | '\r') {
+        } else if matches!(character, '\n' | '\r')
+            || (line_layout && matches!(character, '\u{2028}' | '\u{2029}'))
+        {
             push_sentence(text, start, at, &mut sentences)?;
             start = at + character.len_utf8();
             if character == '\r' && chars.peek().is_some_and(|(_, next)| *next == '\n') {
@@ -548,7 +588,7 @@ pub(crate) fn answer_fetched_source_question_v1(
             ));
         }
         let extracted_text_sha256 = digest(extracted_text.as_bytes());
-        for sentence in sentence_candidates(extracted_text)? {
+        for sentence in sentence_candidates(extracted_text, false)? {
             let sentence_tokens = tokens(&sentence.text);
             let matched_query_terms: Vec<_> = query_terms
                 .iter()
@@ -740,7 +780,7 @@ pub(crate) fn answer_fetched_source_question_v2(
             .as_deref()
             .expect("validated active source body has extracted text");
         let extracted_text_sha256 = digest(extracted_text.as_bytes());
-        for sentence in sentence_candidates(extracted_text)? {
+        for sentence in sentence_candidates(extracted_text, false)? {
             let sentence_tokens = tokens(&sentence.text);
             let matched_query_terms: Vec<_> = query_terms
                 .iter()
@@ -884,6 +924,13 @@ pub(crate) fn source_question_answer_lines_v2(answer: &SourceQuestionAnswerV2) -
 /// extractive ranking family. This is a candidate operation, not a semantic
 /// summary verifier; every selected sentence remains tied to exact source bytes.
 pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummaryCandidates> {
+    extractive_summary_candidates_internal(document, false)
+}
+
+fn extractive_summary_candidates_internal(
+    document: &str,
+    line_layout: bool,
+) -> Result<ExtractiveSummaryCandidates> {
     if document.is_empty() || document.len() > MAX_REQUEST_BYTES {
         return Err(failure(
             "TEXT_SUMMARY_INPUT_LIMIT",
@@ -939,7 +986,7 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
             "text must be nonempty, at most 100000 Unicode scalars/256000 bytes, with supported controls only",
         ));
     }
-    let mut candidates = sentence_candidates(&text)?;
+    let mut candidates = sentence_candidates(&text, line_layout)?;
     if candidates.is_empty() {
         return Err(schema("text contains no sentence candidates"));
     }
@@ -1010,11 +1057,16 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     selected.sort_unstable();
     let selected_set: std::collections::BTreeSet<_> = selected.iter().copied().collect();
 
-    let mut output = String::from(EXTRACTIVE_SUMMARY_LABEL);
+    let mut output = if line_layout {
+        String::new()
+    } else {
+        EXTRACTIVE_SUMMARY_LABEL.into()
+    };
     let mut spans = Vec::with_capacity(selected.len());
     for index in &selected {
         let candidate = &candidates[*index];
         match format {
+            SummaryFormat::Bullets if output.is_empty() => output.push_str("- "),
             SummaryFormat::Bullets => output.push_str("\n- "),
             SummaryFormat::Paragraph if spans.is_empty() => output.push('\n'),
             SummaryFormat::Paragraph => output.push(' '),
@@ -1022,6 +1074,9 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
         let output_start = output.len();
         output.push_str(&candidate.text);
         let output_end = output.len();
+        if line_layout && spans.is_empty() {
+            output.push_str(LINE_SUMMARY_NOTE);
+        }
         spans.push(ExtractedSentence {
             sentence_index: *index,
             selection_rank: selection_ranks[index],
@@ -1041,7 +1096,12 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     let output_sha256 = digest(output.as_bytes());
     let report = ExtractiveSummaryCandidates {
         operation: OPERATION.into(),
-        algorithm: ALGORITHM.into(),
+        algorithm: if line_layout {
+            LINE_SUMMARY_ALGORITHM
+        } else {
+            ALGORITHM
+        }
+        .into(),
         source_document: document.into(),
         source_sha256: digest(document.as_bytes()),
         source_text_sha256: digest(text.as_bytes()),
@@ -1078,8 +1138,7 @@ pub(crate) fn summarize_previous_result_with_limits(
     source_content_plan_id: &str,
     source_render_sha256: &str,
     source_text: &str,
-    max_sentences: usize,
-    max_chars: Option<usize>,
+    limits: PreviousResultSummaryLimits,
 ) -> Result<PreviousResultSummaryArtifact> {
     if !sha256_id(summary_result_id)
         || !sha256_id(source_result_id)
@@ -1091,6 +1150,15 @@ pub(crate) fn summarize_previous_result_with_limits(
             "summary inputs require exact result, content-plan and render identities",
         ));
     }
+    let (max_sentences, max_chars, line_limit) = match limits {
+        PreviousResultSummaryLimits::Sentences {
+            max_sentences,
+            max_chars,
+        } => (max_sentences, max_chars, None),
+        PreviousResultSummaryLimits::Lines(
+            limit @ (SummaryLineLimit::Exact(count) | SummaryLineLimit::AtMost(count)),
+        ) => (count, None, Some(limit)),
+    };
     let document = match max_chars {
         Some(max_chars) => serde_json::to_string(&serde_json::json!({
             "text": source_text,
@@ -1104,7 +1172,7 @@ pub(crate) fn summarize_previous_result_with_limits(
             "format": "bullets"
         }))?,
     };
-    let summary = extractive_summary_candidates(&document)?;
+    let summary = extractive_summary_candidates_internal(&document, line_limit.is_some())?;
     if summary.source_text != source_text
         || summary.source_text_sha256 != digest(source_text.as_bytes())
     {
@@ -1113,27 +1181,51 @@ pub(crate) fn summarize_previous_result_with_limits(
             "summary source differs from the exact prior result text",
         ));
     }
-    let summary_unit = previous_result_summary_unit(source_result_id, &summary);
-    Ok(PreviousResultSummaryArtifact {
-        kind: PREVIOUS_RESULT_SUMMARY_KIND.into(),
+    if let Some(limit) = line_limit {
+        let actual = summary.text.lines().count();
+        let valid = match limit {
+            SummaryLineLimit::Exact(count) => actual == count,
+            SummaryLineLimit::AtMost(count) => (1..=count).contains(&actual),
+        };
+        if !valid {
+            return Err(failure(
+                "RESULT_SUMMARY_LINE_COUNT_UNMET",
+                &format!(
+                    "元の回答から抽出できた要約は{actual}行で、指定の行数条件を満たしません。"
+                ),
+            ));
+        }
+    }
+    let mut artifact = PreviousResultSummaryArtifact {
+        kind: if line_limit.is_some() {
+            PREVIOUS_RESULT_LINE_SUMMARY_KIND
+        } else {
+            PREVIOUS_RESULT_SUMMARY_KIND
+        }
+        .into(),
         summary_result_id: summary_result_id.into(),
         source_result_id: source_result_id.into(),
         source_content_plan_id: source_content_plan_id.into(),
         source_render_sha256: source_render_sha256.into(),
         source_text_sha256: summary.source_text_sha256.clone(),
-        summary_unit_sha256: digest(summary_unit.as_bytes()),
+        summary_unit_sha256: String::new(),
         summary,
-    })
+        line_limit,
+    };
+    artifact.summary_unit_sha256 = digest(artifact.output_unit().as_bytes());
+    Ok(artifact)
 }
 
-pub(crate) fn previous_result_summary_unit(
-    source_result_id: &str,
-    summary: &ExtractiveSummaryCandidates,
-) -> String {
-    format!(
-        "{PREVIOUS_RESULT_SUMMARY_HEADER}（結果ID: {source_result_id}）。\n{}",
-        summary.text
-    )
+impl PreviousResultSummaryArtifact {
+    pub(crate) fn output_unit(&self) -> String {
+        if self.line_limit.is_some() {
+            return self.summary.text.clone();
+        }
+        format!(
+            "{PREVIOUS_RESULT_SUMMARY_HEADER}（結果ID: {}）。\n{}",
+            self.source_result_id, self.summary.text
+        )
+    }
 }
 
 pub(crate) struct RetainedPreviousResultSummary {
@@ -1153,13 +1245,18 @@ pub(crate) fn verify_retained_previous_result_summary(
     result: &ResultRecord,
     plan: &ContentPlan,
 ) -> Result<Option<RetainedPreviousResultSummary>> {
-    let Intent::SummarizePreviousResult {
-        max_sentences,
-        max_chars,
-    } = &bundle.meaning.intent
-    else {
+    let Some(limits) = PreviousResultSummaryLimits::from_intent(&bundle.meaning.intent) else {
         return Ok(None);
     };
+    if matches!(limits, PreviousResultSummaryLimits::Lines(_))
+        != (bundle.meaning.parser_version
+            == crate::input::PREVIOUS_RESULT_LINE_SUMMARY_PARSER_VERSION)
+    {
+        return Err(failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the retained summary intent differs from its parser version",
+        ));
+    }
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
@@ -1234,8 +1331,7 @@ pub(crate) fn verify_retained_previous_result_summary(
         &source_plan.id,
         &source_render.actual_sha256,
         &source.text,
-        max_sentences.unwrap_or(3),
-        *max_chars,
+        limits,
     )?;
     if artifact.summary.sentence_count > request.budget.max_actions as usize {
         return Err(failure(
@@ -1243,7 +1339,7 @@ pub(crate) fn verify_retained_previous_result_summary(
             "the source sentence scan exceeds the original action budget",
         ));
     }
-    let output_unit = previous_result_summary_unit(&source.id, &artifact.summary);
+    let output_unit = artifact.output_unit();
     let artifact_bytes = canonical(&artifact)?;
     if artifact_bytes.len().saturating_add(output_unit.len()) > request.budget.max_evidence_bytes {
         return Err(failure(
@@ -1371,6 +1467,11 @@ pub(crate) fn previous_summary_explanation(
         store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
     else {
         if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER)
+            || prior
+                .text
+                .lines()
+                .next()
+                .is_some_and(|line| line.starts_with("- ") && line.ends_with(LINE_SUMMARY_NOTE))
             || prior.text.contains("\n出典packet: ")
             || prior
                 .text
@@ -1393,10 +1494,7 @@ pub(crate) fn previous_summary_explanation(
     );
     if !is_source_summary
         && !is_source_question
-        && !matches!(
-            summary_bundle.meaning.intent,
-            Intent::SummarizePreviousResult { .. }
-        )
+        && PreviousResultSummaryLimits::from_intent(&summary_bundle.meaning.intent).is_none()
     {
         return Ok(None);
     }

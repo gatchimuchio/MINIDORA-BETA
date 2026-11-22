@@ -252,6 +252,13 @@ pub enum MeaningCompositionFormat {
     Bullets,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SummaryLineLimit {
+    Exact(usize),
+    AtMost(usize),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Intent {
@@ -315,6 +322,9 @@ pub enum Intent {
     SummarizePreviousResult {
         max_sentences: Option<usize>,
         max_chars: Option<usize>,
+    },
+    SummarizePreviousResultLines {
+        limit: SummaryLineLimit,
     },
     GenerateCode {
         document: String,
