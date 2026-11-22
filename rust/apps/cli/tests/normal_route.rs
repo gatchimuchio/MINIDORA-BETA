@@ -10982,6 +10982,70 @@ fn input_limit_failure_retains_original_identity_and_durable_terminal_result() {
 }
 
 #[test]
+fn stdin_checks_byte_budget_before_decoding_and_before_opening_state() {
+    let scratch = Scratch::new();
+    let db = scratch.0.join("state");
+    let invoke = |input: &[u8], limit: usize| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .arg("--db")
+            .arg(&db)
+            .args([
+                "--case",
+                "normal-route",
+                "--actor",
+                "owner",
+                "--input",
+                "stdin-input",
+                "--json",
+                "--max-input-bytes",
+                &limit.to_string(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    let original = "　２＋３を計算して。　\n";
+    for (bytes, limit, reason) in [
+        (original.as_bytes(), 3, "stdin exceeds --max-input-bytes"),
+        (b"2+3".as_slice(), 2, "stdin exceeds --max-input-bytes"),
+        (b"\xff".as_slice(), 1, "stdin is not valid UTF-8"),
+        (b"2".as_slice(), 0, "stdin exceeds --max-input-bytes"),
+        (b"".as_slice(), 0, "request text is empty"),
+        ("　\n".as_bytes(), 4, "request text is empty"),
+    ] {
+        let output = invoke(bytes, limit);
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = std::str::from_utf8(&output.stderr).unwrap();
+        assert!(stderr.contains(reason), "{stderr}");
+        assert!(output.stdout.is_empty());
+        assert!(!db.exists(), "inadmissible stdin must not open a Store");
+    }
+
+    let result = record(&invoke(original.as_bytes(), original.len()));
+    assert_eq!(result["input_id"], "stdin-input");
+    let store = minidora_engine::store::Store::open(&db).unwrap();
+    let case = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let bundle = case.bundle.as_ref().unwrap();
+    assert_eq!(bundle.request.text, original);
+    assert_eq!(
+        bundle.raw_sha256,
+        minidora_domain::digest(original.as_bytes())
+    );
+    assert_eq!(bundle.meaning.spans[0].end, original.len());
+
+    let refused = invoke(b"\xff", 1);
+    assert_eq!(refused.status.code(), Some(1));
+    let latest = store.load_case("owner", "normal-route").unwrap().unwrap();
+    assert_eq!(latest.revision, case.revision);
+    assert_eq!(latest.input_fingerprint, case.input_fingerprint);
+}
+
+#[test]
 fn existing_file_conflict_preserves_bytes_and_does_not_close_adopted_goal() {
     let scratch = Scratch::new();
     let target = scratch.0.join("existing.txt");

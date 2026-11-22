@@ -326,6 +326,9 @@ fn run(options: Options) -> Result<u8, String> {
         }
         return Ok(0);
     }
+    if options.mode == Mode::Run {
+        return run_request(options);
+    }
     let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
     if options.mode == Mode::ReconcileEffects {
         let actions = engine
@@ -362,31 +365,34 @@ fn run(options: Options) -> Result<u8, String> {
         writeln!(output).map_err(|error| error.to_string())?;
         return Ok(0);
     }
-    if options.mode == Mode::Serve {
-        return serve(&mut engine, &options);
-    }
+    serve(&mut engine, &options)
+}
+
+fn run_request(options: Options) -> Result<u8, String> {
     let text = if options.text.is_empty() {
         if io::stdin().is_terminal() {
             return Err("supply request text or redirect UTF-8 stdin; see --help".into());
         }
-        let mut text = String::new();
+        let mut bytes = Vec::new();
         let limit = u64::try_from(options.budget.max_input_bytes)
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         io::stdin()
             .take(limit)
-            .read_to_string(&mut text)
+            .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
-        if text.len() > options.budget.max_input_bytes {
+        if bytes.len() > options.budget.max_input_bytes {
             return Err("stdin exceeds --max-input-bytes; no input was executed".into());
         }
-        text
+        String::from_utf8(bytes)
+            .map_err(|error| format!("stdin is not valid UTF-8: {}", error.utf8_error()))?
     } else {
         options.text.join(" ")
     };
     if text.trim().is_empty() {
         return Err("request text is empty".into());
     }
+    let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
     let input_id = match options.input_id {
         Some(id) => id,
         None => {
