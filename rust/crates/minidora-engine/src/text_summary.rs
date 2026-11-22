@@ -1996,7 +1996,8 @@ fn derived_source_followup<'a>(
         failure(
             "SOURCE_CONTEXT_INVALID",
             match bundle.meaning.parser_version.as_str() {
-                crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION => {
+                crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                | crate::input::IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION => {
                     "the preceding source summary differs from the retained proof"
                 }
                 crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
@@ -2055,18 +2056,17 @@ fn derived_source_followup<'a>(
             if !crate::input::is_source_summary_intent(&target_input.meaning.intent) {
                 return Err(invalid());
             }
-            let requested_summary_packet = if parser_version
-                == crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
-            {
-                let Intent::SummarizePreviousSourcePacketLines { packet_id, .. } =
-                    &input.meaning.intent
-                else {
-                    return Err(invalid());
+            let requested_summary_packet =
+                if crate::input::uses_adopted_summary_packet_context(parser_version) {
+                    let Intent::SummarizePreviousSourcePacketLines { packet_id, .. } =
+                        &input.meaning.intent
+                    else {
+                        return Err(invalid());
+                    };
+                    Some(packet_id.clone())
+                } else {
+                    None
                 };
-                Some(packet_id.clone())
-            } else {
-                None
-            };
             steps.push(SourceContextStep {
                 context: target,
                 detail_input: None,
@@ -2373,15 +2373,17 @@ pub(crate) fn verify_retained_source_summary<'a>(
             | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+            | crate::input::IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
     )
     .then_some(version);
     let compatible_line_version = match parser {
-        Some(crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION) => matches!(
-            version,
-            crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
-                | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
-                | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
-        ),
+        Some(crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION) => {
+            matches!(
+                version,
+                crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+                    | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+            ) || crate::input::uses_adopted_summary_packet_context(version)
+        }
         Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
             crate::input::is_explanation_line_summary_version(version)
                 || matches!(
@@ -3162,6 +3164,7 @@ fn source_summary_packet_positions(
             | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+            | crate::input::IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
@@ -3174,8 +3177,8 @@ fn source_summary_packet_positions(
         parser_version,
         crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
-            | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
-    ) {
+    ) || crate::input::uses_adopted_summary_packet_context(parser_version)
+    {
         let mut uris = packets.iter().filter_map(|(_, packet, _)| {
             (Some(packet.id.as_str()) == requested_packet_id).then_some(packet.final_uri.as_str())
         });

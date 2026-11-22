@@ -13034,6 +13034,94 @@ fn source_packet_line_summary_selects_only_a_packet_adopted_by_a_historical_summ
 }
 
 #[test]
+fn source_packet_line_summary_limits_implicit_selection_to_the_latest_summary() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let water = "https://example.test/water";
+    let weather = "https://example.test/weather";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_sources(
+        &scratch.0,
+        actor,
+        &[
+            (water, "水温は31度でした。水位は一定でした。"),
+            (weather, "天気は晴れでした。風向は北でした。"),
+        ],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet_id = |index: usize| {
+        sequence_artifact(&store, &Value::String(packet_refs[index].clone()))["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let broad = record(&execute(&scratch.0, actor, &["前回の資料を要約して"]));
+    assert_eq!(
+        broad["text"]
+            .as_str()
+            .unwrap()
+            .matches("出典packet:")
+            .count(),
+        2
+    );
+    let selected_id = packet_id(0);
+    let raw = format!("出典packet: {selected_id} を2行で要約して");
+    let narrowed = record(&execute(&scratch.0, actor, &[&raw]));
+    let text = narrowed["text"].as_str().unwrap();
+    assert_eq!(text.lines().count(), 2);
+    assert!(text.contains(water));
+    assert!(!text.contains(weather));
+    assert_eq!(narrowed["dependencies"][0], broad["id"]);
+    assert_eq!(narrowed["dependencies"][1], source_id);
+    assert_eq!(narrowed["dependencies"][2], packet_refs[0]);
+    let saved = inspect_normal_case(&scratch.0, actor);
+    assert!(saved["bundle"]["request"]["context_ref"].is_null());
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        broad["id"]
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v154-implicit-source-summary-packet-line"
+    );
+
+    let same_source = format!("summarize source packet {selected_id} in up to 3 lines");
+    let repeated = record(&execute(&scratch.0, actor, &[&same_source]));
+    assert_eq!(repeated["text"], narrowed["text"]);
+    assert_eq!(repeated["dependencies"][0], narrowed["id"]);
+
+    let other_source = format!("出典packet: {} を2行で要約して", packet_id(1));
+    let target = scratch.0.join("implicit-unadopted-must-not-write.txt");
+    let path = target.to_str().unwrap();
+    let result = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &["--output", path, "--allow-write", path, &other_source],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("SOURCE_SUMMARY_PACKET_NOT_ACTIVE:")
+    );
+    assert!(result["render"].is_null());
+    assert!(!target.exists());
+
+    let broad_id = broad["id"].as_str().unwrap();
+    let historical = record(&execute(
+        &scratch.0,
+        actor,
+        &["--context", broad_id, &other_source],
+    ));
+    assert!(historical["text"].as_str().unwrap().contains(weather));
+    assert_eq!(historical["dependencies"][0], broad_id);
+    assert!(store.actions(actor, "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_line_summary_changes_line_count_using_an_explicit_historical_summary() {
     let scratch = Scratch::new();
     let actor = "owner";
