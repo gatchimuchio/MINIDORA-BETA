@@ -1975,12 +1975,16 @@ fn derived_source_followup<'a>(
     let invalid = || {
         failure(
             "SOURCE_CONTEXT_INVALID",
-            if bundle.meaning.parser_version
-                == crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
-            {
-                "the preceding source summary differs from the retained proof"
-            } else {
-                "the explicitly referenced source explanation or its derivation differs from the retained proof"
+            match bundle.meaning.parser_version.as_str() {
+                crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION => {
+                    "the preceding source summary differs from the retained proof"
+                }
+                crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION => {
+                    "the explicitly referenced source summary differs from the retained proof"
+                }
+                _ => {
+                    "the explicitly referenced source explanation or its derivation differs from the retained proof"
+                }
             },
         )
     };
@@ -2026,7 +2030,7 @@ fn derived_source_followup<'a>(
             return Err(invalid());
         }
         let target_input = registered(target)?;
-        if parser_version == crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION {
+        if crate::input::uses_summary_source_context(parser_version) {
             if !crate::input::is_source_summary_intent(&target_input.meaning.intent) {
                 return Err(invalid());
             }
@@ -2100,7 +2104,13 @@ fn derived_source_followup<'a>(
             let index = proof.sole_packet_index.ok_or_else(|| {
                 failure(
                     "AMBIGUOUS_SOURCE_CONTEXT",
-                    "直前の資料要約に複数の出典があり、行数要約の対象を一つに決められません。",
+                    if bundle.meaning.parser_version
+                        == crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                    {
+                        "指定した資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
+                    } else {
+                        "直前の資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
+                    },
                 )
             })?;
             scope.selected_body_index = Some(index);
@@ -2322,6 +2332,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
     )
     .then_some(version);
     let compatible_line_version = match parser {
@@ -2332,7 +2343,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
         ),
         Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
             crate::input::is_explanation_line_summary_version(version)
-                || version == crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                || crate::input::uses_summary_source_context(version)
         }
         _ => false,
     };
@@ -3108,6 +3119,7 @@ fn source_summary_packet_positions(
             | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {

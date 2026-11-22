@@ -4018,6 +4018,7 @@ fn verify_source_summary_context(
                 | crate::input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
                 | crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
         ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
     let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();
@@ -4050,7 +4051,7 @@ fn verify_source_summary_context(
         goal.intent,
         Intent::SummarizePreviousSourcePacketLines { .. }
     ) || crate::input::is_explanation_line_summary_version(&bundle.meaning.parser_version)
-        || crate::input::uses_implicit_source_context(&bundle.meaning.parser_version)
+        || crate::input::uses_summary_source_context(&bundle.meaning.parser_version)
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_SUMMARY_MISMATCH")?;
     }

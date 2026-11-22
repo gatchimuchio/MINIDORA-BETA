@@ -5687,15 +5687,37 @@ impl Engine {
                 })
                 .and_then(|case| case.bundle.as_ref())
                 .and_then(|bundle| match &bundle.meaning.intent {
-                    Intent::ExplainPrevious => Some(input::ImplicitSourceContext::Explanation),
+                    Intent::ExplainPrevious => Some(input::SourceContext::Explanation),
                     intent if input::is_source_summary_intent(intent) => {
-                        Some(input::ImplicitSourceContext::Summary)
+                        Some(input::SourceContext::Summary)
                     }
                     _ => None,
                 });
-            input::seal_with_implicit_source_context(&request, previous, implicit_source_context)
+            input::seal_with_source_context(&request, previous, implicit_source_context)
         };
         let sealed = sealed.and_then(|bundle| {
+            if has_compute_budget
+                && bundle.meaning.parser_version
+                    == input::EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
+                && let Some(context) = previous
+                && self
+                    .store
+                    .get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &context.input_id,
+                        context.input_version,
+                    )?
+                    .is_some_and(|(_, source)| {
+                        input::is_source_summary_intent(&source.meaning.intent)
+                    })
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::Summary),
+                );
+            }
             if input::uses_implicit_source_context(&bundle.meaning.parser_version) {
                 // Preserve the derived result itself before resolving its source.
                 return Ok(bundle);

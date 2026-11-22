@@ -96,6 +96,8 @@ pub(crate) const IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v150-implicit-explanation-source-line-summary";
 pub(crate) const IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
     "declarative-ja-en-v151-implicit-source-summary-line";
+pub(crate) const EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
+    "declarative-ja-en-v152-explicit-source-summary-line";
 const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
@@ -143,14 +145,21 @@ pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v114-explicit-source-explanation-followup";
 
-pub(crate) enum ImplicitSourceContext {
+#[derive(Clone, Copy)]
+pub(crate) enum SourceContext {
     Explanation,
     Summary,
 }
 
+pub(crate) fn uses_summary_source_context(version: &str) -> bool {
+    matches!(
+        version,
+        IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION | EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+    )
+}
+
 pub(crate) fn uses_derived_source_context(version: &str) -> bool {
-    version == IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
-        || uses_source_explanation_context(version)
+    uses_summary_source_context(version) || uses_source_explanation_context(version)
 }
 
 pub(crate) fn uses_implicit_source_context(version: &str) -> bool {
@@ -283,13 +292,13 @@ pub(crate) fn verified_multi_condition_relation_source(bundle: &InputBundle) -> 
 }
 
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
-    seal_with_implicit_source_context(request, previous, None)
+    seal_with_source_context(request, previous, None)
 }
 
-pub(crate) fn seal_with_implicit_source_context(
+pub(crate) fn seal_with_source_context(
     request: &RequestEnvelope,
     previous: Option<&ResultRecord>,
-    implicit_source_context: Option<ImplicitSourceContext>,
+    source_context: Option<SourceContext>,
 ) -> Result<InputBundle> {
     if [&request.case_id, &request.input_id, &request.actor_id]
         .iter()
@@ -414,11 +423,11 @@ pub(crate) fn seal_with_implicit_source_context(
     });
     let explicit_source_explanation_candidate =
         request.context_ref.is_some() && source_explanation_candidate;
-    let implicit_source_line_parser = implicit_source_context
+    let implicit_source_line_parser = source_context
         .filter(|_| request.context_ref.is_none() && source_explanation_candidate)
         .map(|context| match context {
-            ImplicitSourceContext::Explanation => IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION,
-            ImplicitSourceContext::Summary => IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION,
+            SourceContext::Explanation => IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION,
+            SourceContext::Summary => IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION,
         });
     let parser_version = match &intent {
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
@@ -475,6 +484,12 @@ pub(crate) fn seal_with_implicit_source_context(
             if explicit_source_explanation_candidate =>
         {
             EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
+        }
+        Intent::SummarizePreviousSourceLines { .. }
+            if explicit_source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::Summary)) =>
+        {
+            EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
         }
         Intent::SummarizePreviousSourceLines { .. } if explicit_source_explanation_candidate => {
             EXPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
