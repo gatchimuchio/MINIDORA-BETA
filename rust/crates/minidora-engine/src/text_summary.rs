@@ -3,8 +3,8 @@
 use crate::ports::{JsonKind, strict_json_document};
 use crate::store::{Store, VerifiedCaseHistory};
 use minidora_domain::{
-    ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, Result, ResultRecord,
-    SummaryLineLimit, canonical, digest, failure, identity,
+    ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, MeaningIR, Result,
+    ResultRecord, SummaryLineLimit, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1583,6 +1583,7 @@ pub(crate) fn previous_summary_explanation(
         Intent::SummarizePreviousSource
             | Intent::SummarizePreviousSourceConstrained { .. }
             | Intent::SummarizePreviousSourceLines { .. }
+            | Intent::SummarizePreviousSourcePacketLines { .. }
     );
     let is_source_question = matches!(
         summary_bundle.meaning.intent,
@@ -2020,6 +2021,7 @@ fn explicit_explanation_source<'a>(
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
                 | Intent::SummarizePreviousSourceLines { .. }
+                | Intent::SummarizePreviousSourcePacketLines { .. }
         ) {
             break SourceFollowup::direct(detail);
         }
@@ -2237,19 +2239,23 @@ pub(crate) fn verify_retained_source_summary<'a>(
         Intent::SummarizePreviousSource
             | Intent::SummarizePreviousSourceConstrained { .. }
             | Intent::SummarizePreviousSourceLines { .. }
+            | Intent::SummarizePreviousSourcePacketLines { .. }
     ) {
         return Ok(None);
     }
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let line_summary = matches!(
-        bundle.meaning.intent,
-        Intent::SummarizePreviousSourceLines { .. }
-    );
-    if line_summary
-        != (bundle.meaning.parser_version == crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION)
-    {
+    let parser = crate::input::source_line_summary_parser(&bundle.meaning.intent);
+    let line_summary = parser.is_some();
+    let version = bundle.meaning.parser_version.as_str();
+    let sealed_line_version = matches!(
+        version,
+        crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+    )
+    .then_some(version);
+    if parser != sealed_line_version {
         return Err(failure(
             "RECOVERY_SOURCE_SUMMARY_MISMATCH",
             "the retained source line summary intent and parser version differ",
@@ -2307,8 +2313,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             "the prior result lacks fetched bodies",
         ));
     }
-    let active_positions =
-        source_summary_packet_positions(&source_packets, &bundle.meaning.parser_version)?;
+    let active_positions = selected_source_summary_positions(&source_packets, &bundle.meaning)?;
     if constrained && active_positions.len() != 1 {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
@@ -3006,6 +3011,7 @@ pub(crate) fn source_summary_packet_positions(
         parser_version,
         crate::input::SOURCE_SUMMARY_PARSER_VERSION
             | crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
+            | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
@@ -3015,6 +3021,26 @@ pub(crate) fn source_summary_packet_positions(
         validate_source_summary_body(packet, reference)?;
     }
     Ok(select_source_versions(packets)?.active_packet_indices)
+}
+
+pub(crate) fn selected_source_summary_positions(
+    packets: &[(usize, &EvidencePacket, String)],
+    meaning: &MeaningIR,
+) -> Result<Vec<usize>> {
+    let positions = source_summary_packet_positions(packets, &meaning.parser_version)?;
+    let Intent::SummarizePreviousSourcePacketLines { packet_id, .. } = &meaning.intent else {
+        return Ok(positions);
+    };
+    let mut matches = positions
+        .into_iter()
+        .filter(|position| &packets[*position].1.id == packet_id);
+    match (matches.next(), matches.next()) {
+        (Some(position), None) => Ok(vec![position]),
+        _ => Err(failure(
+            "SOURCE_SUMMARY_PACKET_NOT_ACTIVE",
+            "指定した出典packetを、参照した取得結果の現行本文から一意に選べません。",
+        )),
+    }
 }
 
 pub(crate) fn constrained_source_summary_limits(intent: &Intent) -> Option<(usize, Option<usize>)> {
@@ -3073,7 +3099,9 @@ pub(crate) fn summarize_fetched_source_for_intent(
     packet: &EvidencePacket,
     source_packet_ref: &str,
 ) -> Result<SourceExtractiveSummaryCandidates> {
-    if let Intent::SummarizePreviousSourceLines { limit } = intent {
+    if let Intent::SummarizePreviousSourceLines { limit }
+    | Intent::SummarizePreviousSourcePacketLines { limit, .. } = intent
+    {
         return summarize_fetched_source_internal(
             source_result_id,
             packet,

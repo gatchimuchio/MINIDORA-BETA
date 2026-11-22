@@ -5691,7 +5691,8 @@ impl Engine {
                 Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
-                | Intent::SummarizePreviousSourceLines { .. } => None,
+                | Intent::SummarizePreviousSourceLines { .. }
+                | Intent::SummarizePreviousSourcePacketLines { .. } => None,
                 _ => return Ok(bundle),
             };
             let context = if has_compute_budget
@@ -5748,6 +5749,7 @@ impl Engine {
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
                 | Intent::SummarizePreviousSourceLines { .. }
+                | Intent::SummarizePreviousSourcePacketLines { .. }
         ) && let Some(source) =
             previous.filter(|source| has_compute_budget || source.lifecycle == Lifecycle::Commit)
             && let Some(prior_case) = latest.as_ref()
@@ -5820,6 +5822,7 @@ impl Engine {
             Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
                 | Intent::SummarizePreviousSourceLines { .. }
+                | Intent::SummarizePreviousSourcePacketLines { .. }
         ) {
             previous_source
                 .map(|context| context.bodies().map(|(index, _)| index).collect::<Vec<_>>())
@@ -8791,7 +8794,8 @@ impl Engine {
             }
             intent @ (Intent::SummarizePreviousSource
             | Intent::SummarizePreviousSourceConstrained { .. }
-            | Intent::SummarizePreviousSourceLines { .. }) => {
+            | Intent::SummarizePreviousSourceLines { .. }
+            | Intent::SummarizePreviousSourcePacketLines { .. }) => {
                 let Some(context) = previous_source else {
                     return self.stop(
                         &mut state,
@@ -8801,7 +8805,7 @@ impl Engine {
                     );
                 };
                 let prior = context.source;
-                let line_summary = matches!(intent, Intent::SummarizePreviousSourceLines { .. });
+                let line_summary = input::source_line_summary_parser(intent).is_some();
                 if line_summary && prior.lifecycle != Lifecycle::Commit {
                     return self.stop(
                         &mut state,
@@ -8848,9 +8852,9 @@ impl Engine {
                     graph.observe(&node_id, &packet_ref, &BTreeMap::new())?;
                     source_packets.push((source_index, packet, packet_ref));
                 }
-                let active_positions = match crate::text_summary::source_summary_packet_positions(
+                let active_positions = match crate::text_summary::selected_source_summary_positions(
                     &source_packets,
-                    &bundle.meaning.parser_version,
+                    &bundle.meaning,
                 ) {
                     Ok(positions) => positions,
                     Err(Error::Contract { code, message }) => {

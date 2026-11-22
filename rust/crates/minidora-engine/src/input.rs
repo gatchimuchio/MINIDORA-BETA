@@ -84,6 +84,9 @@ pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v94-versioned-source-summary";
 pub(crate) const SOURCE_LINE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v145-source-line-summary";
+pub(crate) const SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v146-source-packet-line-summary";
+const SOURCE_PACKET_SUMMARY_LABEL: &str = "出典packet";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
 pub(crate) const CSV_ROW_EXPLANATION_PARSER_VERSION: &str =
@@ -148,6 +151,16 @@ pub(crate) fn is_legacy_text_summary_explanation_version(version: &str) -> bool 
             | TEXT_EDIT_EXPLANATION_PARSER_VERSION
             | TEXT_COMPOSITION_EXPLANATION_PARSER_VERSION
     )
+}
+
+pub(crate) fn source_line_summary_parser(intent: &Intent) -> Option<&'static str> {
+    match intent {
+        Intent::SummarizePreviousSourceLines { .. } => Some(SOURCE_LINE_SUMMARY_PARSER_VERSION),
+        Intent::SummarizePreviousSourcePacketLines { .. } => {
+            Some(SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION)
+        }
+        _ => None,
+    }
 }
 
 const SOURCE_EVIDENCE_VERSION: &str = "minidora.sealed-source-evidence.v1";
@@ -307,6 +320,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::SummarizePreviousSource
             | Intent::SummarizePreviousSourceConstrained { .. }
             | Intent::SummarizePreviousSourceLines { .. }
+            | Intent::SummarizePreviousSourcePacketLines { .. }
     ) && lacks_source_context()
     {
         unresolved.push(
@@ -414,7 +428,10 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }
-        Intent::SummarizePreviousSourceLines { .. } => SOURCE_LINE_SUMMARY_PARSER_VERSION,
+        Intent::SummarizePreviousSourceLines { .. }
+        | Intent::SummarizePreviousSourcePacketLines { .. } => {
+            source_line_summary_parser(&intent).expect("source line summary parser")
+        }
         _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
@@ -1707,6 +1724,27 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
                     "guarded rule clauses do not match the original request",
                 )
             });
+    }
+    if let Intent::SummarizePreviousSourcePacketLines { packet_id, limit } = intent {
+        let (packet, _) = source_packet_line_summary_captures(terminal_trim(text))?
+            .filter(|(packet, parsed_limit)| packet.as_str() == packet_id && parsed_limit == limit)
+            .ok_or_else(|| {
+                failure(
+                    "SOURCE_PACKET_SUMMARY_SPAN",
+                    "the source packet and line limit do not match the original request",
+                )
+            })?;
+        let offset = text.len() - text.trim_start().len();
+        let span = captured_source_span(text, offset, packet).ok_or_else(|| {
+            failure(
+                "SOURCE_PACKET_SUMMARY_SPAN",
+                "the source packet identity is outside the original request",
+            )
+        })?;
+        return Ok(BTreeMap::from([(
+            "/SummarizePreviousSourcePacketLines/packet_id".into(),
+            vec![span],
+        )]));
     }
     let source_inspection = match intent {
         Intent::InspectFactSource { fact_id } => Some((
@@ -3926,6 +3964,18 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
 
 fn interpret(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
+    if source_packet_line_summary_request(statement) {
+        return Ok(source_packet_line_summary_captures(statement)?
+            .map(
+                |(packet, limit)| Intent::SummarizePreviousSourcePacketLines {
+                    packet_id: packet.as_str().into(),
+                    limit,
+                },
+            )
+            .unwrap_or_else(|| Intent::Unknown {
+                reason: "出典packet IDを一つ指定し、1〜8行の要約を依頼してください。".into(),
+            }));
+    }
     if let Some(rule_id) = source_inspection_payload(statement, LISTED_RULE_SOURCE_LABEL) {
         return Ok(
             if !text.trim().contains(['?', '？', '\r', '\n'])
@@ -4514,6 +4564,41 @@ fn previous_source_line_summary_intent(text: &str) -> Result<Option<Intent>> {
         .map(|captures| Intent::SummarizePreviousSourceLines {
             limit: summary_line_limit(&captures[2], captures.get(1).is_some()),
         }))
+}
+
+fn source_packet_line_summary_request(text: &str) -> bool {
+    if source_inspection_payload(text, SOURCE_PACKET_SUMMARY_LABEL).is_some() {
+        return true;
+    }
+    let mut words = text.split_ascii_whitespace();
+    words.next().is_some_and(|word| {
+        word.eq_ignore_ascii_case("summarize") || word.eq_ignore_ascii_case("summarise")
+    }) && words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("source"))
+        && words
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("packet"))
+}
+
+fn source_packet_line_summary_captures(
+    text: &str,
+) -> Result<Option<(regex::Match<'_>, SummaryLineLimit)>> {
+    let japanese = regex(
+        r"^出典packet[:：][ \t　]*(?P<id>\S+?)[ \t　]*を(?P<count>[1-8])行(?P<max>以内)?で要約(?:してください|して|せよ)$",
+    )?;
+    let english = regex(
+        r"(?i)^summari[sz]e source packet (?P<id>\S+) in (?P<max>up to )?(?P<count>[1-8]) lines?$",
+    )?;
+    let Some(captures) = japanese.captures(text).or_else(|| english.captures(text)) else {
+        return Ok(None);
+    };
+    let packet = captures.name("id").expect("source packet ID capture");
+    if !valid_source_record_id(packet.as_str(), "") {
+        return Ok(None);
+    }
+    let limit = summary_line_limit(&captures["count"], captures.name("max").is_some());
+    Ok(Some((packet, limit)))
 }
 
 fn previous_result_summary_intent(text: &str) -> Result<Option<Intent>> {

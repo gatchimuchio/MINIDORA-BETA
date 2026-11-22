@@ -3842,6 +3842,7 @@ pub(crate) fn source_followup_anchor<'a>(
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
                 | Intent::SummarizePreviousSourceLines { .. }
+                | Intent::SummarizePreviousSourcePacketLines { .. }
         );
     let explanation = allow_explanation
         && committed
@@ -4009,13 +4010,13 @@ fn verify_source_summary_context(
     goal: &GoalContract,
 ) -> Result<Option<crate::text_summary::RetainedSourceSummary>> {
     let sealed_line = state.bundle.as_ref().is_some_and(|bundle| {
-        bundle.meaning.parser_version == crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
-            || matches!(
-                bundle.meaning.intent,
-                Intent::SummarizePreviousSourceLines { .. }
-            )
+        matches!(
+            bundle.meaning.parser_version.as_str(),
+            crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
+                | crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+        ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
-    let goal_line = matches!(goal.intent, Intent::SummarizePreviousSourceLines { .. });
+    let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();
     if (sealed_line || goal_line)
         && state
             .bundle
@@ -4032,6 +4033,7 @@ fn verify_source_summary_context(
         Intent::SummarizePreviousSource
             | Intent::SummarizePreviousSourceConstrained { .. }
             | Intent::SummarizePreviousSourceLines { .. }
+            | Intent::SummarizePreviousSourcePacketLines { .. }
     ) {
         return Ok(None);
     }
@@ -4040,6 +4042,12 @@ fn verify_source_summary_context(
         .as_ref()
         .filter(|bundle| bundle.request.actor_id == actor && bundle.request.case_id == case)
         .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    if matches!(
+        goal.intent,
+        Intent::SummarizePreviousSourcePacketLines { .. }
+    ) {
+        verify_registered_input(store, bundle, "RECOVERY_SOURCE_SUMMARY_MISMATCH")?;
+    }
     crate::text_summary::verify_retained_source_summary(
         store,
         bundle,
@@ -4891,6 +4899,7 @@ fn inspect(
                 Intent::SummarizePreviousSource
                     | Intent::SummarizePreviousSourceConstrained { .. }
                     | Intent::SummarizePreviousSourceLines { .. }
+                    | Intent::SummarizePreviousSourcePacketLines { .. }
                     | Intent::SummarizePreviousResult { .. }
                     | Intent::SummarizePreviousResultLines { .. }
                     | Intent::AskPreviousSourceQuestion { .. }

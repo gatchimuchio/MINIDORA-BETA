@@ -322,6 +322,10 @@ pub enum Intent {
     SummarizePreviousSourceLines {
         limit: SummaryLineLimit,
     },
+    SummarizePreviousSourcePacketLines {
+        packet_id: String,
+        limit: SummaryLineLimit,
+    },
     SummarizePreviousResult {
         max_sentences: Option<usize>,
         max_chars: Option<usize>,

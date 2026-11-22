@@ -12462,6 +12462,89 @@ fn natural_source_question_suspends_without_prior_body_or_topic_match() {
 }
 
 #[test]
+fn source_packet_line_summary_selects_the_requested_body_from_two_sources() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let uris = [
+        "https://example.test/temperature",
+        "https://example.test/rain",
+    ];
+    let texts = [
+        "昼の水温は9度でした。",
+        "夜の雨量は12.5 mmでした。風向も記録しました。",
+    ];
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_sources(
+        &scratch.0,
+        actor,
+        &[(uris[0], texts[0]), (uris[1], texts[1])],
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet = sequence_artifact(&store, &serde_json::json!(packet_refs[1]));
+    let packet_id = packet["id"].as_str().unwrap();
+    let requested = format!("出典packet： {packet_id} を2行で要約して");
+    let summary = record(&execute(&scratch.0, actor, &[&requested]));
+    let output = summary["text"].as_str().unwrap();
+    assert_eq!(output.lines().count(), 2);
+    assert!(output.contains("夜の雨量は12.5 mmでした。"));
+    assert!(output.contains(uris[1]));
+    assert!(!output.contains(uris[0]));
+    let sealed = inspect_normal_case(&scratch.0, actor);
+    assert_eq!(
+        sealed["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-en-v146-source-packet-line-summary"
+    );
+    let raw_span = &sealed["bundle"]["meaning"]["source_roles"]["/SummarizePreviousSourcePacketLines/packet_id"]
+        [0];
+    assert_eq!(
+        requested.get(
+            raw_span["start"].as_u64().unwrap() as usize
+                ..raw_span["end"].as_u64().unwrap() as usize
+        ),
+        Some(packet_id)
+    );
+    let proof_ref = summary["dependencies"].as_array().unwrap().last().unwrap();
+    let proof = sequence_artifact(&store, proof_ref);
+    assert_eq!(proof["source_packet_id"], packet_id);
+    assert_eq!(proof["source_packet_ref"], packet_refs[1]);
+    assert_eq!(proof["source_result_id"], source_id);
+    assert_eq!(proof["summary"]["source_text"], texts[1]);
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    assert!(detail["text"].as_str().unwrap().contains(packet_id));
+
+    let missing = format!(
+        "summarize source packet {} in up to 2 lines",
+        "0".repeat(64)
+    );
+    let target = scratch.0.join("missing-source.txt");
+    let target_arg = target.to_str().unwrap();
+    let stopped = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--context",
+                &source_id,
+                "--output",
+                target_arg,
+                "--allow-write",
+                target_arg,
+                &missing,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        stopped["reason"]
+            .as_str()
+            .unwrap()
+            .contains("SOURCE_SUMMARY_PACKET_NOT_ACTIVE")
+    );
+    assert!(stopped["render"].is_null());
+    assert!(!target.exists());
+}
+
+#[test]
 fn source_line_summary_keeps_a_single_fetched_body_and_its_spans() {
     let scratch = Scratch::new();
     let actor = "owner";
