@@ -3841,6 +3841,7 @@ pub(crate) fn source_followup_anchor<'a>(
             Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
+                | Intent::SummarizePreviousSourceLines { .. }
         );
     let explanation = allow_explanation
         && committed
@@ -4007,9 +4008,30 @@ fn verify_source_summary_context(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<Option<crate::text_summary::RetainedSourceSummary>> {
+    let sealed_line = state.bundle.as_ref().is_some_and(|bundle| {
+        bundle.meaning.parser_version == crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
+            || matches!(
+                bundle.meaning.intent,
+                Intent::SummarizePreviousSourceLines { .. }
+            )
+    });
+    let goal_line = matches!(goal.intent, Intent::SummarizePreviousSourceLines { .. });
+    if (sealed_line || goal_line)
+        && state
+            .bundle
+            .as_ref()
+            .is_none_or(|bundle| !goal_line || bundle.meaning.intent != goal.intent)
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+            "the retained Goal differs from the sealed source line summary requirement",
+        ));
+    }
     if !matches!(
         goal.intent,
-        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+        Intent::SummarizePreviousSource
+            | Intent::SummarizePreviousSourceConstrained { .. }
+            | Intent::SummarizePreviousSourceLines { .. }
     ) {
         return Ok(None);
     }
@@ -4868,6 +4890,7 @@ fn inspect(
                 goal.intent,
                 Intent::SummarizePreviousSource
                     | Intent::SummarizePreviousSourceConstrained { .. }
+                    | Intent::SummarizePreviousSourceLines { .. }
                     | Intent::SummarizePreviousResult { .. }
                     | Intent::SummarizePreviousResultLines { .. }
                     | Intent::AskPreviousSourceQuestion { .. }

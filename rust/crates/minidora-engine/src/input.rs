@@ -82,6 +82,8 @@ const SEARCH_FALLBACK_PARSER_VERSION: &str = "declarative-ja-en-v93-search-fallb
 pub(crate) const FIRST_DIRECT_CONTINUATION_PARSER_VERSION: &str = "direct-source-continuation-v1";
 pub(crate) const SOURCE_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-en-v94-versioned-source-summary";
+pub(crate) const SOURCE_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-en-v145-source-line-summary";
 pub(crate) const CSV_JOIN_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v95-csv-join-explanation";
 pub(crate) const CSV_ROW_EXPLANATION_PARSER_VERSION: &str =
@@ -302,7 +304,9 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     }
     if matches!(
         intent,
-        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+        Intent::SummarizePreviousSource
+            | Intent::SummarizePreviousSourceConstrained { .. }
+            | Intent::SummarizePreviousSourceLines { .. }
     ) && lacks_source_context()
     {
         unresolved.push(
@@ -410,6 +414,7 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
         Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
             SOURCE_SUMMARY_PARSER_VERSION
         }
+        Intent::SummarizePreviousSourceLines { .. } => SOURCE_LINE_SUMMARY_PARSER_VERSION,
         _ => PARSER_VERSION,
     };
     let meaning = MeaningIR {
@@ -4175,6 +4180,9 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = constrained_previous_source_summary_intent(body)? {
         return Ok(intent);
     }
+    if let Some(intent) = previous_source_line_summary_intent(body)? {
+        return Ok(intent);
+    }
     if let Some(intent) = previous_result_summary_intent(body)? {
         return Ok(intent);
     }
@@ -4489,6 +4497,25 @@ fn constrained_previous_source_summary_intent(text: &str) -> Result<Option<Inten
     }))
 }
 
+fn previous_source_line_summary_intent(text: &str) -> Result<Option<Intent>> {
+    let japanese = regex(
+        r"^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))を([1-8])行(以内)?で要約(?:してください|して|せよ)$",
+    )?;
+    if let Some(captures) = japanese.captures(text) {
+        return Ok(Some(Intent::SummarizePreviousSourceLines {
+            limit: summary_line_limit(&captures[1], captures.get(2).is_some()),
+        }));
+    }
+    let english = regex(
+        r"(?i)^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document) in (up to )?([1-8]) lines?$",
+    )?;
+    Ok(english
+        .captures(text)
+        .map(|captures| Intent::SummarizePreviousSourceLines {
+            limit: summary_line_limit(&captures[2], captures.get(1).is_some()),
+        }))
+}
+
 fn previous_result_summary_intent(text: &str) -> Result<Option<Intent>> {
     let japanese = regex(
         r"^(?:(?:前回|前|直前)(?:の)?(?:結果|回答|比較|説明)|その(?:結果|回答|比較|説明))(?:を)?(?:(?:([1-8])(?:文|点)以内)(?:[、,]([1-9][0-9]{0,5})(?:字|文字)以内)?|([1-9][0-9]{0,5})(?:字|文字)以内(?:[、,]([1-8])(?:文|点)以内)?)?(?:で)?要約(?:してください|して|せよ)$",
@@ -4531,21 +4558,25 @@ fn previous_result_line_summary_intent(text: &str) -> Result<Option<Intent>> {
     let english = regex(
         r"(?i)^summari[sz]e (?:the )?(?:previous|prior|last) (?:result|answer|comparison) in (up to )?([1-8]) lines?$",
     )?;
-    let line_summary = |count: &str, at_most| {
-        let count = count.parse().expect("line count captures one ASCII digit");
-        let limit = if at_most {
-            SummaryLineLimit::AtMost(count)
-        } else {
-            SummaryLineLimit::Exact(count)
-        };
-        Intent::SummarizePreviousResultLines { limit }
-    };
     if let Some(captures) = japanese.captures(text) {
-        return Ok(Some(line_summary(&captures[1], captures.get(2).is_some())));
+        return Ok(Some(Intent::SummarizePreviousResultLines {
+            limit: summary_line_limit(&captures[1], captures.get(2).is_some()),
+        }));
     }
     Ok(english
         .captures(text)
-        .map(|captures| line_summary(&captures[2], captures.get(1).is_some())))
+        .map(|captures| Intent::SummarizePreviousResultLines {
+            limit: summary_line_limit(&captures[2], captures.get(1).is_some()),
+        }))
+}
+
+fn summary_line_limit(count: &str, at_most: bool) -> SummaryLineLimit {
+    let count = count.parse().expect("line count captures one ASCII digit");
+    if at_most {
+        SummaryLineLimit::AtMost(count)
+    } else {
+        SummaryLineLimit::Exact(count)
+    }
 }
 
 fn meaning_comparison_intent(text: &str) -> Result<Option<Intent>> {
@@ -7731,7 +7762,6 @@ mod tests {
         for text in [
             "前回の結果を0行で要約して",
             "直前の回答を9行以内で要約して",
-            "前回の資料を2行で要約して",
             "前回の結果を2行以内、20字以内で要約して",
             "「前回の結果を2行で要約して」",
             "Summarize the previous result in up to 9 lines",
@@ -7747,6 +7777,61 @@ mod tests {
             seal(&old, None).unwrap().meaning.parser_version,
             PARSER_VERSION
         );
+    }
+
+    #[test]
+    fn previous_source_line_summary_seals_the_source_context_and_line_count() {
+        for (text, limit) in [
+            (
+                "　前回の資料を2行で要約してください。　",
+                SummaryLineLimit::Exact(2),
+            ),
+            ("その出典を8行以内で要約して", SummaryLineLimit::AtMost(8)),
+            (
+                "Summarize the previous source in 1 line",
+                SummaryLineLimit::Exact(1),
+            ),
+            (
+                "summarise retrieved document in up to 3 lines",
+                SummaryLineLimit::AtMost(3),
+            ),
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert_eq!(
+                bundle.meaning.parser_version,
+                SOURCE_LINE_SUMMARY_PARSER_VERSION
+            );
+            assert_eq!(
+                bundle.meaning.intent,
+                Intent::SummarizePreviousSourceLines { limit }
+            );
+            assert_eq!(bundle.meaning.spans[0].text, text);
+            assert_eq!(bundle.meaning.spans[0].end, text.len());
+            assert_eq!(
+                bundle.meaning.unresolved,
+                ["no actual committed previous result is available for source summarization"]
+            );
+        }
+        for text in [
+            "前回の資料を0行で要約して",
+            "取得した本文を9行以内で要約して",
+            "前回の資料を2行以内、10字以内で要約して",
+            "「前回の資料を2行で要約して」",
+            "Summarize previous body in up to 9 lines",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+        for text in [
+            "前回の資料を要約して",
+            "その出典を2点以内で要約して",
+            "Summarize previous source in up to 20 characters",
+        ] {
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+            assert_eq!(bundle.meaning.parser_version, SOURCE_SUMMARY_PARSER_VERSION);
+        }
     }
 
     #[test]

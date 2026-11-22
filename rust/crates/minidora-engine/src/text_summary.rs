@@ -1580,7 +1580,9 @@ pub(crate) fn previous_summary_explanation(
     };
     let is_source_summary = matches!(
         summary_bundle.meaning.intent,
-        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+        Intent::SummarizePreviousSource
+            | Intent::SummarizePreviousSourceConstrained { .. }
+            | Intent::SummarizePreviousSourceLines { .. }
     );
     let is_source_question = matches!(
         summary_bundle.meaning.intent,
@@ -2017,6 +2019,7 @@ fn explicit_explanation_source<'a>(
             Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
+                | Intent::SummarizePreviousSourceLines { .. }
         ) {
             break SourceFollowup::direct(detail);
         }
@@ -2202,6 +2205,15 @@ fn selected_body_followup<'a>(
 }
 
 pub(crate) fn source_summary_unit(report: &SourceExtractiveSummaryCandidates) -> String {
+    if report.summary.line_limit.is_some() {
+        return format!(
+            "{}（出典: {}、出典packet: {}、取得本文SHA-256: {}。ライセンス情報: 未記録。）",
+            report.summary.text,
+            report.source_final_uri.escape_default(),
+            report.source_packet_id,
+            report.raw_body_sha256,
+        );
+    }
     format!(
         "出典: {}\n出典packet: {}\n取得本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
         report.source_final_uri,
@@ -2222,14 +2234,29 @@ pub(crate) fn verify_retained_source_summary<'a>(
 ) -> Result<Option<RetainedSourceSummary>> {
     if !matches!(
         bundle.meaning.intent,
-        Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+        Intent::SummarizePreviousSource
+            | Intent::SummarizePreviousSourceConstrained { .. }
+            | Intent::SummarizePreviousSourceLines { .. }
     ) {
         return Ok(None);
     }
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let summary_limits = constrained_source_summary_limits(&bundle.meaning.intent);
+    let line_summary = matches!(
+        bundle.meaning.intent,
+        Intent::SummarizePreviousSourceLines { .. }
+    );
+    if line_summary
+        != (bundle.meaning.parser_version == crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION)
+    {
+        return Err(failure(
+            "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+            "the retained source line summary intent and parser version differ",
+        ));
+    }
+    let constrained =
+        line_summary || constrained_source_summary_limits(&bundle.meaning.intent).is_some();
     let prior_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
         failure(
             "RECOVERY_SOURCE_CONTEXT_MISMATCH",
@@ -2250,6 +2277,12 @@ pub(crate) fn verify_retained_source_summary<'a>(
             )
         })?;
     let prior = context.source;
+    if line_summary && prior.lifecycle != Lifecycle::Commit {
+        return Err(failure(
+            "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+            "the retained line summary source is not a completed retrieval",
+        ));
+    }
     if !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_MISMATCH",
@@ -2276,7 +2309,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
     }
     let active_positions =
         source_summary_packet_positions(&source_packets, &bundle.meaning.parser_version)?;
-    if summary_limits.is_some() && active_positions.len() != 1 {
+    if constrained && active_positions.len() != 1 {
         return Err(failure(
             "RECOVERY_SOURCE_CONTEXT_AMBIGUOUS",
             "the constrained source summary requires exactly one selected source",
@@ -2300,18 +2333,24 @@ pub(crate) fn verify_retained_source_summary<'a>(
     }
     for position in active_positions {
         let (_, packet, packet_ref) = &source_packets[position];
-        let report = match summary_limits {
-            Some((max_sentences, max_chars)) => summarize_fetched_source_with_limits(
-                &prior.id,
-                packet,
-                packet_ref,
-                max_sentences,
-                max_chars,
-            )?,
-            None => summarize_fetched_source(&prior.id, packet, packet_ref)?,
-        };
+        let report = summarize_fetched_source_for_intent(
+            &bundle.meaning.intent,
+            &prior.id,
+            packet,
+            packet_ref,
+        )?;
         let encoded = canonical(&report)?;
+        let unit = source_summary_unit(&report);
         report_bytes = report_bytes.saturating_add(encoded.len());
+        if line_summary {
+            report_bytes = report_bytes.saturating_add(unit.len());
+            if report.summary.sentence_count > request.budget.max_actions as usize {
+                return Err(failure(
+                    "RECOVERY_SOURCE_SUMMARY_LIMIT",
+                    "the retained source sentence scan exceeds the original action budget",
+                ));
+            }
+        }
         if report_bytes > request.budget.max_evidence_bytes {
             return Err(failure(
                 "RECOVERY_SOURCE_SUMMARY_LIMIT",
@@ -2326,7 +2365,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             ));
         }
         dependencies.push(report_ref);
-        units.push(source_summary_unit(&report));
+        units.push(unit);
         reports.push(report);
     }
     if result.id != identity(request)?
@@ -2441,6 +2480,17 @@ fn previous_source_summary_explanation<'a>(
     }
     for (index, report) in proof.reports.iter().enumerate() {
         let summary = &report.summary;
+        let count_limit = match summary.line_limit {
+            Some(SummaryLineLimit::Exact(count)) => format!(
+                "指定行数: {count}。実際の行数: {}",
+                summary.text.lines().count()
+            ),
+            Some(SummaryLineLimit::AtMost(count)) => format!(
+                "行数上限: {count}。実際の行数: {}",
+                summary.text.lines().count()
+            ),
+            None => format!("文数上限{}", summary.max_sentences),
+        };
         units.extend([
             format!("出典{}: {}", index + 1, report.source_final_uri),
             format!("取得URL: {}", report.source_request_uri),
@@ -2459,11 +2509,10 @@ fn previous_source_summary_explanation<'a>(
                 report.parser_version
             ),
             format!(
-                "候補文{}件、選択{}件、未選択{}件。文数上限{}、文字数上限{}。",
+                "候補文{}件、選択{}件、未選択{}件。{count_limit}、文字数上限{}。",
                 summary.sentence_count,
                 summary.sentences.len(),
                 summary.omitted_sentence_indices.len(),
-                summary.max_sentences,
                 summary.max_chars
             ),
         ]);
@@ -2956,6 +3005,7 @@ pub(crate) fn source_summary_packet_positions(
     if !matches!(
         parser_version,
         crate::input::SOURCE_SUMMARY_PARSER_VERSION
+            | crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
@@ -3006,6 +3056,49 @@ pub(crate) fn summarize_fetched_source_with_limits(
     max_sentences: usize,
     max_chars: Option<usize>,
 ) -> Result<SourceExtractiveSummaryCandidates> {
+    summarize_fetched_source_internal(
+        source_result_id,
+        packet,
+        source_packet_ref,
+        PreviousResultSummaryLimits::Sentences {
+            max_sentences,
+            max_chars,
+        },
+    )
+}
+
+pub(crate) fn summarize_fetched_source_for_intent(
+    intent: &Intent,
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+) -> Result<SourceExtractiveSummaryCandidates> {
+    if let Intent::SummarizePreviousSourceLines { limit } = intent {
+        return summarize_fetched_source_internal(
+            source_result_id,
+            packet,
+            source_packet_ref,
+            PreviousResultSummaryLimits::Lines(*limit),
+        );
+    }
+    if let Some((max_sentences, max_chars)) = constrained_source_summary_limits(intent) {
+        return summarize_fetched_source_with_limits(
+            source_result_id,
+            packet,
+            source_packet_ref,
+            max_sentences,
+            max_chars,
+        );
+    }
+    summarize_fetched_source(source_result_id, packet, source_packet_ref)
+}
+
+fn summarize_fetched_source_internal(
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+    limits: PreviousResultSummaryLimits,
+) -> Result<SourceExtractiveSummaryCandidates> {
     if !sha256_id(source_result_id) {
         return Err(failure(
             "SOURCE_EVIDENCE_INVALID",
@@ -3017,14 +3110,25 @@ pub(crate) fn summarize_fetched_source_with_limits(
         .extracted_text
         .as_deref()
         .expect("validated fetched body has text");
-    let document = match max_chars {
-        Some(max_chars) => serde_json::to_string(&serde_json::json!({
+    let document = match limits {
+        PreviousResultSummaryLimits::Lines(limit) => serde_json::to_string(&serde_json::json!({
+            "text": text,
+            "line_limit": limit,
+            "format": "bullets"
+        }))?,
+        PreviousResultSummaryLimits::Sentences {
+            max_sentences,
+            max_chars: Some(max_chars),
+        } => serde_json::to_string(&serde_json::json!({
             "text": text,
             "max_sentences": max_sentences,
             "max_chars": max_chars,
             "format": "bullets"
         }))?,
-        None => serde_json::to_string(&serde_json::json!({
+        PreviousResultSummaryLimits::Sentences {
+            max_sentences,
+            max_chars: None,
+        } => serde_json::to_string(&serde_json::json!({
             "text": text,
             "max_sentences": max_sentences,
             "format": "bullets"
@@ -3038,7 +3142,12 @@ pub(crate) fn summarize_fetched_source_with_limits(
         ));
     }
     Ok(SourceExtractiveSummaryCandidates {
-        operation: "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1".into(),
+        operation: if summary.line_limit.is_some() {
+            "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1"
+        } else {
+            "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1"
+        }
+        .into(),
         source_result_id: source_result_id.into(),
         source_packet_id: packet.id.clone(),
         source_packet_ref: source_packet_ref.into(),

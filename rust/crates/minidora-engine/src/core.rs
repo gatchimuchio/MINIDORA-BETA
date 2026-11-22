@@ -5690,7 +5690,8 @@ impl Engine {
                 Intent::FetchPreviousSearchCandidate { rank } => Some(rank),
                 Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
-                | Intent::SummarizePreviousSourceConstrained { .. } => None,
+                | Intent::SummarizePreviousSourceConstrained { .. }
+                | Intent::SummarizePreviousSourceLines { .. } => None,
                 _ => return Ok(bundle),
             };
             let context = if has_compute_budget
@@ -5746,6 +5747,7 @@ impl Engine {
             Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource
                 | Intent::SummarizePreviousSourceConstrained { .. }
+                | Intent::SummarizePreviousSourceLines { .. }
         ) && let Some(source) =
             previous.filter(|source| has_compute_budget || source.lifecycle == Lifecycle::Commit)
             && let Some(prior_case) = latest.as_ref()
@@ -5815,7 +5817,9 @@ impl Engine {
         let mut compute_requires = Vec::new();
         let source_followup_indices = if matches!(
             bundle.meaning.intent,
-            Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. }
+            Intent::SummarizePreviousSource
+                | Intent::SummarizePreviousSourceConstrained { .. }
+                | Intent::SummarizePreviousSourceLines { .. }
         ) {
             previous_source
                 .map(|context| context.bodies().map(|(index, _)| index).collect::<Vec<_>>())
@@ -8785,7 +8789,9 @@ impl Engine {
                 units = hypothesis.units;
                 result.guarantee = Guarantee::Hypothesis;
             }
-            Intent::SummarizePreviousSource | Intent::SummarizePreviousSourceConstrained { .. } => {
+            intent @ (Intent::SummarizePreviousSource
+            | Intent::SummarizePreviousSourceConstrained { .. }
+            | Intent::SummarizePreviousSourceLines { .. }) => {
                 let Some(context) = previous_source else {
                     return self.stop(
                         &mut state,
@@ -8795,6 +8801,15 @@ impl Engine {
                     );
                 };
                 let prior = context.source;
+                let line_summary = matches!(intent, Intent::SummarizePreviousSourceLines { .. });
+                if line_summary && prior.lifecycle != Lifecycle::Commit {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "SOURCE_SUMMARY_PARTIAL_CONTEXT",
+                        "行数を指定した出典要約には、取得が完了した本文が必要です。",
+                    );
+                }
                 if source_followup_indices.is_empty() {
                     return self.stop(
                         &mut state,
@@ -8803,8 +8818,8 @@ impl Engine {
                         "前回結果に要約できる取得本文がありません。検索一覧や題名だけから本文を補いません。",
                     );
                 }
-                let summary_limits =
-                    crate::text_summary::constrained_source_summary_limits(&bundle.meaning.intent);
+                let constrained = line_summary
+                    || crate::text_summary::constrained_source_summary_limits(intent).is_some();
                 let mut source_packets = Vec::with_capacity(source_followup_indices.len());
                 for (source_index, packet) in context.bodies() {
                     let packet_bytes = canonical(packet)?;
@@ -8843,12 +8858,16 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 };
-                if summary_limits.is_some() && active_positions.len() != 1 {
+                if constrained && active_positions.len() != 1 {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "AMBIGUOUS_SOURCE_CONTEXT",
-                        "複数の出典があるため、文字数・箇条書き数の制約を適用する対象を一つに決められません。",
+                        if line_summary {
+                            "複数の出典があるため、行数を指定して要約する対象を一つに決められません。"
+                        } else {
+                            "複数の出典があるため、文字数・箇条書き数の制約を適用する対象を一つに決められません。"
+                        },
                     );
                 }
                 result.dependencies.extend(context.dependencies());
@@ -8864,19 +8883,14 @@ impl Engine {
                 }
                 for position in active_positions {
                     let (_, packet, packet_ref) = &source_packets[position];
-                    let summary_result = if let Some((max_sentences, max_chars)) = summary_limits {
-                        crate::text_summary::summarize_fetched_source_with_limits(
-                            &prior.id,
-                            packet,
-                            packet_ref,
-                            max_sentences,
-                            max_chars,
-                        )
-                    } else {
-                        crate::text_summary::summarize_fetched_source(&prior.id, packet, packet_ref)
-                    };
+                    let summary_result = crate::text_summary::summarize_fetched_source_for_intent(
+                        intent, &prior.id, packet, packet_ref,
+                    );
                     let source_report = match summary_result {
                         Ok(report) => report,
+                        Err(Error::Contract { code, message }) if line_summary => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
                         Err(error) => {
                             let code = match &error {
                                 Error::Contract { code, .. } => code.as_str(),
@@ -8891,7 +8905,21 @@ impl Engine {
                         }
                     };
                     let encoded = canonical(&source_report)?;
+                    let unit = crate::text_summary::source_summary_unit(&source_report);
                     report_bytes = report_bytes.saturating_add(encoded.len());
+                    if line_summary {
+                        report_bytes = report_bytes.saturating_add(unit.len());
+                        if source_report.summary.sentence_count
+                            > request.budget.max_actions as usize
+                        {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                "RESOURCE_LIMIT",
+                                "取得本文の候補文数が今回の推論予算を超えています。",
+                            );
+                        }
+                    }
                     if report_bytes > request.budget.max_evidence_bytes {
                         return self.stop(
                             &mut state,
@@ -8900,7 +8928,7 @@ impl Engine {
                             "出典付き要約artifactが要求の証拠予算を超えました。",
                         );
                     }
-                    units.push(crate::text_summary::source_summary_unit(&source_report));
+                    units.push(unit);
                     source_reports.push(encoded);
                 }
                 for encoded in source_reports {

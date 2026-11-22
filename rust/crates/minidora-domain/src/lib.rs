@@ -319,6 +319,9 @@ pub enum Intent {
         max_sentences: Option<usize>,
         max_chars: Option<usize>,
     },
+    SummarizePreviousSourceLines {
+        limit: SummaryLineLimit,
+    },
     SummarizePreviousResult {
         max_sentences: Option<usize>,
         max_chars: Option<usize>,

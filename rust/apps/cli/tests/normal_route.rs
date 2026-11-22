@@ -12462,6 +12462,115 @@ fn natural_source_question_suspends_without_prior_body_or_topic_match() {
 }
 
 #[test]
+fn source_line_summary_keeps_a_single_fetched_body_and_its_spans() {
+    let scratch = Scratch::new();
+    let actor = "owner";
+    let uri = "https://example.test/water";
+    let ordinary = "水温は12.5度でした。雨量も記録しました。";
+    let (source_id, packet_refs, _) =
+        seed_fetched_source_case_with_sources(&scratch.0, actor, &[(uri, ordinary)]);
+    let summary = record(&execute(
+        &scratch.0,
+        actor,
+        &["取得した資料を2行で要約して"],
+    ));
+    let output = summary["text"].as_str().unwrap();
+    assert_eq!(output.lines().count(), 2);
+    assert!(output.contains("水温は12.5度でした。"));
+    assert!(output.contains(uri));
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let proof_ref = summary["dependencies"].as_array().unwrap().last().unwrap();
+    let proof = sequence_artifact(&store, proof_ref);
+    assert_eq!(
+        proof["operation"],
+        "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1"
+    );
+    assert_eq!(proof["source_result_id"], source_id);
+    assert_eq!(proof["source_packet_ref"], packet_refs[0]);
+    assert_eq!(
+        proof["summary"]["line_limit"],
+        serde_json::json!({"EXACT": 2})
+    );
+    for selected in proof["summary"]["sentences"].as_array().unwrap() {
+        for (text, start, end) in [
+            (ordinary, "source_start", "source_end"),
+            (output, "output_start", "output_end"),
+        ] {
+            let span = selected[start].as_u64().unwrap() as usize
+                ..selected[end].as_u64().unwrap() as usize;
+            assert_eq!(text.get(span), selected["text"].as_str());
+        }
+    }
+    let detail = record(&execute(&scratch.0, actor, &["詳しく説明して"]));
+    assert!(
+        detail["text"]
+            .as_str()
+            .unwrap()
+            .contains("指定行数: 2。実際の行数: 2")
+    );
+
+    let at_most = record(&execute(
+        &scratch.0,
+        actor,
+        &[
+            "--context",
+            &source_id,
+            "summarize the previous source in up to 3 lines",
+        ],
+    ));
+    assert_eq!(at_most["text"], summary["text"]);
+    let target = scratch.0.join("unmet-source-summary.txt");
+    let target_arg = target.to_str().unwrap();
+    let unmet = stopped(
+        &execute(
+            &scratch.0,
+            actor,
+            &[
+                "--context",
+                &source_id,
+                "--output",
+                target_arg,
+                "--allow-write",
+                target_arg,
+                "取得した資料を3行で要約して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        unmet["reason"]
+            .as_str()
+            .unwrap()
+            .contains("RESULT_SUMMARY_LINE_COUNT_UNMET")
+    );
+    assert!(unmet["render"].is_null());
+    assert!(!target.exists());
+
+    let multi = Scratch::new();
+    seed_fetched_source_case_with_sources(
+        &multi.0,
+        actor,
+        &[
+            (uri, ordinary),
+            ("https://example.test/weather", "空は晴れていました。"),
+        ],
+    );
+    let ambiguous = stopped(
+        &execute(&multi.0, actor, &["取得した資料を2行以内で要約して"]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        ambiguous["reason"]
+            .as_str()
+            .unwrap()
+            .contains("AMBIGUOUS_SOURCE_CONTEXT")
+    );
+}
+
+#[test]
 fn constrained_previous_source_summary_binds_one_actual_packet_and_stops_on_ambiguity() {
     let no_prior = Scratch::new();
     let result = stopped(

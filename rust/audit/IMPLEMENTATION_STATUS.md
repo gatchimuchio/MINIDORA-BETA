@@ -3253,3 +3253,22 @@ Debian 13 Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。�
 - 全workspace実行試験、厳格Clippy、認証HTTP・ブラウザー、製品規模の資源計測、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
 
 復旧2世代は `55a2a48` と `67250ae`。当該単位の資産は9件。保持7件（Core・文書・要約・通常CLI試験、実装記録・要求トレース・原典読解台帳）、保留2件、保管済み・稼働中・ゴミ箱移動済みは各0件。独立検証の `/workspace/.minidora-cloud/b223-structured-line-summary.mtdrmn` は2,510ファイル、16ディレクトリ、9,513,832論理バイト、割当16,551,936バイト。揮発性のビルド・試験用 `/dev/shm/minidora-b223.2rVNEM` は2,023ファイルの場所と372ディレクトリ（ハードリンク重複を除く2,005ファイル）、660,896,240論理バイト、割当667,430,912バイト。LinuxでWindows標準ゴミ箱の処置が成立しないため現位置で保留。最終処分待ち0件、廃棄による容量回収0。Windows保管とオンライン専用化は非該当。
+
+## 2026-11-22 JST B224 — D3-C E6 取得済み資料の出典付き要約に行数条件を追加
+
+着工点は `a389a817de9582a258d1db86b572d81ca0df83fa`。共通指示1.1、R2 §7・§8・§9・§12、E5 B114合同判定を照合した。現行三点セットのSHA-256はD2仕様 `de618da9d50f248a7e984ad807aab4a306f17204eb9e722da387aa7d587573b0`、D2工程 `d1afc8a3e225fcbc21ef39eb3152ca9c64ffe79ee61d0702220802700570ce7a`、D3-C指示 `fa4bfbb6d4c897df943fcebe64e2eb1e766834fabcf7187d9e78598d7e7445e3`。採用記録は `270b6482dff22cef7559363776f52806a0074fb0fd7fd0081b7772e62c2b9ef5`。基線の実CLIでは、保存済み取得本文からの新しい日英行数要求4件は `CAPABILITY_UNAVAILABLE` で止まり、許可パスへの作用はなかった。同一入力IDで再生しても同じ結果だった。
+
+「取得した資料を2行で要約して」「取得した資料を2行以内で要約して」などの日本語と対応する英語をv145で封印する。1〜8行。既存のCoreが照合した同ケースの取得完了結果から、同一URLの現行版を選ぶ。使用できる本文が一つのときに指定または上限を適用する。複数なら `AMBIGUOUS_SOURCE_CONTEXT`、取得が未完了なら `SOURCE_SUMMARY_PARTIAL_CONTEXT`、指定行数に不足なら `RESULT_SUMMARY_LINE_COUNT_UNMET` で停止する。元の取得は再実行しない。
+
+`SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1` は取得本文とpacket、行数条件、候補文、元の本文と表示のUTF-8範囲を保持する。選択文の1行1候補を保ちつつ、末行にURL・packet ID・原本文SHA-256・ライセンス未記録の表示を添える。短い根拠表示は後続の詳説から再検査できる。新モードは候補文数と、証拠と実表示を合わせたバイト数で制限する。復旧は同じ元Goalと行数条件、取得結果、証拠、採用計画、表示、原作用を照合する。
+
+凍結版・出典台帳・配布時SHA-256を照合し、`HDS計算降下.py`、`HDS実行系射影.py`、`HDS統合実行系.py`、`HDS模型作用.py`、`目的会話.py`、`目的計画.py`、`汎用要求IR.py`、`統合能力.py` の8件（1,035行）を全文読解した。選択実行と候補提案が実際に使う射影、試験以外の実呼出しが見つからない旧adapter、目的計画から実能力への接続を記録した。目的計画は宣言型の一意最短経路を選び、予定型は実観測とは別に保持する。旧原典の実行・旧上流treeの直接照合・Rust全契約との同等性は未確認。原典読解は335/416件、正式受入93件は `UNVERIFIED`、E6は継続中。
+
+Debian 13 Linux x86_64 6.18.57、Rust/Cargo 1.99.1、製品 `0.7.0-alpha.11`。実CLI SHA-256は基線 `73dc17a0642acbff7fdec23aa4d1d56537252346050fe82249da75b46f29fd7b`、検査対象 `0a3ee7ea1687ed88c83619e7edca8b8740430c7bf414f8eb6fedfd4d35e3fd3e`。Domain・Input・Core・Recovery・要約・通常CLI試験の `git diff --binary` SHA-256は `e1762b9dd8460721d4eb3873f687516dc1474a9d850cb89d255c7d08d620cb4c`。`Cargo.lock` は `b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc`。候補・試験は `/dev/shm` 上のtargetでデバッグ情報なし、増分コンパイル無効。
+
+- 入力・要約・復旧150件と通常経路18件の計168件がPASS。保存された取得本文、原文・出力byte範囲、出典を含む2行、上限指定、行数不足と複数出典の停止、詳説を確認した。`cargo fmt --all -- --check`、`cargo build -p minidora-cli --locked`、`cargo check --workspace --all-targets --locked`、`git diff --check` は終了0。
+- 独立CLIは表示8件と詳説2件を確認した。同一URLの新版を選び、保存済みloopback取得記録の日本語と絵文字を含む66バイト本文では元URL・最終URL・選択byte範囲を照合した。今回の独立検証は既存取得記録を再生した。通常停止17件と、証拠の結び付きがない復旧停止1件で追加作用はなかった。独立fixtureの別利用者時の終了コード想定は観測した既存の `REJECT` へ訂正した。
+- 旧要約490・445バイト、旧詳説1,124バイト、新要約356バイト、新詳説1,147バイトの中断履歴5件は `LOCAL_FILE_RECONCILED_NO_RESEND`。byte・SHA-256・inode・mtime・作用IDを照合した。新要約の証拠と出力は合計3,125バイトの上限で成立。SQLite `quick_check` は16件合格。
+- 認証HTTPは既存のプロフィール要約経路を近接検査した。全workspace実行試験、厳格Clippy、新規ネット取得、新機能のHTTP・ブラウザー経由、製品規模の資源計測、E7体系QC、E8独立QA、公開・配布は `NOT_RUN`。
+
+復旧2世代は `a389a81` と `55a2a48`。当該単位の資産は11件。保持9件（Domain・Input・Core・Recovery・要約・通常CLI試験、実装記録・要求トレース・原典読解台帳）、保留2件、保管済み・稼働中・ゴミ箱移動済みは各0件。独立検証の `/workspace/.minidora-cloud/b224-fetched-line-summary.dWiYV9` は2,477ファイル、34ディレクトリ、25,215,693論理バイト、割当31,571,968バイト。揮発性のビルド・試験用 `/dev/shm/minidora-b224.oJ0joz` は2,023ファイルの場所と372ディレクトリ（ハードリンク重複を除く2,005ファイル）、661,204,504論理バイト、割当667,729,920バイト。LinuxでWindows標準ゴミ箱の処置が成立しないため現位置で保留。最終処分待ち0件、廃棄による容量回収0。Windows保管とオンライン専用化は非該当。
