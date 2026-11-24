@@ -346,6 +346,11 @@ pub enum Intent {
     GenerateCode {
         document: String,
     },
+    GenerateReturnFunction {
+        name: String,
+        parameters: Vec<String>,
+        expression: SourceSpan,
+    },
     ReadCode {
         document: String,
     },

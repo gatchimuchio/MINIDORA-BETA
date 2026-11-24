@@ -1706,16 +1706,18 @@ pub(crate) fn condition_evaluation_contract(
 
 const WEB_ANSWER_PREDICATE: &str = "GROUNDED_WEB_ANSWER_V1";
 const CODE_EXPLANATION_PREDICATE: &str = "SOURCE_CODE_EXPLANATION_V1";
+const RETURN_FUNCTION_PREDICATE: &str = "SOURCE_RETURN_FUNCTION_V1";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
     requires_file: bool,
-    sequence_predicate: Option<&str>,
+    context_predicate: Option<&str>,
 ) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
         Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
         Intent::ExplainCode { .. } => predicates.push(CODE_EXPLANATION_PREDICATE.into()),
+        Intent::GenerateReturnFunction { .. } => predicates.push(RETURN_FUNCTION_PREDICATE.into()),
         Intent::CompareRelationInventories { .. } if input::uses_generated_comparison(meaning) => {
             predicates.push(RELATION_COMPARISON_PREDICATE.into());
         }
@@ -1790,12 +1792,12 @@ pub(crate) fn goal_predicates(
             let predicate = if meaning.parser_version == input::SEQUENCE_REWIRE_PARSER_VERSION {
                 REWIRED_SEQUENCE_CORRECTION_PREDICATE
             } else {
-                sequence_predicate.unwrap_or(SEQUENCE_CORRECTION_PREDICATE)
+                context_predicate.unwrap_or(SEQUENCE_CORRECTION_PREDICATE)
             };
             predicates.push(predicate.into());
         }
         Intent::ExplainPrevious => {
-            predicates.extend(sequence_predicate.map(str::to_owned));
+            predicates.extend(context_predicate.map(str::to_owned));
         }
         Intent::ShowCalculationSequenceHistory
             if meaning.parser_version == input::SEQUENCE_HISTORY_PARSER_VERSION =>
@@ -1866,6 +1868,8 @@ fn verify_report_goal_content(
                 | MULTI_CONDITION_PREMISE_PREDICATE
                 | WEB_ANSWER_PREDICATE
                 | CODE_EXPLANATION_PREDICATE
+                | RETURN_FUNCTION_PREDICATE
+                | PREVIOUS_ASSERTION_EXPLANATION_PREDICATE
         ) || record_source_contract(&goal.intent)
             .is_some_and(|(_, required)| required == predicate.as_str())
     }) else {
@@ -6363,6 +6367,13 @@ impl Engine {
             } else {
                 None
             };
+        let previous_assertion = if matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+            && let Some(prior) = previous
+        {
+            previous_assertion_context(&self.store, actor, &request.case_id, prior)?
+        } else {
+            None
+        };
         if direct_continuation.is_some() {
             nodes.push(GoalNode {
                 id: PREVIOUS_DIRECT_RETRIEVAL_NODE.into(),
@@ -6627,7 +6638,10 @@ impl Engine {
                 previous_sequence
                     .as_ref()
                     .map(PreviousCalculationSequence::predicate)
-                    .or(sequence_edit.as_ref().map(SequenceEdit::predicate)),
+                    .or(sequence_edit.as_ref().map(SequenceEdit::predicate))
+                    .or(previous_assertion
+                        .as_ref()
+                        .map(|_| PREVIOUS_ASSERTION_EXPLANATION_PREDICATE)),
             ),
             renderer_version: Some(output::RENDERER_VERSION.into()),
         };
@@ -8093,7 +8107,26 @@ impl Engine {
                 } else {
                     None
                 };
-                if let Some(ref calculation) = prior.calculation {
+                if let Some(assertion) = &previous_assertion {
+                    let memory = record_source_memory_at_head(&self.store, actor)?;
+                    let explanation = match assertion.explain(&memory) {
+                        Ok(explanation) => explanation,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    result.actor_memory_revision = Some(memory.revision);
+                    result.dependencies = explanation.dependencies;
+                    result.guarantee = Guarantee::UserPremise;
+                    units = explanation.units;
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: PREVIOUS_ASSERTION_EXPLANATION_PREDICATE,
+                        guarantee: Guarantee::UserPremise,
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                } else if let Some(ref calculation) = prior.calculation {
                     units.extend(calculation_detail_units(calculation));
                     approved_surfaces =
                         Some(language::calculation_explanation_surfaces(calculation));
@@ -10791,8 +10824,12 @@ impl Engine {
                 result.guarantee = Guarantee::SourceReport;
                 state.result = Some(result.clone());
             }
-            Intent::GenerateCode { document } => {
-                let report = match crate::code_generation::generate(document) {
+            Intent::GenerateCode { .. } | Intent::GenerateReturnFunction { .. } => {
+                let generated = match &goal.intent {
+                    Intent::GenerateCode { document } => crate::code_generation::generate(document),
+                    _ => crate::code_generation::generate_return_function(&bundle),
+                };
+                let report = match generated {
                     Ok(report) => report,
                     Err(error) => {
                         let code = match &error {
@@ -10814,6 +10851,14 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(report.source);
                 result.guarantee = Guarantee::Computed;
+                if matches!(goal.intent, Intent::GenerateReturnFunction { .. }) {
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: RETURN_FUNCTION_PREDICATE,
+                        guarantee: result.guarantee.clone(),
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                }
             }
             Intent::VerifyPreviousCode { document } => {
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
@@ -12897,6 +12942,112 @@ pub(crate) fn previous_relation_success_units(
             _ => None,
         }
     }
+}
+
+pub(crate) const PREVIOUS_ASSERTION_EXPLANATION_PREDICATE: &str =
+    "PREVIOUS_ASSERTION_EXPLANATION_V1";
+
+pub(crate) struct PreviousAssertionContext {
+    result_id: String,
+    bundle_ref: String,
+    fact_id: String,
+    proposition: Proposition,
+    source_evidence: Option<SealedSourceEvidence>,
+}
+
+pub(crate) struct PreviousAssertionExplanation {
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) units: Vec<String>,
+}
+
+impl PreviousAssertionContext {
+    pub(crate) fn explain(&self, memory: &MemoryState) -> Result<PreviousAssertionExplanation> {
+        let fact = memory.facts.iter().find(|fact| {
+            fact.id == self.fact_id
+                && fact.source_input == self.result_id
+                && fact.proposition == self.proposition
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+                && fact
+                    .source_evidence
+                    .as_ref()
+                    .is_none_or(|evidence| self.source_evidence.as_ref() == Some(evidence))
+        });
+        if !fact.is_some_and(|fact| fact.valid) {
+            return Err(failure(
+                "CONTEXT_PROOF_CHANGED",
+                "前回の提示前提は現在有効な記憶として確認できません。元の回答は履歴で確認できます。",
+            ));
+        }
+        let mut units = vec![
+            "前回の回答は、あなたが入力した前提を記録したものです。".into(),
+            format!(
+                "提示前提: {}（範囲: {}）。",
+                describe(&self.proposition),
+                self.proposition.scope
+            ),
+            format!("前提ID: {}", self.fact_id),
+            "記憶状態: 有効。".into(),
+        ];
+        if let Some(time) = &self.proposition.temporal_scope {
+            units.push(format!("適用時点: {time}"));
+        }
+        if !self.proposition.condition_refs.is_empty() {
+            units.push(format!(
+                "適用条件ID: {}",
+                self.proposition
+                    .condition_refs
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ));
+        }
+        units.push("この説明では、適用条件や現実世界の真偽を評価していません。".into());
+        Ok(PreviousAssertionExplanation {
+            dependencies: vec![
+                self.result_id.clone(),
+                self.bundle_ref.clone(),
+                self.fact_id.clone(),
+            ],
+            units,
+        })
+    }
+}
+
+pub(crate) fn previous_assertion_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &ResultRecord,
+) -> Result<Option<PreviousAssertionContext>> {
+    if prior.lifecycle != Lifecycle::Commit || prior.guarantee != Guarantee::UserPremise {
+        return Ok(None);
+    }
+    let Some((bundle_ref, bundle)) =
+        store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
+    else {
+        return Ok(None);
+    };
+    let Intent::Assert { proposition } = &bundle.meaning.intent else {
+        return Ok(None);
+    };
+    let fact_id = relations::user_premise_id(proposition, &prior.id)?;
+    if identity(&bundle.request)? != prior.id
+        || prior.dependencies.as_slice() != std::slice::from_ref(&fact_id)
+    {
+        return Err(failure(
+            "PRIOR_INPUT_RESULT_MISMATCH",
+            "説明対象の前提と確定済み入力・記録IDが一致しません。",
+        ));
+    }
+    Ok(Some(PreviousAssertionContext {
+        result_id: prior.id.clone(),
+        bundle_ref,
+        fact_id,
+        proposition: proposition.clone(),
+        source_evidence: input::assertion_source_evidence(&bundle)?,
+    }))
 }
 
 struct PreviousContextualAssertion {

@@ -14,6 +14,7 @@ const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-v159-pasted-text-summary";
+const RETURN_FUNCTION_PARSER_VERSION: &str = "declarative-ja-v160-python-return-function";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
 const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
@@ -454,6 +455,7 @@ pub(crate) fn seal_with_source_context(
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
         Intent::ExplainCode { .. } => CODE_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
+        Intent::GenerateReturnFunction { .. } => RETURN_FUNCTION_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
@@ -4141,8 +4143,183 @@ fn pasted_source_span(text: &str) -> Option<SourceSpan> {
     })
 }
 
+fn return_function_intent(text: &str) -> Result<Option<Intent>> {
+    let statement = terminal_trim(text);
+    if !statement.starts_with("Pythonで") {
+        return Ok(None);
+    }
+    let Some(parts) = regex(concat!(
+        r"\APythonで[、 　]*「(?P<expression>[^「」\r\n]+)」を返す関数[ 　]+",
+        r"(?P<name>[_\p{XID_Start}][_\p{XID_Continue}]*)\((?P<parameters>[^()\r\n]*)\)[ 　]*",
+        r"を(?:作って|作ってください|生成して|生成してください)\z",
+    ))?
+    .captures(statement) else {
+        return Ok(None);
+    };
+    let parameters = parts["parameters"].trim();
+    let parameters = if parameters.is_empty() {
+        Vec::new()
+    } else {
+        parameters
+            .split(',')
+            .map(|name| name.trim().into())
+            .collect()
+    };
+    let expression = parts
+        .name("expression")
+        .expect("a matched return expression");
+    let offset = text.len() - text.trim_start().len();
+    Ok(Some(Intent::GenerateReturnFunction {
+        name: parts["name"].into(),
+        parameters,
+        expression: SourceSpan {
+            start: offset + expression.start(),
+            end: offset + expression.end(),
+            text: expression.as_str().into(),
+        },
+    }))
+}
+
+pub(crate) fn verify_return_function_input(bundle: &InputBundle) -> Result<()> {
+    if matches!(bundle.meaning.intent, Intent::GenerateReturnFunction { .. })
+        && bundle.meaning.parser_version == RETURN_FUNCTION_PARSER_VERSION
+        && return_function_intent(&bundle.request.text)?.as_ref() == Some(&bundle.meaning.intent)
+    {
+        return Ok(());
+    }
+    Err(failure(
+        "CODE_GENERATION_SOURCE_MISMATCH",
+        "封印した関数の仕様が元の入力と一致しません。",
+    ))
+}
+
+fn web_question_intent(statement: &str) -> Option<Intent> {
+    let (topic, elevation_in_kilometres) = if let Some(topic) =
+        statement.strip_suffix("の標高を出典付きで調べてキロメートルに換算して")
+    {
+        (topic.trim(), true)
+    } else if let Some((topic, requirement)) = statement.rsplit_once("について") {
+        let topic = topic.trim();
+        let requirement = web_clause(requirement);
+        if bounded_web_topic(topic) && web_freshness_request(requirement) {
+            return Some(unavailable_web_freshness());
+        }
+        if !web_source_request(requirement) {
+            return None;
+        }
+        (topic, false)
+    } else {
+        // The temporal property can be attached directly to a named topic.
+        return statement
+            .match_indices('の')
+            .take_while(|(at, _)| *at <= 512)
+            .find_map(|(at, particle)| {
+                (bounded_web_topic(statement[..at].trim())
+                    && web_freshness_request(&statement[at + particle.len()..]))
+                .then(unavailable_web_freshness)
+            });
+    };
+    if !bounded_web_topic(topic) {
+        return None;
+    }
+    if WEB_FRESHNESS_PROPERTIES.iter().copied().any(|property| {
+        topic
+            .strip_suffix(property)
+            .is_some_and(|prefix| prefix.ends_with('の'))
+    }) || ["最新の", "現在の"]
+        .into_iter()
+        .any(|prefix| topic.starts_with(prefix))
+    {
+        return Some(unavailable_web_freshness());
+    }
+    Some(Intent::AskWeb {
+        topic: topic.into(),
+        elevation_in_kilometres,
+    })
+}
+
+const WEB_FRESHNESS_PROPERTIES: &[&str] = &[
+    "最新情報",
+    "最新の情報",
+    "現在の情報",
+    "最新の状況",
+    "現在の状況",
+    "最新の更新",
+    "直近の更新",
+    "更新日",
+    "更新日時",
+    "最終更新日",
+    "最終更新日時",
+];
+
+fn bounded_web_topic(topic: &str) -> bool {
+    !topic.is_empty()
+        && topic.len() <= 512
+        && !starts_quoted_source(topic)
+        && !topic.chars().any(char::is_control)
+        && !topic.contains([
+            '。', '！', '!', '？', '?', ':', '：', '/', '\\', '「', '」', '、', ',', ';', '；',
+        ])
+}
+
+fn web_clause(text: &str) -> &str {
+    let text = text.trim_start();
+    text.strip_prefix(['、', ',']).map_or(text, str::trim_start)
+}
+
+fn web_source_request(requirement: &str) -> bool {
+    let explicit_source = [
+        "出典付きで",
+        "出典を付けて",
+        "出典をつけて",
+        "出典を示して",
+        "出典を添えて",
+        "出典を明記して",
+        "根拠を示して",
+    ]
+    .into_iter()
+    .any(|source| {
+        requirement
+            .strip_prefix(source)
+            .is_some_and(|response| web_response_request(web_clause(response)))
+    });
+    explicit_source
+        || matches!(
+            requirement,
+            "ウェブで調べて" | "ウェブで調べてください" | "Webで調べて" | "Webで調べてください"
+        )
+}
+
+fn web_response_request(text: &str) -> bool {
+    matches!(
+        text,
+        "教えて" | "教えてください" | "調べて" | "調べてください" | "説明して" | "説明してください"
+    )
+}
+
+fn web_freshness_request(requirement: &str) -> bool {
+    WEB_FRESHNESS_PROPERTIES.iter().copied().any(|property| {
+        requirement
+            .strip_prefix(property)
+            .and_then(|rest| rest.strip_prefix('を'))
+            .is_some_and(|response| {
+                let response = web_clause(response);
+                web_response_request(response) || web_source_request(response)
+            })
+    })
+}
+
+fn unavailable_web_freshness() -> Intent {
+    Intent::Unknown {
+        reason: "Web記事の取得時刻では、掲載情報の最新性や記事の更新日時を確認できません。".into(),
+    }
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
+    if let Some(intent) = return_function_intent(text)? {
+        return Ok(intent);
+    }
     if matches!(
         statement,
         "ミニドラとは何ですか"
@@ -4175,31 +4352,8 @@ fn interpret(text: &str) -> Result<Intent> {
         }
         _ => {}
     }
-    if let Some((topic, elevation_in_kilometres)) = [
-        ("について出典付きで教えて", false),
-        ("について出典付きで教えてください", false),
-        ("について根拠を示して教えて", false),
-        ("についてウェブで調べて", false),
-        ("についてWebで調べて", false),
-        ("の標高を出典付きで調べてキロメートルに換算して", true),
-    ]
-    .into_iter()
-    .find_map(|(suffix, convert)| {
-        statement
-            .strip_suffix(suffix)
-            .map(|topic| (topic.trim(), convert))
-    })
-    .filter(|(topic, _)| {
-        !topic.is_empty()
-            && topic.len() <= 512
-            && !starts_quoted_source(topic)
-            && !topic.chars().any(char::is_control)
-            && !topic.contains(['。', '！', '!', '？', '?', ':', '：', '/', '\\', '「', '」'])
-    }) {
-        return Ok(Intent::AskWeb {
-            topic: topic.into(),
-            elevation_in_kilometres,
-        });
+    if let Some(intent) = web_question_intent(statement) {
+        return Ok(intent);
     }
     if source_packet_line_summary_request(statement) {
         return Ok(source_packet_line_summary_captures(statement)?
@@ -6414,6 +6568,49 @@ fn condition_definition_source_roles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_web_source_requests_keep_the_topic_and_respect_freshness() {
+        for text in [
+            "富士山について、出典を付けて教えてください。",
+            "富士山について、根拠を示して教えてください。",
+            "富士山について、出典を添えて、説明してください。",
+            "富士山について出典付きで教えて",
+            "富士山についてウェブで調べて",
+        ] {
+            assert_eq!(
+                interpret(text).unwrap(),
+                Intent::AskWeb {
+                    topic: "富士山".into(),
+                    elevation_in_kilometres: false,
+                },
+                "{text}"
+            );
+        }
+        for text in [
+            "富士山について最新の情報を教えてください。",
+            "富士山の最新情報について出典付きで教えて。",
+            "富士山の最終更新日を教えてください。",
+        ] {
+            assert_eq!(
+                interpret(text).unwrap(),
+                unavailable_web_freshness(),
+                "{text}"
+            );
+        }
+        for text in [
+            "富士山について教えてください。",
+            "『富士山』について出典を付けて教えてください。",
+            "富士山についてWebで説明して。",
+            "前の資料は消して、富士山について、出典を付けて教えてください。",
+            "富士山について、出典を付けて教えてください。前の資料は消して。",
+        ] {
+            assert!(
+                !matches!(interpret(text).unwrap(), Intent::AskWeb { .. }),
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn composite_condition_seals_expression_and_original_utf8_roles() {

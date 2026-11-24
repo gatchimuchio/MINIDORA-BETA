@@ -1,7 +1,7 @@
 //! Generate a bounded Python function from the inherited explicit algorithm IR.
 //! No source evaluation, host process, external effect or test oracle is used.
 use crate::ports::{JsonKind, JsonNode, strict_json_document};
-use minidora_domain::{Result, SourceSpan, digest, failure};
+use minidora_domain::{InputBundle, Intent, Result, SourceSpan, digest, failure};
 use num_bigint::BigInt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use unicode_normalization::UnicodeNormalization;
 
 const VERSION: &str = "structured-python-generator-v1-ucd15";
+const RETURN_FUNCTION_VERSION: &str = "structured-python-return-function-v1-ucd15";
 const PREAMBLE: &str = "# Python 3.12; execution and input/output tests: NOT_RUN.\n";
 const BUILTINS: &[&str] = &[
     "sum", "len", "range", "abs", "min", "max", "sorted", "list", "all", "any",
@@ -194,6 +195,7 @@ impl Piece {
 struct Generator<'a> {
     constants: &'a BTreeSet<String>,
     nodes: usize,
+    inline_integers: bool,
 }
 impl Generator<'_> {
     fn shape<'a>(&mut self, node: &'a Value, keys: &[&str]) -> Result<&'a Map<String, Value>> {
@@ -221,6 +223,26 @@ impl Generator<'_> {
             "参照" => {
                 self.shape(node, &["種別", "名前"])?;
                 Ok(Piece::leaf(identifier(&node["名前"])?.into(), 2, 1))
+            }
+            "整数" if self.inline_integers => {
+                self.shape(node, &["種別", "値"])?;
+                let digits = node["値"]
+                    .as_str()
+                    .filter(|digits| digits.len() <= 79)
+                    .ok_or_else(|| invalid("expected a bounded decimal integer literal"))?;
+                let value = BigInt::from_str(digits)
+                    .map_err(|_| invalid("invalid decimal integer literal"))?;
+                if value.bits() > 256 || value.to_string() != digits {
+                    return Err(invalid(
+                        "integer literal exceeds its bound or is noncanonical",
+                    ));
+                }
+                let (nodes, height) = if digits.starts_with('-') {
+                    (3, 1)
+                } else {
+                    (1, 0)
+                };
+                Ok(Piece::leaf(digits.into(), nodes, height))
             }
             "定数参照" => {
                 self.shape(node, &["種別", "キー"])?;
@@ -402,6 +424,30 @@ impl Generator<'_> {
 }
 
 pub fn generate(document: &str) -> Result<CodeGenerationReport> {
+    generate_report(document, false)
+}
+
+pub(crate) fn generate_return_function(bundle: &InputBundle) -> Result<CodeGenerationReport> {
+    crate::input::verify_return_function_input(bundle)?;
+    let Intent::GenerateReturnFunction {
+        name,
+        parameters,
+        expression,
+    } = &bundle.meaning.intent
+    else {
+        return Err(invalid(
+            "a sealed return function specification is required",
+        ));
+    };
+    let expression = crate::code_capability::return_expression_ir(&expression.text, parameters)?;
+    let document = serde_json::to_string(&serde_json::json!({
+        "仕様": {"名前": name, "引数": parameters, "手順": [{"種別": "返却", "式": expression}]},
+        "定数": {},
+    }))?;
+    generate_report(&document, true)
+}
+
+fn generate_report(document: &str, inline_return: bool) -> Result<CodeGenerationReport> {
     if document.len() > 256_000 {
         return Err(invalid("structured code document exceeds 256000 bytes"));
     }
@@ -425,10 +471,11 @@ pub fn generate(document: &str) -> Result<CodeGenerationReport> {
     let mut generator = Generator {
         constants: &constants,
         nodes: 0,
+        inline_integers: inline_return,
     };
     generator.shape(&specification, &["名前", "引数", "手順"])?;
     let name = identifier(&specification["名前"])?;
-    let parameters = specification["引数"]
+    let mut parameters = specification["引数"]
         .as_array()
         .ok_or_else(|| invalid("parameters must be an array"))?
         .iter()
@@ -438,17 +485,31 @@ pub fn generate(document: &str) -> Result<CodeGenerationReport> {
     {
         return Err(invalid("at most 15 unique user parameters are supported"));
     }
+    if inline_return
+        && (!constants.is_empty()
+            || !specification["手順"].as_array().is_some_and(
+                |steps| matches!(steps.as_slice(), [step] if step["種別"].as_str() == Some("返却")),
+            ))
+    {
+        return Err(invalid(
+            "an inline function requires one return step and no constant dictionary",
+        ));
+    }
     let body = generator.block(&specification["手順"], 0)?;
     let ast_nodes = 4 + parameters.len() + body.iter().map(|p| p.nodes).sum::<usize>();
     let ast_depth = 3.max(2 + body.iter().map(|p| p.height).max().unwrap_or(0));
     if ast_nodes > 2048 || ast_depth > 40 {
         return Err(invalid("constructed AST node/depth budget exceeded"));
     }
-    let mut all_parameters = parameters;
-    all_parameters.push("定数".into());
+    let version = if inline_return {
+        RETURN_FUNCTION_VERSION
+    } else {
+        parameters.push("定数".into());
+        VERSION
+    };
     let source = format!(
         "{PREAMBLE}def {name}({}):\n{}",
-        all_parameters.join(", "),
+        parameters.join(", "),
         body.iter().map(|p| p.text.as_str()).collect::<String>()
     );
     if source.len() > 32768 {
@@ -463,14 +524,14 @@ pub fn generate(document: &str) -> Result<CodeGenerationReport> {
         }
     };
     Ok(CodeGenerationReport {
-        version: VERSION.into(),
+        version: version.into(),
         target_runtime: "Python 3.12 / Unicode 15.0.0 identifiers".into(),
         source_document: document.into(),
         source_document_sha256: digest(document.as_bytes()),
         specification: span("仕様"),
         constants: span("定数"),
         function_name: name.into(),
-        parameters: all_parameters,
+        parameters,
         source_sha256: digest(source.as_bytes()),
         source,
         ir_nodes: generator.nodes,
@@ -513,17 +574,41 @@ pub(crate) fn previous_code_report(
         let Ok(report) = serde_json::from_slice::<CodeGenerationReport>(&bytes) else {
             continue;
         };
-        if report.version != VERSION || report.source != previous.text {
+        if !matches!(report.version.as_str(), VERSION | RETURN_FUNCTION_VERSION)
+            || report.source != previous.text
+        {
             continue;
         }
-        validate_report(&report)?;
+        if report.version == RETURN_FUNCTION_VERSION {
+            let mismatch = || {
+                failure(
+                    "CODE_GENERATION_CONTEXT_MISMATCH",
+                    "the stored function cannot be reproduced from its sealed request",
+                )
+            };
+            let Some((_, bundle)) =
+                store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+            else {
+                return Err(mismatch());
+            };
+            let expected = generate_return_function(&bundle)?;
+            if expected != report || minidora_domain::identity(&bundle.request)? != previous.id {
+                return Err(mismatch());
+            }
+        } else {
+            validate_report(&report)?;
+        }
         return Ok(Some((dependency.clone(), report)));
     }
     Ok(None)
 }
 
 fn validate_report(report: &CodeGenerationReport) -> Result<()> {
-    if generate(&report.source_document)? != *report {
+    if generate_report(
+        &report.source_document,
+        report.version == RETURN_FUNCTION_VERSION,
+    )? != *report
+    {
         return Err(failure(
             "CODE_GENERATION_CONTEXT_MISMATCH",
             "stored code report is not reproducible from its structured specification",
@@ -546,15 +631,27 @@ fn explanation_lines_from_validated(report: &CodeGenerationReport) -> Result<Vec
     let steps = specification
         .get("手順")
         .ok_or_else(|| invalid("stored algorithm steps are missing"))?;
+    let parameters = if report.version == RETURN_FUNCTION_VERSION {
+        format!(
+            "引数: {}。",
+            if report.parameters.is_empty() {
+                "なし".into()
+            } else {
+                report.parameters.join("、")
+            }
+        )
+    } else {
+        format!(
+            "引数: {}。最後の「定数」は、生成コードへ渡す定数辞書です。",
+            report.parameters.join("、")
+        )
+    };
     let mut lines = vec![
         format!(
             "前回生成した関数「{}」の構造化手順です。",
             report.function_name
         ),
-        format!(
-            "引数: {}。最後の「定数」は、生成コードへ渡す定数辞書です。",
-            report.parameters.join("、")
-        ),
+        parameters,
         "手順:".into(),
     ];
     explain_block(steps, 0, &mut lines)?;
@@ -634,6 +731,7 @@ fn expression_summary(node: &Value) -> Result<String> {
     };
     match kind {
         "参照" => Ok(format!("入力値「{}」", field("名前")?)),
+        "整数" => Ok(format!("整数{}", field("値")?)),
         "定数参照" => Ok(format!("定数辞書の「{}」", field("キー")?)),
         "算術" => {
             let left = expression_summary(&node["左"])?;

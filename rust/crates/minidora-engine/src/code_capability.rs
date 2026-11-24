@@ -1685,6 +1685,89 @@ fn parse_expression(tokens: &[Token]) -> Result<Expr> {
     ExpressionParser::new(tokens).parse_all()
 }
 
+pub(crate) fn return_expression_ir(
+    source: &str,
+    parameters: &[String],
+) -> Result<serde_json::Value> {
+    if source.len() > 2048 || source.contains('#') || source.chars().any(char::is_control) {
+        return Err(input_error(
+            "a return expression must be one bounded line without comments",
+        ));
+    }
+    let lines = lex_source(source)?;
+    let [line] = lines.as_slice() else {
+        return Err(input_error("one return expression is required"));
+    };
+    if line.tokens.len() > 64 {
+        return Err(input_error("return expression token budget exceeded"));
+    }
+    return_ir(&parse_expression(&line.tokens)?, parameters, 0)
+}
+
+fn return_ir(expr: &Expr, parameters: &[String], depth: usize) -> Result<serde_json::Value> {
+    use serde_json::json;
+
+    if depth > 24 {
+        return Err(input_error("return expression depth exceeded"));
+    }
+    let pair = |kind, operator, left, right| -> Result<_> {
+        Ok(json!({
+            "種別": kind,
+            "演算": operator,
+            "左": return_ir(left, parameters, depth + 1)?,
+            "右": return_ir(right, parameters, depth + 1)?,
+        }))
+    };
+    match &expr.kind {
+        ExprKind::Name(name) if parameters.contains(name) => {
+            Ok(json!({"種別": "参照", "名前": name}))
+        }
+        ExprKind::Constant(CodeValue::Integer(value)) => {
+            Ok(json!({"種別": "整数", "値": value.to_string()}))
+        }
+        ExprKind::Unary(UnaryOperator::Minus, operand) => {
+            let ExprKind::Constant(CodeValue::Integer(value)) = &operand.kind else {
+                return Err(input_error(
+                    "unary minus requires an integer literal in this request",
+                ));
+            };
+            Ok(json!({"種別": "整数", "値": (-value).to_string()}))
+        }
+        ExprKind::Binary(operator, left, right) => pair(
+            "算術",
+            match operator {
+                Operator::Add => "加算",
+                Operator::Subtract => "減算",
+                Operator::Multiply => "乗算",
+                Operator::FloorDivide => "整数商",
+                Operator::Modulo => "剰余",
+            },
+            left,
+            right,
+        ),
+        ExprKind::Compare(left, comparisons) => {
+            let [(operator, right)] = comparisons.as_slice() else {
+                return Err(input_error(
+                    "chained comparisons are unsupported in this request",
+                ));
+            };
+            let operator = match operator {
+                CompareOperator::Equal => "等値",
+                CompareOperator::NotEqual => "非等値",
+                CompareOperator::Less => "未満",
+                CompareOperator::LessEqual => "以下",
+                CompareOperator::Greater => "超",
+                CompareOperator::GreaterEqual => "以上",
+                _ => return Err(input_error("unsupported comparison in a return expression")),
+            };
+            pair("比較", operator, left, right)
+        }
+        _ => Err(input_error(
+            "return expressions use declared parameters, integers, arithmetic or a single comparison",
+        )),
+    }
+}
+
 fn parse_simple_list(tokens: &[Token], _loop_depth: usize) -> Result<Vec<Stmt>> {
     let mut segments = Vec::new();
     let mut depth = 0isize;

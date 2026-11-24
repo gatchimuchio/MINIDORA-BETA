@@ -4633,7 +4633,18 @@ fn inspect(
             });
     let sequence_predicate = sequence_goal_predicate.filter(|_| !requires_sequence_edit);
     let explains_sequence = sequence_predicate.is_some();
-    if goal.required_predicates != goal_predicates(&bundle.meaning, true, sequence_goal_predicate)
+    let assertion_predicate = (matches!(goal.intent, Intent::ExplainPrevious)
+        && goal
+            .required_predicates
+            .iter()
+            .any(|predicate| predicate == crate::core::PREVIOUS_ASSERTION_EXPLANATION_PREDICATE))
+    .then_some(crate::core::PREVIOUS_ASSERTION_EXPLANATION_PREDICATE);
+    if goal.required_predicates
+        != goal_predicates(
+            &bundle.meaning,
+            true,
+            sequence_goal_predicate.or(assertion_predicate),
+        )
         && (requires_generated_comparison
             || requires_generated_calculation
             || requires_verified_correction
@@ -4646,9 +4657,12 @@ fn inspect(
             || requires_generated_why
             || matches!(
                 goal.intent,
-                Intent::AskWeb { .. } | Intent::ExplainCode { .. }
+                Intent::AskWeb { .. }
+                    | Intent::ExplainCode { .. }
+                    | Intent::GenerateReturnFunction { .. }
             )
             || explains_sequence
+            || assertion_predicate.is_some()
             || goal.required_predicates != legacy_predicates)
     {
         return Err(failure(
@@ -5428,6 +5442,25 @@ fn inspect(
     if matches!(goal.intent, Intent::ExplainPrevious) && !explains_sequence {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
+    if matches!(goal.intent, Intent::GenerateReturnFunction { .. }) {
+        const CODE: &str = "RECOVERY_RETURN_FUNCTION_MISMATCH";
+        verify_registered_input(store, bundle, CODE)?;
+        let report = crate::code_generation::generate_return_function(bundle)?;
+        let reference = verified_artifact(store, actor, case, &report)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != [reference]
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [report.source.as_str()]
+            || plan.text != report.source
+            || result.text != report.source
+            || serde_json::to_vec(&report)?.len() > goal.budget.max_evidence_bytes
+        {
+            return Err(failure(
+                CODE,
+                "the retained code differs from the original function request",
+            ));
+        }
+    }
     if matches!(goal.intent, Intent::ExplainCode { .. }) {
         const CODE: &str = "RECOVERY_SOURCE_CODE_EXPLANATION_MISMATCH";
         verify_registered_input(store, bundle, CODE)?;
@@ -5471,6 +5504,9 @@ fn inspect(
                 "the code-generation source or structured explanation no longer matches the prior result",
             ));
         }
+    }
+    if assertion_predicate.is_some() {
+        verify_previous_assertion_explanation(store, state, bundle, result, plan)?;
     }
     if let Some((report_ref, expected_units)) = &previous_csv_statistics_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
@@ -6619,6 +6655,55 @@ fn verify_web_answer<'a>(
         return Err(invalid());
     }
     Ok([listing_ref, body_ref, answer_ref])
+}
+
+fn verify_previous_assertion_explanation(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    const CODE: &str = "RECOVERY_ASSERTION_EXPLANATION_MISMATCH";
+    let invalid = || {
+        failure(
+            CODE,
+            "The original assertion, memory revision or explanation changed.",
+        )
+    };
+    let request = &bundle.request;
+    let prior = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .ok_or_else(invalid)?;
+    verify_registered_input(store, bundle, CODE)?;
+    let assertion =
+        crate::core::previous_assertion_context(store, &request.actor_id, &request.case_id, prior)?
+            .ok_or_else(invalid)?;
+    // Recheck the state at adoption, without changing an attempted effect's
+    // original input or treating the current memory revision as its source.
+    let revision = result.actor_memory_revision.ok_or_else(invalid)?;
+    let memory = store
+        .load_memory_revision(&request.actor_id, revision)?
+        .ok_or_else(invalid)?;
+    let expected = assertion.explain(&memory)?;
+    if result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.guarantee != Guarantee::UserPremise
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != expected.dependencies
+        || plan.guarantee != result.guarantee
+        || plan.required_units != expected.units
+        || plan.text != expected.units.join("\n")
+        || result.text != plan.text
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn verified_artifact<T: serde::Serialize>(

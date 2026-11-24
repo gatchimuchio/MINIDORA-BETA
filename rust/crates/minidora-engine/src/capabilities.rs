@@ -91,7 +91,7 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "bounded-code",
-                    scope: "構造化仕様からのPythonコード生成、貼り付けたPython関数の日本語説明、対応文法の読取と有限評価を行います。",
+                    scope: "構造化仕様や文中の戻り式からPython関数を生成し、貼り付けた関数の説明、対応文法の読取と有限評価を行います。",
                     permission: None,
                     limits: "生成は明示されたアルゴリズムに、評価は単一関数の対応文法に限られます。ホストのPythonは実行しません。",
                 },
