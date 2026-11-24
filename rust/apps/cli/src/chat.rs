@@ -128,8 +128,8 @@ fn saved_result<'a>(case: &'a CaseRevision, result_id: &str) -> Option<&'a Resul
 }
 
 fn show_history(engine: &Engine, options: &Options, selection: &str) -> Result<(), String> {
-    let Some(case) = engine
-        .latest(&options.actor, &options.case_id)
+    let Some((case, order)) = engine
+        .case_with_history_order(&options.actor, &options.case_id)
         .map_err(|error| error.to_string())?
     else {
         eprintln!("この会話には保存済みの結果がありません。");
@@ -159,7 +159,7 @@ fn show_history(engine: &Engine, options: &Options, selection: &str) -> Result<(
         return Ok(());
     };
 
-    let count = case.prior_results.len();
+    let count = order.len();
     let pages = count.div_ceil(HISTORY_PAGE_SIZE);
     if pages == 0 && selection.is_empty() {
         return Ok(());
@@ -169,12 +169,12 @@ fn show_history(engine: &Engine, options: &Options, selection: &str) -> Result<(
         return Ok(());
     }
     eprintln!("以前の結果ID（{page}/{pages}ページ、全{count}件）:");
-    for (id, result) in case
-        .prior_results
+    for id in order
         .iter()
         .skip((page - 1) * HISTORY_PAGE_SIZE)
         .take(HISTORY_PAGE_SIZE)
     {
+        let result = &case.prior_results[id];
         let message = result
             .text
             .lines()

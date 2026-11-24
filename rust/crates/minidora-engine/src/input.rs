@@ -25,6 +25,8 @@ pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
     "declarative-ja-v182-csv-left-right-inner-join";
+pub(crate) const NATURAL_FINITE_EXPECTATION_PARSER_VERSION: &str =
+    "declarative-ja-v183-natural-finite-expectation";
 pub(crate) const PASTED_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v170-pasted-text-replacement";
 pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
@@ -184,6 +186,9 @@ pub(crate) const WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v175-direct-source-explanation-followup";
 
+pub(crate) const EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v184-explicit-direct-body-question-followup";
+
 pub(crate) const IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v163-implicit-web-body-question-followup";
 
@@ -206,6 +211,7 @@ pub(crate) enum SourceContext {
     PreviousJsonTableConversionExplanation,
     DirectSourceExplanation,
     ExplainedDirectSource,
+    DirectBodyQuestion,
     WebAnswerExplanation,
     ResumedWebAnswerExplanation,
     WebBodyQuestion,
@@ -233,6 +239,7 @@ pub(crate) fn uses_derived_source_context(version: &str) -> bool {
     uses_summary_source_context(version)
         || uses_source_explanation_context(version)
         || uses_web_body_question_context(version)
+        || version == EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
 }
 
 pub(crate) fn uses_web_body_question_context(version: &str) -> bool {
@@ -249,6 +256,17 @@ pub(crate) fn is_web_body_question_input(bundle: &InputBundle) -> bool {
         Intent::AskPreviousSourceQuestion { .. }
     ) && (uses_web_answer_explanation_context(&bundle.meaning.parser_version)
         || uses_web_body_question_context(&bundle.meaning.parser_version))
+}
+
+pub(crate) fn is_direct_body_question_input(bundle: &InputBundle) -> bool {
+    matches!(
+        bundle.meaning.intent,
+        Intent::AskPreviousSourceQuestion { .. }
+    ) && matches!(
+        bundle.meaning.parser_version.as_str(),
+        DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+    )
 }
 
 pub(crate) fn uses_web_answer_explanation_context(version: &str) -> bool {
@@ -546,6 +564,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::PreviousJsonTableConversionExplanation
         | SourceContext::DirectSourceExplanation
         | SourceContext::ExplainedDirectSource
+        | SourceContext::DirectBodyQuestion
         | SourceContext::WebAnswerExplanation
         | SourceContext::ResumedWebAnswerExplanation
         | SourceContext::WebBodyQuestion
@@ -569,6 +588,11 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
+        Intent::FiniteProbabilityStatistics { .. }
+            if terminal_trim(&request.text).starts_with("値が") =>
+        {
+            NATURAL_FINITE_EXPECTATION_PARSER_VERSION
+        }
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
         Intent::ConvertPreviousLength { .. } => PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION,
         Intent::CorrectCalculationSequenceStep { .. }
@@ -716,6 +740,15 @@ pub(crate) fn seal_with_source_context(
             } else {
                 WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
             }
+        }
+        Intent::AskPreviousSourceQuestion { .. }
+        | Intent::SummarizePreviousSource
+        | Intent::SummarizePreviousSourceConstrained { .. }
+        | Intent::SummarizePreviousSourceLines { .. }
+            if explicit_source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::DirectBodyQuestion)) =>
+        {
+            EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
         }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource
@@ -5714,8 +5747,53 @@ fn quantity_statistics_intent(text: &str) -> Result<Option<Intent>> {
     }))
 }
 
+fn natural_finite_expectation_intent(text: &str) -> Result<Option<Intent>> {
+    if !text.starts_with("値が") {
+        return Ok(None);
+    }
+    let Some(parts) = regex(
+        r"\A値が(?P<outcomes>[-0-9eE+.,、， \t　]+)で[ \t　]*(?:、[ \t　]*)?重みが(?P<weights>[-0-9eE+.,、， \t　]+)のときの期待値を求めて(?:ください)?\z",
+    )?
+    .captures(text)
+    else {
+        return Ok(None);
+    };
+    let read_list = |list: &str| {
+        let array = format!("[{}]", list.replace(['、', '，'], ",").replace('　', " "));
+        scalar_array(math_array(&array, &mut 0, 0)?)
+    };
+    let parsed: Result<Intent> = (|| {
+        Ok(Intent::FiniteProbabilityStatistics {
+            outcomes: read_list(&parts["outcomes"])?,
+            weights: read_list(&parts["weights"])?,
+        })
+    })();
+    match parsed {
+        Ok(intent) => Ok(Some(intent)),
+        Err(Error::Contract { code, message }) => Ok(Some(Intent::Unknown {
+            reason: format!("{code}: {message}"),
+        })),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn verified_natural_finite_expectation(bundle: &InputBundle) -> Result<bool> {
+    let parsed = natural_finite_expectation_intent(terminal_trim(&bundle.request.text))?;
+    Ok(
+        bundle.meaning.parser_version == NATURAL_FINITE_EXPECTATION_PARSER_VERSION
+            && matches!(
+                bundle.meaning.intent,
+                Intent::FiniteProbabilityStatistics { .. }
+            )
+            && parsed.as_ref() == Some(&bundle.meaning.intent),
+    )
+}
+
 fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
     if let Some(intent) = quantity_statistics_intent(text)? {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = natural_finite_expectation_intent(text)? {
         return Ok(Some(intent));
     }
     if let Some(capture) =
@@ -9047,6 +9125,47 @@ mod mathematics_and_source_tests {
             let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None);
             assert!(
                 bundle.is_err() || matches!(bundle.unwrap().meaning.intent, Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn natural_finite_expectation_seals_literal_pairs_and_rejects_partial_lists() {
+        let text = "　値が-1.20E+1、0、5で、重みが1、2、1のときの期待値を求めてください。";
+        let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+        assert_eq!(bundle.request.text, text);
+        assert_eq!(
+            bundle.meaning.parser_version,
+            NATURAL_FINITE_EXPECTATION_PARSER_VERSION
+        );
+        assert!(verified_natural_finite_expectation(&bundle).unwrap());
+        assert!(matches!(
+            &bundle.meaning.intent,
+            Intent::FiniteProbabilityStatistics { outcomes, weights }
+                if outcomes == &["-1.20E+1", "0", "5"] && weights == &["1", "2", "1"]
+        ));
+        let old = seal(
+            &RequestEnvelope::new(
+                "c",
+                "old",
+                "actor",
+                "期待値 [-1.20E+1, 0, 5] 重み [1, 2, 1] を計算して",
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(old.meaning.intent, bundle.meaning.intent);
+        assert_eq!(old.meaning.parser_version, PARSER_VERSION);
+        assert!(!verified_natural_finite_expectation(&old).unwrap());
+        for text in [
+            "値が0、2で重みが1、のときの期待値を求めて",
+            "値が0、2で、重みが1e+、2のときの期待値を求めて",
+            "値が0、2で、重みが1、2のときの期待値を求めて送信して",
+            "値が0、2のときの期待値を求めて",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
                 "{text}"
             );
         }

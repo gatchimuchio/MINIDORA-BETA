@@ -1424,6 +1424,27 @@ impl Store {
         self.latest_case(case)
     }
 
+    pub(crate) fn load_case_with_history_order(
+        &self,
+        actor: &str,
+        case: &str,
+    ) -> Result<Option<(CaseRevision, Vec<String>)>> {
+        if !Self::actor_for_case(&self.connection, actor, case)? {
+            return Ok(None);
+        }
+        let mut last_revisions = BTreeMap::new();
+        let head = self.read_verified_case(case, |revision| {
+            if let Some(result) = &revision.result {
+                last_revisions.insert(result.id.clone(), revision.revision);
+            }
+        })?;
+        Ok(head.map(|head| {
+            let mut order: Vec<_> = head.prior_results.keys().cloned().collect();
+            order.sort_by_key(|id| std::cmp::Reverse(last_revisions.get(id)));
+            (head, order)
+        }))
+    }
+
     /// Read the immutable parent of a revision already verified by `load_case`.
     pub(crate) fn parent_of_verified_revision(
         &self,
@@ -2670,6 +2691,14 @@ impl Store {
     }
 
     fn verify_case(&self, case: &str) -> Result<()> {
+        self.read_verified_case(case, |_| ()).map(|_| ())
+    }
+
+    fn read_verified_case(
+        &self,
+        case: &str,
+        mut observe: impl FnMut(&CaseRevision),
+    ) -> Result<Option<CaseRevision>> {
         let mut statement = sql(self.connection.prepare(
             "SELECT revision,state_sha256,parent_hash,event_hash FROM case_revision WHERE case_id=?1 ORDER BY revision",
         ))?;
@@ -2732,10 +2761,11 @@ impl Store {
             } else if revision.lifecycle != Lifecycle::Received {
                 return Err(failure("INTEGRITY_FAILURE", "case did not start RECEIVED"));
             }
+            observe(&revision);
             previous_hash = Some(event_hash);
             previous = Some(revision);
         }
-        Ok(())
+        Ok(previous)
     }
 
     fn verify_actions(&self, case: &str) -> Result<()> {

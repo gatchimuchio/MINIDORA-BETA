@@ -39,6 +39,7 @@ use std::{
 const FILE_RECONCILED_REASON: &str =
     "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted";
 const FILE_UNCONFIRMED_PREFIX: &str = "LOCAL_RECONCILIATION_UNCONFIRMED: ";
+const FILE_FAILURE_RECORDED_PREFIX: &str = "LOCAL_FILE_FAILURE_RECORDED: ";
 
 pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord> {
     let mut state = store
@@ -66,6 +67,20 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
         Ok(value) => value,
         Err(error) => return suspend(store, &mut state, result, &error.to_string()),
     };
+    if receipt.phase == EffectPhase::Failed {
+        if state.lifecycle == Lifecycle::Suspend && result.receipts.contains(&receipt) {
+            return Ok(result);
+        }
+        result.reason = Some(format!(
+            "{FILE_FAILURE_RECORDED_PREFIX}{}",
+            receipt.reason.as_deref().unwrap_or_default()
+        ));
+        result
+            .receipts
+            .retain(|old| old.action_id != receipt.action_id);
+        result.receipts.push(receipt);
+        return persist_reconciliation_suspension(store, &mut state, result);
+    }
     // Persist a recovered UNKNOWN observation before its later confirmation.
     // The exact token, target, authority and request bytes are unchanged.
     if action.phase == EffectPhase::Unknown {
@@ -173,7 +188,9 @@ fn is_reconcile_checkpoint(store: &Store, state: &CaseRevision) -> Result<bool> 
         return Ok(false);
     };
     let request = &bundle.request;
-    if !(reason == FILE_RECONCILED_REASON || reason.starts_with(FILE_UNCONFIRMED_PREFIX))
+    if !(reason == FILE_RECONCILED_REASON
+        || reason.starts_with(FILE_UNCONFIRMED_PREFIX)
+        || reason.starts_with(FILE_FAILURE_RECORDED_PREFIX))
         || result.reason.as_deref() != Some(reason)
         || result.lifecycle != Lifecycle::Running
         || state.input_fingerprint.as_deref() != Some(result.id.as_str())
@@ -4503,7 +4520,11 @@ fn verify_implicit_source_predecessor(
 ) -> Result<()> {
     let version = &bundle.meaning.parser_version;
     if crate::input::uses_web_body_question_context(version)
-        || version == crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        || matches!(
+            version.as_str(),
+            crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        )
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
     }
@@ -6008,6 +6029,36 @@ fn inspect(
     {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
+    if bundle.meaning.parser_version == crate::input::NATURAL_FINITE_EXPECTATION_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_FINITE_EXPECTATION_MISMATCH";
+        let Intent::FiniteProbabilityStatistics { outcomes, weights } = &goal.intent else {
+            return Err(failure(
+                CODE,
+                "the sealed finite expectation intent changed",
+            ));
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        if !crate::input::verified_natural_finite_expectation(bundle)? {
+            return Err(failure(
+                CODE,
+                "the sealed outcomes or weights differ from the original request",
+            ));
+        }
+        let report = crate::math::finite_probability_statistics(outcomes, weights)?;
+        let expected = serde_json::to_string_pretty(&report)?;
+        if result.guarantee != Guarantee::Computed
+            || !result.dependencies.is_empty()
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [expected.as_str()]
+            || plan.text != expected
+            || result.text != expected
+        {
+            return Err(failure(
+                CODE,
+                "the retained report differs from the original finite expectation request",
+            ));
+        }
+    }
     if bundle.meaning.parser_version == crate::input::JSON_OBJECT_KEY_PATH_PARSER_VERSION {
         const CODE: &str = "RECOVERY_JSON_OBJECT_KEY_PATH_MISMATCH";
         let Intent::JsonPointer { document, pointer } = &goal.intent else {
@@ -7282,7 +7333,10 @@ fn inspect(
         || action.idempotency_key != expected_action
         || Some(action.target.as_str()) != path.to_str()
         || action.exact_request_sha256 != render.actual_sha256
-        || !matches!(action.phase, EffectPhase::Unknown | EffectPhase::Confirmed)
+        || !matches!(
+            action.phase,
+            EffectPhase::Unknown | EffectPhase::Confirmed | EffectPhase::Failed
+        )
     {
         return Err(failure(
             "RECOVERY_ACTION_MISMATCH",
@@ -7298,23 +7352,44 @@ fn inspect(
             "original authorization or exact effect bytes differ",
         ));
     }
-    observe_file(path, &exact)?;
-    let receipt = if action.phase == EffectPhase::Confirmed {
+    if action.phase == EffectPhase::Failed {
+        if result.id != fingerprint
+            || result.input_id != request.input_id
+            || result.input_version != request.input_version
+        {
+            return Err(failure(
+                "RECOVERY_IDENTITY_MISMATCH",
+                "adopted result differs from the failed action's original input",
+            ));
+        }
+    } else {
+        observe_file(path, &exact)?;
+    }
+    let receipt = if action.phase != EffectPhase::Unknown {
         let receipt = action.receipt.clone().ok_or_else(|| {
             failure(
                 "RECOVERY_RECEIPT_MISSING",
-                "confirmed action has no original receipt",
+                "terminal action has no original receipt",
             )
         })?;
+        let observation_matches = if action.phase == EffectPhase::Confirmed {
+            receipt.observed_bytes == Some(exact.len() as u64)
+        } else {
+            receipt.observed_bytes.is_none()
+                && receipt
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| !reason.is_empty())
+        };
         if receipt.action_id != action.action_id
             || receipt.target != action.target
-            || receipt.phase != EffectPhase::Confirmed
+            || receipt.phase != action.phase
             || receipt.content_sha256 != digest(&exact)
-            || receipt.observed_bytes != Some(exact.len() as u64)
+            || !observation_matches
         {
             return Err(failure(
                 "RECOVERY_RECEIPT_MISMATCH",
-                "stored receipt does not match observed exact artifact",
+                "stored receipt does not match the original action and artifact",
             ));
         }
         receipt
@@ -7582,6 +7657,14 @@ fn suspend(
     reason: &str,
 ) -> Result<ResultRecord> {
     result.reason = Some(format!("{FILE_UNCONFIRMED_PREFIX}{reason}"));
+    persist_reconciliation_suspension(store, state, result)
+}
+
+fn persist_reconciliation_suspension(
+    store: &Store,
+    state: &mut CaseRevision,
+    mut result: ResultRecord,
+) -> Result<ResultRecord> {
     if state.lifecycle == Lifecycle::Suspend {
         if state.goal_sha256.is_none() || state.bundle.is_none() {
             result.lifecycle = Lifecycle::Suspend;

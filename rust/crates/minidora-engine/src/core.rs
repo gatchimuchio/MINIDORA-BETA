@@ -4433,6 +4433,15 @@ impl Engine {
         self.store.load_case(actor, case)
     }
 
+    /// The verified case head and its earlier result IDs, newest revision first.
+    pub fn case_with_history_order(
+        &self,
+        actor: &str,
+        case: &str,
+    ) -> Result<Option<(CaseRevision, Vec<String>)>> {
+        self.store.load_case_with_history_order(actor, case)
+    }
+
     /// Build a bounded sequence from directly supplied typed semantic units.
     /// The API belongs to Core but deliberately does not parse natural language,
     /// verify the supplied evidence labels, mutate a case, or adopt content.
@@ -5892,6 +5901,9 @@ impl Engine {
                         }
                         Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
                             Some(input::SourceContext::WebBodyQuestion)
+                        }
+                        Guarantee::Hypothesis if input::is_direct_body_question_input(&source) => {
+                            Some(input::SourceContext::DirectBodyQuestion)
                         }
                         _ => None,
                     })
