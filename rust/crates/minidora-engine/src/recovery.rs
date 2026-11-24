@@ -4388,18 +4388,15 @@ pub(crate) fn source_followup_anchor<'a>(
         };
         // Stopped questions have no adopted answer artifact. Require the exact
         // diagnostic and the same derivation with the original request budget.
-        let same_diagnostic = if result.reason.as_deref().is_some_and(|reason| {
-            reason.ends_with(crate::text_summary::WIKIPEDIA_SOURCE_QUESTION_NO_MATCH)
-        }) {
-            same_stop(
-                crate::text_summary::answer_fetched_source_question(
-                    &context.source.id,
-                    query,
-                    &packets,
-                    bundle.request.budget.max_actions as usize,
-                )
-                .err(),
-            )
+        let wiki_replay = crate::text_summary::replay_stopped_wikipedia_source_question(
+            result.reason.as_deref().unwrap_or_default(),
+            &context.source.id,
+            query,
+            &packets,
+            bundle.request.budget.max_actions as usize,
+        );
+        let same_diagnostic = if let Some(replay) = wiki_replay {
+            same_stop(replay.err())
         } else {
             same_stop(
                 crate::text_summary::answer_fetched_source_question_v2(

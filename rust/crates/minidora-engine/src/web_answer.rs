@@ -397,6 +397,7 @@ fn find_passage(
         article,
         unquoted_only,
         false,
+        false,
         matches_topic,
         &mut |passage| {
             selected = Some(passage);
@@ -415,6 +416,7 @@ fn find_elevation_passage(article: &str, topic: &str) -> Option<(Passage, bool)>
     let _ = visit_passages(
         article,
         true,
+        false,
         false,
         &|sentence| {
             stated_elevation_metres(sentence).is_some()
@@ -465,6 +467,7 @@ fn find_topic_passage<'a>(
         article,
         false,
         false,
+        false,
         &|sentence| sentence.contains(topic) || sentence.contains(title),
         &mut |passage| {
             if passage.text.contains(topic) {
@@ -479,17 +482,36 @@ fn find_topic_passage<'a>(
 }
 
 pub(crate) fn readable_passages(article: &str, limit: usize) -> Vec<Passage> {
+    readable_passages_with_markup(article, limit, false)
+}
+
+pub(crate) fn readable_passages_with_nested_footnotes(article: &str, limit: usize) -> Vec<Passage> {
+    readable_passages_with_markup(article, limit, true)
+}
+
+fn readable_passages_with_markup(
+    article: &str,
+    limit: usize,
+    nested_footnotes: bool,
+) -> Vec<Passage> {
     let mut passages = Vec::new();
     let limit = limit.min(MAX_SUMMARY_PASSAGES);
     if limit == 0 {
         return passages;
     }
-    let _ = visit_passages(article, true, true, &|_| true, &mut |passage| {
-        if !passage.text.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
-            passages.push(passage);
-        }
-        passages.len() == limit
-    });
+    let _ = visit_passages(
+        article,
+        true,
+        true,
+        nested_footnotes,
+        &|_| true,
+        &mut |passage| {
+            if !passage.text.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+                passages.push(passage);
+            }
+            passages.len() == limit
+        },
+    );
     passages
 }
 
@@ -497,6 +519,7 @@ fn visit_passages(
     article: &str,
     unquoted_only: bool,
     summary_lead_only: bool,
+    nested_footnotes: bool,
     matches_topic: &impl Fn(&str) -> bool,
     stop: &mut impl FnMut(Passage) -> bool,
 ) -> Option<()> {
@@ -509,7 +532,7 @@ fn visit_passages(
             break;
         }
         if rest.starts_with("{{") {
-            rest = &rest[template_end(rest)?..];
+            rest = &rest[prose_markup_end(rest, unquoted_only, nested_footnotes)?.0..];
             continue;
         }
         if let Some(block_end) = block_end(rest) {
@@ -520,7 +543,7 @@ fn visit_passages(
             rest = &rest[end + block_end.len()..];
             continue;
         }
-        let line_end = prose_line_end(rest, unquoted_only, summary_lead_only)?;
+        let line_end = prose_line_end(rest, unquoted_only, summary_lead_only, nested_footnotes)?;
         let line = &rest[..line_end];
         let article_offset = bounded.len() - rest.len();
         let is_prose = !line.starts_with(['=', '*', '#', ':', ';', '|', '!', '<'])
@@ -531,6 +554,7 @@ fn visit_passages(
                 article_offset,
                 &|sentence| is_prose && matches_topic(sentence),
                 unquoted_only.then_some(&mut quotes),
+                nested_footnotes,
                 stop,
             ) == Some(true)
         {
@@ -558,7 +582,12 @@ fn block_end(rest: &str) -> Option<&'static str> {
 }
 
 /// Do not start a new candidate line inside a multiline note or template.
-fn prose_line_end(text: &str, unquoted_only: bool, stop_at_unknown_tag: bool) -> Option<usize> {
+fn prose_line_end(
+    text: &str,
+    unquoted_only: bool,
+    stop_at_unknown_tag: bool,
+    nested_footnotes: bool,
+) -> Option<usize> {
     let mut at = 0;
     while at < text.len() {
         let rest = &text[at..];
@@ -567,7 +596,7 @@ fn prose_line_end(text: &str, unquoted_only: bool, stop_at_unknown_tag: bool) ->
             b'[' if rest.starts_with("[[") => at += markup_end(rest, unquoted_only)?,
             b'{' if stop_at_unknown_tag && rest.starts_with("{|") => return None,
             b'{' if rest.starts_with("{{") || rest.starts_with("{|") => {
-                at += markup_end(rest, unquoted_only)?;
+                at += prose_markup_end(rest, unquoted_only, nested_footnotes)?.0;
             }
             b'<' if is_reference(rest)
                 || block_end(rest).is_some()
@@ -610,6 +639,7 @@ fn line_passage(
     article_offset: usize,
     matches_topic: &impl Fn(&str) -> bool,
     mut quotes: Option<&mut QuotationContext>,
+    nested_footnotes: bool,
     stop: &mut impl FnMut(Passage) -> bool,
 ) -> Option<bool> {
     let mut at = 0;
@@ -619,8 +649,16 @@ fn line_passage(
     let mut quoted = quotes.as_deref().is_some_and(QuotationContext::is_open);
     while at < line.len() {
         let remaining = &line[at..];
-        if let Some(end) = markup_end(remaining, quotes.is_some()) {
-            match visible_markup(&remaining[..end]) {
+        if let Some((end, omit_note)) =
+            prose_markup_end(remaining, quotes.is_some(), nested_footnotes)
+        {
+            let markup = &remaining[..end];
+            let visible = if omit_note {
+                Some("")
+            } else {
+                visible_markup(markup)
+            };
+            match visible {
                 Some(visible) => {
                     if let Some(context) = quotes.as_deref_mut() {
                         for character in visible.chars() {
@@ -673,6 +711,67 @@ fn line_passage(
         quoted = quotes.as_deref().is_some_and(QuotationContext::is_open);
     }
     Some(false)
+}
+
+/// The second value identifies a verified note that has no visible prose.
+fn prose_markup_end(
+    text: &str,
+    unquoted_only: bool,
+    nested_footnotes: bool,
+) -> Option<(usize, bool)> {
+    if nested_footnotes && let Some(body) = nested_footnote_body(text) {
+        let (end, omit_note) = nested_footnote_end(body)?;
+        return Some((text.len() - body.len() + end, omit_note));
+    }
+    markup_end(text, unquoted_only).map(|end| (end, false))
+}
+
+fn nested_footnote_body(text: &str) -> Option<&str> {
+    ["{{refnest|group=\"注釈\"|", "{{refnest|group=注釈|"]
+        .into_iter()
+        .find_map(|prefix| text.strip_prefix(prefix))
+}
+
+/// Accept a single note argument with a complete nested reference. Its text
+/// does not participate in prose recognition, quotation tracking or matching.
+fn nested_footnote_end(body: &str) -> Option<(usize, bool)> {
+    let mut at = 0;
+    let mut has_reference = false;
+    let mut single_note_argument = true;
+    while let Some(rest) = body.get(at..).filter(|rest| !rest.is_empty()) {
+        if rest.starts_with("}}") {
+            return Some((at + 2, has_reference && single_note_argument));
+        }
+        if let Some(reference) = rest.strip_prefix("<ref>") {
+            let (contents, _) = reference.split_once("</ref>")?;
+            if contents.trim().is_empty() || contents.contains('<') {
+                return None;
+            }
+            at += "<ref>".len() + contents.len() + "</ref>".len();
+            has_reference = true;
+            continue;
+        }
+        if let Some(link) = rest.strip_prefix("[[") {
+            let (label, _) = link.split_once("]]")?;
+            if label.trim().is_empty() || label.contains(['[', ']', '{', '}', '<', '>']) {
+                return None;
+            }
+            at += label.len() + 4;
+            continue;
+        }
+        let character = rest.chars().next()?;
+        if character == '|' {
+            // The boundary is still known, but this variant is not eligible.
+            single_note_argument = false;
+        }
+        if matches!(character, '[' | ']' | '{' | '}' | '<' | '>')
+            || character.is_control() && !matches!(character, '\t' | '\r' | '\n')
+        {
+            return None;
+        }
+        at += character.len_utf8();
+    }
+    None
 }
 
 fn markup_end(text: &str, unquoted_only: bool) -> Option<usize> {
@@ -827,6 +926,50 @@ fn safe_label(label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_footnotes_preserve_the_passage_range_without_exposing_the_note() {
+        let opening = "富士山は活火山である。\n";
+        let retained = "富士山は[[富士箱根伊豆国立公園]]に指定されている";
+        let note = "{{refnest|group=\"注釈\"|[[1936年]]の補足。<ref>注記だけの語。</ref>。}}";
+        let article = format!("{opening}{retained}{note}。\n");
+
+        assert_eq!(readable_passages(&article, 32).len(), 1);
+        let passages = readable_passages_with_nested_footnotes(&article, 32);
+        let [_, passage] = passages.as_slice() else {
+            panic!("expected two readable passages, got {passages:?}");
+        };
+        assert_eq!(
+            passage.text,
+            "富士山は富士箱根伊豆国立公園に指定されている。"
+        );
+        let raw = &article[passage.source_start..passage.source_end];
+        assert_eq!(raw, format!("{retained}{note}。"));
+        assert_eq!(passage.source_span_sha256, digest(raw.as_bytes()));
+
+        for unsupported in [
+            "{{refnest|group=\"注釈\"|<ref>未閉鎖の注記。}}",
+            "{{refnest|group=\"注釈\"|<ref>注記。</ref>|name=extra}}",
+            "{{othernote|<ref>注記。</ref>}}",
+        ] {
+            let article = format!("{opening}{retained}{unsupported}。\n");
+            assert_eq!(
+                readable_passages_with_nested_footnotes(&article, 32).len(),
+                1
+            );
+        }
+
+        let note =
+            "{{refnest|group=注釈|<ref>引用内の閉じ括弧 }}。\n注記だけの別行がある。\n</ref>。}}";
+        let article = format!("{retained}{note}。\n公園の説明が続く。\n");
+        let passages = readable_passages_with_nested_footnotes(&article, 32);
+        assert_eq!(passages.len(), 2);
+        assert_eq!(
+            passages[0].text,
+            "富士山は富士箱根伊豆国立公園に指定されている。"
+        );
+        assert_eq!(passages[1].text, "公園の説明が続く。");
+    }
 
     #[test]
     fn ascii_case_uses_the_exact_article_title_only_without_a_topic_hit() {
