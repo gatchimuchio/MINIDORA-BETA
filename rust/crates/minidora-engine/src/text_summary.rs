@@ -2412,12 +2412,13 @@ struct SourceContextStep<'a> {
     detail_input: Option<InputBundle>,
     derivation: &'a ResultRecord,
     derivation_input: InputBundle,
+    web_body_question: bool,
     reuse_sole_summary_packet: bool,
     requested_summary_packet: Option<String>,
 }
 
-/// Identify a direct retrieval named by a retained, pre-v175 body question.
-pub(crate) fn legacy_body_question_retrieval<'a>(
+/// Identify the retained retrieval or Web answer named by a v89 body question.
+pub(crate) fn legacy_body_question_source<'a>(
     store: &Store,
     question: &InputBundle,
     prior_results: &'a BTreeMap<String, ResultRecord>,
@@ -2463,22 +2464,68 @@ pub(crate) fn legacy_body_question_retrieval<'a>(
     else {
         return Ok(None);
     };
-    let Intent::Retrieve { urls, .. } = &original.meaning.intent else {
-        return Ok(None);
-    };
     if original.request.actor_id != request.actor_id
         || original.request.case_id != request.case_id
         || identity(&original.request)? != source.id
-        || urls.is_empty()
-        || urls.len() != source.evidence.len()
-        || !urls
-            .iter()
-            .zip(&source.evidence)
-            .all(|(uri, packet)| packet.packet_kind == "FETCHED_BODY" && packet.request_uri == *uri)
     {
         return Ok(None);
     }
-    Ok(Some((source, original)))
+    let supported = match &original.meaning.intent {
+        Intent::Retrieve { urls, .. } => {
+            !urls.is_empty()
+                && urls.len() == source.evidence.len()
+                && urls.iter().zip(&source.evidence).all(|(uri, packet)| {
+                    packet.packet_kind == "FETCHED_BODY" && packet.request_uri == *uri
+                })
+        }
+        Intent::AskWeb { .. } => {
+            original.meaning.parser_version == crate::input::WEB_QUESTION_PARSER_VERSION
+                && source.dependencies.len() == 3
+                && matches!(source.evidence.as_slice(), [listing, body]
+                if listing.packet_kind == "SEARCH_LIST" && body.packet_kind == "FETCHED_BODY")
+        }
+        _ => false,
+    };
+    Ok(supported.then_some((source, original)))
+}
+
+fn verify_legacy_body_question_source(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    question: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    followup_version: &str,
+) -> Result<bool> {
+    let Some((source, original)) =
+        legacy_body_question_source(store, question, prior_results, Some(history))?
+    else {
+        return Ok(false);
+    };
+    let web = matches!(original.meaning.intent, Intent::AskWeb { .. });
+    let expected_version = if web {
+        crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+    } else {
+        crate::input::EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+    };
+    if followup_version != expected_version {
+        return Ok(false);
+    }
+    if web {
+        crate::search::verify_committed_web_answer(store, history, source, &original)?;
+    } else {
+        if history
+            .input_result(&source.input_id, source.input_version)?
+            .as_ref()
+            != Some(source)
+            || !history.contains_committed_result(source)?
+        {
+            return Ok(false);
+        }
+        for packet in &source.evidence {
+            crate::ports::validate_successful_packet(packet, &original.request.permissions)?;
+        }
+    }
+    Ok(true)
 }
 
 fn derived_source_followup<'a>(
@@ -2566,33 +2613,24 @@ fn derived_source_followup<'a>(
         {
             let valid_target = if follows_web_question {
                 crate::input::is_web_body_question_input(&target_input)
+                    || (parser_version
+                        == crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                        && verify_legacy_body_question_source(
+                            store,
+                            history,
+                            &target_input,
+                            prior_results,
+                            parser_version,
+                        )?)
             } else if follows_direct_question {
-                if crate::input::is_direct_body_question_input(&target_input) {
-                    true
-                } else if let Some((source, original)) = legacy_body_question_retrieval(
-                    store,
-                    &target_input,
-                    prior_results,
-                    Some(history),
-                )? {
-                    if history
-                        .input_result(&source.input_id, source.input_version)?
-                        .as_ref()
-                        != Some(source)
-                        || !history.contains_committed_result(source)?
-                    {
-                        return Err(invalid());
-                    }
-                    for packet in &source.evidence {
-                        crate::ports::validate_successful_packet(
-                            packet,
-                            &original.request.permissions,
-                        )?;
-                    }
-                    true
-                } else {
-                    false
-                }
+                crate::input::is_direct_body_question_input(&target_input)
+                    || verify_legacy_body_question_source(
+                        store,
+                        history,
+                        &target_input,
+                        prior_results,
+                        parser_version,
+                    )?
             } else {
                 crate::input::is_source_summary_intent(&target_input.meaning.intent)
             };
@@ -2615,6 +2653,7 @@ fn derived_source_followup<'a>(
                 detail_input: None,
                 derivation: target,
                 derivation_input: target_input,
+                web_body_question: follows_web_question,
                 reuse_sole_summary_packet: true,
                 requested_summary_packet,
             });
@@ -2644,6 +2683,7 @@ fn derived_source_followup<'a>(
             detail_input: Some(detail_input),
             derivation,
             derivation_input,
+            web_body_question: false,
             reuse_sole_summary_packet: crate::input::is_explanation_line_summary_version(
                 parser_version,
             ),
@@ -2674,8 +2714,7 @@ fn derived_source_followup<'a>(
                     Some(scope),
                 )?
                 .ok_or_else(invalid)?;
-                let web_question = crate::input::is_web_body_question_input(&step.derivation_input);
-                if web_question {
+                if step.web_body_question {
                     let [(index, _)] = proof.source_packet_refs.as_slice() else {
                         return Err(invalid());
                     };
@@ -2691,7 +2730,7 @@ fn derived_source_followup<'a>(
                     step.context,
                     Some(&proof.answer_ref),
                     "SOURCE_CONTEXT_INVALID",
-                    if web_question {
+                    if step.web_body_question {
                         "Web body question"
                     } else {
                         "direct body question"

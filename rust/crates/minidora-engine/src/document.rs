@@ -895,23 +895,23 @@ fn previous_json_table_conversion_explanation(
     })
 }
 
-fn previous_pasted_text_replacement_explanation(
+const PASTED_TEXT_REPLACEMENT_CONTEXT_INVALID: &str = "PASTED_TEXT_REPLACEMENT_CONTEXT_INVALID";
+
+fn invalid_pasted_text_replacement() -> minidora_domain::Error {
+    failure(
+        PASTED_TEXT_REPLACEMENT_CONTEXT_INVALID,
+        "前回の置換結果と保存した入力・原文範囲を照合できません。",
+    )
+}
+
+fn verify_pasted_text_replacement_report<'a>(
     store: &crate::store::Store,
     actor: &str,
     case: &str,
     previous: &ResultRecord,
-    max_evidence_bytes: usize,
-) -> Result<PriorDocumentExplanation> {
-    const CODE: &str = "PASTED_TEXT_REPLACEMENT_CONTEXT_INVALID";
-    let invalid = || {
-        failure(
-            CODE,
-            "前回の置換結果と保存した入力・原文範囲を照合できません。",
-        )
-    };
-    let (bundle_ref, bundle) = store
-        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
-        .ok_or_else(invalid)?;
+    bundle_ref: &str,
+    bundle: &'a InputBundle,
+) -> Result<(&'a str, &'a str, String, DocumentResult)> {
     let Intent::TextReplace {
         document,
         old,
@@ -919,15 +919,15 @@ fn previous_pasted_text_replacement_explanation(
         count,
     } = &bundle.meaning.intent
     else {
-        return Err(invalid());
+        return Err(invalid_pasted_text_replacement());
     };
     if previous.guarantee != Guarantee::Computed
         || !previous.evidence.is_empty()
         || previous.calculation.is_some()
         || previous.id != minidora_domain::identity(&bundle.request)?
-        || bundle_ref != digest(&canonical(&bundle)?)
+        || bundle_ref != digest(&canonical(bundle)?)
     {
-        return Err(invalid());
+        return Err(invalid_pasted_text_replacement());
     }
     let report =
         if bundle.meaning.parser_version == crate::input::PASTED_TEXT_REPLACEMENT_PARSER_VERSION {
@@ -944,7 +944,7 @@ fn previous_pasted_text_replacement_explanation(
             .as_deref()
             != Some(report_bytes.as_slice())
     {
-        return Err(invalid());
+        return Err(invalid_pasted_text_replacement());
     }
     revalidate_previous_document_render(
         store,
@@ -952,9 +952,24 @@ fn previous_pasted_text_replacement_explanation(
         case,
         previous,
         Some(&report_ref),
-        CODE,
+        PASTED_TEXT_REPLACEMENT_CONTEXT_INVALID,
         "pasted text replacement",
     )?;
+    Ok((old, new, report_ref, report))
+}
+
+fn previous_pasted_text_replacement_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    max_evidence_bytes: usize,
+) -> Result<PriorDocumentExplanation> {
+    let (bundle_ref, bundle) = store
+        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        .ok_or_else(invalid_pasted_text_replacement)?;
+    let (old, new, report_ref, report) =
+        verify_pasted_text_replacement_report(store, actor, case, previous, &bundle_ref, &bundle)?;
 
     const MAX_SHOWN_CHANGES: usize = 8;
     let changes = report
@@ -976,8 +991,14 @@ fn previous_pasted_text_replacement_explanation(
         format!("置換記録SHA-256: {report_ref}"),
     ];
     for span in changes.take(MAX_SHOWN_CHANGES) {
-        let (start, end) = span.output_start.zip(span.output_end).ok_or_else(invalid)?;
-        let replaced = report.text.get(start..end).ok_or_else(invalid)?;
+        let (start, end) = span
+            .output_start
+            .zip(span.output_end)
+            .ok_or_else(invalid_pasted_text_replacement)?;
+        let replaced = report
+            .text
+            .get(start..end)
+            .ok_or_else(invalid_pasted_text_replacement)?;
         lines.push(format!(
             "原文byte[{}..{}) SHA-256 {} → 出力byte[{start}..{end}) SHA-256 {}",
             span.source_start,
@@ -6542,6 +6563,146 @@ pub(crate) fn previous_text_replacement(
     old: &str,
     new: &str,
 ) -> Result<(String, String, PreviousTextEditArtifact)> {
+    replace_retained_text(previous, old, new, None)
+}
+
+const PREVIOUS_ANSWER_EDIT: &str = "PREVIOUS_OUTPUT_REPLACE_EXACT_V1";
+const PREVIOUS_DOCUMENT_EDIT: &str = "PREVIOUS_DOCUMENT_REPLACE_EXACT_V1";
+
+pub(crate) fn previous_text_replacement_for_bundle(
+    store: &crate::store::Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    old: &str,
+    new: &str,
+) -> Result<(String, String, PreviousTextEditArtifact)> {
+    if bundle.meaning.parser_version
+        != crate::input::PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
+    {
+        return previous_text_replacement(previous, old, new);
+    }
+    let invalid = || {
+        failure(
+            "PREVIOUS_DOCUMENT_BODY_UNVERIFIABLE",
+            "前回の文章の本文を保存済みの編集結果から照合できません。",
+        )
+    };
+    let request = &bundle.request;
+    if !crate::input::is_previous_document_text_replacement(&request.text)
+        || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        || bundle.context_sha256 != identity(&Some(previous))?
+        || prior_results.get(&previous.id) != Some(previous)
+    {
+        return Err(invalid());
+    }
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let (source_ref, source) = store
+        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        .ok_or_else(invalid)?;
+    if identity(&source.request)? != previous.id {
+        return Err(invalid());
+    }
+    match &source.meaning.intent {
+        Intent::TextReplace { .. } => {
+            let (_, _, _, report) = verify_pasted_text_replacement_report(
+                store,
+                actor,
+                case,
+                previous,
+                &source_ref,
+                &source,
+            )?;
+            replace_retained_text(previous, old, new, Some(&report.text))
+        }
+        Intent::ReplacePreviousText {
+            old: source_old,
+            new: source_new,
+        } => {
+            let [parent_id, parent_plan, parent_render, report_ref] =
+                previous.dependencies.as_slice()
+            else {
+                return Err(invalid());
+            };
+            let report_bytes = store.get_bytes(actor, case, report_ref)?;
+            let report: PreviousTextEditArtifact = serde_json::from_slice(&report_bytes)?;
+            if canonical(&report)? != report_bytes
+                || report.source_result_id != *parent_id
+                || report.source_content_plan_sha256 != *parent_plan
+                || report.source_render_sha256 != *parent_render
+                || source.meaning.context_result_ref.as_ref() != Some(parent_id)
+                || previous.guarantee != Guarantee::UserPremise
+                || previous.calculation.is_some()
+                || !previous.evidence.is_empty()
+                || !previous.content_plan.as_ref().is_some_and(|plan| {
+                    plan.locale == source.request.locale
+                        && plan.required_units == previous_text_replacement_lines(&report)
+                })
+            {
+                return Err(invalid());
+            }
+            revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                previous,
+                Some(report_ref),
+                "PREVIOUS_OUTPUT_INTEGRITY",
+                "edited document",
+            )?;
+            match report.operation.as_str() {
+                PREVIOUS_DOCUMENT_EDIT
+                    if source.meaning.parser_version
+                        == crate::input::PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
+                        && crate::input::is_previous_document_text_replacement(
+                            &source.request.text,
+                        )
+                        && previous.text == report.edit.text
+                        && report.source_text_sha256 == report.edit.source_sha256
+                        && replace_unique_exact(
+                            &report.edit.source_document,
+                            source_old,
+                            source_new,
+                        )? == report.edit => {}
+                PREVIOUS_ANSWER_EDIT => {
+                    let parent = prior_results.get(parent_id).ok_or_else(invalid)?;
+                    if !parent
+                        .content_plan
+                        .as_ref()
+                        .is_some_and(|plan| plan.required_units.as_slice() == [plan.text.as_str()])
+                        || source.context_sha256 != identity(&Some(parent))?
+                    {
+                        return Err(invalid());
+                    }
+                    revalidate_previous_document_render(
+                        store,
+                        actor,
+                        case,
+                        parent,
+                        None,
+                        "PREVIOUS_OUTPUT_INTEGRITY",
+                        "source document",
+                    )?;
+                    let (_, _, replay) = previous_text_replacement(parent, source_old, source_new)?;
+                    if replay != report {
+                        return Err(invalid());
+                    }
+                }
+                _ => return Err(invalid()),
+            }
+            replace_retained_text(previous, old, new, Some(&report.edit.text))
+        }
+        _ => previous_text_replacement(previous, old, new),
+    }
+}
+
+fn replace_retained_text(
+    previous: &ResultRecord,
+    old: &str,
+    new: &str,
+    body: Option<&str>,
+) -> Result<(String, String, PreviousTextEditArtifact)> {
     if previous.lifecycle != Lifecycle::Commit {
         return Err(failure(
             "MISSING_ACTUAL_RESULT",
@@ -6575,13 +6736,19 @@ pub(crate) fn previous_text_replacement(
     }
     let source_content_plan_sha256 = digest(&canonical(plan)?);
     let source_render_sha256 = digest(&canonical(render)?);
-    let source_text_sha256 = digest(plan.text.as_bytes());
-    let edit = replace_unique_exact(&plan.text, old, new)?;
+    let source_text = body.unwrap_or(&plan.text);
+    let source_text_sha256 = digest(source_text.as_bytes());
+    let edit = replace_unique_exact(source_text, old, new)?;
     Ok((
         source_content_plan_sha256.clone(),
         source_render_sha256.clone(),
         PreviousTextEditArtifact {
-            operation: "PREVIOUS_OUTPUT_REPLACE_EXACT_V1".into(),
+            operation: if body.is_some() {
+                PREVIOUS_DOCUMENT_EDIT
+            } else {
+                PREVIOUS_ANSWER_EDIT
+            }
+            .into(),
             source_result_id: previous.id.clone(),
             source_content_plan_sha256,
             source_render_sha256,
@@ -6592,6 +6759,9 @@ pub(crate) fn previous_text_replacement(
 }
 
 pub(crate) fn previous_text_replacement_lines(artifact: &PreviousTextEditArtifact) -> Vec<String> {
+    if artifact.operation == PREVIOUS_DOCUMENT_EDIT {
+        return vec![artifact.edit.text.clone()];
+    }
     vec![
         "前回の回答で一致した文字列を1箇所置換しました。意味・事実の正確さは検証していません。"
             .into(),

@@ -12143,6 +12143,59 @@ fn natural_previous_answer_edit_consumes_and_chains_actual_rendered_output() {
 }
 
 #[test]
+fn previous_document_edit_uses_the_body_of_a_retained_wrapped_answer() {
+    let scratch = Scratch::new();
+    record(&execute(
+        &scratch.0,
+        "owner",
+        &["文章の「猫」を「犬」に置き換えて:\n猫が町にいます。"],
+    ));
+    let wrapped = record(&execute(
+        &scratch.0,
+        "owner",
+        &["前回の回答の「町」を「村」に置き換えて"],
+    ));
+    assert!(wrapped["text"].as_str().unwrap().contains("意味・事実"));
+    let context = wrapped["id"].as_str().unwrap();
+    let output = scratch.0.join("metadata-only.txt");
+    let denied = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--context",
+                context,
+                "--allow-write",
+                output.to_str().unwrap(),
+                "--output",
+                output.to_str().unwrap(),
+                "前回の文章の「意味」を「概要」に置き換えて",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .contains("PREVIOUS_TEXT_NOT_FOUND")
+    );
+    assert!(!output.exists());
+
+    let replaced = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--context",
+            context,
+            "前回の文章の「村」を「里」に置き換えて",
+        ],
+    ));
+    assert_eq!(replaced["text"], "犬が里にいます。");
+}
+
+#[test]
 fn natural_previous_answer_edit_suspends_for_missing_or_nonunique_literals() {
     let missing = Scratch::new();
     let no_prior = stopped(

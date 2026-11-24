@@ -1099,33 +1099,35 @@ pub(crate) fn candidate_body_observation(
     previous_observation_with_history(store, actor, case, previous, history)
 }
 
-fn explain_web_answer(
+const WEB_ANSWER_EXPLANATION_CONTEXT_INVALID: &str = "WEB_ANSWER_EXPLANATION_CONTEXT_INVALID";
+
+fn invalid_web_answer_context() -> minidora_domain::Error {
+    failure(
+        WEB_ANSWER_EXPLANATION_CONTEXT_INVALID,
+        "前回のWeb回答と保存された検索・取得・採用記録が一致しません。",
+    )
+}
+
+pub(crate) fn verify_committed_web_answer<'a>(
     store: &Store,
     history: &VerifiedCaseHistory<'_>,
-    bundle: &InputBundle,
-    previous: &ResultRecord,
+    previous: &'a ResultRecord,
     original: &InputBundle,
-) -> Result<SearchExplanation> {
+) -> Result<crate::recovery::RetainedWebAnswer<'a>> {
     use web_answer::{ANSWER_NODE, BODY_NODE, LISTING_NODE};
 
-    const CODE: &str = "WEB_ANSWER_EXPLANATION_CONTEXT_INVALID";
-    let invalid = || {
-        failure(
-            CODE,
-            "前回のWeb回答と保存された検索・取得・採用記録が一致しません。",
-        )
-    };
-    validate_search_predecessor(bundle, previous, CODE)?;
-    if history
-        .input_result(&previous.input_id, previous.input_version)?
-        .as_ref()
-        != Some(previous)
+    let invalid = invalid_web_answer_context;
+    if previous.lifecycle != Lifecycle::Commit
+        || history
+            .input_result(&previous.input_id, previous.input_version)?
+            .as_ref()
+            != Some(previous)
         || !history.contains_committed_result(previous)?
     {
         return Err(invalid());
     }
-    let actor = &bundle.request.actor_id;
-    let case = &bundle.request.case_id;
+    let actor = &original.request.actor_id;
+    let case = &original.request.case_id;
     let plan = previous.content_plan.as_ref().ok_or_else(invalid)?;
     let graph_ref = previous.execution_graph_ref.as_ref().ok_or_else(invalid)?;
     let graph: Value = serde_json::from_slice(&store.get_bytes(actor, case, graph_ref)?)?;
@@ -1151,11 +1153,23 @@ fn explain_web_answer(
         case,
         previous,
         Some(answer_ref),
-        CODE,
+        WEB_ANSWER_EXPLANATION_CONTEXT_INVALID,
         "Web answer",
     )?;
+    Ok(proof)
+}
+
+fn explain_web_answer(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    original: &InputBundle,
+) -> Result<SearchExplanation> {
+    validate_search_predecessor(bundle, previous, WEB_ANSWER_EXPLANATION_CONTEXT_INVALID)?;
+    let proof = verify_committed_web_answer(store, history, previous, original)?;
     let [listing, body] = previous.evidence.as_slice() else {
-        return Err(invalid());
+        return Err(invalid_web_answer_context());
     };
     let units = proof
         .answer

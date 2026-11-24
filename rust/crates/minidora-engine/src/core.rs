@@ -5976,16 +5976,28 @@ impl Engine {
                                 Some(input::SourceContext::WebBodyQuestion)
                             }
                             Guarantee::Hypothesis
-                                if input::is_direct_body_question_input(&source)
-                                    || crate::text_summary::legacy_body_question_retrieval(
-                                        &self.store,
-                                        &source,
-                                        &state.prior_results,
-                                        None,
-                                    )?
-                                    .is_some() =>
+                                if input::is_direct_body_question_input(&source) =>
                             {
                                 Some(input::SourceContext::DirectBodyQuestion)
+                            }
+                            Guarantee::Hypothesis => {
+                                crate::text_summary::legacy_body_question_source(
+                                    &self.store,
+                                    &source,
+                                    &state.prior_results,
+                                    None,
+                                )?
+                                .and_then(|(_, original)| {
+                                    match original.meaning.intent {
+                                        Intent::AskWeb { .. } => {
+                                            Some(input::SourceContext::WebBodyQuestion)
+                                        }
+                                        Intent::Retrieve { .. } => {
+                                            Some(input::SourceContext::DirectBodyQuestion)
+                                        }
+                                        _ => None,
+                                    }
+                                })
                             }
                             _ => None,
                         };
@@ -6471,7 +6483,14 @@ impl Engine {
                 );
             }
             let (content_ref, render_ref, artifact) =
-                match crate::document::previous_text_replacement(prior, old, new) {
+                match crate::document::previous_text_replacement_for_bundle(
+                    &self.store,
+                    &bundle,
+                    &state.prior_results,
+                    prior,
+                    old,
+                    new,
+                ) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {

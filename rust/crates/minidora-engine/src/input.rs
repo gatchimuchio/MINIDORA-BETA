@@ -18,6 +18,8 @@ pub(crate) const NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v187-named-derived-relation-query";
 pub(crate) const DERIVED_RELATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v191-derived-relation-followup";
+pub(crate) const PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION: &str =
+    "declarative-ja-v193-previous-document-text-replacement";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
@@ -618,6 +620,11 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::DerivedRelationFollowup => None,
     });
     let parser_version = match &intent {
+        Intent::ReplacePreviousText { .. }
+            if is_previous_document_text_replacement(&request.text) =>
+        {
+            PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
+        }
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
@@ -4003,6 +4010,11 @@ fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
         }
     }
     Ok(None)
+}
+
+pub(crate) fn is_previous_document_text_replacement(text: &str) -> bool {
+    let text = text.trim_start();
+    text.starts_with("前回の文章の") || text.starts_with("直前の文章の")
 }
 
 fn previous_text_replacement_intent(text: &str) -> Result<Option<Intent>> {

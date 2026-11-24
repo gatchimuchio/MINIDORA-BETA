@@ -4873,8 +4873,20 @@ fn verify_previous_text_edit_context(
             "the referenced previous output is not the same committed result",
         ));
     }
+    if bundle.meaning.parser_version
+        == crate::input::PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
+    {
+        verify_registered_input(store, bundle, "RECOVERY_PREVIOUS_TEXT_MISMATCH")?;
+    }
     let (source_content_ref, source_render_ref, artifact) =
-        crate::document::previous_text_replacement(prior, old, new)?;
+        crate::document::previous_text_replacement_for_bundle(
+            store,
+            bundle,
+            &state.prior_results,
+            prior,
+            old,
+            new,
+        )?;
     let source_content = prior.content_plan.as_ref().ok_or_else(|| {
         failure(
             "RECOVERY_PREVIOUS_TEXT_MISMATCH",
