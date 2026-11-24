@@ -4,7 +4,7 @@
 
 The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.11`; they are not a silent migration of the beta's saved data or duplicate-input guarantees. Alpha 11 is incompatible with alpha 7 through alpha 10 Rust store metadata: ordinary opens return `SCHEMA_MISMATCH` and leave legacy files unchanged. The explicit `migrate` command verifies and upgrades alpha 7, alpha 8, alpha 9 or alpha 10 metadata while preserving old immutable records. Alpha 11 adds versioned Core condition semantics; legacy `condition_refs` remain present, and references without definitions evaluate to `UNKNOWN`.
 
-**Current construction authority (2026-11-19, D3-C):** [Japanese-base specification, schedule, Codex order and version adoption](audit/construction/MB-BUILD-20261119-D3-C/README.md), with [repository-wide `AGENTS.md`](../AGENTS.md) and the prior [R2 logical contract](../docs/redesign/01_SYSTEM_SPECIFICATION.md). The R4 (2026-11-15) and 2026-11-13/14 construction sets and B01–B56 are preserved historical sources, not the active work order. **At E1 build one integrated native Core K1–K7 before E2 tests all seven CORE-G01–CORE-G07 success predicates on the same version.** These construction gate IDs are distinct from R2 source/evidence requirements C01–C13. E3/E4 connect the minimum input/output; E5 proves T01–T03 on the ordinary user route before specialist expansion. E6 closes all named and newly discovered requirements and every inherited source's semantics/consumer path; the historical D1 adoption record, retained in D2-LLM, changes the R2 §20 inspection timing, not its required coverage. E7 systematic QC and E8 independent QA follow whole-system construction. Scoped component tests or seven recorded observations are not gate acceptance. The detailed [implementation status](audit/IMPLEMENTATION_STATUS.md) retains the observed gaps.
+**Current BUILD authority (2026-11-24):** [BUILD-v4 requirements, design, development schedule and concise Codex order](audit/construction/MB-BUILD-20261124-V4-BUILD/README.md), with [root `AGENTS.md`](../AGENTS.md). The current objective is a **standalone standard engine beta**, not a product release or a consumer-specific adapter. Reuse the existing single Core K1–K7 and normal input→Core→output mechanism; repair only the actual BUILD blockers, preserve safe durable-state/effect handling, create a runnable artifact, and fix the public API/schema/dependency/revision and known-limits identity as one baseline. Build/launch/actual I/O observation is part of construction. **There is no compulsory QC, QA, independent test, GPQA, performance, Windows/8GB or cross-OS acceptance stage in BUILD-v4.** The previous [D2/D3-C](audit/construction/MB-BUILD-20261119-D3-C/README.md) E0–E8 contract, historic Core seven-gate and T01–T03 records, all 93 prior obligations and source/test censuses remain dated reference evidence; they do not define the active BUILD completion gate. [Implementation status](audit/IMPLEMENTATION_STATUS.md) records historical local observations without declaring the current code completed.
 
 ## Build in the cloud workspace
 
@@ -20,10 +20,7 @@ cd /workspace/MINIDORA-BETA/rust
 rustc --version --verbose
 cargo --version
 cargo metadata --locked --format-version 1
-cargo fmt --all -- --check
 cargo check --workspace --all-targets --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
 cargo build --workspace --locked
 
 minidora_bin="$CARGO_TARGET_DIR/debug/minidora-rust"
@@ -34,7 +31,7 @@ mkdir -p /workspace/.minidora-cloud
 
 `Cargo.lock` fixes the dependency resolution. If the toolchain is absent, provision the official Rust toolchain with normal certificate/checksum verification before running these commands. Keep the environment's proxy and certificate trust. No API key or external provider is needed for the local arithmetic, relations, mathematical functions or file-output examples.
 
-These commands are the reproducible verification procedure. The source alone does not establish that every command or end-to-end scenario passed; current-run evidence must identify the exact implementation revision, command and result.
+These commands establish the Rust toolchain, compile the workspace and locate the runnable entry for **BUILD**. They are not independent quality tests or claims of QC/QA acceptance. Only report the command/OS/revision and actual execution evidence observed. Additional quality or benchmark work requires a separate explicit request.
 
 ## Arithmetic, actual-result context and persistence
 
