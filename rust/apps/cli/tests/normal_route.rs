@@ -10743,6 +10743,34 @@ fn conjunctive_relation_questions_query_every_clause_and_keep_their_proofs() {
 }
 
 #[test]
+fn repeated_pronoun_questions_reuse_the_committed_multi_premise_subject() {
+    let scratch = Scratch::new();
+    let case = "repeated-pronoun-context";
+    let run = |text: &str| record(&execute_in_case(&scratch.0, "owner", case, &[text]));
+    let bird = run("[scope=物語]ミナは鳥です");
+    run("[scope=物語]ミナは青です");
+    run("もし[scope=物語]Xは鳥かつXは青なら[scope=物語]Xは動物");
+
+    let named = run("[scope=物語]ミナは動物ですか");
+    assert_eq!(named["guarantee"], "DERIVED");
+    for _ in 0..3 {
+        let derived = run("それは動物ですか");
+        assert_eq!(derived["text"], named["text"]);
+        assert_eq!(derived["dependencies"], named["dependencies"]);
+    }
+
+    let answer = run("それは鳥ですか");
+    assert_eq!(answer["guarantee"], "USER_PREMISE");
+    assert_eq!(answer["dependencies"], bird["dependencies"]);
+    assert!(
+        answer["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは鳥である（範囲: 物語）")
+    );
+}
+
+#[test]
 fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context() {
     let scratch = Scratch::new();
     let rule = record(&execute(

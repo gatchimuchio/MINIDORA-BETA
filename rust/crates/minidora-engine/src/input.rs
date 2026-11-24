@@ -16,6 +16,8 @@ pub(crate) const CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v181-contextual-assertion-relation-query";
 pub(crate) const NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v187-named-derived-relation-query";
+pub(crate) const DERIVED_RELATION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v191-derived-relation-followup";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
@@ -229,6 +231,7 @@ pub(crate) enum SourceContext {
     PartialWebCandidate,
     ContextualAssertionRelationQuery,
     NamedDerivedRelationQuery,
+    DerivedRelationFollowup,
     Summary,
 }
 
@@ -237,6 +240,7 @@ pub(crate) fn is_registered_previous_relation_query(parser_version: &str) -> boo
         parser_version,
         CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
             | NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
+            | DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
     )
 }
 
@@ -610,7 +614,8 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::WebBodyQuestion
         | SourceContext::PartialWebCandidate
         | SourceContext::ContextualAssertionRelationQuery
-        | SourceContext::NamedDerivedRelationQuery => None,
+        | SourceContext::NamedDerivedRelationQuery
+        | SourceContext::DerivedRelationFollowup => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
@@ -664,6 +669,11 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
+        }
+        Intent::AskPreviousRelation { .. }
+            if matches!(source_context, Some(SourceContext::DerivedRelationFollowup)) =>
+        {
+            DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
         }
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             guarded_relation_rule_parser(&intent).unwrap_or(PARSER_VERSION)

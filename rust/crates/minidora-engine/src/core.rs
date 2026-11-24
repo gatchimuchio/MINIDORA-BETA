@@ -5830,6 +5830,18 @@ impl Engine {
                 );
             }
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
+                && let Some(prior) = previous
+                && previous_derived_followup_question(&self.store, actor, &request.case_id, prior)?
+                    .is_some()
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::DerivedRelationFollowup),
+                );
+            }
+            if has_compute_budget
                 && matches!(
                     bundle.meaning.intent,
                     Intent::FetchPreviousSearchCandidate { .. }
@@ -7042,8 +7054,9 @@ impl Engine {
             Intent::AskPreviousRelation { .. }
                 | Intent::AssertPreviousRelation { .. }
                 | Intent::ExplainPrevious
-        ) && let Some(prior) =
-            previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+        ) && bundle.meaning.parser_version
+            != input::DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
+            && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
             && let Some((_, prior_bundle)) = self.store.get_input_bundle(
                 actor,
                 &request.case_id,
@@ -13689,36 +13702,45 @@ pub(crate) fn resolve_previous_relation_for_bundle(
         ));
     }
     let request = &bundle.request;
-    if bundle.meaning.context_result_ref.as_ref() != Some(&previous.id)
-        || request
-            .context_ref
-            .as_ref()
-            .is_some_and(|id| id != &previous.id)
-        || prior_results.get(&previous.id) != Some(previous)
-        || bundle.context_sha256 != identity(&Some(previous))?
-    {
+    if !registered_relation_context_matches(bundle, prior_results, previous)? {
         return Err(invalid());
     }
-    if parser_version == input::NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION {
-        let anchor = previous_named_derived_relation_source(
-            store,
-            &request.actor_id,
-            &request.case_id,
-            previous,
-        )?
-        .ok_or_else(invalid)?;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let derived_anchor = match parser_version.as_str() {
+        input::NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION => Some((
+            previous_named_derived_relation_source(store, actor, case, previous)?
+                .ok_or_else(invalid)?,
+            false,
+        )),
+        input::DERIVED_RELATION_FOLLOWUP_PARSER_VERSION => {
+            let followup = previous_derived_followup_question(store, actor, case, previous)?
+                .ok_or_else(invalid)?;
+            verify_named_origin_for_derived_followup(
+                store,
+                prior_results,
+                &followup,
+                memory,
+                remaining_actions,
+            )?;
+            Some((followup.proposition, followup.explain))
+        }
+        _ => None,
+    };
+    if let Some((anchor, explain)) = derived_anchor {
         if explicit_scope
             .as_ref()
             .is_some_and(|scope| scope != &anchor.scope)
         {
             return Ok(PreviousRelationResolution::Missing);
         }
-        return resolve_named_derived_relation_context(
+        return resolve_derived_relation_context(
             store,
             request,
             previous,
             memory,
             &anchor,
+            explain,
             proposition,
             remaining_actions,
         );
@@ -13744,6 +13766,23 @@ pub(crate) fn resolve_previous_relation_for_bundle(
         scope: anchor.scope.clone(),
         ..proposition.clone()
     }))
+}
+
+fn registered_relation_context_matches(
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+) -> Result<bool> {
+    Ok(
+        bundle.meaning.context_result_ref.as_ref() == Some(&previous.id)
+            && bundle
+                .request
+                .context_ref
+                .as_ref()
+                .is_none_or(|id| id == &previous.id)
+            && prior_results.get(&previous.id) == Some(previous)
+            && bundle.context_sha256 == identity(&Some(previous))?,
+    )
 }
 
 fn previous_named_derived_relation_source(
@@ -13828,12 +13867,153 @@ fn previous_named_derived_direct_premises<'a>(
     })
 }
 
-fn resolve_named_derived_relation_context(
+struct PreviousDerivedFollowup {
+    proposition: Proposition,
+    explain: bool,
+    bundle: InputBundle,
+}
+
+fn previous_derived_followup_question(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<PreviousDerivedFollowup>> {
+    let Some(revision) = previous.actor_memory_revision else {
+        return Ok(None);
+    };
+    if previous.lifecycle != Lifecycle::Commit
+        || previous.guarantee != Guarantee::Derived
+        || previous
+            .dependencies
+            .iter()
+            .filter(|id| id.starts_with("fact:"))
+            .take(3)
+            .count()
+            < 3
+    {
+        return Ok(None);
+    }
+    let Some((_, registered)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        registered.meaning.parser_version.as_str(),
+        input::NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
+            | input::DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
+    ) {
+        return Ok(None);
+    }
+    let invalid = || {
+        failure(
+            "PRIOR_INPUT_RESULT_MISMATCH",
+            "代名詞が参照する関係回答と確定時の入力・記憶版を照合できません。",
+        )
+    };
+    let Intent::AskPreviousRelation {
+        proposition,
+        explain,
+        explicit_scope,
+    } = &registered.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    if identity(&registered.request)? != previous.id {
+        return Err(invalid());
+    }
+    // Recover the subject and scope from this answer's own proof, keeping the
+    // remaining proposition fields from its registered question.
+    let original_memory = store
+        .load_memory_revision(actor, revision)?
+        .ok_or_else(invalid)?;
+    let mut premises = previous_named_derived_direct_premises(&original_memory, previous);
+    let (Some(first), Some(second)) = (premises.next(), premises.next()) else {
+        return Ok(None);
+    };
+    let anchor = &first.proposition;
+    if explicit_scope
+        .as_ref()
+        .is_some_and(|scope| scope != &anchor.scope)
+        || std::iter::once(second).chain(premises).any(|fact| {
+            fact.proposition.subject != anchor.subject || fact.proposition.scope != anchor.scope
+        })
+    {
+        return Ok(None);
+    }
+    Ok(Some(PreviousDerivedFollowup {
+        proposition: Proposition {
+            subject: anchor.subject.clone(),
+            scope: anchor.scope.clone(),
+            ..proposition.clone()
+        },
+        explain: *explain,
+        bundle: registered,
+    }))
+}
+
+fn verify_named_origin_for_derived_followup(
+    store: &Store,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    followup: &PreviousDerivedFollowup,
+    memory: &MemoryState,
+    remaining_actions: &mut u32,
+) -> Result<()> {
+    let bundle = &followup.bundle;
+    if bundle.meaning.parser_version != input::NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION {
+        return Ok(());
+    }
+    // v187 still binds to its named question. A v191 result already carries
+    // its own verified proof, so longer chains stop at the immediately prior result.
+    let changed = || {
+        failure(
+            "CONTEXT_PROOF_CHANGED",
+            "前回の関係回答で使った主語と根拠を、現在の記憶で再確認できません。",
+        )
+    };
+    let original = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| prior_results.get(id))
+        .ok_or_else(changed)?;
+    if !registered_relation_context_matches(bundle, prior_results, original)? {
+        return Err(changed());
+    }
+    let request = &bundle.request;
+    let anchor = previous_named_derived_relation_source(
+        store,
+        &request.actor_id,
+        &request.case_id,
+        original,
+    )?
+    .ok_or_else(changed)?;
+    let resolution = resolve_derived_relation_context(
+        store,
+        request,
+        original,
+        memory,
+        &anchor,
+        false,
+        &followup.proposition,
+        remaining_actions,
+    )?;
+    match resolution {
+        PreviousRelationResolution::Resolved(resolved) if resolved == followup.proposition => {
+            Ok(())
+        }
+        _ => Err(changed()),
+    }
+}
+
+fn resolve_derived_relation_context(
     store: &Store,
     request: &RequestEnvelope,
     previous: &ResultRecord,
     memory: &MemoryState,
     anchor: &Proposition,
+    explain: bool,
     question: &Proposition,
     remaining_actions: &mut u32,
 ) -> Result<PreviousRelationResolution> {
@@ -13848,16 +14028,12 @@ fn resolve_named_derived_relation_context(
     *remaining_actions = remaining_actions
         .checked_sub(answer.steps)
         .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
-    let contradicted = match answer.status.as_str() {
-        "SUPPORTED" => false,
-        "CONTRADICTED" => true,
-        _ => return Err(proof_changed()),
-    };
-    let expected_unit = relation_answer_surface(anchor, contradicted);
+    let expected_units = previous_relation_success_units(memory, anchor, &answer, explain)
+        .ok_or_else(proof_changed)?;
     if relations::answer_dependencies(&answer) != previous.dependencies
         || relations::answer_guarantee(&answer) != previous.guarantee
         || !previous.content_plan.as_ref().is_some_and(|plan| {
-            plan.required_units.as_slice() == std::slice::from_ref(&expected_unit)
+            plan.required_units == expected_units
                 && plan.dependencies.starts_with(&previous.dependencies)
         })
     {
