@@ -28,9 +28,32 @@ Windowsでは同じクローンのルートで `start-minidora.cmd` を実行す
 
 ### 標準API
 
-Rustのconsumerは同じソースの `minidora-engine` と `minidora-domain` を使用する。`Engine::capabilities()` は `minidora-native/v1` のAPI版、保存schema、実装済みの提供能力と必要権限を返す。CLIでは `minidora-rust capabilities --json` から同じ情報を得られる。`Engine::execute(actor, RequestEnvelope)` で実行し、`ResultRecord` の `lifecycle`、`reason`、本文、出典、受領を利用する。`engine.case_status(actor, case)` は同じactorの最新結果と、採用済みの実モデル版を返す。 [Nativeの呼出例](#標準の呼出方法)
+Rustのconsumerは同じソースの `minidora-engine` と `minidora-domain` を使用する。`Engine::capabilities()` は `minidora-native/v1` のAPI版、保存schema、実装済みの提供能力と必要権限を返す。CLIでは `minidora-rust capabilities --json` から同じ情報を得られる。`Engine::execute(actor, RequestEnvelope)` で実行し、`ResultRecord` の `lifecycle`、`reason`、本文、出典、受領を利用する。`engine.case_status(actor, case)` は同じactorの最新結果と、採用済みの実モデル版を返す。
 
-## 過去のBUILD-v4限定固定記録（2026-11-24／STANDARD BETA v5は未完成）
+```rust
+use minidora_domain::{RequestEnvelope, Result, ResultRecord};
+use minidora_engine::Engine;
+
+fn greet(engine: &mut Engine, actor: &str, input_id: &str) -> Result<ResultRecord> {
+    engine.execute(actor, RequestEnvelope::new("demo", input_id, actor, "こんにちは"))
+}
+```
+
+### v5 Linux実行基線（2026-11-24 JST）
+
+| 固定対象 | 識別情報 |
+|---|---|
+| 実行コードと起動手順 | Git `fea2e0c9f7ad82fa492a2c7fb07d1a22090b6be6` |
+| パッケージと契約 | `0.7.0-alpha.11`、API `minidora-native/v1`、保存schema `minidora-rust/0.7.0-alpha.11`。採用した模型の版は結果の `ContentPlan` に保存する。 |
+| ビルド | Debian 13、`x86_64-unknown-linux-gnu`、Rust/Cargo `1.99.1`。`CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0` を設定し、上記ランチャーが `cargo run --locked` でビルドした。SQLite同梱、ネイティブTLSはシステムのOpenSSLを使用。 |
+| 依存のSHA-256 | `Cargo.lock` は `b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc`。`rust-toolchain.toml` は `d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33`。 |
+| 実行物 | 作業環境の `/workspace/.minidora-cloud/build-v5-fea2e0c/minidora-rust`。SHA-256は `159f2e1f110175bfdc7b2b7c00de3092da7ac80fb1a656e5504f64ae8136b6b6`。 |
+
+GitHubの新規クローンをLinuxで起動し、一つの対話で、日本語の挨拶と追問、保存規則からの推論、算術、JSON表、コード生成と説明を確認した。Web許可を切った発話は停止し、再度許可した発話では検索一覧・富士山の記事本文を実取得し、本文が「標高」と記した `3775.56 m` を `94389/25000 km` に換算した。回答と実ファイルの782バイト、保存受領、取消後の作用IDを照合し、再照合でファイルが再書込されないことを確認した。再起動確認で観測用の20秒制限に達した発話は取消で閉じ、同じ会話を再開して保存規則を別の対象に適用した。既存のUNKNOWN復旧の局所確認も実施した。
+
+直接観測の対象はLinux x86_64。Windows起動スクリプトを同じソースに収録し、Windows実機起動は未実施。日本語の入力は対応文型に限られ、Web回答は許可された日本語Wikipediaの取得本文と照合できる内容に範囲を限る。提供機能と制限は `capabilities --json` に記載している。
+
+## 過去のBUILD-v4限定固定記録（2026-11-24）
 
 以下は`50f6514`で記録した限定的なLinuxビルド、算術・Native/CLI、保存・許可付きローカルファイル出力の観測であり、通常日本語チャット、多ターン記憶、自律Web候補→実本文取得、専門Portの対話統合、clone後の簡易起動が一体成立したという観測ではない。v5の完成判定には使用できない。
 
