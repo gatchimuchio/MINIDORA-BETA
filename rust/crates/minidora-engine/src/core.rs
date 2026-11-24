@@ -5394,17 +5394,11 @@ impl Engine {
         // loaded immutable snapshot as the safe fallback for this request.
         let resolution =
             resolve_previous_relation_proposition(&memory, previous, proposition, explicit_scope);
-        let answer = match &resolution {
-            PreviousRelationResolution::Resolved(resolved) => {
-                relations::query(&memory, resolved, max_actions).map(Some)
-            }
-            PreviousRelationResolution::Missing | PreviousRelationResolution::Ambiguous => Ok(None),
-        };
-        Ok(PreviousRelationQuery {
-            resolution: Some(resolution),
+        Ok(PreviousRelationQuery::from_snapshot(
             memory,
-            answer,
-        })
+            resolution,
+            max_actions,
+        ))
     }
 
     fn indexed_relation_objects_answer(
@@ -5781,6 +5775,24 @@ impl Engine {
             input::seal_with_source_context(&request, previous, implicit_source_context)
         };
         let sealed = sealed.and_then(|bundle| {
+            if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
+                && let Some(prior) = previous
+                && previous_assertion_context(
+                    &self.store,
+                    actor,
+                    &request.case_id,
+                    &state.prior_results,
+                    prior,
+                )?
+                .is_some_and(|assertion| assertion.context.is_some())
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::ContextualAssertionRelationQuery),
+                );
+            }
             if has_compute_budget
                 && matches!(
                     bundle.meaning.intent,
@@ -6939,6 +6951,46 @@ impl Engine {
                 &format!("{ACTION_BUDGET_RESIDUALS} {:?}", graph.residuals()),
             );
         }
+        let contextual_query_memory = if matches!(
+            goal.intent,
+            Intent::AskPreviousRelation { .. }
+                | Intent::AssertPreviousRelation { .. }
+                | Intent::ExplainPrevious
+        ) && let Some(prior) =
+            previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+            && let Some((_, prior_bundle)) = self.store.get_input_bundle(
+                actor,
+                &request.case_id,
+                &prior.input_id,
+                prior.input_version,
+            )?
+            && prior_bundle.meaning.parser_version
+                == input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+        {
+            let memory = self.store.load_memory(actor)?;
+            match crate::recovery::verify_current_contextual_assertion_relation_result(
+                &self.store,
+                &state,
+                prior,
+                &memory,
+                request.budget.max_actions,
+                &prior_bundle,
+            ) {
+                Ok(()) => Some(memory),
+                Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                    return self.stop(&mut state, Lifecycle::Suspend, "RESOURCE_LIMIT", &message);
+                }
+                Err(Error::Contract { .. }) => {
+                    return self.stop(
+                        &mut state, Lifecycle::Suspend, "CONTEXT_PROOF_CHANGED",
+                        "前回の関係回答で使った代名詞の前提と根拠を、現在の記憶で再確認できません。",
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
         let mut units = Vec::new();
         let mut approved_surfaces = None;
         let mut report_goal_content = None;
@@ -8523,7 +8575,10 @@ impl Engine {
                     proof_dependencies: expected_proof_dependencies,
                 }) = prior_relation.as_ref()
                 {
-                    let memory = self.store.load_memory(actor)?;
+                    let memory = match contextual_query_memory {
+                        Some(memory) => memory,
+                        None => self.store.load_memory(actor)?,
+                    };
                     result.actor_memory_revision = Some(memory.revision);
                     let answer =
                         relations::query(&memory, proposition, request.budget.max_actions)?;
@@ -9856,7 +9911,10 @@ impl Engine {
                         "前提追加の文脈参照が直前の同一ケース確定結果と一致しません。",
                     );
                 }
-                let mut memory = self.store.load_memory(actor)?;
+                let mut memory = match contextual_query_memory {
+                    Some(memory) => memory,
+                    None => self.store.load_memory(actor)?,
+                };
                 let previous_assertion = match previous_contextual_assertion_fact(
                     &self.store,
                     actor,
@@ -10509,13 +10567,53 @@ impl Engine {
                     );
                 }
 
-                let query = self.active_previous_relation_query(
-                    actor,
-                    prior,
-                    proposition,
-                    explicit_scope.as_deref(),
-                    request.budget.max_actions,
-                )?;
+                let query =
+                    if bundle.meaning.parser_version
+                        == input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+                    {
+                        let memory = self.store.load_memory(actor)?;
+                        let resolution = match resolve_previous_relation_for_bundle(
+                            &self.store,
+                            &bundle,
+                            &state.prior_results,
+                            prior,
+                            &memory,
+                        ) {
+                            Ok(resolution) => resolution,
+                            Err(Error::Contract { code, message })
+                                if matches!(
+                                    code.as_str(),
+                                    "CONTEXT_PROOF_CHANGED" | "PRIOR_INPUT_RESULT_MISMATCH"
+                                ) =>
+                            {
+                                return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                            }
+                            Err(error) => return Err(error),
+                        };
+                        PreviousRelationQuery::from_snapshot(
+                            memory,
+                            resolution,
+                            request.budget.max_actions,
+                        )
+                    } else {
+                        let query = self.active_previous_relation_query(
+                            actor,
+                            prior,
+                            proposition,
+                            explicit_scope.as_deref(),
+                            request.budget.max_actions,
+                        )?;
+                        if contextual_query_memory
+                            .as_ref()
+                            .is_some_and(|memory| memory.revision != query.memory.revision)
+                        {
+                            return self.stop(
+                            &mut state, Lifecycle::Suspend, "CONTEXT_PROOF_CHANGED",
+                            "文脈の照合中に記憶が更新されました。新しい問いで確認してください。",
+                        );
+                        }
+                        query
+                    };
                 result.actor_memory_revision = Some(query.memory.revision);
                 state.result = Some(result.clone());
                 let answer = match query.answer {
@@ -13260,6 +13358,26 @@ pub(crate) struct PreviousRelationQuery {
     pub(crate) answer: Result<Option<relations::QueryOutcome>>,
 }
 
+impl PreviousRelationQuery {
+    fn from_snapshot(
+        memory: MemoryState,
+        resolution: PreviousRelationResolution,
+        max_actions: u32,
+    ) -> Self {
+        let answer = match &resolution {
+            PreviousRelationResolution::Resolved(proposition) => {
+                relations::query(&memory, proposition, max_actions).map(Some)
+            }
+            PreviousRelationResolution::Missing | PreviousRelationResolution::Ambiguous => Ok(None),
+        };
+        Self {
+            resolution: Some(resolution),
+            memory,
+            answer,
+        }
+    }
+}
+
 pub(crate) enum PreviousRelationResolution {
     Resolved(Proposition),
     Missing,
@@ -13403,6 +13521,69 @@ pub(crate) fn resolve_previous_relation_proposition(
             .unwrap_or_else(|| anchor.proposition.scope.clone()),
         ..proposition.clone()
     })
+}
+
+pub(crate) fn resolve_previous_relation_for_bundle(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+) -> Result<PreviousRelationResolution> {
+    let invalid = || {
+        failure(
+            "PRIOR_INPUT_RESULT_MISMATCH",
+            "代名詞が参照する確定済みの前提と、封印された入力を照合できません。",
+        )
+    };
+    let Intent::AskPreviousRelation {
+        proposition,
+        explicit_scope,
+        ..
+    } = &bundle.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    if bundle.meaning.parser_version != input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION {
+        return Ok(resolve_previous_relation_proposition(
+            memory,
+            previous,
+            proposition,
+            explicit_scope.as_deref(),
+        ));
+    }
+    let request = &bundle.request;
+    if bundle.meaning.context_result_ref.as_ref() != Some(&previous.id)
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+        || prior_results.get(&previous.id) != Some(previous)
+        || bundle.context_sha256 != identity(&Some(previous))?
+    {
+        return Err(invalid());
+    }
+    let assertion = previous_assertion_context(
+        store,
+        &request.actor_id,
+        &request.case_id,
+        prior_results,
+        previous,
+    )?
+    .filter(|assertion| assertion.context.is_some())
+    .ok_or_else(invalid)?;
+    let anchor = &assertion.active_fact(memory)?.proposition;
+    if explicit_scope
+        .as_ref()
+        .is_some_and(|scope| scope != &anchor.scope)
+    {
+        return Ok(PreviousRelationResolution::Missing);
+    }
+    Ok(PreviousRelationResolution::Resolved(Proposition {
+        subject: anchor.subject.clone(),
+        scope: anchor.scope.clone(),
+        ..proposition.clone()
+    }))
 }
 
 pub(crate) fn previous_relation_success_units(

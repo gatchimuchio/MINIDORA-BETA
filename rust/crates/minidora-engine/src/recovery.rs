@@ -28,6 +28,7 @@ use crate::{
 };
 use minidora_domain::*;
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
@@ -301,18 +302,108 @@ fn verify_saved_previous_relation_query_context(
     else {
         return Ok(());
     };
+    if !matches!(
+        prior_bundle.meaning.intent,
+        Intent::AskPreviousRelation { .. }
+    ) {
+        return Ok(());
+    }
+    verify_saved_previous_relation_query_proof(
+        store,
+        state,
+        previous,
+        &prior_bundle,
+        None,
+        goal.budget.max_actions,
+    )?;
+    if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none()
+        && (result.dependencies != [previous.id.clone()]
+            || result.guarantee != previous.guarantee
+            || result.calculation.is_some()
+            || plan.required_units != [previous.text.clone()]
+            || plan.text != result.text
+            || result.text != previous.text
+            || plan.guarantee != result.guarantee
+            || plan.dependencies.get(..result.dependencies.len())
+                != Some(result.dependencies.as_slice()))
+    {
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the explanation does not preserve the exact saved AskPreviousRelation result",
+        ));
+    }
+    Ok(())
+}
+
+fn is_contextual_assertion_relation_query(bundle: &InputBundle) -> bool {
+    bundle.meaning.parser_version
+        == crate::input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+}
+
+fn load_contextual_assertion_relation_input(
+    store: &Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+) -> Result<Option<InputBundle>> {
+    Ok(store
+        .get_input_bundle(
+            &state.actor_id,
+            &state.case_id,
+            &previous.input_id,
+            previous.input_version,
+        )?
+        .map(|(_, bundle)| bundle)
+        .filter(is_contextual_assertion_relation_query))
+}
+
+pub(crate) fn verify_current_contextual_assertion_relation_result(
+    store: &Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+    max_actions: u32,
+    prior_bundle: &InputBundle,
+) -> Result<()> {
+    if !is_contextual_assertion_relation_query(prior_bundle) {
+        return Ok(());
+    }
+    verify_saved_previous_relation_query_proof(
+        store,
+        state,
+        previous,
+        prior_bundle,
+        Some(memory),
+        max_actions,
+    )
+}
+
+fn verify_saved_previous_relation_query_proof(
+    store: &Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+    prior_bundle: &InputBundle,
+    current_memory: Option<&MemoryState>,
+    max_actions: u32,
+) -> Result<()> {
+    let actor = &state.actor_id;
+    let case = &state.case_id;
     let Intent::AskPreviousRelation {
         proposition,
         explain,
         explicit_scope,
     } = &prior_bundle.meaning.intent
     else {
-        return Ok(());
+        return Err(failure(
+            "RECOVERY_CONTEXT_PROOF_CHANGED",
+            "the saved contextual relation result no longer has a sealed relation question",
+        ));
     };
     if previous.lifecycle != Lifecycle::Commit
         || previous.calculation.is_some()
-        || prior_bundle.request.actor_id != actor
-        || prior_bundle.request.case_id != case
+        || prior_bundle.request.input_id != previous.input_id
+        || prior_bundle.request.input_version != previous.input_version
+        || &prior_bundle.request.actor_id != actor
+        || &prior_bundle.request.case_id != case
         || identity(&prior_bundle.request)? != previous.id
     {
         return Err(failure(
@@ -351,8 +442,8 @@ fn verify_saved_previous_relation_query_context(
             "the saved AskPreviousRelation anchor is not bound to its sealed input identity",
         ));
     };
-    if anchor_bundle.request.actor_id != actor
-        || anchor_bundle.request.case_id != case
+    if &anchor_bundle.request.actor_id != actor
+        || &anchor_bundle.request.case_id != case
         || identity(&anchor_bundle.request)? != anchor.id
     {
         return Err(failure(
@@ -394,12 +485,13 @@ fn verify_saved_previous_relation_query_context(
             "the saved AskPreviousRelation has no retained actor-memory revision",
         )
     })?;
-    let original_resolved = match crate::core::resolve_previous_relation_proposition(
-        &original_memory,
+    let original_resolved = match crate::core::resolve_previous_relation_for_bundle(
+        store,
+        prior_bundle,
+        &state.prior_results,
         anchor,
-        proposition,
-        explicit_scope.as_deref(),
-    ) {
+        &original_memory,
+    )? {
         crate::core::PreviousRelationResolution::Resolved(value) => value,
         crate::core::PreviousRelationResolution::Missing
         | crate::core::PreviousRelationResolution::Ambiguous => {
@@ -436,14 +528,19 @@ fn verify_saved_previous_relation_query_context(
         ));
     }
 
-    let current = crate::core::indexed_previous_relation_query_from_store(
-        store,
-        actor,
-        anchor,
-        proposition,
-        explicit_scope.as_deref(),
-        goal.budget.max_actions,
-    )?;
+    let current =
+        if current_memory.is_none() && !is_contextual_assertion_relation_query(prior_bundle) {
+            crate::core::indexed_previous_relation_query_from_store(
+                store,
+                actor,
+                anchor,
+                proposition,
+                explicit_scope.as_deref(),
+                max_actions,
+            )?
+        } else {
+            None
+        };
     let (current_memory, current_resolved, current_answer) = if let Some(query) = current {
         let resolved = match query.resolution {
             Some(crate::core::PreviousRelationResolution::Resolved(value)) => value,
@@ -464,15 +561,19 @@ fn verify_saved_previous_relation_query_context(
                 "the saved AskPreviousRelation has no supported or contradicted result at the current head",
             )
         })?;
-        (query.memory, resolved, answer)
+        (Cow::Owned(query.memory), resolved, answer)
     } else {
-        let memory = store.load_memory(actor)?;
-        let resolved = match crate::core::resolve_previous_relation_proposition(
-            &memory,
+        let memory = match current_memory {
+            Some(memory) => Cow::Borrowed(memory),
+            None => Cow::Owned(store.load_memory(actor)?),
+        };
+        let resolved = match crate::core::resolve_previous_relation_for_bundle(
+            store,
+            prior_bundle,
+            &state.prior_results,
             anchor,
-            proposition,
-            explicit_scope.as_deref(),
-        ) {
+            &memory,
+        )? {
             crate::core::PreviousRelationResolution::Resolved(value) => value,
             crate::core::PreviousRelationResolution::Missing
             | crate::core::PreviousRelationResolution::Ambiguous => {
@@ -482,7 +583,7 @@ fn verify_saved_previous_relation_query_context(
                 ));
             }
         };
-        let answer = crate::relations::query(&memory, &resolved, goal.budget.max_actions)?;
+        let answer = crate::relations::query(&memory, &resolved, max_actions)?;
         (memory, resolved, answer)
     };
     let current_units = crate::core::previous_relation_success_units(
@@ -508,22 +609,6 @@ fn verify_saved_previous_relation_query_context(
         ));
     }
 
-    if crate::core::previous_relation_meaning(store, actor, case, previous)?.is_none()
-        && (result.dependencies != [previous.id.clone()]
-            || result.guarantee != previous.guarantee
-            || result.calculation.is_some()
-            || plan.required_units != [previous.text.clone()]
-            || plan.text != result.text
-            || result.text != previous.text
-            || plan.guarantee != result.guarantee
-            || plan.dependencies.get(..result.dependencies.len())
-                != Some(result.dependencies.as_slice()))
-    {
-        return Err(failure(
-            "RECOVERY_CONTEXT_PROOF_CHANGED",
-            "the explanation does not preserve the exact saved AskPreviousRelation result",
-        ));
-    }
     Ok(())
 }
 
@@ -1875,24 +1960,31 @@ fn verify_relation_profile_answer(
 }
 
 fn verify_previous_relation_memory_result(
+    store: &Store,
     state: &CaseRevision,
     memory: &MemoryState,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<()> {
-    let Intent::AskPreviousRelation {
-        proposition,
-        explain,
-        explicit_scope,
-    } = &goal.intent
-    else {
+    let Intent::AskPreviousRelation { explain, .. } = &goal.intent else {
         return Ok(());
     };
     let bundle = state
         .bundle
         .as_ref()
         .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    const CODE: &str = "RECOVERY_MEMORY_PROOF_MISMATCH";
+    let contextual = is_contextual_assertion_relation_query(bundle);
+    if contextual {
+        verify_registered_input(store, bundle, CODE)?;
+        if bundle.meaning.intent != goal.intent {
+            return Err(failure(
+                CODE,
+                "the contextual relation question differs from its sealed goal",
+            ));
+        }
+    }
     let previous_id = bundle
         .meaning
         .context_result_ref
@@ -1915,12 +2007,35 @@ fn verify_previous_relation_memory_result(
             "the exact prior relation result is not committed",
         ));
     }
-    let resolved = match crate::core::resolve_previous_relation_proposition(
-        memory,
+    if contextual
+        && bundle.request.context_ref.is_none()
+        && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+    {
+        return Err(failure(
+            CODE,
+            "the contextual relation anchor was not the preceding saved result at input admission",
+        ));
+    }
+    if !contextual
+        && let Some(prior_bundle) =
+            load_contextual_assertion_relation_input(store, state, previous)?
+    {
+        verify_current_contextual_assertion_relation_result(
+            store,
+            state,
+            previous,
+            memory,
+            goal.budget.max_actions,
+            &prior_bundle,
+        )?;
+    }
+    let resolved = match crate::core::resolve_previous_relation_for_bundle(
+        store,
+        bundle,
+        &state.prior_results,
         previous,
-        proposition,
-        explicit_scope.as_deref(),
-    ) {
+        memory,
+    )? {
         crate::core::PreviousRelationResolution::Resolved(proposition) => proposition,
         crate::core::PreviousRelationResolution::Missing
         | crate::core::PreviousRelationResolution::Ambiguous => {
@@ -1971,6 +2086,9 @@ fn verify_previous_relation_memory_result_with_index(
         .bundle
         .as_ref()
         .ok_or_else(|| failure("RECOVERY_MEMORY_PROOF_MISMATCH", "sealed input is missing"))?;
+    if is_contextual_assertion_relation_query(bundle) {
+        return Ok(None);
+    }
     let previous_id = bundle
         .meaning
         .context_result_ref
@@ -1992,6 +2110,9 @@ fn verify_previous_relation_memory_result_with_index(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
             "the exact prior relation result is not committed",
         ));
+    }
+    if load_contextual_assertion_relation_input(store, state, previous)?.is_some() {
+        return Ok(None);
     }
     let Some(query) = crate::core::indexed_previous_relation_query_from_store(
         store,
@@ -2926,6 +3047,17 @@ fn verify_result_memory_provenance(
 ) -> Result<Option<RetainedRelationProof>> {
     let Some((memory, snapshot_sha256)) = result_memory_snapshot_with_digest(store, actor, result)?
     else {
+        if matches!(goal.intent, Intent::AskPreviousRelation { .. })
+            && state
+                .bundle
+                .as_ref()
+                .is_some_and(is_contextual_assertion_relation_query)
+        {
+            return Err(failure(
+                "RECOVERY_MEMORY_REVISION_MISSING",
+                "the contextual relation result has no retained actor-memory revision",
+            ));
+        }
         return Ok(None);
     };
     match &goal.intent {
@@ -2988,7 +3120,7 @@ fn verify_result_memory_provenance(
             verify_relation_profile_memory_result(&memory, result, plan, goal)?;
         }
         Intent::AskPreviousRelation { .. } => {
-            verify_previous_relation_memory_result(state, &memory, result, plan, goal)?;
+            verify_previous_relation_memory_result(store, state, &memory, result, plan, goal)?;
         }
         Intent::ExplainPrevious => {
             verify_explain_previous_relation_memory_result(
@@ -5758,7 +5890,7 @@ fn inspect(
             Some(()) => Ok(()),
             None => {
                 let memory = store.load_memory(actor)?;
-                verify_previous_relation_memory_result(state, &memory, result, plan, &goal)
+                verify_previous_relation_memory_result(store, state, &memory, result, plan, &goal)
             }
         })();
         current_verification.map_err(|error| {

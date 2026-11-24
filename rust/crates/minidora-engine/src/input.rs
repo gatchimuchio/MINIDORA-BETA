@@ -12,6 +12,8 @@ const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conve
 pub(crate) const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
 pub(crate) const PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v180-partial-web-candidate-followup";
+pub(crate) const CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION: &str =
+    "declarative-ja-v181-contextual-assertion-relation-query";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
@@ -206,6 +208,7 @@ pub(crate) enum SourceContext {
     ResumedWebAnswerExplanation,
     WebBodyQuestion,
     PartialWebCandidate,
+    ContextualAssertionRelationQuery,
     Summary,
 }
 
@@ -544,7 +547,8 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::WebAnswerExplanation
         | SourceContext::ResumedWebAnswerExplanation
         | SourceContext::WebBodyQuestion
-        | SourceContext::PartialWebCandidate => None,
+        | SourceContext::PartialWebCandidate
+        | SourceContext::ContextualAssertionRelationQuery => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
@@ -578,6 +582,14 @@ pub(crate) fn seal_with_source_context(
             MULTI_CONDITION_RELATION_PARSER_VERSION
         }
         Intent::AskWhy { .. } => RELATION_EXPLANATION_PARSER_VERSION,
+        Intent::AskPreviousRelation { .. }
+            if matches!(
+                source_context,
+                Some(SourceContext::ContextualAssertionRelationQuery)
+            ) =>
+        {
+            CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+        }
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             guarded_relation_rule_parser(&intent).unwrap_or(PARSER_VERSION)
         }
