@@ -3281,9 +3281,17 @@ pub(crate) fn previous_relation_profile_request(
     case: &str,
     previous: &ResultRecord,
 ) -> Result<Option<(String, u32, usize)>> {
-    let Some((_, prior_bundle)) =
-        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
-    else {
+    let prior = store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?;
+    previous_relation_profile_from_input(actor, case, previous, prior.as_ref().map(|(_, b)| b))
+}
+
+fn previous_relation_profile_from_input(
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    prior_bundle: Option<&InputBundle>,
+) -> Result<Option<(String, u32, usize)>> {
+    let Some(prior_bundle) = prior_bundle else {
         return Ok(None);
     };
     let Intent::DraftRelationProfile { subject } = &prior_bundle.meaning.intent else {
@@ -6708,6 +6716,7 @@ impl Engine {
         } else {
             None
         };
+        let mut prior_explanation_input = None;
         let verification_explanation = if has_compute_budget
             && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
             && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
@@ -6725,13 +6734,23 @@ impl Engine {
                 )
                 .map(Some)
             } else {
-                crate::code_generation::previous_verification_explanation(
-                    &self.store,
-                    &state,
-                    &bundle,
-                    prior,
-                    deadline,
-                )
+                let stored = self.store.get_input_bundle(
+                    actor,
+                    &request.case_id,
+                    &prior.input_id,
+                    prior.input_version,
+                );
+                stored.and_then(|sealed| {
+                    prior_explanation_input = sealed.map(|(_, input)| input);
+                    crate::code_generation::previous_verification_explanation_from_input(
+                        &self.store,
+                        &state,
+                        &bundle,
+                        prior,
+                        deadline,
+                        prior_explanation_input.as_ref(),
+                    )
+                })
             };
             match explanation {
                 Ok(explanation) => explanation,
@@ -7082,20 +7101,36 @@ impl Engine {
                 &format!("{ACTION_BUDGET_RESIDUALS} {:?}", graph.residuals()),
             );
         }
-        let contextual_query_memory = if matches!(
+        // Each explanation probe below consumes the same authenticated prior
+        // input. Read it once, without rescanning the journal for each probe.
+        let prior_context_input = if matches!(goal.intent, Intent::ExplainPrevious)
+            && bundle.meaning.parser_version
+                != input::DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
+        {
+            prior_explanation_input
+        } else if matches!(
             goal.intent,
-            Intent::AskPreviousRelation { .. }
+            Intent::ExplainPrevious
+                | Intent::AskPreviousRelation { .. }
                 | Intent::AssertPreviousRelation { .. }
-                | Intent::ExplainPrevious
         ) && bundle.meaning.parser_version
             != input::DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
             && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
-            && let Some((_, prior_bundle)) = self.store.get_input_bundle(
-                actor,
-                &request.case_id,
-                &prior.input_id,
-                prior.input_version,
-            )?
+        {
+            self.store
+                .get_input_bundle(
+                    actor,
+                    &request.case_id,
+                    &prior.input_id,
+                    prior.input_version,
+                )?
+                .map(|(_, input)| input)
+        } else {
+            None
+        };
+        let contextual_query_memory = if bundle.meaning.parser_version
+            != input::DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
+            && let (Some(prior), Some(prior_bundle)) = (previous, prior_context_input.as_ref())
             && input::is_registered_previous_relation_query(&prior_bundle.meaning.parser_version)
         {
             let memory = self.store.load_memory(actor)?;
@@ -7105,7 +7140,7 @@ impl Engine {
                 prior,
                 &memory,
                 request.budget.max_actions,
-                &prior_bundle,
+                prior_bundle,
             ) {
                 Ok(()) => Some(memory),
                 Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
@@ -8581,19 +8616,20 @@ impl Engine {
                     }
                 };
                 let prior_relation = if prior.calculation.is_none() {
-                    previous_relation_meaning(&self.store, actor, &request.case_id, prior)?
+                    previous_relation_meaning_from_input(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        prior,
+                        prior_context_input.as_ref(),
+                    )?
                 } else {
                     None
                 };
                 let prior_relation_objects =
                     if prior.calculation.is_none() && prior_relation.is_none() {
-                        match self.store.get_input_bundle(
-                            actor,
-                            &request.case_id,
-                            &prior.input_id,
-                            prior.input_version,
-                        )? {
-                            Some((_, prior_bundle)) => {
+                        match prior_context_input.as_ref() {
+                            Some(prior_bundle) => {
                                 if identity(&prior_bundle.request)? != prior.id {
                                     return self.stop(
                                         &mut state,
@@ -8602,13 +8638,18 @@ impl Engine {
                                         "前回の関係一覧入力と採用結果の同一性が一致しません。",
                                     );
                                 }
-                                match prior_bundle.meaning.intent {
+                                match &prior_bundle.meaning.intent {
                                     Intent::AskRelationObjects {
                                         subject,
                                         predicate,
                                         negative,
                                         scope,
-                                    } => Some((subject, predicate, negative, scope)),
+                                    } => Some((
+                                        subject.clone(),
+                                        predicate.clone(),
+                                        *negative,
+                                        scope.clone(),
+                                    )),
                                     _ => None,
                                 }
                             }
@@ -8621,11 +8662,11 @@ impl Engine {
                     && prior_relation.is_none()
                     && prior_relation_objects.is_none()
                 {
-                    match previous_relation_profile_request(
-                        &self.store,
+                    match previous_relation_profile_from_input(
                         actor,
                         &request.case_id,
                         prior,
+                        prior_context_input.as_ref(),
                     ) {
                         Ok(profile) => profile,
                         Err(Error::Contract { code, message }) => {
@@ -15138,9 +15179,24 @@ pub(crate) fn previous_relation_meaning(
     if previous.calculation.is_some() {
         return Ok(None);
     }
-    if let Some((_, prior_bundle)) =
-        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
-    {
+    let prior = store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?;
+    previous_relation_meaning_from_input(
+        store,
+        actor,
+        case,
+        previous,
+        prior.as_ref().map(|(_, b)| b),
+    )
+}
+
+fn previous_relation_meaning_from_input(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    prior_bundle: Option<&InputBundle>,
+) -> Result<Option<PriorRelationMeaning>> {
+    if let Some(prior_bundle) = prior_bundle {
         if identity(&prior_bundle.request)? != previous.id {
             return Err(failure(
                 "PRIOR_INPUT_RESULT_MISMATCH",

@@ -636,10 +636,37 @@ pub(crate) fn previous_verification_explanation(
     previous: &ResultRecord,
     deadline: Option<Instant>,
 ) -> Result<Option<CodeVerificationExplanation>> {
+    let source = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &previous.input_id,
+        previous.input_version,
+    )?;
+    previous_verification_explanation_from_input(
+        store,
+        state,
+        bundle,
+        previous,
+        deadline,
+        source.as_ref().map(|(_, input)| input),
+    )
+}
+
+pub(crate) fn previous_verification_explanation_from_input(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    deadline: Option<Instant>,
+    previous_input: Option<&InputBundle>,
+) -> Result<Option<CodeVerificationExplanation>> {
+    let Some(previous_input) = previous_input else {
+        return Ok(None);
+    };
     let Some(RetainedCodeContext {
         output: RetainedCodeOutput::Verification { report_ref, .. },
         ..
-    }) = retained_code_context(store, state, previous)?
+    }) = retained_code_context_from_input(state, previous, previous_input)?
     else {
         return Ok(None);
     };
@@ -1016,6 +1043,14 @@ fn retained_code_context<'a>(
     else {
         return Ok(None);
     };
+    retained_code_context_from_input(state, result, &bundle)
+}
+
+fn retained_code_context_from_input<'a>(
+    state: &CaseRevision,
+    result: &'a ResultRecord,
+    bundle: &InputBundle,
+) -> Result<Option<RetainedCodeContext<'a>>> {
     let context = match &bundle.meaning.intent {
         Intent::ExplainPrevious
             if result.guarantee == Guarantee::Computed
@@ -1045,7 +1080,7 @@ fn retained_code_context<'a>(
             if bundle.meaning.parser_version
                 == crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
             {
-                crate::input::verify_previous_code_case_input(&bundle)?;
+                crate::input::verify_previous_code_case_input(bundle)?;
             }
             RetainedCodeContext {
                 anchor,

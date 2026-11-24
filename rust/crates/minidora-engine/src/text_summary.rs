@@ -1987,28 +1987,54 @@ pub(crate) fn previous_summary_explanation(
         return Ok(None);
     }
     let request = &bundle.request;
+    let mut case_opened = false;
+    let result = store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
+        case_opened = true;
+        previous_summary_explanation_in_history(store, history, bundle, prior_results, prior)
+    });
+    match result {
+        Err(Error::Contract { code, .. }) if !case_opened && code == "CASE_NOT_FOUND" => {
+            missing_previous_summary_input(prior)
+        }
+        other => other,
+    }
+}
+
+fn missing_previous_summary_input(
+    prior: &ResultRecord,
+) -> Result<Option<PreviousResultSummaryExplanation>> {
+    if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER)
+        || prior
+            .text
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("- ") && line.ends_with(LINE_SUMMARY_NOTE))
+        || prior.text.contains("\n出典packet: ")
+        || prior
+            .text
+            .contains("質問語句と一致する原文候補を抽出しました。")
+    {
+        return Err(failure(
+            "MISSING_RESULT_SUMMARY_CONTEXT",
+            "the prior summary or source answer has no retained sealed request",
+        ));
+    }
+    Ok(None)
+}
+
+fn previous_summary_explanation_in_history(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    prior: &ResultRecord,
+) -> Result<Option<PreviousResultSummaryExplanation>> {
+    let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let Some((_, summary_bundle)) =
-        store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
+    let Some((_, summary_bundle)) = history.input_bundle(&prior.input_id, prior.input_version)?
     else {
-        if prior.text.starts_with(PREVIOUS_RESULT_SUMMARY_HEADER)
-            || prior
-                .text
-                .lines()
-                .next()
-                .is_some_and(|line| line.starts_with("- ") && line.ends_with(LINE_SUMMARY_NOTE))
-            || prior.text.contains("\n出典packet: ")
-            || prior
-                .text
-                .contains("質問語句と一致する原文候補を抽出しました。")
-        {
-            return Err(failure(
-                "MISSING_RESULT_SUMMARY_CONTEXT",
-                "the prior summary or source answer has no retained sealed request",
-            ));
-        }
-        return Ok(None);
+        return missing_previous_summary_input(prior);
     };
     let is_source_summary = matches!(
         summary_bundle.meaning.intent,
@@ -2050,7 +2076,7 @@ pub(crate) fn previous_summary_explanation(
             prior_results,
             prior,
             plan,
-            None,
+            (None, history),
         );
     }
     if is_source_summary {
@@ -2061,7 +2087,7 @@ pub(crate) fn previous_summary_explanation(
             prior_results,
             prior,
             plan,
-            None,
+            (None, history),
         );
     }
     let Some(proof) = verify_retained_previous_result_summary(
@@ -2093,8 +2119,8 @@ pub(crate) fn previous_summary_explanation(
                 "the source result is not retained",
             )
         })?;
-    let (_, source_bundle) = store
-        .get_input_bundle(actor, case, &source.input_id, source.input_version)?
+    let (_, source_bundle) = history
+        .input_bundle(&source.input_id, source.input_version)?
         .ok_or_else(|| {
             failure(
                 "RESULT_SUMMARY_SOURCE_UNAVAILABLE",
@@ -2397,6 +2423,7 @@ fn source_followup_for_replay<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     prior: &'a ResultRecord,
     resolved: Option<SourceFollowup<'a>>,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<Option<SourceFollowup<'a>>> {
     if let Some(scope) = resolved {
         return Ok((scope.context == prior
@@ -2404,7 +2431,7 @@ fn source_followup_for_replay<'a>(
             && identity(&Some(prior))? == bundle.context_sha256)
             .then_some(scope));
     }
-    source_followup_context(store, bundle, prior_results, prior)
+    source_followup_context_with_history(store, bundle, prior_results, prior, history)
 }
 
 struct SourceContextStep<'a> {
@@ -2788,7 +2815,7 @@ fn derived_source_followup<'a>(
                 prior_results,
                 step.derivation,
                 derivation_plan,
-                Some((scope, history)),
+                (Some(scope), history),
             )?
         } else {
             previous_source_summary_explanation(
@@ -2798,7 +2825,7 @@ fn derived_source_followup<'a>(
                 prior_results,
                 step.derivation,
                 derivation_plan,
-                Some((scope, history)),
+                (Some(scope), history),
             )?
         };
         let Some(proof) = proof.filter(|proof| proof.source_context_ref.is_some()) else {
@@ -2824,13 +2851,26 @@ pub(crate) fn source_followup_context<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     context: &'a ResultRecord,
 ) -> Result<Option<SourceFollowup<'a>>> {
+    source_followup_context_with_history(store, bundle, prior_results, context, None)
+}
+
+fn source_followup_context_with_history<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    context: &'a ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<Option<SourceFollowup<'a>>> {
     if crate::input::uses_derived_source_context(&bundle.meaning.parser_version) {
+        if let Some(history) = history {
+            return derived_source_followup(store, history, bundle, prior_results, context);
+        }
         let request = &bundle.request;
         return store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
             derived_source_followup(store, history, bundle, prior_results, context)
         });
     }
-    direct_source_followup(store, bundle, prior_results, context, None)
+    direct_source_followup(store, bundle, prior_results, context, history)
 }
 
 fn direct_source_followup<'a>(
@@ -3103,6 +3143,26 @@ pub(crate) fn verify_retained_source_summary<'a>(
     plan: &ContentPlan,
     resolved: Option<SourceFollowup<'a>>,
 ) -> Result<Option<RetainedSourceSummary>> {
+    verify_retained_source_summary_with_history(
+        store,
+        bundle,
+        prior_results,
+        result,
+        plan,
+        resolved,
+        None,
+    )
+}
+
+fn verify_retained_source_summary_with_history<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    resolved: Option<SourceFollowup<'a>>,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<Option<RetainedSourceSummary>> {
     if !matches!(
         bundle.meaning.intent,
         Intent::SummarizePreviousSource
@@ -3176,13 +3236,14 @@ pub(crate) fn verify_retained_source_summary<'a>(
             "the exact prior source result is not retained",
         )
     })?;
-    let context = source_followup_for_replay(store, bundle, prior_results, prior, resolved)?
-        .ok_or_else(|| {
-            failure(
-                "RECOVERY_SOURCE_CONTEXT_MISMATCH",
-                "the referenced source result does not match the sealed context",
-            )
-        })?;
+    let context =
+        source_followup_for_replay(store, bundle, prior_results, prior, resolved, history)?
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_SOURCE_CONTEXT_MISMATCH",
+                    "the referenced source result does not match the sealed context",
+                )
+            })?;
     let prior = context.source;
     if line_summary && prior.lifecycle != Lifecycle::Commit {
         return Err(failure(
@@ -3345,7 +3406,7 @@ fn previous_source_summary_explanation<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     summary_result: &ResultRecord,
     plan: &ContentPlan,
-    resolved: Option<(SourceFollowup<'a>, &VerifiedCaseHistory<'_>)>,
+    replay: (Option<SourceFollowup<'a>>, &VerifiedCaseHistory<'_>),
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let version = explanation.meaning.parser_version.as_str();
     let legacy = version == crate::input::TEXT_SUMMARY_CANDIDATE_EXPLANATION_PARSER_VERSION
@@ -3361,13 +3422,15 @@ fn previous_source_summary_explanation<'a>(
     {
         return Ok(None);
     }
-    let Some(proof) = verify_retained_source_summary(
+    let (resolved, history) = replay;
+    let Some(proof) = verify_retained_source_summary_with_history(
         store,
         summary_bundle,
         prior_results,
         summary_result,
         plan,
-        resolved.map(|(scope, _)| scope),
+        resolved,
+        Some(history),
     )?
     else {
         return Ok(None);
@@ -3390,16 +3453,14 @@ fn previous_source_summary_explanation<'a>(
             "the original retrieval result is missing",
         )
     })?;
-    let (_, source_bundle) = match resolved {
-        Some((_, history)) => history.input_bundle(&source.input_id, source.input_version),
-        None => store.get_input_bundle(actor, case, &source.input_id, source.input_version),
-    }?
-    .ok_or_else(|| {
-        failure(
-            "SOURCE_SUMMARY_CONTEXT_INVALID",
-            "the original retrieval request is missing",
-        )
-    })?;
+    let (_, source_bundle) = history
+        .input_bundle(&source.input_id, source.input_version)?
+        .ok_or_else(|| {
+            failure(
+                "SOURCE_SUMMARY_CONTEXT_INVALID",
+                "the original retrieval request is missing",
+            )
+        })?;
     if source.id != identity(&source_bundle.request)? {
         return Err(failure(
             "SOURCE_SUMMARY_CONTEXT_INVALID",
@@ -3649,7 +3710,7 @@ fn previous_source_question_explanation<'a>(
     prior_results: &'a BTreeMap<String, ResultRecord>,
     question_result: &ResultRecord,
     plan: &ContentPlan,
-    resolved: Option<(SourceFollowup<'a>, &VerifiedCaseHistory<'_>)>,
+    replay: (Option<SourceFollowup<'a>>, &VerifiedCaseHistory<'_>),
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let version = explanation.meaning.parser_version.as_str();
     let legacy = matches!(
@@ -3667,13 +3728,15 @@ fn previous_source_question_explanation<'a>(
     {
         return Ok(None);
     }
-    let Some(proof) = verify_retained_source_question(
+    let (resolved, history) = replay;
+    let Some(proof) = verify_retained_source_question_with_history(
         store,
         question_bundle,
         prior_results,
         question_result,
         plan,
-        resolved.map(|(scope, _)| scope),
+        resolved,
+        Some(history),
     )?
     else {
         return Ok(None);
@@ -3699,11 +3762,9 @@ fn previous_source_question_explanation<'a>(
     let source = prior_results
         .get(&proof.source_result_id)
         .ok_or_else(invalid)?;
-    let (_, source_bundle) = match resolved {
-        Some((_, history)) => history.input_bundle(&source.input_id, source.input_version),
-        None => store.get_input_bundle(actor, case, &source.input_id, source.input_version),
-    }?
-    .ok_or_else(invalid)?;
+    let (_, source_bundle) = history
+        .input_bundle(&source.input_id, source.input_version)?
+        .ok_or_else(invalid)?;
     if source.id != identity(&source_bundle.request)? {
         return Err(invalid());
     }
@@ -3829,6 +3890,26 @@ pub(crate) fn verify_retained_source_question<'a>(
     plan: &ContentPlan,
     resolved: Option<SourceFollowup<'a>>,
 ) -> Result<Option<RetainedSourceQuestion>> {
+    verify_retained_source_question_with_history(
+        store,
+        bundle,
+        prior_results,
+        result,
+        plan,
+        resolved,
+        None,
+    )
+}
+
+fn verify_retained_source_question_with_history<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    resolved: Option<SourceFollowup<'a>>,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<Option<RetainedSourceQuestion>> {
     let Intent::AskPreviousSourceQuestion { query } = &bundle.meaning.intent else {
         return Ok(None);
     };
@@ -3847,13 +3928,14 @@ pub(crate) fn verify_retained_source_question<'a>(
             "the exact prior source result is not retained",
         )
     })?;
-    let context = source_followup_for_replay(store, bundle, prior_results, prior, resolved)?
-        .ok_or_else(|| {
-            failure(
-                "RECOVERY_SOURCE_QUESTION_MISMATCH",
-                "the referenced source result does not match the sealed context",
-            )
-        })?;
+    let context =
+        source_followup_for_replay(store, bundle, prior_results, prior, resolved, history)?
+            .ok_or_else(|| {
+                failure(
+                    "RECOVERY_SOURCE_QUESTION_MISMATCH",
+                    "the referenced source result does not match the sealed context",
+                )
+            })?;
     let prior = context.source;
     let packets = verified_source_question_packets(store, actor, case, context)?;
     let source_packet_refs: Vec<_> = packets

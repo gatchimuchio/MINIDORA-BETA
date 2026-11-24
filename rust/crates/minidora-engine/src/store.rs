@@ -109,6 +109,8 @@ pub(crate) struct VerifiedCaseHistory<'a> {
     connection: &'a Connection,
     actor: &'a str,
     case: &'a str,
+    /// Candidate state blobs grouped by input fingerprint in this snapshot.
+    committed_revisions: BTreeMap<String, Vec<String>>,
 }
 
 impl VerifiedCaseHistory<'_> {
@@ -127,12 +129,11 @@ impl VerifiedCaseHistory<'_> {
     }
 
     pub(crate) fn contains_committed_result(&self, result: &ResultRecord) -> Result<bool> {
-        let mut statement = sql(self.connection.prepare(
-            "SELECT state_sha256 FROM case_revision WHERE case_id=?1 AND lifecycle='COMMIT' ORDER BY revision DESC",
-        ))?;
-        let rows = sql(statement.query_map([self.case], |row| row.get::<_, String>(0)))?;
-        for row in rows {
-            let revision: CaseRevision = self.store.read_blob(&sql(row)?)?;
+        let Some(references) = self.committed_revisions.get(&result.id) else {
+            return Ok(false);
+        };
+        for reference in references.iter().rev() {
+            let revision: CaseRevision = self.store.read_blob(reference)?;
             if revision.lifecycle == Lifecycle::Commit
                 && revision.input_fingerprint.as_deref() == Some(result.id.as_str())
                 && revision.result.as_ref() == Some(result)
@@ -1433,7 +1434,7 @@ impl Store {
             return Ok(None);
         }
         let mut last_revisions = BTreeMap::new();
-        let head = self.read_verified_case(case, |revision| {
+        let head = self.read_verified_case(case, |revision, _, _| {
             if let Some(result) = &revision.result {
                 last_revisions.insert(result.id.clone(), revision.revision);
             }
@@ -1911,12 +1912,24 @@ impl Store {
             TransactionBehavior::Deferred,
         ))?;
         Self::require_case(&transaction, actor, case)?;
-        self.verify_case(case)?;
+        let mut committed_revisions = BTreeMap::<String, Vec<String>>::new();
+        self.read_verified_case(case, |revision, reference, sql_committed| {
+            if sql_committed
+                && revision.lifecycle == Lifecycle::Commit
+                && let Some(fingerprint) = &revision.input_fingerprint
+            {
+                committed_revisions
+                    .entry(fingerprint.clone())
+                    .or_default()
+                    .push(reference.to_owned());
+            }
+        })?;
         let value = read(&VerifiedCaseHistory {
             store: self,
             connection: &transaction,
             actor,
             case,
+            committed_revisions,
         })?;
         sql(transaction.commit())?;
         Ok(value)
@@ -2691,16 +2704,16 @@ impl Store {
     }
 
     fn verify_case(&self, case: &str) -> Result<()> {
-        self.read_verified_case(case, |_| ()).map(|_| ())
+        self.read_verified_case(case, |_, _, _| ()).map(|_| ())
     }
 
     fn read_verified_case(
         &self,
         case: &str,
-        mut observe: impl FnMut(&CaseRevision),
+        mut observe: impl FnMut(&CaseRevision, &str, bool),
     ) -> Result<Option<CaseRevision>> {
         let mut statement = sql(self.connection.prepare(
-            "SELECT revision,state_sha256,parent_hash,event_hash FROM case_revision WHERE case_id=?1 ORDER BY revision",
+            "SELECT revision,state_sha256,parent_hash,event_hash,lifecycle='COMMIT' FROM case_revision WHERE case_id=?1 ORDER BY revision",
         ))?;
         let rows = sql(statement.query_map([case], |r| {
             Ok((
@@ -2708,12 +2721,14 @@ impl Store {
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, String>(3)?,
+                r.get::<_, bool>(4)?,
             ))
         }))?;
         let mut previous_hash = None;
         let mut previous: Option<CaseRevision> = None;
+        let mut owner: Option<String> = None;
         for (expected, row) in rows.enumerate() {
-            let (number, sha, parent_hash, event_hash) = sql(row)?;
+            let (number, sha, parent_hash, event_hash, sql_committed) = sql(row)?;
             if number != expected as i64 || parent_hash != previous_hash {
                 return Err(failure(
                     "INTEGRITY_FAILURE",
@@ -2734,11 +2749,13 @@ impl Store {
                 ));
             }
             let revision: CaseRevision = self.read_blob(&sha)?;
-            let owner: String = sql(self.connection.query_row(
-                "SELECT actor_id FROM case_registry WHERE case_id=?1",
-                [case],
-                |r| r.get(0),
-            ))?;
+            if owner.is_none() {
+                owner = Some(sql(self.connection.query_row(
+                    "SELECT actor_id FROM case_registry WHERE case_id=?1",
+                    [case],
+                    |r| r.get(0),
+                ))?);
+            }
             if !matches!(
                 revision.schema_version.as_str(),
                 SCHEMA_VERSION
@@ -2746,7 +2763,7 @@ impl Store {
                     | ALPHA8_SCHEMA_VERSION
                     | PREVIOUS_SCHEMA_VERSION
                     | ALPHA10_SCHEMA_VERSION
-            ) || revision.actor_id != owner
+            ) || owner.as_deref() != Some(revision.actor_id.as_str())
                 || revision.case_id != case
                 || revision.revision != number as u64
                 || revision.parent_revision != previous.as_ref().map(|p| p.revision)
@@ -2761,7 +2778,7 @@ impl Store {
             } else if revision.lifecycle != Lifecycle::Received {
                 return Err(failure("INTEGRITY_FAILURE", "case did not start RECEIVED"));
             }
-            observe(&revision);
+            observe(&revision, &sha, sql_committed);
             previous_hash = Some(event_hash);
             previous = Some(revision);
         }
