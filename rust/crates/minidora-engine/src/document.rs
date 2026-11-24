@@ -327,14 +327,22 @@ pub(crate) fn previous_document_explanation(
     }
     let actor = &state.actor_id;
     let case = &state.case_id;
-    if explanation_parser_version
-        == crate::input::PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
-    {
+    let conversion_parser_version = match explanation_parser_version {
+        crate::input::PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION => {
+            Some(crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION)
+        }
+        crate::input::PREVIOUS_FILTERED_CSV_CONVERSION_EXPLANATION_PARSER_VERSION => {
+            Some(crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION)
+        }
+        _ => None,
+    };
+    if let Some(parser_version) = conversion_parser_version {
         return previous_json_table_conversion_explanation(
             store,
             state,
             previous,
             budget.max_evidence_bytes,
+            parser_version,
         )
         .map(Some);
     }
@@ -793,6 +801,7 @@ fn previous_json_table_conversion_explanation(
     state: &CaseRevision,
     previous: &ResultRecord,
     max_evidence_bytes: usize,
+    conversion_parser_version: &str,
 ) -> Result<PriorDocumentExplanation> {
     const CODE: &str = "PREVIOUS_JSON_TABLE_EXPLANATION_CONTEXT_INVALID";
     let invalid = || failure(CODE, "元のCSV、保存JSON、変換後CSVの対応を照合できません。");
@@ -805,6 +814,7 @@ fn previous_json_table_conversion_explanation(
         || !previous.evidence.is_empty()
         || previous.calculation.is_some()
         || previous.id != identity(&bundle.request)?
+        || bundle.meaning.parser_version != conversion_parser_version
     {
         return Err(invalid());
     }
@@ -836,15 +846,35 @@ fn previous_json_table_conversion_explanation(
         "retained JSON-table to CSV conversion",
     )?;
 
-    let mut lines = vec![
-        "元CSV、保存JSON、出力CSVを封印済みの入力から再計算し、保存結果と照合しました。".into(),
-        "二つの一覧は、同じJSON Pointerと保存JSONの同じバイト範囲でつながります。".into(),
-    ];
-    lines.extend(table_conversion_lines(
-        &conversion.source_report,
-        &conversion.source_bundle_ref,
-        &conversion.source_report_ref,
-    )?);
+    let mut lines = if conversion_parser_version
+        == crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+    {
+        let column = conversion
+            .source_report
+            .parameters
+            .get("column_name")
+            .ok_or_else(invalid)?;
+        let mut lines =
+            vec!["元CSVで選択条件を再適用し、保存したJSON表と出力CSVを照合しました。".into()];
+        lines.extend(csv_table_rows_lines(
+            &conversion.source_report,
+            column,
+            &conversion.source_bundle_ref,
+            &conversion.source_report_ref,
+        )?);
+        lines
+    } else {
+        let mut lines = vec![
+            "元CSV、保存JSON、出力CSVを封印済みの入力から再計算し、保存結果と照合しました。".into(),
+            "二つの一覧は、同じJSON Pointerと保存JSONの同じバイト範囲でつながります。".into(),
+        ];
+        lines.extend(table_conversion_lines(
+            &conversion.source_report,
+            &conversion.source_bundle_ref,
+            &conversion.source_report_ref,
+        )?);
+        lines
+    };
     lines.extend(table_conversion_lines(
         &conversion.report,
         &bundle_ref,
@@ -6213,12 +6243,15 @@ pub(crate) fn previous_json_table_to_csv(
     let request = &followup.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
+    let parser_version = followup.meaning.parser_version.as_str();
     if !matches!(
         followup.meaning.intent,
         Intent::ConvertPreviousJsonTableToCsv
-    ) || followup.meaning.parser_version
-        != crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION
-        || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
+    ) || !matches!(
+        parser_version,
+        crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION
+            | crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+    ) || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
         || followup.context_sha256 != identity(&Some(previous))?
         || request
             .context_ref
@@ -6242,22 +6275,50 @@ pub(crate) fn previous_json_table_to_csv(
                 .input_bundle(&previous.input_id, previous.input_version)?
                 .ok_or_else(invalid)
         })?;
-    let Intent::CsvToJson {
-        document,
-        has_header,
-    } = &source_bundle.meaning.intent
-    else {
-        return Err(failure(
-            "PREVIOUS_JSON_TABLE_UNAVAILABLE",
-            "参照先にCSVから変換した確定済みJSON表がありません。",
-        ));
+    let verify_source_identity = || {
+        if identity(&source_bundle.request)? != previous.id
+            || previous.guarantee != Guarantee::Computed
+        {
+            return Err(invalid());
+        }
+        Ok(())
     };
-    if identity(&source_bundle.request)? != previous.id || previous.guarantee != Guarantee::Computed
-    {
-        return Err(invalid());
-    }
-
-    let source_report = CsvInput::conversation(document).to_json(*has_header)?;
+    let (source_report, source_label) = match (&source_bundle.meaning.intent, parser_version) {
+        (
+            Intent::CsvToJson {
+                document,
+                has_header,
+            },
+            crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION,
+        ) => {
+            verify_source_identity()?;
+            (
+                CsvInput::conversation(document).to_json(*has_header)?,
+                "CSV-to-JSON conversion",
+            )
+        }
+        (
+            Intent::CsvFilter {
+                document,
+                column,
+                equals,
+            },
+            crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION,
+        ) => {
+            verify_source_identity()?;
+            (
+                CsvInput::conversation(document).filter(column, equals)?,
+                "CSV filter result",
+            )
+        }
+        (_, crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION) => {
+            return Err(failure(
+                "PREVIOUS_JSON_TABLE_UNAVAILABLE",
+                "参照先にCSVから変換した確定済みJSON表がありません。",
+            ));
+        }
+        _ => return Err(invalid()),
+    };
     let source_report_bytes = canonical(&source_report)?;
     let source_report_ref = digest(&source_report_bytes);
     if previous.dependencies.as_slice() != [source_report_ref.as_str()]
@@ -6276,7 +6337,7 @@ pub(crate) fn previous_json_table_to_csv(
         previous,
         Some(&source_report_ref),
         INVALID,
-        "CSV-to-JSON conversion",
+        source_label,
     )?;
 
     let report = json_to_csv(&source_report.text)?;

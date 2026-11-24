@@ -24,7 +24,7 @@ Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...
   minidora-rust chat [--db DIRECTORY] [--actor ID] [--case ID] [--allow-read-host HOST]... [--allow-write EXACT_PATH]...
   minidora-rust capabilities [--json]
-  minidora-rust inspect [OPTIONS]
+  minidora-rust inspect [--db DIRECTORY] [--case ID] [--actor ID] [--input ID [--version N]] [--json]
   minidora-rust migrate --db DIRECTORY [--json]
   minidora-rust reconcile [--db DIRECTORY] [--case ID] [--actor ID] [--json]
   minidora-rust reconcile-effects [--db DIRECTORY] [--case ID] [--actor ID] [--json]
@@ -33,7 +33,7 @@ Usage:
 Options:
   --db DIRECTORY             Durable state directory (default .minidora-rust-state)
   --case ID                  Case identity (default default)
-  --input ID                 Explicit durable identity; omit for a new invocation ID
+  --input ID                 Exact input identity; run creates one when omitted
   --context RESULT_ID        Reference an exact prior result in the same case (run only)
   --version N                Input version (default 1)
   --actor ID                 Trusted local frontend identity
@@ -53,6 +53,10 @@ Use -- before request text beginning with a dash. Retries with an explicit
 Chat reads one turn at a time from stdin. Type /help inside chat for session,
 multiline input and network controls.
 Capabilities prints the engine's version and implemented capabilities as JSON.
+
+Inspect emits the latest case revision as JSON. With --input ID it reads the
+saved result for that exact input and version. A successful lookup exits 0,
+including null when no record is saved. An invalid or denied lookup exits 1.
 
 Actor identity comes from --actor, MINIDORA_ACTOR, or the local USER/USERNAME.
 These are trusted local configuration, not remote authentication. State directory
@@ -157,6 +161,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         text: Vec::new(),
     };
     let mut explicit_db = false;
+    let mut explicit_input_version = false;
     let mut args = args.into_iter().peekable();
     match args.peek().map(String::as_str) {
         Some("run") => {
@@ -241,7 +246,10 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
             "--case" => options.case_id = next_value(&mut args, &arg)?,
             "--input" => options.input_id = Some(next_value(&mut args, &arg)?),
             "--context" => options.context_ref = Some(next_value(&mut args, &arg)?),
-            "--version" => options.input_version = number(next_value(&mut args, &arg)?, &arg)?,
+            "--version" => {
+                options.input_version = number(next_value(&mut args, &arg)?, &arg)?;
+                explicit_input_version = true;
+            }
             "--actor" => options.actor = next_value(&mut args, &arg)?,
             "--json" => options.json = true,
             "--allow-read-host" => {
@@ -289,6 +297,9 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     }
     if options.mode == Mode::Migrate && !explicit_db {
         return Err("migration requires an explicit --db DIRECTORY".into());
+    }
+    if options.mode == Mode::Inspect && explicit_input_version && options.input_id.is_none() {
+        return Err("inspect --version requires --input ID".into());
     }
     if options.mode != Mode::Run && !options.text.is_empty() {
         return Err("only run accepts request text".into());
@@ -412,12 +423,25 @@ fn run(options: Options) -> Result<u8, String> {
         return Ok(terminal_exit(result.lifecycle));
     }
     if options.mode == Mode::Inspect {
-        let revision = engine
-            .latest(&options.actor, &options.case_id)
-            .map_err(|error| error.to_string())?;
         let stdout = io::stdout();
         let mut output = stdout.lock();
-        serde_json::to_writer(&mut output, &revision).map_err(|error| error.to_string())?;
+        if let Some(input) = &options.input_id {
+            let result = engine
+                .input_result(
+                    &options.actor,
+                    &options.case_id,
+                    input,
+                    options.input_version,
+                )
+                .map_err(|error| error.to_string())?;
+            serde_json::to_writer(&mut output, &result)
+        } else {
+            let revision = engine
+                .latest(&options.actor, &options.case_id)
+                .map_err(|error| error.to_string())?;
+            serde_json::to_writer(&mut output, &revision)
+        }
+        .map_err(|error| error.to_string())?;
         writeln!(output).map_err(|error| error.to_string())?;
         return Ok(0);
     }

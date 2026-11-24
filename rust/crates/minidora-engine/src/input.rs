@@ -35,6 +35,10 @@ pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
     "declarative-ja-v174-previous-json-table-to-csv";
 pub(crate) const PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v176-previous-json-table-conversion-explanation";
+pub(crate) const PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION: &str =
+    "declarative-ja-v188-previous-filtered-csv-to-csv";
+pub(crate) const PREVIOUS_FILTERED_CSV_CONVERSION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v189-previous-filtered-csv-conversion-explanation";
 pub(crate) const JSON_OBJECT_KEY_PATH_PARSER_VERSION: &str =
     "declarative-ja-v179-json-object-key-path";
 pub(crate) const PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION: &str =
@@ -213,6 +217,8 @@ pub(crate) enum SourceContext {
     Explanation,
     PastedTextReplacementExplanation,
     PreviousJsonTableConversionExplanation,
+    PreviousFilteredCsvToCsv,
+    PreviousFilteredCsvConversionExplanation,
     DirectSourceExplanation,
     DirectCodeVerificationExplanation,
     ExplainedDirectSource,
@@ -593,6 +599,8 @@ pub(crate) fn seal_with_source_context(
         SourceContext::Summary => Some(IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION),
         SourceContext::PastedTextReplacementExplanation
         | SourceContext::PreviousJsonTableConversionExplanation
+        | SourceContext::PreviousFilteredCsvToCsv
+        | SourceContext::PreviousFilteredCsvConversionExplanation
         | SourceContext::DirectSourceExplanation
         | SourceContext::DirectCodeVerificationExplanation
         | SourceContext::ExplainedDirectSource
@@ -692,6 +700,14 @@ pub(crate) fn seal_with_source_context(
         {
             CSV_LEFT_RIGHT_JOIN_PARSER_VERSION
         }
+        Intent::ConvertPreviousJsonTableToCsv
+            if matches!(
+                source_context,
+                Some(SourceContext::PreviousFilteredCsvToCsv)
+            ) =>
+        {
+            PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+        }
         Intent::ConvertPreviousJsonTableToCsv => PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION,
         Intent::JsonPointer { .. } if document_header(&request.text).starts_with("JSONの「") => {
             JSON_OBJECT_KEY_PATH_PARSER_VERSION
@@ -716,6 +732,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+        }
+        Intent::ExplainPrevious
+            if matches!(
+                source_context,
+                Some(SourceContext::PreviousFilteredCsvConversionExplanation)
+            ) =>
+        {
+            PREVIOUS_FILTERED_CSV_CONVERSION_EXPLANATION_PARSER_VERSION
         }
         Intent::ExplainPrevious
             if matches!(source_context, Some(SourceContext::DirectSourceExplanation)) =>

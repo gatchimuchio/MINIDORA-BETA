@@ -4432,6 +4432,18 @@ impl Engine {
         self.store.load_case(actor, case)
     }
 
+    /// Read the durable result for an exact input and version of an actor-owned case.
+    /// A missing result yields `None`.
+    pub fn input_result(
+        &self,
+        actor: &str,
+        case: &str,
+        input: &str,
+        version: u64,
+    ) -> Result<Option<ResultRecord>> {
+        self.store.get_input_result(actor, case, input, version)
+    }
+
     /// The verified case head and its earlier result IDs, newest revision first.
     pub fn case_with_history_order(
         &self,
@@ -5831,6 +5843,29 @@ impl Engine {
                 );
             }
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::ConvertPreviousJsonTableToCsv)
+                && let Some(prior) = previous.filter(|result| {
+                    result.lifecycle == Lifecycle::Commit && result.guarantee == Guarantee::Computed
+                })
+                && self
+                    .store
+                    .get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &prior.input_id,
+                        prior.input_version,
+                    )?
+                    .is_some_and(|(_, source)| {
+                        matches!(source.meaning.intent, Intent::CsvFilter { .. })
+                    })
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::PreviousFilteredCsvToCsv),
+                );
+            }
+            if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
                 && let Some(context) = previous.filter(|result| {
                     result.lifecycle == Lifecycle::Commit
@@ -5863,6 +5898,13 @@ impl Engine {
                                 && context.guarantee == Guarantee::Computed =>
                         {
                             Some(input::SourceContext::PreviousJsonTableConversionExplanation)
+                        }
+                        Intent::ConvertPreviousJsonTableToCsv
+                            if source.meaning.parser_version
+                                == input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+                                && context.guarantee == Guarantee::Computed =>
+                        {
+                            Some(input::SourceContext::PreviousFilteredCsvConversionExplanation)
                         }
                         Intent::Retrieve { .. }
                             if context.guarantee == Guarantee::SourceReport

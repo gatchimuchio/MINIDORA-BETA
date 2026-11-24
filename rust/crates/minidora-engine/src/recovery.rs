@@ -5404,7 +5404,8 @@ fn inspect(
             "RECOVERY_TEXT_REPLACEMENT_CONTEXT_CHANGED",
             "the stored replacement explanation no longer binds its original result",
         )),
-        crate::input::PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION => Some((
+        crate::input::PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+        | crate::input::PREVIOUS_FILTERED_CSV_CONVERSION_EXPLANATION_PARSER_VERSION => Some((
             "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
             "the stored CSV conversion explanation no longer binds its original result",
         )),
@@ -5426,6 +5427,10 @@ fn inspect(
                 .as_ref()
                 .is_some_and(|reference| reference != &previous.id)
             || bundle.context_sha256 != identity(&Some(previous))?
+            || (bundle.meaning.parser_version
+                == crate::input::PREVIOUS_FILTERED_CSV_CONVERSION_EXPLANATION_PARSER_VERSION
+                && bundle.request.context_ref.is_none()
+                && store.input_start_predecessor(state)?.as_ref() != Some(previous))
         {
             return Err(invalid());
         }
@@ -6156,6 +6161,16 @@ fn inspect(
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(|| failure(CODE, "the exact prior table result is missing"))?;
         verify_registered_input(store, bundle, CODE)?;
+        if bundle.meaning.parser_version
+            == crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+            && bundle.request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(prior)
+        {
+            return Err(failure(
+                CODE,
+                "the saved filtered table was not the preceding result at admission",
+            ));
+        }
         let conversion = crate::document::previous_json_table_to_csv(store, bundle, prior)?;
         let reference = verified_artifact(store, actor, case, &conversion.report)?;
         let dependencies = conversion.dependencies(reference);

@@ -86,6 +86,8 @@ C,open
 
 CSVをJSON表に変換した後は、`前回のJSON表をCSVに変換して` で、保存済みのJSON表を使ってCSVを作れる。途中で別の話題を挟んだ場合は、JSON表の結果IDを `/context` で指定する。CSVに戻した結果の後に `詳しく説明して` と入力すると、元CSV・保存JSON・出力CSVの対応箇所を確認できる。
 
+`CSVの列「status」が値「open」の行を選択して:` で貼り付けたCSVから行を抽出した場合も、同じ追問で選択済みの行をCSVにできる。先頭ゼロを含むIDは文字列のまま保持し、追問で元の選択条件と変換の根拠を確認できる。
+
 二つのCSV表で列の値が一致する行を結合するには、`/paste` のあとに次のように入力する。各表のキーは一意にする。結果の行は左表の順に並び、対応する行がなかったキーも確認できる。
 
 ```text
@@ -122,6 +124,8 @@ Web回答の後に `詳しく説明して` または `この回答の出典は�
 
 `富士山の標高を出典付きで調べてキロメートルに換算して` では、同じ依頼の中で記事を探し、本文が「標高は … m」と述べる箇所を取り出して厳密に換算する。記事名・値・単位を確認できる場合に成立し、本文に別記された最高地点の値と区別する。否定・仮定・引用内の値は換算の根拠から外す。
 
+`高尾山の標高を出典付きで調べてキロメートルに換算して` では、記事名が文の主語と一致する場合に、本文が山を「標高599メートル（m）の山」と述べる箇所も使える。回答はその本文の記述、換算値、出典を示す。
+
 ファイル出力を利用する場合は、起動時に `--allow-write` で信頼するローカルの絶対パスを指定する。対話で `/output PATH` を入力すると、同じパスを次の一発話の保存先に指定できる。`/output off` で取り消せる。保存を試みた発話では、結果本文に加えて対象パス・作用ID・受領状態を表示する。
 
 Windowsの保存先には `C:\Users\利用者\Documents\結果.txt` のようなドライブ付き絶対パスを指定する。親ディレクトリは事前に用意する。UNC共有パス、特殊なデバイス名、ジャンクションを経由する保存先は保留または失敗になる。
@@ -141,6 +145,8 @@ Windowsの保存先には `C:\Users\利用者\Documents\結果.txt` のような
 Rustのconsumerは同じソースの `minidora-engine` と `minidora-domain` を使用する。`Engine::capabilities()` は `minidora-native/v1` のAPI版、保存schema、実装済みの提供能力と必要権限を返す。CLIでは `minidora-rust capabilities --json` から同じ情報を得られる。`Engine::execute(actor, RequestEnvelope)` で実行し、`ResultRecord` の `lifecycle`、`reason`、本文、出典、受領を利用する。`engine.case_status(actor, case)` は同じactorの最新結果と、採用済みの実モデル版を返す。
 
 日本語の `RequestEnvelope.locale` は `ja` と `ja-JP` を受け付け、指定された綴りを入力と採用結果に保持する。
+
+`minidora-rust inspect --input ID --version N --json` または `engine.input_result(actor, case, input, version)` で、指定した入力版の保存済み `ResultRecord` を読み出せる。CLIの版指定は省略時に `1`。結果未保存または該当版が存在しない場合はCLIが `null` を返し、Native APIでは `None` になる。`--input` を省略するとCLIは会話の最新保存版を返す。
 
 ```rust
 use minidora_domain::{RequestEnvelope, Result, ResultRecord};

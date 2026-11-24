@@ -16,6 +16,7 @@ const MAX_SCAN_BYTES: usize = 131_072;
 const MAX_SUMMARY_PASSAGES: usize = 128;
 const MAX_SENTENCE_BYTES: usize = 1_536;
 const MAX_TOPIC_BYTES: usize = 512;
+const MOUNTAIN_DEFINITION_ANSWER: &str = "minidora.web-answer.wikipedia-prose.v3";
 
 pub(crate) fn nodes() -> [GoalNode; 3] {
     [
@@ -125,10 +126,15 @@ impl WebAnswer {
             );
         }
         if let Some(elevation) = &self.elevation {
+            let source = if self.kind == MOUNTAIN_DEFINITION_ANSWER {
+                "本文の山の定義文"
+            } else {
+                "本文"
+            };
             units.insert(
                 2,
                 format!(
-                    "本文が『標高』と記した {} m を換算すると、{} km です（1 km = 1000 m）。",
+                    "{source}が『標高』と記した {} m を換算すると、{} km です（1 km = 1000 m）。",
                     elevation.metres, elevation.calculation.exact_value
                 ),
             );
@@ -178,8 +184,13 @@ impl WebAnswer {
             ));
         }
         if let Some(elevation) = &self.elevation {
+            let source = if self.kind == MOUNTAIN_DEFINITION_ANSWER {
+                "本文の山の定義文にある標高"
+            } else {
+                "本文中の標高"
+            };
             units.push(format!(
-                "本文中の標高 {} m を 1000 で割り、{} km としました。",
+                "{source} {} m を 1000 で割り、{} km としました。",
                 elevation.metres, elevation.calculation.exact_value
             ));
         }
@@ -229,21 +240,26 @@ pub(crate) fn answer(
         ));
     }
     let selected = if elevation_in_kilometres {
-        find_passage(article, true, &|line| {
-            stated_elevation_metres(line).is_some()
-        })
-        .map(|passage| (passage, None))
+        find_elevation_passage(article, topic)
+            .map(|(passage, definition)| (passage, None, definition))
     } else {
         find_topic_passage(article, topic, &candidate.title)
+            .map(|(passage, title)| (passage, title, false))
     };
-    let (passage, case_matched_article_title) = selected.ok_or_else(|| {
-        failure(
-            "WEB_ANSWER_NO_SUPPORTED_PASSAGE",
-            "取得本文で話題に一致する読み取れる日本語の文を確認できませんでした。",
-        )
-    })?;
+    let (passage, case_matched_article_title, uses_mountain_definition) =
+        selected.ok_or_else(|| {
+            failure(
+                "WEB_ANSWER_NO_SUPPORTED_PASSAGE",
+                "取得本文で話題に一致する読み取れる日本語の文を確認できませんでした。",
+            )
+        })?;
     let elevation = if elevation_in_kilometres {
-        let metres = stated_elevation_metres(&passage.text).ok_or_else(|| {
+        let metres = if uses_mountain_definition {
+            mountain_definition_metres(topic, &passage.text)
+        } else {
+            stated_elevation_metres(&passage.text)
+        }
+        .ok_or_else(|| {
             failure(
                 "WEB_ELEVATION_UNRESOLVED",
                 "本文から標高の値と単位を確認できませんでした。",
@@ -257,7 +273,9 @@ pub(crate) fn answer(
         None
     };
     Ok(WebAnswer {
-        kind: if case_matched_article_title.is_some() {
+        kind: if uses_mountain_definition {
+            MOUNTAIN_DEFINITION_ANSWER
+        } else if case_matched_article_title.is_some() {
             "minidora.web-answer.wikipedia-prose.v2"
         } else {
             "minidora.web-answer.wikipedia-prose.v1"
@@ -300,6 +318,11 @@ fn stated_elevation_metres(sentence: &str) -> Option<&str> {
 }
 
 fn metre_value(value: &str) -> Option<(&str, &str)> {
+    let (number, rest) = measured_number(value)?;
+    Some((number, rest.strip_prefix('m')?))
+}
+
+fn measured_number(value: &str) -> Option<(&str, &str)> {
     let value = value.trim_start();
     let end = value
         .bytes()
@@ -310,7 +333,44 @@ fn metre_value(value: &str) -> Option<(&str, &str)> {
     if integral.is_empty() || fraction.is_empty() || fraction.contains('.') || number.len() > 24 {
         return None;
     }
-    Some((number, rest.trim_start().strip_prefix('m')?))
+    Some((number, rest.trim_start()))
+}
+
+fn mountain_definition_metres<'a>(topic: &str, sentence: &'a str) -> Option<&'a str> {
+    let mut predicate = sentence.strip_prefix(topic)?;
+    if let Some(reading) = predicate.strip_prefix('（') {
+        let (reading, rest) = reading.split_once('）')?;
+        if reading.is_empty()
+            || !reading
+                .chars()
+                .all(|character| matches!(character, 'ぁ'..='ゖ' | 'ァ'..='ヺ' | 'ー'))
+        {
+            return None;
+        }
+        predicate = rest;
+    }
+    let (location, elevation) = predicate.strip_prefix("は、")?.split_once("にある標高")?;
+    if !location.ends_with(['市', '区', '町', '村'])
+        || !location
+            .chars()
+            .all(|character| matches!(character, '一'..='龯' | '々' | 'ヶ'))
+        || !description_phrase(location)
+        || ["推定", "概算", "未確認", "想定"]
+            .into_iter()
+            .any(|word| location.contains(word))
+    {
+        return None;
+    }
+    let (number, rest) = measured_number(elevation)?;
+    (rest == "メートル（m）の山。").then_some(number)
+}
+
+fn decimal_value_parts(number: &str) -> (&str, &str) {
+    let (integer, fraction) = number.split_once('.').unwrap_or((number, ""));
+    (
+        integer.trim_start_matches('0'),
+        fraction.trim_end_matches('0'),
+    )
 }
 
 fn positive_measurement_end(tail: &str) -> bool {
@@ -344,6 +404,47 @@ fn find_passage(
         },
     );
     selected
+}
+
+fn find_elevation_passage(article: &str, topic: &str) -> Option<(Passage, bool)> {
+    // Preserve the earlier direct statement rule throughout the same bounded
+    // scan. A definition is eligible only as a fallback for the named subject.
+    let mut direct = None;
+    let mut definition: Option<Passage> = None;
+    let mut conflicting_definitions = false;
+    let _ = visit_passages(
+        article,
+        true,
+        false,
+        &|sentence| {
+            stated_elevation_metres(sentence).is_some()
+                || mountain_definition_metres(topic, sentence).is_some()
+        },
+        &mut |passage| {
+            if stated_elevation_metres(&passage.text).is_some() {
+                direct = Some((passage, false));
+                return true;
+            }
+            if !article[passage.source_start..passage.source_end].contains("{{")
+                && let Some(number) = mountain_definition_metres(topic, &passage.text)
+            {
+                if let Some(previous) = &definition {
+                    let previous_number = mountain_definition_metres(topic, &previous.text)
+                        .expect("the definition had a checked elevation");
+                    conflicting_definitions |=
+                        decimal_value_parts(previous_number) != decimal_value_parts(number);
+                } else {
+                    definition = Some(passage);
+                }
+            }
+            false
+        },
+    );
+    if conflicting_definitions {
+        direct
+    } else {
+        direct.or_else(|| definition.map(|passage| (passage, true)))
+    }
 }
 
 fn find_topic_passage<'a>(
@@ -743,6 +844,44 @@ mod tests {
         assert_eq!(passage.text, "pythonという小文字表記もある。");
         assert!(find_topic_passage(article, "python", "Python (言語)").is_none());
         assert!(find_topic_passage(article, "py", "Python").is_none());
+    }
+
+    #[test]
+    fn mountain_definition_uses_its_named_subject_and_unambiguous_metres() {
+        let title = "高尾山";
+        let raw = "'''高尾山'''（たかおさん）は、[[東京都]][[八王子市]]にある[[高さ#標高|標高]]599[[メートル]]（m）の[[山]]。";
+        let (passage, fallback) = find_elevation_passage(raw, title).unwrap();
+        assert!(fallback);
+        assert_eq!(
+            mountain_definition_metres(title, &passage.text),
+            Some("599")
+        );
+        assert_eq!(&raw[passage.source_start..passage.source_end], raw);
+        assert_eq!(passage.source_span_sha256, digest(raw.as_bytes()));
+
+        for invalid in [
+            raw.replace("高尾山", "別の山"),
+            raw.replace("599", "約599"),
+            raw.replace("599", "推定599"),
+            raw.replace("山]]。", "山]]ではない。"),
+            raw.replace("[[八王子市]]", "{{lang-ja|八王子市}}"),
+            format!("「{raw}」"),
+            format!("{{{{Info|{raw}}}}}"),
+        ] {
+            assert!(
+                find_elevation_passage(&invalid, title).is_none(),
+                "{invalid}"
+            );
+        }
+
+        let same = format!("{raw}\n{}", raw.replace("599", "599.0"));
+        assert!(find_elevation_passage(&same, title).is_some());
+        let different = format!("{raw}\n{}", raw.replace("599", "599.3"));
+        assert!(find_elevation_passage(&different, title).is_none());
+        let direct = format!("{different}\n標高は600 mです。\n");
+        let (passage, fallback) = find_elevation_passage(&direct, title).unwrap();
+        assert!(!fallback);
+        assert_eq!(stated_elevation_metres(&passage.text), Some("600"));
     }
 
     #[test]
