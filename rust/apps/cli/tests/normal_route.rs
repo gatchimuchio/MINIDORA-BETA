@@ -67,12 +67,26 @@ fn seed_fetched_source_case_with_observations<'a>(
     actor: &str,
     sources: impl IntoIterator<Item = (&'a str, &'a str, u64)>,
 ) -> (String, Vec<String>, Vec<String>) {
+    seed_fetched_source_case_with_mode(directory, actor, sources, "FIXTURE")
+}
+
+fn seed_fetched_source_case_with_mode<'a>(
+    directory: &Path,
+    actor: &str,
+    sources: impl IntoIterator<Item = (&'a str, &'a str, u64)>,
+    mode: &str,
+) -> (String, Vec<String>, Vec<String>) {
     use minidora_domain::{
         CaseRevision, EvidencePacket, GoalContract, Guarantee, Lifecycle, RequestEnvelope,
         ResultRecord, SCHEMA_VERSION, digest, identity,
     };
 
     let case = "normal-route";
+    let (provider_id, parser_version) = match mode {
+        "LIVE" => ("https-direct-url-v1", "strict-utf8-identity-v1"),
+        "FIXTURE" => ("normal-route-test-fixture", "fixture-exact-text-v1"),
+        _ => panic!("unsupported fetched-body test mode: {mode}"),
+    };
     let request = RequestEnvelope::new(case, "source-fixture", actor, "source fixture");
     let bundle = minidora_engine::input::seal(&request, None).unwrap();
     let fingerprint = identity(&request).unwrap();
@@ -85,18 +99,18 @@ fn seed_fetched_source_case_with_observations<'a>(
         let raw_body = extracted_text.as_bytes().to_vec();
         let mut packet = EvidencePacket {
             id: String::new(),
-            mode: "FIXTURE".into(),
+            mode: mode.into(),
             packet_kind: "FETCHED_BODY".into(),
             request_uri: uri.into(),
             final_uri: uri.into(),
             redirect_chain: vec![uri.into()],
             observed_at_unix_ms,
-            provider_id: "normal-route-test-fixture".into(),
+            provider_id: provider_id.into(),
             http_status: 200,
             raw_sha256: digest(&raw_body),
             raw_body,
             extracted_text: Some(extracted_text.into()),
-            parser_version: "fixture-exact-text-v1".into(),
+            parser_version: parser_version.into(),
             independence_group: uri.into(),
             failure: None,
             retry_after: None,
@@ -12374,6 +12388,150 @@ fn natural_source_question_consumes_every_retained_candidate_body_in_order() {
     for packet_ref in &packet_refs {
         assert!(graph.to_string().contains(packet_ref));
     }
+}
+
+#[test]
+fn mixed_live_source_question_replays_wiki_and_other_body_spans() {
+    let scratch = Scratch::new();
+    let wiki_uri = "https://ja.wikipedia.org/wiki/Fuji?action=raw";
+    let other_uri = "https://example.test/park";
+    let wiki_raw = "また、[[国立公園]]に指定されている{{refnest|group=\"注釈\"|脚注固有語<ref>{{Cite web|title=出典}}</ref>。}}。";
+    let wiki_visible = "また、国立公園に指定されている。";
+    let wiki_prefix = "{{Photo|marksize=18}}\n'''富士山'''は、[[日本]]の活火山である。\n静岡県と山梨県にまたがる。\n";
+    let wiki_body = format!("{wiki_prefix}{wiki_raw}\n");
+    let other_visible = "国立公園の利用案内です。";
+    let (source_id, packet_refs, _) = seed_fetched_source_case_with_mode(
+        &scratch.0,
+        "owner",
+        [
+            (wiki_uri, wiki_body.as_str(), 1),
+            (other_uri, other_visible, 2),
+        ],
+        "LIVE",
+    );
+
+    let question = "資料では「国立公園」について何と述べていますか";
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mixed-source-question", question],
+    ));
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "HYPOTHESIS");
+    let dependencies = answer["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 4);
+    assert_eq!(dependencies[0], source_id);
+    assert_eq!(dependencies[1], packet_refs[0]);
+    assert_eq!(dependencies[2], packet_refs[1]);
+    let answer_ref = dependencies[3].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let answer_bytes = store
+        .get_bytes("owner", "normal-route", answer_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&answer_bytes), answer_ref);
+    let typed: Value = serde_json::from_slice(&answer_bytes).unwrap();
+    assert_eq!(
+        typed["operation"],
+        "SOURCE_QUESTION_MIXED_PROSE_EXTRACTIVE_CANDIDATES_V5"
+    );
+    assert_eq!(typed["source_result_id"], source_id);
+    assert_eq!(typed["active_source_count"], 2);
+    assert_eq!(typed["matched_sentence_count"], 2);
+
+    let explanation = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mixed-source-explanation", "詳しく説明して"],
+    ));
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "HYPOTHESIS");
+    let mut explanation_dependencies = vec![answer["id"].clone()];
+    explanation_dependencies.extend_from_slice(dependencies);
+    assert_eq!(
+        explanation["dependencies"],
+        Value::Array(explanation_dependencies)
+    );
+    let answer_text = answer["text"].as_str().unwrap();
+    let explanation_text = explanation["text"].as_str().unwrap();
+    for text in [answer_text, explanation_text] {
+        assert!(!text.contains("脚注固有語"));
+    }
+    let candidates = typed["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 2);
+    for (index, (uri, start, raw, visible, body_label, candidate_label)) in [
+        (
+            wiki_uri,
+            wiki_prefix.len(),
+            wiki_raw,
+            wiki_visible,
+            "原本文",
+            "表示候補",
+        ),
+        (
+            other_uri,
+            0,
+            other_visible,
+            other_visible,
+            "抽出本文",
+            "原文候補",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let candidate = &candidates[index];
+        let end = start + raw.len();
+        let raw_digest = minidora_domain::digest(raw.as_bytes());
+        assert_eq!(candidate["source_final_uri"], uri);
+        assert_eq!(candidate["source_packet_ref"], packet_refs[index]);
+        assert_eq!(candidate["source_mode"], "LIVE");
+        assert_eq!(candidate["source_start"], start);
+        assert_eq!(candidate["source_end"], end);
+        assert_eq!(candidate["source_span_sha256"], raw_digest);
+        assert_eq!(candidate["text"], visible);
+        let range = format!("{body_label}byte[{start}..{end})");
+        assert!(answer_text.contains(&range), "{answer_text}");
+        assert!(answer_text.contains(&format!("{candidate_label}: {visible}")));
+        assert!(explanation_text.contains(&format!(
+            "{range} / 範囲SHA-256: {raw_digest} / {candidate_label}: {visible:?}"
+        )));
+    }
+
+    let no_match_path = scratch.0.join("footnote-answer.txt");
+    let no_match_path_arg = no_match_path.to_str().unwrap();
+    let no_match = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                "wiki-footnote-only",
+                "--context",
+                &source_id,
+                "--output",
+                no_match_path_arg,
+                "--allow-write",
+                no_match_path_arg,
+                "資料では「脚注固有語」について何と述べていますか",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    let reason = no_match["reason"].as_str().unwrap();
+    assert!(reason.starts_with("SOURCE_QUESTION_NO_MATCH: "), "{reason}");
+    assert!(reason.contains("その他の資料の抽出本文"), "{reason}");
+    assert_eq!(no_match["dependencies"], serde_json::json!([]));
+    assert!(!no_match_path.exists());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
+    let resumed = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "mixed-source-question-resumed", question],
+    ));
+    assert_eq!(resumed["dependencies"], answer["dependencies"]);
+    assert_eq!(resumed["text"], answer["text"]);
 }
 
 #[test]

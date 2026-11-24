@@ -326,21 +326,25 @@ const WIKIPEDIA_SOURCE_QUESTION_V3: &str =
     "SOURCE_QUESTION_WIKIPEDIA_PROSE_EXTRACTIVE_CANDIDATES_V3";
 const WIKIPEDIA_SOURCE_QUESTION_V4: &str =
     "SOURCE_QUESTION_WIKIPEDIA_PROSE_EXTRACTIVE_CANDIDATES_V4";
+const MIXED_SOURCE_QUESTION_V5: &str = "SOURCE_QUESTION_MIXED_PROSE_EXTRACTIVE_CANDIDATES_V5";
 pub(crate) const WIKIPEDIA_SOURCE_QUESTION_NO_MATCH: &str =
     "保存済みWikipedia本文の冒頭で、今回の予算内に読み取れた文には質問語句が見つかりませんでした。";
 pub(crate) const WIKIPEDIA_SOURCE_QUESTION_V4_NO_MATCH: &str = "保存済みWikipedia本文の冒頭で、注記を除いて今回の予算内に読み取れた文には質問語句が見つかりませんでした。";
+const MIXED_SOURCE_QUESTION_NO_MATCH: &str = "資料ごとの形式で照合しましたが、保存済みWikipedia記事の読み取れた冒頭と、その他の資料の抽出本文に質問語句が見つかりませんでした。";
 
 #[derive(Clone, Copy)]
-enum WikipediaQuestionProse {
+enum SourceQuestionProse {
     V3,
     V4,
+    MixedV5,
 }
 
-impl WikipediaQuestionProse {
+impl SourceQuestionProse {
     fn from_operation(operation: &str) -> Option<Self> {
         match operation {
             WIKIPEDIA_SOURCE_QUESTION_V3 => Some(Self::V3),
             WIKIPEDIA_SOURCE_QUESTION_V4 => Some(Self::V4),
+            MIXED_SOURCE_QUESTION_V5 => Some(Self::MixedV5),
             _ => None,
         }
     }
@@ -349,6 +353,7 @@ impl WikipediaQuestionProse {
         match self {
             Self::V3 => WIKIPEDIA_SOURCE_QUESTION_V3,
             Self::V4 => WIKIPEDIA_SOURCE_QUESTION_V4,
+            Self::MixedV5 => MIXED_SOURCE_QUESTION_V5,
         }
     }
 
@@ -356,7 +361,12 @@ impl WikipediaQuestionProse {
         match self {
             Self::V3 => WIKIPEDIA_SOURCE_QUESTION_NO_MATCH,
             Self::V4 => WIKIPEDIA_SOURCE_QUESTION_V4_NO_MATCH,
+            Self::MixedV5 => MIXED_SOURCE_QUESTION_NO_MATCH,
         }
+    }
+
+    fn uses_wikipedia_prose(self, final_uri: &str) -> bool {
+        !matches!(self, Self::MixedV5) || is_wikipedia_raw_uri(final_uri)
     }
 }
 
@@ -1008,16 +1018,20 @@ pub(crate) fn answer_fetched_source_question_v2(
     answer_fetched_source_question_versioned(source_result_id, question_topic, packets, None)
 }
 
-pub(crate) fn replay_stopped_wikipedia_source_question(
+pub(crate) fn replay_stopped_prose_source_question(
     reason: &str,
     source_result_id: &str,
     question_topic: &str,
     packets: &[(usize, &EvidencePacket, String)],
     candidate_limit: usize,
 ) -> Option<Result<SourceQuestionAnswerV2>> {
-    let prose = [WikipediaQuestionProse::V4, WikipediaQuestionProse::V3]
-        .into_iter()
-        .find(|version| reason.ends_with(version.no_match()))?;
+    let prose = [
+        SourceQuestionProse::MixedV5,
+        SourceQuestionProse::V4,
+        SourceQuestionProse::V3,
+    ]
+    .into_iter()
+    .find(|version| reason.ends_with(version.no_match()))?;
     Some(answer_fetched_source_question_versioned(
         source_result_id,
         question_topic,
@@ -1032,37 +1046,53 @@ pub(crate) fn answer_fetched_source_question(
     packets: &[(usize, &EvidencePacket, String)],
     candidate_limit: usize,
 ) -> Result<SourceQuestionAnswerV2> {
-    if is_wikipedia_source_question_scope(packets) {
+    let wikipedia_count = packets
+        .iter()
+        .filter(|(_, packet, _)| is_wikipedia_raw_body(packet))
+        .count();
+    let mode = if wikipedia_count == packets.len()
+        && !packets.is_empty()
+        && packets
+            .iter()
+            .all(|(_, packet, _)| supported_wikipedia_source_question_packet(packet))
+    {
+        Some(SourceQuestionProse::V4)
+    } else if wikipedia_count > 0
+        && wikipedia_count < packets.len()
+        && packets.iter().any(|(_, packet, _)| packet.mode == "LIVE")
+    {
+        Some(SourceQuestionProse::MixedV5)
+    } else {
+        None
+    };
+    if let Some(mode) = mode {
         return answer_fetched_source_question_versioned(
             source_result_id,
             question_topic,
             packets,
-            Some((WikipediaQuestionProse::V4, candidate_limit)),
+            Some((mode, candidate_limit)),
         );
     }
     answer_fetched_source_question_v2(source_result_id, question_topic, packets)
 }
 
-fn is_wikipedia_source_question_scope(packets: &[(usize, &EvidencePacket, String)]) -> bool {
-    !packets.is_empty()
-        && packets.iter().all(|(_, packet, _)| {
-            packet.mode == "LIVE"
-                && packet.http_status == 200
-                && packet.provider_id == "https-direct-url-v1"
-                && packet.parser_version == "strict-utf8-identity-v1"
-                && packet
-                    .extracted_text
-                    .as_deref()
-                    .is_some_and(|text| text.as_bytes() == packet.raw_body)
-                && is_wikipedia_raw_body(packet)
-        })
+fn supported_wikipedia_source_question_packet(packet: &EvidencePacket) -> bool {
+    packet.mode == "LIVE"
+        && packet.http_status == 200
+        && packet.provider_id == "https-direct-url-v1"
+        && packet.parser_version == "strict-utf8-identity-v1"
+        && packet
+            .extracted_text
+            .as_deref()
+            .is_some_and(|text| text.as_bytes() == packet.raw_body)
+        && is_wikipedia_raw_body(packet)
 }
 
 fn answer_fetched_source_question_versioned(
     source_result_id: &str,
     question_topic: &str,
     packets: &[(usize, &EvidencePacket, String)],
-    mut wikipedia: Option<(WikipediaQuestionProse, usize)>,
+    mut prose: Option<(SourceQuestionProse, usize)>,
 ) -> Result<SourceQuestionAnswerV2> {
     if !sha256_id(source_result_id)
         || question_topic.is_empty()
@@ -1075,8 +1105,13 @@ fn answer_fetched_source_question_versioned(
             "expected a committed source result, a topic up to 512 bytes and 1..16 fetched-body packets",
         ));
     }
-    let wiki_prose = wikipedia.is_some();
-    if wiki_prose && !is_wikipedia_source_question_scope(packets) {
+    let mixed = matches!(prose, Some((SourceQuestionProse::MixedV5, _)));
+    if prose.is_some()
+        && !mixed
+        && !packets
+            .iter()
+            .all(|(_, packet, _)| supported_wikipedia_source_question_packet(packet))
+    {
         return Err(failure(
             "SOURCE_QUESTION_EVIDENCE_INVALID",
             "the Wikipedia question requires intact original live UTF-8 article bodies",
@@ -1139,6 +1174,30 @@ fn answer_fetched_source_question_versioned(
         source_versions,
         superseded_version_count,
     } = select_source_versions(packets, None)?;
+    if mixed {
+        let mut wiki = false;
+        let mut other = false;
+        for packet_index in &active_packet_indices {
+            let (_, packet, _) = &packets[*packet_index];
+            if is_wikipedia_raw_body(packet) {
+                if !supported_wikipedia_source_question_packet(packet) {
+                    return Err(failure(
+                        "SOURCE_QUESTION_EVIDENCE_INVALID",
+                        "mixed source questions require intact original live UTF-8 Wikipedia bodies",
+                    ));
+                }
+                wiki = true;
+            } else {
+                other = true;
+            }
+        }
+        if !(wiki && other) {
+            return Err(failure(
+                "SOURCE_QUESTION_EVIDENCE_INVALID",
+                "mixed source questions require both Wikipedia and other fetched bodies",
+            ));
+        }
+    }
 
     let mut ordered = Vec::<(usize, usize, usize, SourceQuestionCandidate)>::new();
     let mut matched_sentence_count = 0usize;
@@ -1149,15 +1208,20 @@ fn answer_fetched_source_question_versioned(
             .as_deref()
             .expect("validated active source body has extracted text");
         let extracted_text_sha256 = digest(extracted_text.as_bytes());
-        let passages: Vec<_> = if let Some((prose, remaining)) = &mut wikipedia {
+        let passages: Vec<_> = if let Some((rule, remaining)) = &mut prose
+            && rule.uses_wikipedia_prose(&packet.final_uri)
+        {
             if *remaining == 0 {
+                if mixed {
+                    continue;
+                }
                 break;
             }
-            let passages = match prose {
-                WikipediaQuestionProse::V3 => {
+            let passages = match rule {
+                SourceQuestionProse::V3 => {
                     crate::web_answer::readable_passages(extracted_text, *remaining)
                 }
-                WikipediaQuestionProse::V4 => {
+                SourceQuestionProse::V4 | SourceQuestionProse::MixedV5 => {
                     crate::web_answer::readable_passages_with_nested_footnotes(
                         extracted_text,
                         *remaining,
@@ -1211,7 +1275,7 @@ fn answer_fetched_source_question_versioned(
     if ordered.is_empty() {
         return Err(failure(
             "SOURCE_QUESTION_NO_MATCH",
-            wikipedia.map(|(prose, _)| prose.no_match()).unwrap_or(
+            prose.map(|(rule, _)| rule.no_match()).unwrap_or(
                 "no sentence in the newest body version for any exact final URI contains a supported topic term",
             ),
         ));
@@ -1236,7 +1300,7 @@ fn answer_fetched_source_question_versioned(
         })
         .collect();
     Ok(SourceQuestionAnswerV2 {
-        operation: wikipedia.map(|(prose, _)| prose.operation()).unwrap_or(
+        operation: prose.map(|(rule, _)| rule.operation()).unwrap_or(
             "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2",
         ).into(),
         source_result_id: source_result_id.into(),
@@ -1248,7 +1312,9 @@ fn answer_fetched_source_question_versioned(
         source_versions,
         matched_sentence_count,
         candidates,
-        guarantee: if wiki_prose {
+        guarantee: if mixed {
+            "各URLの最新取得版を資料ごとの形式で照合しました。Wikipediaは候補予算内の冒頭表示文を使い、原本文の範囲には除いた記法も含まれます。その他の資料は抽出本文の範囲を示します。回答の意味・網羅性・資料の信頼性と事実性は未検証です"
+        } else if prose.is_some() {
             "各URLの最新取得版から、候補予算内で読み取れた記事冒頭の表示文と語句を照合しました。原本文の範囲とSHA-256には表示時に除いた記法も含まれます。回答の意味・網羅性・資料の信頼性と事実性は未検証です"
         } else {
             "exact English-token or Japanese-substring matches from the latest observed body/parser version for each exact final URI; older distinct versions and repeated observations remain linked, while source independence, semantic relevance, completeness, reliability and factual truth are not verified"
@@ -1257,19 +1323,14 @@ fn answer_fetched_source_question_versioned(
 }
 
 pub(crate) fn source_question_answer_lines_v2(answer: &SourceQuestionAnswerV2) -> Vec<String> {
-    let wiki_prose = WikipediaQuestionProse::from_operation(&answer.operation).is_some();
-    let (intro, span_label, candidate_label) = if wiki_prose {
-        (
-            "取得済みWikipedia本文の冒頭から、予算内で読み取れた文を質問語句と照合しました。表示ではリンクや注記の記法を除いています。",
-            "原本文",
-            "表示候補",
-        )
+    let prose = SourceQuestionProse::from_operation(&answer.operation);
+    let mixed = matches!(prose, Some(SourceQuestionProse::MixedV5));
+    let intro = if mixed {
+        "取得済み本文を資料ごとの形式で照合しました。Wikipediaはリンクや注記の記法を除いた冒頭の表示文、その他の資料は抽出本文を使いました。"
+    } else if prose.is_some() {
+        "取得済みWikipedia本文の冒頭から、予算内で読み取れた文を質問語句と照合しました。表示ではリンクや注記の記法を除いています。"
     } else {
-        (
-            "前回取得した実本文の最新版から、質問語句と一致する原文候補を抽出しました。",
-            "extracted-text ",
-            "原文候補",
-        )
+        "前回取得した実本文の最新版から、質問語句と一致する原文候補を抽出しました。"
     };
     let mut lines = vec![
         intro.into(),
@@ -1314,6 +1375,14 @@ pub(crate) fn source_question_answer_lines_v2(answer: &SourceQuestionAnswerV2) -
         answer.candidates.len()
     ));
     for candidate in &answer.candidates {
+        let (span_label, candidate_label) =
+            if prose.is_some_and(|rule| rule.uses_wikipedia_prose(&candidate.source_final_uri)) {
+                ("原本文", "表示候補")
+            } else if mixed {
+                ("抽出本文", "原文候補")
+            } else {
+                ("extracted-text ", "原文候補")
+            };
         lines.push(format!(
             "候補{} / mode: {} / source: {} / packet: {} / raw-body SHA-256: {} / extracted-text SHA-256: {}",
             candidate.rank,
@@ -3711,7 +3780,7 @@ pub(crate) fn recompute_source_question_artifact(
                 source_question_answer_lines_v2(&answer),
             ))
         }
-        operation if let Some(prose) = WikipediaQuestionProse::from_operation(operation) => {
+        operation if let Some(prose) = SourceQuestionProse::from_operation(operation) => {
             let answer = answer_fetched_source_question_versioned(
                 source_result_id,
                 query,
@@ -3875,17 +3944,18 @@ fn previous_source_question_explanation<'a>(
         format!("回答レポート: {} / SHA-256: {}", proof.operation, proof.answer_ref),
         format!("一致した{matched}文から{}候補を採用。一致した語の種類が多い文を優先し、同数のときは資料と抽出位置の順で並べました。", candidates.len()),
     ]);
-    let (span_label, candidate_label) = if WikipediaQuestionProse::from_operation(&proof.operation)
-        .is_some()
-    {
+    let prose = SourceQuestionProse::from_operation(&proof.operation);
+    if matches!(prose, Some(SourceQuestionProse::MixedV5)) {
+        units.push(format!(
+            "Wikipediaは記事冒頭から読み取れた文を合計{}候補まで照合しました。表示では記法を除き、範囲は原本文を指します。その他の資料は抽出本文の範囲を示します。",
+            question_bundle.request.budget.max_actions,
+        ));
+    } else if prose.is_some() {
         units.push(format!(
             "記事冒頭から読み取れた文を候補{}件まで照合しました。表示候補では記法を除き、原本文の範囲にはその記法も含まれます。",
             question_bundle.request.budget.max_actions,
         ));
-        ("原本文", "表示候補")
-    } else {
-        ("抽出本文", "原文候補")
-    };
+    }
     for candidate in candidates {
         let packet = proof
             .source_packet_refs
@@ -3893,6 +3963,12 @@ fn previous_source_question_explanation<'a>(
             .find(|(_, reference)| reference == &candidate.source_packet_ref)
             .and_then(|(index, _)| source.evidence.get(*index))
             .ok_or_else(invalid)?;
+        let (span_label, candidate_label) =
+            if prose.is_some_and(|rule| rule.uses_wikipedia_prose(&packet.final_uri)) {
+                ("原本文", "表示候補")
+            } else {
+                ("抽出本文", "原文候補")
+            };
         let mut chars = candidate.text.chars();
         let mut preview: String = chars.by_ref().take(128).collect();
         if chars.next().is_some() {
@@ -4472,7 +4548,11 @@ fn summarize_page_break_source_for_intent(
 }
 
 fn is_wikipedia_raw_body(packet: &EvidencePacket) -> bool {
-    url::Url::parse(&packet.final_uri).is_ok_and(|uri| {
+    is_wikipedia_raw_uri(&packet.final_uri)
+}
+
+fn is_wikipedia_raw_uri(uri: &str) -> bool {
+    url::Url::parse(uri).is_ok_and(|uri| {
         let mut actions = uri.query_pairs().filter(|(key, _)| key == "action");
         uri.scheme() == "https"
             && uri.host_str() == Some(crate::search::SearchProvider::Wikipedia.host())
@@ -4840,7 +4920,7 @@ mod tests {
         }
 
         let query = "国立公園";
-        let older = replay_stopped_wikipedia_source_question(
+        let older = replay_stopped_prose_source_question(
             WIKIPEDIA_SOURCE_QUESTION_NO_MATCH,
             &result_id,
             query,
@@ -4895,6 +4975,38 @@ mod tests {
         packet.extracted_text = Some(text.into());
         packet.observed_at_unix_ms = observed_at_unix_ms;
         packet
+    }
+
+    #[test]
+    fn mixed_source_question_keeps_later_plain_sources_when_wiki_budget_is_used() {
+        let wiki = |title: &str, text: &str| {
+            let mut packet = source_question_packet(text);
+            packet.final_uri = format!("https://ja.wikipedia.org/wiki/{title}?action=raw");
+            packet.request_uri.clone_from(&packet.final_uri);
+            packet
+        };
+        let first = wiki("Other", "さきに読む文である。\n");
+        let second = wiki("Json", "JSON はデータ形式である。\n");
+        let plain = source_question_packet("JSON is a text format.");
+        let packets = [&first, &second, &plain].map(|packet| digest(&canonical(packet).unwrap()));
+        let sources = [
+            (0, &first, packets[0].clone()),
+            (1, &second, packets[1].clone()),
+            (2, &plain, packets[2].clone()),
+        ];
+        let result_id = "a".repeat(64);
+        let limited = answer_fetched_source_question(&result_id, "JSON", &sources, 1).unwrap();
+        assert_eq!(limited.operation, MIXED_SOURCE_QUESTION_V5);
+        assert_eq!(limited.candidates.len(), 1);
+        assert_eq!(limited.candidates[0].source_packet_ref, packets[2]);
+
+        let both = answer_fetched_source_question(&result_id, "JSON", &sources, 2).unwrap();
+        assert_eq!(both.candidates.len(), 2);
+        assert_eq!(both.candidates[0].source_packet_ref, packets[1]);
+        assert_eq!(both.candidates[1].source_packet_ref, packets[2]);
+        let lines = source_question_answer_lines_v2(&both);
+        assert!(lines.iter().any(|line| line.contains(" / 原本文byte[")));
+        assert!(lines.iter().any(|line| line.contains(" / 抽出本文byte[")));
     }
 
     #[test]
