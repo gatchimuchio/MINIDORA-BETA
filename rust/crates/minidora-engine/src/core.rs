@@ -5702,6 +5702,12 @@ impl Engine {
                 })
                 .and_then(|case| case.bundle.as_ref())
                 .and_then(|bundle| match &bundle.meaning.intent {
+                    Intent::ExplainPrevious
+                        if bundle.meaning.parser_version
+                            == input::WEB_ANSWER_EXPLANATION_PARSER_VERSION =>
+                    {
+                        Some(input::SourceContext::WebAnswerExplanation)
+                    }
                     Intent::ExplainPrevious => Some(input::SourceContext::Explanation),
                     intent if input::is_source_summary_intent(intent) => {
                         Some(input::SourceContext::Summary)
@@ -5711,6 +5717,40 @@ impl Engine {
             input::seal_with_source_context(&request, previous, implicit_source_context)
         };
         let sealed = sealed.and_then(|bundle| {
+            if has_compute_budget
+                && request.context_ref.is_some()
+                && matches!(
+                    bundle.meaning.intent,
+                    Intent::AskPreviousSourceQuestion { .. }
+                        | Intent::SummarizePreviousSource
+                        | Intent::SummarizePreviousSourceConstrained { .. }
+                        | Intent::SummarizePreviousSourceLines { .. }
+                )
+                && let Some(context) = previous.filter(|result| {
+                    result.lifecycle == Lifecycle::Commit
+                        && result.guarantee == Guarantee::SourceReport
+                        && result.evidence.is_empty()
+                })
+                && self
+                    .store
+                    .get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &context.input_id,
+                        context.input_version,
+                    )?
+                    .is_some_and(|(_, source)| {
+                        matches!(source.meaning.intent, Intent::ExplainPrevious)
+                            && source.meaning.parser_version
+                                == input::WEB_ANSWER_EXPLANATION_PARSER_VERSION
+                    })
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::WebAnswerExplanation),
+                );
+            }
             if has_compute_budget
                 && matches!(
                     bundle.meaning.parser_version.as_str(),
@@ -5736,7 +5776,10 @@ impl Engine {
                     Some(input::SourceContext::Summary),
                 );
             }
-            if input::uses_implicit_source_context(&bundle.meaning.parser_version) {
+            if input::uses_implicit_source_context(&bundle.meaning.parser_version)
+                || bundle.meaning.parser_version
+                    == input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            {
                 // Preserve the derived result itself before resolving its source.
                 return Ok(bundle);
             }

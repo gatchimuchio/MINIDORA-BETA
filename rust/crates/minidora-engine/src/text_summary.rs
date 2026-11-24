@@ -2373,19 +2373,46 @@ fn direct_source_followup<'a>(
         return Ok(None);
     }
     let direct = SourceFollowup::direct(context);
-    if bundle.meaning.parser_version != crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
-        || context.guarantee != Guarantee::SourceReport
-        || !context.evidence.is_empty()
+    let version = bundle.meaning.parser_version.as_str();
+    let web_followup = version == crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION;
+    let explanation_shape =
+        context.guarantee == Guarantee::SourceReport && context.evidence.is_empty();
+    if web_followup
+        && (!explanation_shape
+            || context.lifecycle != Lifecycle::Commit
+            || request
+                .context_ref
+                .as_deref()
+                .is_some_and(|reference| reference != context.id))
+    {
+        return Ok(None);
+    }
+    if !explanation_shape
+        || !(web_followup || version == crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION)
     {
         return Ok(Some(direct));
     }
 
     match history {
-        Some(history) => {
-            selected_body_followup(store, history, prior_results, context, actor, case)
-        }
+        Some(history) => selected_body_followup(
+            store,
+            history,
+            prior_results,
+            context,
+            actor,
+            case,
+            web_followup,
+        ),
         None => store.with_verified_case_history(actor, case, |history| {
-            selected_body_followup(store, history, prior_results, context, actor, case)
+            selected_body_followup(
+                store,
+                history,
+                prior_results,
+                context,
+                actor,
+                case,
+                web_followup,
+            )
         }),
     }
 }
@@ -2397,6 +2424,7 @@ fn selected_body_followup<'a>(
     context: &'a ResultRecord,
     actor: &str,
     case: &str,
+    web_followup: bool,
 ) -> Result<Option<SourceFollowup<'a>>> {
     let invalid = || {
         failure(
@@ -2407,10 +2435,17 @@ fn selected_body_followup<'a>(
     let (_, explanation) = history
         .input_bundle(&context.input_id, context.input_version)?
         .ok_or_else(invalid)?;
+    let expected_explanation = if web_followup {
+        crate::input::WEB_ANSWER_EXPLANATION_PARSER_VERSION
+    } else {
+        crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
+    };
     if !matches!(explanation.meaning.intent, Intent::ExplainPrevious)
-        || explanation.meaning.parser_version
-            != crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
+        || explanation.meaning.parser_version != expected_explanation
     {
+        if web_followup {
+            return Err(invalid());
+        }
         return Ok(Some(SourceFollowup::direct(context)));
     }
     let source = explanation
@@ -2427,9 +2462,21 @@ fn selected_body_followup<'a>(
         source,
     )?
     else {
+        if web_followup {
+            return Err(invalid());
+        }
         return Ok(Some(SourceFollowup::direct(context)));
     };
-    let Some(selected_body_index) = proof.selected_body_index else {
+    let selected_body_index = if web_followup {
+        // The Web explanation proof checked the single fetched body against
+        // the original selection and retained answer before returning.
+        source_summary_bodies(source)
+            .next()
+            .map(|(index, _)| index)
+            .ok_or_else(invalid)?
+    } else if let Some(index) = proof.selected_body_index {
+        index
+    } else {
         return Ok(Some(SourceFollowup::direct(context)));
     };
     let plan = context.content_plan.as_ref().ok_or_else(invalid)?;
@@ -2438,6 +2485,7 @@ fn selected_body_followup<'a>(
             .input_result(&context.input_id, context.input_version)?
             .as_ref()
             != Some(context)
+        || (web_followup && !history.contains_committed_result(context)?)
         || context.calculation.is_some()
         || plan.locale != explanation.request.locale
         || plan.required_units != proof.units
@@ -2453,7 +2501,11 @@ fn selected_body_followup<'a>(
         context,
         None,
         "SOURCE_CONTEXT_INVALID",
-        "search candidate body explanation",
+        if web_followup {
+            "Web answer explanation"
+        } else {
+            "search candidate body explanation"
+        },
     )?;
     Ok(Some(SourceFollowup {
         context,
@@ -2534,6 +2586,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
                     version,
                     crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                         | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+                        | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                 )
         }
         _ => false,
@@ -3386,6 +3439,7 @@ fn source_summary_packet_positions(
             | crate::input::IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
         return Ok((0..packets.len()).collect());
     }

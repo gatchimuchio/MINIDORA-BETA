@@ -153,6 +153,9 @@ pub(crate) const SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const WEB_ANSWER_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v161-web-answer-explanation";
 
+pub(crate) const WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v162-web-answer-explanation-followup";
+
 pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v113-explained-search-body-source-followup";
 
@@ -162,6 +165,7 @@ pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 #[derive(Clone, Copy)]
 pub(crate) enum SourceContext {
     Explanation,
+    WebAnswerExplanation,
     Summary,
 }
 
@@ -448,9 +452,10 @@ pub(crate) fn seal_with_source_context(
         request.context_ref.is_some() && source_explanation_candidate;
     let implicit_source_context =
         source_context.filter(|_| request.context_ref.is_none() && source_explanation_candidate);
-    let implicit_source_line_parser = implicit_source_context.map(|context| match context {
-        SourceContext::Explanation => IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION,
-        SourceContext::Summary => IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION,
+    let implicit_source_line_parser = implicit_source_context.and_then(|context| match context {
+        SourceContext::Explanation => Some(IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION),
+        SourceContext::Summary => Some(IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION),
+        SourceContext::WebAnswerExplanation => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
@@ -521,6 +526,19 @@ pub(crate) fn seal_with_source_context(
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
         Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,
         Intent::ExplainCalculationSequenceStep { .. } => SEQUENCE_STEP_EXPLANATION_PARSER_VERSION,
+        Intent::AskPreviousSourceQuestion { .. }
+        | Intent::SummarizePreviousSource
+        | Intent::SummarizePreviousSourceConstrained { .. }
+        | Intent::SummarizePreviousSourceLines { .. }
+            if matches!(source_context, Some(SourceContext::WebAnswerExplanation))
+                && previous.is_some_and(|result| {
+                    result.lifecycle == Lifecycle::Commit
+                        && result.guarantee == Guarantee::SourceReport
+                        && result.evidence.is_empty()
+                }) =>
+        {
+            WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        }
         Intent::SummarizePreviousSourcePacketLines { .. }
             if explicit_source_explanation_candidate
                 && matches!(source_context, Some(SourceContext::Summary)) =>

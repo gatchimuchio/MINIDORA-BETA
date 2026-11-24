@@ -121,6 +121,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                     bundle.meaning.parser_version.as_str(),
                     crate::input::SOURCE_SUMMARY_PARSER_VERSION
                         | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+                        | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
@@ -4058,7 +4059,27 @@ fn verify_source_summary_context(
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_SUMMARY_MISMATCH")?;
     }
-    if crate::input::uses_implicit_source_context(&bundle.meaning.parser_version) {
+    verify_implicit_source_predecessor(store, state, bundle)?;
+    crate::text_summary::verify_retained_source_summary(
+        store,
+        bundle,
+        &state.prior_results,
+        result,
+        plan,
+        None,
+    )
+}
+
+fn verify_implicit_source_predecessor(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+) -> Result<()> {
+    let version = &bundle.meaning.parser_version;
+    if crate::input::uses_implicit_source_context(version)
+        || (version == crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            && bundle.request.context_ref.is_none())
+    {
         let context = bundle
             .meaning
             .context_result_ref
@@ -4071,14 +4092,7 @@ fn verify_source_summary_context(
             ));
         }
     }
-    crate::text_summary::verify_retained_source_summary(
-        store,
-        bundle,
-        &state.prior_results,
-        result,
-        plan,
-        None,
-    )
+    Ok(())
 }
 
 const TEXT_SUMMARY_CANDIDATE_MISMATCH: &str = "RECOVERY_TEXT_SUMMARY_CANDIDATE_MISMATCH";
@@ -4294,6 +4308,7 @@ fn verify_source_question_context(
         .as_ref()
         .filter(|bundle| bundle.request.actor_id == actor && bundle.request.case_id == case)
         .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "sealed original unavailable"))?;
+    verify_implicit_source_predecessor(store, state, bundle)?;
     crate::text_summary::verify_retained_source_question(
         store,
         bundle,
@@ -4413,6 +4428,7 @@ fn inspect(
         bundle.meaning.parser_version.as_str(),
         crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
     }
