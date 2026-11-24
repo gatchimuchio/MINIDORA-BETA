@@ -36,6 +36,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+const FILE_RECONCILED_REASON: &str =
+    "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted";
+const FILE_UNCONFIRMED_PREFIX: &str = "LOCAL_RECONCILIATION_UNCONFIRMED: ";
+
 pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord> {
     let mut state = store
         .load_case(actor, case)?
@@ -45,10 +49,12 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
             .result
             .ok_or_else(|| failure("INTEGRITY_FAILURE", "committed case has no result"));
     }
-    if !matches!(state.lifecycle, Lifecycle::Adopted | Lifecycle::Suspend) {
+    if !matches!(state.lifecycle, Lifecycle::Adopted | Lifecycle::Suspend)
+        && !(state.lifecycle == Lifecycle::Running && is_reconcile_checkpoint(store, &state)?)
+    {
         return Err(failure(
             "INVALID_RECOVERY_STATE",
-            "only an adopted/suspended case can reconcile a local file",
+            "local file reconciliation requires an adopted, suspended or interrupted reconciliation state",
         ));
     }
     let mut result = state
@@ -147,17 +153,66 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
             )?
         },
     );
-    result.reason = Some(
-        "LOCAL_FILE_RECONCILED: exact original artifact observed; no effect resubmitted".into(),
-    );
+    result.reason = Some(FILE_RECONCILED_REASON.into());
     if state.lifecycle == Lifecycle::Suspend {
         advance(store, &mut state, &result, Lifecycle::Running)?;
+    }
+    if state.lifecycle == Lifecycle::Running {
         advance(store, &mut state, &result, Lifecycle::Adopted)?;
     }
     advance(store, &mut state, &result, Lifecycle::Commit)?;
     state
         .result
         .ok_or_else(|| failure("INTEGRITY_FAILURE", "reconciliation lost result"))
+}
+
+fn is_reconcile_checkpoint(store: &Store, state: &CaseRevision) -> Result<bool> {
+    let (Some(result), Some(reason), Some(bundle)) =
+        (&state.result, state.reason.as_deref(), &state.bundle)
+    else {
+        return Ok(false);
+    };
+    let request = &bundle.request;
+    if !(reason == FILE_RECONCILED_REASON || reason.starts_with(FILE_UNCONFIRMED_PREFIX))
+        || result.reason.as_deref() != Some(reason)
+        || result.lifecycle != Lifecycle::Running
+        || state.input_fingerprint.as_deref() != Some(result.id.as_str())
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || state.goal_sha256.is_none()
+        || result.content_plan.is_none()
+        || result.render.is_none()
+    {
+        return Ok(false);
+    }
+    let Some(parent) = store.parent_of_verified_revision(state)? else {
+        return Ok(false);
+    };
+    if parent.lifecycle != Lifecycle::Suspend
+        || parent.actor_id != state.actor_id
+        || parent.case_id != state.case_id
+        || parent.input_fingerprint != state.input_fingerprint
+        || parent.goal_sha256 != state.goal_sha256
+        || parent.bundle != state.bundle
+        || parent.prior_results != state.prior_results
+    {
+        return Ok(false);
+    }
+    let Some(mut original) = parent.result else {
+        return Ok(false);
+    };
+    if original.lifecycle != Lifecycle::Suspend {
+        return Ok(false);
+    }
+    // The durable checkpoint may record an observation. The original adoption
+    // must be unchanged, and inspect revalidates the graph and physical effect.
+    original.lifecycle = Lifecycle::Running;
+    original.reason.clone_from(&result.reason);
+    original.receipts.clone_from(&result.receipts);
+    original
+        .execution_graph_ref
+        .clone_from(&result.execution_graph_ref);
+    Ok(&original == result)
 }
 
 /// Reconcile local file actions after the goal was cancelled.
@@ -6026,6 +6081,36 @@ fn inspect(
             ));
         }
     }
+    if bundle.meaning.parser_version == crate::input::CSV_LEFT_RIGHT_JOIN_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_CSV_INNER_JOIN_MISMATCH";
+        let Intent::CsvInnerJoin {
+            document,
+            left_key_column,
+            right_key_column,
+        } = &goal.intent
+        else {
+            return Err(failure(CODE, "the sealed CSV inner join intent changed"));
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let report = crate::document::CsvInput::conversation(document).inner_join_by_parser(
+            left_key_column,
+            right_key_column,
+            &bundle.meaning.parser_version,
+        )?;
+        let reference = verified_artifact(store, actor, case, &report)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != [reference]
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [report.text.as_str()]
+            || plan.text != report.text
+            || result.text != report.text
+        {
+            return Err(failure(
+                CODE,
+                "the retained inner join report differs from the original CSV request",
+            ));
+        }
+    }
     if bundle.meaning.parser_version == crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION {
         const CODE: &str = "RECOVERY_CSV_COMPARE_MISMATCH";
         let Intent::CsvCompare {
@@ -7496,7 +7581,7 @@ fn suspend(
     mut result: ResultRecord,
     reason: &str,
 ) -> Result<ResultRecord> {
-    result.reason = Some(format!("LOCAL_RECONCILIATION_UNCONFIRMED: {reason}"));
+    result.reason = Some(format!("{FILE_UNCONFIRMED_PREFIX}{reason}"));
     if state.lifecycle == Lifecycle::Suspend {
         if state.goal_sha256.is_none() || state.bundle.is_none() {
             result.lifecycle = Lifecycle::Suspend;

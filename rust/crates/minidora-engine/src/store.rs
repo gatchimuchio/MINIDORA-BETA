@@ -1424,6 +1424,26 @@ impl Store {
         self.latest_case(case)
     }
 
+    /// Read the immutable parent of a revision already verified by `load_case`.
+    pub(crate) fn parent_of_verified_revision(
+        &self,
+        state: &CaseRevision,
+    ) -> Result<Option<CaseRevision>> {
+        Self::require_case(&self.connection, &state.actor_id, &state.case_id)?;
+        let Some(parent) = state.parent_revision else {
+            return Ok(None);
+        };
+        let reference: Option<String> = sql(self
+            .connection
+            .query_row(
+                "SELECT state_sha256 FROM case_revision WHERE case_id=?1 AND revision=?2",
+                params![state.case_id, integer(parent)?],
+                |row| row.get(0),
+            )
+            .optional())?;
+        reference.map(|sha| self.read_blob(&sha)).transpose()
+    }
+
     /// Recover the registered original of a case that was cancelled before sealing.
     pub(crate) fn registered_request_by_fingerprint(
         &self,

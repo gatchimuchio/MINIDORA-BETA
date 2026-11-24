@@ -143,6 +143,12 @@ pub struct SourceExtractiveSummaryCandidates {
 
 const WIKIPEDIA_SOURCE_SUMMARY: &str = "SOURCE_WIKIPEDIA_PROSE_EXTRACTIVE_CANDIDATES_V1";
 const PAGE_BREAK_SOURCE_SUMMARY: &str = "SOURCE_PAGE_BREAK_EXTRACTIVE_CANDIDATES_V1";
+const RFC_PAGED_PROSE_SOURCE_SUMMARY: &str = "SOURCE_RFC_PAGED_PROSE_EXTRACTIVE_CANDIDATES_V2";
+const RFC_PAGED_PROSE_ALGORITHM: &str = "RFC_PAGED_PROSE_BOUNDARIES_TOKEN_FREQUENCY_V2";
+const RFC_PAGED_PROSE_LABEL: &str = "RFC本文を原文順に候補予算まで走査した抽出候補です。印刷用の折り返しと空白を整えて表示しました。網羅性は未確認です。";
+const RFC_PAGED_PROSE_LINE_NOTE: &str =
+    "（RFC本文を候補予算まで走査し空白を整えた抽出候補・網羅性未確認）";
+const RFC_PAGED_PROSE_GUARANTEE: &str = "extractive candidates from RFC prose examined in source order up to the sealed action budget and ranked by token frequency; the source range and its hash refer to the original bytes, while displayed text folds ASCII whitespace. Coverage, meaning and factual truth are not verified";
 const WIKIPEDIA_SUMMARY_NOTE: &str = "Wikipedia記事の冒頭から読み取れた範囲の抜粋です。記法を除いて表示しています。記事全体の網羅性は未確認です。";
 
 #[derive(Deserialize)]
@@ -474,6 +480,7 @@ fn push_sentence(
 enum SummaryBoundaries {
     Legacy,
     FetchedPageBreaks,
+    RfcPagedProse { candidate_limit: usize },
 }
 
 fn sentence_candidates(text: &str, line_layout: bool) -> Result<Vec<Candidate>> {
@@ -520,6 +527,140 @@ fn sentence_candidates_with_boundaries(
     }
     push_sentence(text, start, text.len(), &mut sentences)?;
     Ok(sentences)
+}
+
+fn rfc_paged_prose_candidates(text: &str, candidate_limit: usize) -> Result<Vec<Candidate>> {
+    let candidate_limit = candidate_limit.min(MAX_SENTENCES);
+    let mut sentences = Vec::new();
+    if candidate_limit == 0 {
+        return Ok(sentences);
+    }
+    let mut section_is_prose = false;
+    let mut offset = 0;
+    for (page_index, page) in text.split('\x0c').enumerate() {
+        let mut paragraph_start = None;
+        // Pages can start in the middle of a paragraph. Wait for a local
+        // paragraph or section boundary before admitting a sentence start.
+        let mut paragraph_start_known = page_index == 0;
+        let mut at = offset;
+        for line in page.split_inclusive('\n').chain(std::iter::once("")) {
+            let line_start = at;
+            at += line.len();
+            let line = line.trim_end_matches(['\r', '\n']);
+            let prose_line = line.strip_prefix("   ").is_some_and(|content| {
+                !content.is_empty()
+                    && !content.starts_with([' ', '\t', '[', '|'])
+                    && !content.contains(".....")
+            });
+            if section_is_prose && prose_line {
+                paragraph_start.get_or_insert(line_start);
+                continue;
+            }
+            if let Some(start) = paragraph_start.take() {
+                if paragraph_start_known {
+                    push_rfc_prose_sentences(
+                        text,
+                        start..line_start,
+                        candidate_limit,
+                        &mut sentences,
+                    )?;
+                    if sentences.len() == candidate_limit {
+                        return Ok(sentences);
+                    }
+                }
+                paragraph_start_known = true;
+            }
+            if line == "Abstract" {
+                section_is_prose = true;
+                paragraph_start_known = true;
+            } else if matches!(
+                line,
+                "Status of This Memo"
+                    | "Copyright Notice"
+                    | "Table of Contents"
+                    | "Author's Address"
+                    | "Authors' Addresses"
+            ) {
+                section_is_prose = false;
+            } else if let Some(heading) = rfc_section_heading(line) {
+                section_is_prose = !heading.ends_with("References");
+                paragraph_start_known = true;
+            }
+        }
+        offset += page.len() + 1;
+    }
+    Ok(sentences)
+}
+
+fn rfc_section_heading(line: &str) -> Option<&str> {
+    let numbered = line.strip_prefix("Appendix ").unwrap_or(line);
+    let (number, heading) = numbered.split_once("  ")?;
+    let number = number.strip_suffix('.')?;
+    let section = number
+        .split('.')
+        .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let appendix = line.starts_with("Appendix ")
+        && number.len() == 1
+        && number.as_bytes()[0].is_ascii_uppercase();
+    ((section || appendix) && !heading.trim().is_empty()).then_some(heading.trim())
+}
+
+fn push_rfc_prose_sentences(
+    text: &str,
+    range: Range<usize>,
+    candidate_limit: usize,
+    sentences: &mut Vec<Candidate>,
+) -> Result<()> {
+    let paragraph = &text[range.clone()];
+    let mut start = range.start;
+    for (offset, character) in paragraph.char_indices() {
+        if !matches!(character, '.' | '!' | '?') {
+            continue;
+        }
+        let end = offset + character.len_utf8();
+        if paragraph[end..]
+            .chars()
+            .next()
+            .is_some_and(|next| !next.is_whitespace())
+        {
+            continue;
+        }
+        if character == '.' {
+            let word = paragraph[..offset]
+                .split_ascii_whitespace()
+                .next_back()
+                .unwrap_or_default()
+                .trim_start_matches(['(', '"']);
+            if matches!(
+                word,
+                "e.g" | "i.e" | "etc" | "vs" | "cf" | "Fig" | "No" | "Dr" | "Mr" | "Mrs" | "Ms"
+            ) || (word.len() == 1 && word.as_bytes()[0].is_ascii_alphabetic())
+                || word.ends_with('.')
+            {
+                continue;
+            }
+        }
+        let end = range.start + end;
+        if let Some(raw) = trim_range(text, start, end) {
+            let original = &text[raw];
+            if original.starts_with(|first: char| first.is_ascii_uppercase())
+                && original.split_ascii_whitespace().nth(3).is_some()
+            {
+                push_sentence(text, start, end, sentences)?;
+                sentences.last_mut().expect("nonempty source sentence").text =
+                    fold_rfc_prose_whitespace(original);
+                if sentences.len() == candidate_limit {
+                    break;
+                }
+            }
+        }
+        start = end;
+    }
+    Ok(())
+}
+
+fn fold_rfc_prose_whitespace(text: &str) -> String {
+    text.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn token_character(character: char) -> bool {
@@ -1249,13 +1390,15 @@ fn extractive_summary_candidates_internal(
             "required_sentence_indices must not contain duplicates",
         ));
     }
+    let rfc_prose = matches!(boundaries, SummaryBoundaries::RfcPagedProse { .. });
     if text.trim().is_empty()
         || text.len() > MAX_REQUEST_BYTES
         || text.chars().count() > MAX_TEXT_SCALARS
+        || (rfc_prose && text.split('\r').skip(1).any(|part| !part.starts_with('\n')))
         || text.chars().any(|character| {
             character.is_control()
                 && !matches!(character, '\t' | '\n' | '\r')
-                && !(boundaries == SummaryBoundaries::FetchedPageBreaks && character == '\x0c')
+                && !(boundaries != SummaryBoundaries::Legacy && character == '\x0c')
         })
     {
         return Err(failure(
@@ -1263,7 +1406,11 @@ fn extractive_summary_candidates_internal(
             "text must be nonempty, at most 100000 Unicode scalars/256000 bytes, with supported controls only",
         ));
     }
-    let mut candidates = sentence_candidates_with_boundaries(&text, line_layout, boundaries)?;
+    let mut candidates = if let SummaryBoundaries::RfcPagedProse { candidate_limit } = boundaries {
+        rfc_paged_prose_candidates(&text, candidate_limit)?
+    } else {
+        sentence_candidates_with_boundaries(&text, line_layout, boundaries)?
+    };
     if candidates.is_empty() {
         return Err(schema("text contains no sentence candidates"));
     }
@@ -1298,6 +1445,8 @@ fn extractive_summary_candidates_internal(
 
     let mut output = if line_layout {
         String::new()
+    } else if rfc_prose {
+        RFC_PAGED_PROSE_LABEL.into()
     } else {
         EXTRACTIVE_SUMMARY_LABEL.into()
     };
@@ -1314,7 +1463,11 @@ fn extractive_summary_candidates_internal(
         output.push_str(&candidate.text);
         let output_end = output.len();
         if line_layout && spans.is_empty() {
-            output.push_str(LINE_SUMMARY_NOTE);
+            output.push_str(if rfc_prose {
+                RFC_PAGED_PROSE_LINE_NOTE
+            } else {
+                LINE_SUMMARY_NOTE
+            });
         }
         spans.push(ExtractedSentence {
             sentence_index: *index,
@@ -1340,7 +1493,9 @@ fn extractive_summary_candidates_internal(
             OPERATION
         }
         .into(),
-        algorithm: if line_layout {
+        algorithm: if rfc_prose {
+            RFC_PAGED_PROSE_ALGORITHM
+        } else if line_layout {
             LINE_SUMMARY_ALGORITHM
         } else {
             ALGORITHM
@@ -1365,7 +1520,12 @@ fn extractive_summary_candidates_internal(
         length_limited_sentence_indices,
         sentences: spans,
         coverage_verified: false,
-        guarantee: GUARANTEE.into(),
+        guarantee: if rfc_prose {
+            RFC_PAGED_PROSE_GUARANTEE
+        } else {
+            GUARANTEE
+        }
+        .into(),
         line_limit,
     };
     if minidora_domain::canonical(&report)?.len() > MAX_ARTIFACT_BYTES {
@@ -2851,14 +3011,23 @@ pub(crate) fn verify_retained_source_summary<'a>(
             WIKIPEDIA_SOURCE_SUMMARY => RetainedSourceSummaryReport::Wikipedia(Box::new(
                 summarize_wikipedia_source(bundle, &prior.id, packet, packet_ref)?,
             )),
-            PAGE_BREAK_SOURCE_SUMMARY => RetainedSourceSummaryReport::PageBreak(Box::new(
-                summarize_page_break_source_for_intent(
-                    &bundle.meaning.intent,
-                    &prior.id,
-                    packet,
-                    packet_ref,
-                )?,
-            )),
+            PAGE_BREAK_SOURCE_SUMMARY | RFC_PAGED_PROSE_SOURCE_SUMMARY => {
+                RetainedSourceSummaryReport::PageBreak(Box::new(
+                    summarize_page_break_source_for_intent(
+                        &bundle.meaning.intent,
+                        &prior.id,
+                        packet,
+                        packet_ref,
+                        if version.operation == RFC_PAGED_PROSE_SOURCE_SUMMARY {
+                            SummaryBoundaries::RfcPagedProse {
+                                candidate_limit: request.budget.max_actions as usize,
+                            }
+                        } else {
+                            SummaryBoundaries::FetchedPageBreaks
+                        },
+                    )?,
+                ))
+            }
             "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1"
             | "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1" => {
                 RetainedSourceSummaryReport::Legacy(Box::new(summarize_legacy_source_for_intent(
@@ -3065,6 +3234,12 @@ fn previous_source_summary_explanation<'a>(
         ]);
         if spans.is_some() {
             units.push("原本文の改ページ文字（U+000C）を区切りとして扱いました。".into());
+        }
+        if report.operation == RFC_PAGED_PROSE_SOURCE_SUMMARY {
+            units.push(format!(
+                "ページをまたがない本文段落を原文順に候補{}件まで走査し、表示では折り返しと空白を整えました。原本文の範囲とSHA-256には元の折り返しが含まれます。",
+                (summary_bundle.request.budget.max_actions as usize).min(MAX_SENTENCES),
+            ));
         }
         for (index, sentence) in summary.sentences.iter().enumerate() {
             let mut chars = sentence.text.chars();
@@ -3753,6 +3928,13 @@ pub(crate) fn summarize_fetched_source_for_intent(
             source_result_id,
             packet,
             source_packet_ref,
+            if is_rfc_editor_plain_text(packet) {
+                SummaryBoundaries::RfcPagedProse {
+                    candidate_limit: bundle.request.budget.max_actions as usize,
+                }
+            } else {
+                SummaryBoundaries::FetchedPageBreaks
+            },
         )
         .map(|report| RetainedSourceSummaryReport::PageBreak(Box::new(report)));
     }
@@ -3804,13 +3986,37 @@ fn has_fetched_page_breaks(packet: &EvidencePacket) -> bool {
             .is_some_and(|text| text.contains('\x0c') && text.as_bytes() == packet.raw_body)
 }
 
+fn is_rfc_editor_plain_text(packet: &EvidencePacket) -> bool {
+    url::Url::parse(&packet.final_uri).is_ok_and(|uri| {
+        uri.scheme() == "https"
+            && uri.host_str() == Some("www.rfc-editor.org")
+            && uri.username().is_empty()
+            && uri.password().is_none()
+            && uri.port().is_none()
+            && uri.query().is_none()
+            && uri.fragment().is_none()
+            && uri
+                .path()
+                .strip_prefix("/rfc/rfc")
+                .and_then(|path| path.strip_suffix(".txt"))
+                .is_some_and(|number| {
+                    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                })
+    })
+}
+
 fn summarize_page_break_source_for_intent(
     intent: &Intent,
     source_result_id: &str,
     packet: &EvidencePacket,
     source_packet_ref: &str,
+    boundaries: SummaryBoundaries,
 ) -> Result<PageBreakSourceSummary> {
-    if !has_fetched_page_breaks(packet) || is_wikipedia_raw_body(packet) {
+    let rfc_prose = matches!(boundaries, SummaryBoundaries::RfcPagedProse { .. });
+    if !has_fetched_page_breaks(packet)
+        || is_wikipedia_raw_body(packet)
+        || (rfc_prose && !is_rfc_editor_plain_text(packet))
+    {
         return Err(failure(
             "SOURCE_EVIDENCE_INVALID",
             "the retained UTF-8 body does not contain an original page break",
@@ -3821,7 +4027,7 @@ fn summarize_page_break_source_for_intent(
         packet,
         source_packet_ref,
         source_summary_limits(intent),
-        SummaryBoundaries::FetchedPageBreaks,
+        boundaries,
     )?;
     let source_span_sha256 = source
         .summary
@@ -3831,7 +4037,15 @@ fn summarize_page_break_source_for_intent(
             let exact = packet
                 .raw_body
                 .get(sentence.source_start..sentence.source_end)
-                .filter(|raw| *raw == sentence.text.as_bytes())
+                .filter(|raw| {
+                    if rfc_prose {
+                        !raw.contains(&b'\x0c')
+                            && std::str::from_utf8(raw)
+                                .is_ok_and(|text| fold_rfc_prose_whitespace(text) == sentence.text)
+                    } else {
+                        *raw == sentence.text.as_bytes()
+                    }
+                })
                 .ok_or_else(|| {
                     failure(
                         "SOURCE_SUMMARY_SPAN_MISMATCH",
@@ -4022,7 +4236,9 @@ fn summarize_fetched_source_internal(
         ));
     }
     Ok(SourceExtractiveSummaryCandidates {
-        operation: if boundaries == SummaryBoundaries::FetchedPageBreaks {
+        operation: if matches!(boundaries, SummaryBoundaries::RfcPagedProse { .. }) {
+            RFC_PAGED_PROSE_SOURCE_SUMMARY
+        } else if boundaries == SummaryBoundaries::FetchedPageBreaks {
             PAGE_BREAK_SOURCE_SUMMARY
         } else if summary.line_limit.is_some() {
             "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1"
@@ -4076,6 +4292,44 @@ mod tests {
                 SummaryBoundaries::FetchedPageBreaks,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn paged_rfc_candidates_preserve_raw_wraps_and_skip_layout_fragments() {
+        let text = concat!(
+            "Abstract\n\n",
+            "   JSON has a media type for data exchange and\n",
+            "   its extension is .json. Details are given in Section 4.e of this document.\n\n",
+            "Table of Contents\n\n   1.  Introduction ...................... 3\n\n",
+            "1.  Introduction\n\n   This paragraph continues beyond the page\x0c\n",
+            "RFC 8259                  JSON               December 2017\n\n",
+            "   JSON appears here in a continuation.\n\n",
+            "   A new paragraph contains a complete sentence.\n",
+        );
+        let candidates = rfc_paged_prose_candidates(text, MAX_SENTENCES).unwrap();
+        let limited = rfc_paged_prose_candidates(text, 1).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].text, candidates[0].text);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "JSON has a media type for data exchange and its extension is .json.",
+                "Details are given in Section 4.e of this document.",
+                "A new paragraph contains a complete sentence.",
+            ]
+        );
+        assert_eq!(
+            &text[candidates[0].start..candidates[0].end],
+            "JSON has a media type for data exchange and\n   its extension is .json."
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|c| !text[c.start..c.end].contains('\x0c'))
         );
     }
 

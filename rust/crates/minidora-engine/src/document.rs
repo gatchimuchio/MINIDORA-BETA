@@ -106,8 +106,18 @@ impl<'a> CsvInput<'a> {
         )
     }
 
-    pub(crate) fn inner_join(self, left_key: &str, right_key: &str) -> Result<DocumentResult> {
-        csv_inner_join_input(self, left_key, right_key)
+    pub(crate) fn inner_join_by_parser(
+        self,
+        left_key: &str,
+        right_key: &str,
+        parser_version: &str,
+    ) -> Result<DocumentResult> {
+        csv_inner_join_input(
+            self,
+            left_key,
+            right_key,
+            parser_version == crate::input::CSV_LEFT_RIGHT_JOIN_PARSER_VERSION,
+        )
     }
 }
 
@@ -631,7 +641,9 @@ pub(crate) fn previous_document_explanation(
         CsvTableOperation::Compare(key_column) => {
             csv.compare_by_parser(key_column, &bundle.meaning.parser_version)?
         }
-        CsvTableOperation::Join(left_key, right_key) => csv.inner_join(left_key, right_key)?,
+        CsvTableOperation::Join(left_key, right_key) => {
+            csv.inner_join_by_parser(left_key, right_key, &bundle.meaning.parser_version)?
+        }
         CsvTableOperation::Filter(column, equals) => csv.filter(column, equals)?,
         CsvTableOperation::Sort(column, descending) => csv.sort(column, descending)?,
         CsvTableOperation::GroupCount(column) => csv.group_count(column)?,
@@ -4432,15 +4444,47 @@ fn parse_csv_input(input: CsvInput<'_>, has_header: bool) -> Result<CsvTable> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum JapaneseCsvPairLabel {
-    Before,
-    After,
+    Left,
+    Right,
 }
 
-fn japanese_csv_pair_label(line: &str) -> Option<(JapaneseCsvPairLabel, usize)> {
-    let (label, rest) = if let Some(rest) = line.strip_prefix("変更前") {
-        (JapaneseCsvPairLabel::Before, rest)
+#[derive(Clone, Copy)]
+enum JapaneseCsvPairFormat {
+    BeforeAfter,
+    LeftRight,
+}
+
+impl JapaneseCsvPairFormat {
+    fn labels(self) -> (&'static str, &'static str) {
+        match self {
+            Self::BeforeAfter => ("変更前", "変更後"),
+            Self::LeftRight => ("左の表", "右の表"),
+        }
+    }
+
+    fn invalid(self) -> minidora_domain::Error {
+        match self {
+            Self::BeforeAfter => failure(
+                "CSV_COMPARE_DELIMITER",
+                "変更前: と変更後: の見出しをこの順に各1行置き、それぞれにCSV表を続けてください。",
+            ),
+            Self::LeftRight => failure(
+                "CSV_INNER_JOIN_DELIMITER",
+                "左の表: と右の表: の見出しをこの順に各1行置き、それぞれにCSV表を続けてください。",
+            ),
+        }
+    }
+}
+
+fn japanese_csv_pair_label(
+    line: &str,
+    format: JapaneseCsvPairFormat,
+) -> Option<(JapaneseCsvPairLabel, usize)> {
+    let (left, right) = format.labels();
+    let (label, rest) = if let Some(rest) = line.strip_prefix(left) {
+        (JapaneseCsvPairLabel::Left, rest)
     } else {
-        (JapaneseCsvPairLabel::After, line.strip_prefix("変更後")?)
+        (JapaneseCsvPairLabel::Right, line.strip_prefix(right)?)
     };
     let rest = rest.strip_prefix(':').or_else(|| rest.strip_prefix('：'))?;
     let remaining = if rest.is_empty() {
@@ -4454,22 +4498,22 @@ fn japanese_csv_pair_label(line: &str) -> Option<(JapaneseCsvPairLabel, usize)> 
 
 pub(crate) fn starts_japanese_csv_comparison(document: &str) -> bool {
     matches!(
-        japanese_csv_pair_label(document),
-        Some((JapaneseCsvPairLabel::Before, _))
+        japanese_csv_pair_label(document, JapaneseCsvPairFormat::BeforeAfter),
+        Some((JapaneseCsvPairLabel::Left, _))
     )
 }
 
-fn invalid_japanese_csv_pair() -> minidora_domain::Error {
-    failure(
-        "CSV_COMPARE_DELIMITER",
-        "変更前: と変更後: の見出しをこの順に各1行置き、それぞれにCSV表を続けてください。",
+pub(crate) fn starts_japanese_csv_inner_join(document: &str) -> bool {
+    matches!(
+        japanese_csv_pair_label(document, JapaneseCsvPairFormat::LeftRight),
+        Some((JapaneseCsvPairLabel::Left, _))
     )
 }
 
 fn parse_csv_section(
     input: CsvInput<'_>,
     has_header: bool,
-    section: Option<JapaneseCsvPairLabel>,
+    section: Option<(JapaneseCsvPairFormat, JapaneseCsvPairLabel)>,
 ) -> Result<(CsvTable, Option<usize>)> {
     let document = input.document;
     admission(document)?;
@@ -4481,15 +4525,15 @@ fn parse_csv_section(
     loop {
         // A quoted cell is consumed in full by `cell`, so this check only
         // sees logical record boundaries.
-        if let Some(section) = section
-            && let Some((label, length)) = japanese_csv_pair_label(&document[at..])
+        if let Some((format, section)) = section
+            && let Some((label, length)) = japanese_csv_pair_label(&document[at..], format)
         {
-            if section != JapaneseCsvPairLabel::Before
-                || label != JapaneseCsvPairLabel::After
+            if section != JapaneseCsvPairLabel::Left
+                || label != JapaneseCsvPairLabel::Right
                 || rows.is_empty()
                 || at + length == bytes.len()
             {
-                return Err(invalid_japanese_csv_pair());
+                return Err(format.invalid());
             }
             next_section = Some(at + length);
             break;
@@ -5323,13 +5367,17 @@ fn csv_pair_tables(input: CsvInput<'_>, delimiter_error: &str) -> Result<(CsvTab
     Ok((left, right))
 }
 
-fn japanese_csv_pair_tables(input: CsvInput<'_>) -> Result<(CsvTable, CsvTable)> {
+fn japanese_csv_pair_tables(
+    input: CsvInput<'_>,
+    format: JapaneseCsvPairFormat,
+) -> Result<(CsvTable, CsvTable)> {
     let document = input.document;
-    let Some((JapaneseCsvPairLabel::Before, left_start)) = japanese_csv_pair_label(document) else {
-        return Err(invalid_japanese_csv_pair());
+    let Some((JapaneseCsvPairLabel::Left, left_start)) = japanese_csv_pair_label(document, format)
+    else {
+        return Err(format.invalid());
     };
     if left_start == document.len() {
-        return Err(invalid_japanese_csv_pair());
+        return Err(format.invalid());
     }
     let (mut left, next_section) = parse_csv_section(
         CsvInput {
@@ -5337,16 +5385,16 @@ fn japanese_csv_pair_tables(input: CsvInput<'_>) -> Result<(CsvTable, CsvTable)>
             ..input
         },
         true,
-        Some(JapaneseCsvPairLabel::Before),
+        Some((format, JapaneseCsvPairLabel::Left)),
     )?;
-    let right_start = left_start + next_section.ok_or_else(invalid_japanese_csv_pair)?;
+    let right_start = left_start + next_section.ok_or_else(|| format.invalid())?;
     let (mut right, _) = parse_csv_section(
         CsvInput {
             document: &document[right_start..],
             ..input
         },
         true,
-        Some(JapaneseCsvPairLabel::After),
+        Some((format, JapaneseCsvPairLabel::Right)),
     )?;
     retain_csv_pair_source(
         document,
@@ -5392,7 +5440,7 @@ fn csv_compare_by_input(
         return Err(failure("CSV_COLUMN", "key column name must not be empty"));
     }
     let (left, right) = if japanese_labels {
-        japanese_csv_pair_tables(input)?
+        japanese_csv_pair_tables(input, JapaneseCsvPairFormat::BeforeAfter)?
     } else {
         csv_pair_tables(input, "CSV_COMPARE_DELIMITER")?
     };
@@ -5650,13 +5698,19 @@ pub fn csv_inner_join(
     left_key_column: &str,
     right_key_column: &str,
 ) -> Result<DocumentResult> {
-    CsvInput::strict(document).inner_join(left_key_column, right_key_column)
+    csv_inner_join_input(
+        CsvInput::strict(document),
+        left_key_column,
+        right_key_column,
+        false,
+    )
 }
 
 fn csv_inner_join_input(
     input: CsvInput<'_>,
     left_key_column: &str,
     right_key_column: &str,
+    japanese_labels: bool,
 ) -> Result<DocumentResult> {
     let document = input.document;
     admission(document)?;
@@ -5666,7 +5720,11 @@ fn csv_inner_join_input(
             "both named key columns must not be empty",
         ));
     }
-    let (left, right) = csv_pair_tables(input, "CSV_INNER_JOIN_DELIMITER")?;
+    let (left, right) = if japanese_labels {
+        japanese_csv_pair_tables(input, JapaneseCsvPairFormat::LeftRight)?
+    } else {
+        csv_pair_tables(input, "CSV_INNER_JOIN_DELIMITER")?
+    };
     let left_header = left.header.as_deref().expect("header parsing is explicit");
     let right_header = right.header.as_deref().expect("header parsing is explicit");
     let left_key_index = left_header
@@ -7154,6 +7212,78 @@ pub fn compose_explicit_text(document: &str) -> Result<TextCompositionResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn japanese_csv_inner_join_keeps_quoted_labels_and_original_byte_spans() {
+        let left = "id,name\n2,\"左の値\n右の表:\n続き\"\n右の表:,表の値";
+        let right = "record_id,kind\n2,\"右の値\n左の表：\n続き\"\n右の表:,別の値";
+        let source = format!("左の表：\r\n{left}\r\n右の表:\n{right}");
+        let legacy =
+            format!("--- MINIDORA LEFT CSV ---\n{left}\r\n--- MINIDORA RIGHT CSV ---\n{right}");
+        let join = |body: &str, expected_parser: &str| {
+            let text = format!("CSVを「id」と「record_id」で内部結合して:\n{body}");
+            let request = minidora_domain::RequestEnvelope::new("case", "join", "actor", &text);
+            let bundle = crate::input::seal(&request, None).unwrap();
+            assert_eq!(bundle.request.text, text);
+            assert_eq!(bundle.meaning.parser_version, expected_parser);
+            let Intent::CsvInnerJoin {
+                document,
+                left_key_column,
+                right_key_column,
+            } = &bundle.meaning.intent
+            else {
+                panic!("expected a CSV inner join")
+            };
+            assert_eq!(document, body);
+            CsvInput::conversation(document)
+                .inner_join_by_parser(
+                    left_key_column,
+                    right_key_column,
+                    &bundle.meaning.parser_version,
+                )
+                .unwrap()
+        };
+        let report = join(&source, crate::input::CSV_LEFT_RIGHT_JOIN_PARSER_VERSION);
+        let legacy_report = join(&legacy, crate::input::PARSER_VERSION);
+        assert_eq!(report.text, legacy_report.text);
+        assert_eq!(report.source_document, source);
+        assert_eq!(report.source_sha256, digest(source.as_bytes()));
+        assert_eq!(report.parameters, legacy_report.parameters);
+        for span in &report.spans {
+            assert_eq!(
+                &source[span.source_start..span.source_end],
+                span.source_text
+            );
+        }
+        assert!(report.spans.iter().any(|span| {
+            span.kind == "CSV_INNER_JOIN_LEFT_CELL"
+                && span.source_text == "\"左の値\n右の表:\n続き\""
+        }));
+    }
+
+    #[test]
+    fn japanese_csv_inner_join_holds_missing_tables_or_repeated_labels() {
+        for source in [
+            "左の表:",
+            "左の表:\nid,name\n2,犬",
+            "左の表:\n右の表:\nrecord_id,kind\n2,イヌ類",
+            "左の表:\nid,name\n2,犬\n右の表:",
+            "左の表:\n左の表:\nid,name\n2,犬\n右の表:\nrecord_id,kind\n2,イヌ類",
+            "左の表:\nid,name\n2,犬\n右の表:\nrecord_id,kind\n2,イヌ類\n右の表:",
+        ] {
+            let failure = CsvInput::conversation(source)
+                .inner_join_by_parser(
+                    "id",
+                    "record_id",
+                    crate::input::CSV_LEFT_RIGHT_JOIN_PARSER_VERSION,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(failure, minidora_domain::Error::Contract { code, .. } if code == "CSV_INNER_JOIN_DELIMITER"),
+                "{source:?}"
+            );
+        }
+    }
 
     #[test]
     fn pasted_text_replacement_requires_an_unambiguous_match_or_explicit_count() {

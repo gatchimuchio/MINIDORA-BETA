@@ -80,6 +80,22 @@ C,open
 
 CSVをJSON表に変換した後は、`前回のJSON表をCSVに変換して` で、保存済みのJSON表を使ってCSVを作れる。途中で別の話題を挟んだ場合は、JSON表の結果IDを `/context` で指定する。CSVに戻した結果の後に `詳しく説明して` と入力すると、元CSV・保存JSON・出力CSVの対応箇所を確認できる。
 
+二つのCSV表で列の値が一致する行を結合するには、`/paste` のあとに次のように入力する。各表のキーは一意にする。結果の行は左表の順に並び、対応する行がなかったキーも確認できる。
+
+```text
+/paste
+CSVを「id」と「record_id」で内部結合して:
+左の表:
+id,name
+2,犬
+1,猫
+右の表:
+record_id,kind
+1,ネコ類
+2,イヌ類
+/end
+```
+
 ローカル会話に外部LLMのキーは不要。Webを使うセッションは `./start-minidora.sh --allow-read-host ja.wikipedia.org` と明示し、`富士山について、出典を付けて教えてください。` と入力する。Windowsの起動方法でも同じオプションを使える。`/net off` で通信を停止し、`/net on` で起動時の許可を再適用する。本文は選んだ記事の観測範囲で使用する。記事の取得時刻で最新性や更新日時を確認できない場合は、回答を保留する。
 
 検索一覧と本文の一部を保存した時点で取得量の上限に達した場合は、`1件目の本文を取得して` のように一覧の順位を指定できる。別の発話を挟んだ場合は `/context 結果ID` でその保留結果を参照する。元の一覧から選び、今回の通信許可と取得枠で本文を取得する。続く `詳しく説明して` で一覧と取得した本文の出典を確認できる。
@@ -88,7 +104,7 @@ CSVをJSON表に変換した後は、`前回のJSON表をCSVに変換して` で
 
 URLを直接指定して本文を取得した後に `詳しく説明して` と入力すると、保存した通信の結果と原文を照合し、取得先・全文の範囲・前回表示した範囲を説明する。通信を止めたまま、そこから同じ本文への質問や `前回の本文を要約して` に進める。
 
-RFCのように改ページ文字を含む取得本文も、`前回の本文を要約して` で抜粋できる。続けて `詳しく説明して` と入力すると、選んだ文の原文バイト範囲とSHA-256を確認できる。
+RFC Editorから取得した改ページ付きテキストは、`前回の本文を要約して` で文を抜粋できる。ページ内の印刷上の折り返しをつないで表示する。`前回の本文を2行で要約して` で行数を指定でき、`詳しく説明して` で各文の原文バイト範囲とSHA-256を確認できる。
 
 Web回答の後に `詳しく説明して` と聞くと、保存してある検索一覧、選んだ候補、取得本文、元の本文で使った範囲を照合する。その説明に続けて `前回の本文を要約して` と頼むと、同じ取得本文の冒頭から読み取れた文を抜粋し、対応するリンクや注記の記法を除いて表示する。抜粋は通信を止めたまま使え、元本文で使った範囲とハッシュを保存する。読み取れる文が指定の行数に足りない場合は保留する。
 
@@ -101,6 +117,8 @@ Web回答の後に `詳しく説明して` と聞くと、保存してある検�
 Windowsの保存先には `C:\Users\利用者\Documents\結果.txt` のようなドライブ付き絶対パスを指定する。親ディレクトリは事前に用意する。UNC共有パス、特殊なデバイス名、ジャンクションを経由する保存先は保留または失敗になる。
 
 対話中の `/reconcile` は現在の会話で元の保存作用を照合し、確定済みの場合は当時の受領記録を表示する。`中止` で取り消した会話は `/reconcile-effects` で残る作用を照合できる。照合に使うのは会話に記録された元のパス・内容・権限で、次の発話用の保存指定とは独立している。
+
+照合の途中でプロセスが終了した場合、保存された照合開始の記録があれば、同じ会話を開き直して `/reconcile` で元のファイルを再確認できる。
 
 ### 標準API
 
@@ -641,7 +659,7 @@ Selection uses the exact decoded named header and returns a JSON array of **stri
 
 For positional selection, use `csv-select-index no-header 2:` or `csv-select-index header 2:` followed by the CSV body. The Japanese forms are `見出しなしCSVの第2列を選択して:` and `見出しありCSVの第2列を選択して:`. Column numbering starts at 1, and the selected cells remain JSON strings. The `header` mode uses the first record as the header. The `no-header` mode includes it among the data rows. In the same case, `詳しく説明して` shows the selected column and the original byte ranges of the selected cells.
 
-`csv-inner-join "id" "record_id":` or `CSVを「id」と「record_id」で内部結合して:` uses the reserved two-table CSV markers above. The two named keys must be unique in their own headered tables; exact matches produce JSON string-table rows in left-table order with `left.` and `right.` namespaced columns. Both keys remain in the output, unmatched keys are listed separately, and emitted header/cell values map to original byte ranges in the combined input. No type inference or one-to-many expansion is applied.
+`csv-inner-join "id" "record_id":` uses the reserved two-table CSV markers above. `CSVを「id」と「record_id」で内部結合して:` also accepts the standalone headings `左の表:` and `右の表:`. The named keys must be unique within each table. Exact matches produce JSON string-table rows in left-table order with `left.` and `right.` namespaced columns. Both keys remain in the output, unmatched keys are listed separately, and emitted header/cell values map to original byte ranges in the combined input.
 
 Named-column statistics explicitly interpret every selected cell as either a unitless exact arithmetic expression or as one decimal numeric literal followed by a unit. Mixed unit-bearing and unitless/non-numeric cells suspend. The exact statistics report identifies the source digest, decoded column, observation count and original header/cell byte spans; mixed `mm`, `cm`, `m` and `km` values normalize exactly to metres. These are descriptive statistics for supplied cells and do not imply a representative population.
 

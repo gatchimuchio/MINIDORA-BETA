@@ -7531,9 +7531,11 @@ impl Engine {
                 left_key_column,
                 right_key_column,
             } => {
-                let value = match CsvInput::conversation(document)
-                    .inner_join(left_key_column, right_key_column)
-                {
+                let value = match CsvInput::conversation(document).inner_join_by_parser(
+                    left_key_column,
+                    right_key_column,
+                    &bundle.meaning.parser_version,
+                ) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {

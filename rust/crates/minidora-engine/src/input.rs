@@ -23,6 +23,8 @@ pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v165-generated-code-single-case";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
+pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
+    "declarative-ja-v182-csv-left-right-inner-join";
 pub(crate) const PASTED_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v170-pasted-text-replacement";
 pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
@@ -619,6 +621,11 @@ pub(crate) fn seal_with_source_context(
             if crate::document::starts_japanese_csv_comparison(document) =>
         {
             CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION
+        }
+        Intent::CsvInnerJoin { document, .. }
+            if crate::document::starts_japanese_csv_inner_join(document) =>
+        {
+            CSV_LEFT_RIGHT_JOIN_PARSER_VERSION
         }
         Intent::ConvertPreviousJsonTableToCsv => PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION,
         Intent::JsonPointer { .. } if document_header(&request.text).starts_with("JSONの「") => {
