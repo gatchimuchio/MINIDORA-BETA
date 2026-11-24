@@ -5709,6 +5709,15 @@ impl Engine {
                         Some(input::SourceContext::WebAnswerExplanation)
                     }
                     Intent::ExplainPrevious => Some(input::SourceContext::Explanation),
+                    Intent::AskPreviousSourceQuestion { .. }
+                        if matches!(
+                            bundle.meaning.parser_version.as_str(),
+                            input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                                | input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                        ) =>
+                    {
+                        Some(input::SourceContext::WebBodyQuestion)
+                    }
                     intent if input::is_source_summary_intent(intent) => {
                         Some(input::SourceContext::Summary)
                     }

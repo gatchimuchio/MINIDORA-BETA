@@ -2144,6 +2144,9 @@ fn derived_source_followup<'a>(
                 | crate::input::IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION => {
                     "the preceding source summary differs from the retained proof"
                 }
+                crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION => {
+                    "the preceding Web body question differs from the retained proof"
+                }
                 crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                 | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION => {
                     "the explicitly referenced source summary differs from the retained proof"
@@ -2196,8 +2199,22 @@ fn derived_source_followup<'a>(
             return Err(invalid());
         }
         let target_input = registered(target)?;
-        if crate::input::uses_summary_source_context(parser_version) {
-            if !crate::input::is_source_summary_intent(&target_input.meaning.intent) {
+        let follows_web_question =
+            parser_version == crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION;
+        if follows_web_question || crate::input::uses_summary_source_context(parser_version) {
+            let valid_target = if follows_web_question {
+                matches!(
+                    target_input.meaning.intent,
+                    Intent::AskPreviousSourceQuestion { .. }
+                ) && matches!(
+                    target_input.meaning.parser_version.as_str(),
+                    crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                )
+            } else {
+                crate::input::is_source_summary_intent(&target_input.meaning.intent)
+            };
+            if !valid_target {
                 return Err(invalid());
             }
             let requested_summary_packet =
@@ -2261,6 +2278,38 @@ fn derived_source_followup<'a>(
                 != Some(step.context)
             {
                 return Err(invalid());
+            }
+            if matches!(
+                step.derivation_input.meaning.intent,
+                Intent::AskPreviousSourceQuestion { .. }
+            ) {
+                let proof = verify_retained_source_question(
+                    store,
+                    &step.derivation_input,
+                    prior_results,
+                    step.derivation,
+                    derivation_plan,
+                    Some(scope),
+                )?
+                .ok_or_else(invalid)?;
+                let [(index, _)] = proof.source_packet_refs.as_slice() else {
+                    return Err(invalid());
+                };
+                if !history.contains_committed_result(step.context)? {
+                    return Err(invalid());
+                }
+                crate::document::revalidate_previous_document_render(
+                    store,
+                    &bundle.request.actor_id,
+                    &bundle.request.case_id,
+                    step.context,
+                    Some(&proof.answer_ref),
+                    "SOURCE_CONTEXT_INVALID",
+                    "Web body question",
+                )?;
+                scope.selected_body_index = Some(*index);
+                scope.context = step.context;
+                continue;
             }
             let proof = verify_retained_source_summary(
                 store,
@@ -2587,6 +2636,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
                     crate::input::IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                         | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                         | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
                 )
         }
         _ => false,
@@ -3440,6 +3490,7 @@ fn source_summary_packet_positions(
             | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
             | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
     ) {
         return Ok((0..packets.len()).collect());
     }

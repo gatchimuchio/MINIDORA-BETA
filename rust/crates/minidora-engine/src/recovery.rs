@@ -4076,6 +4076,9 @@ fn verify_implicit_source_predecessor(
     bundle: &InputBundle,
 ) -> Result<()> {
     let version = &bundle.meaning.parser_version;
+    if version == crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION {
+        verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
+    }
     if crate::input::uses_implicit_source_context(version)
         || (version == crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
             && bundle.request.context_ref.is_none())

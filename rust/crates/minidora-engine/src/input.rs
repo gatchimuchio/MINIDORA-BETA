@@ -156,6 +156,9 @@ pub(crate) const WEB_ANSWER_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v162-web-answer-explanation-followup";
 
+pub(crate) const IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v163-implicit-web-body-question-followup";
+
 pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v113-explained-search-body-source-followup";
 
@@ -166,6 +169,7 @@ pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) enum SourceContext {
     Explanation,
     WebAnswerExplanation,
+    WebBodyQuestion,
     Summary,
 }
 
@@ -185,7 +189,9 @@ pub(crate) fn uses_summary_source_context(version: &str) -> bool {
 }
 
 pub(crate) fn uses_derived_source_context(version: &str) -> bool {
-    uses_summary_source_context(version) || uses_source_explanation_context(version)
+    uses_summary_source_context(version)
+        || uses_source_explanation_context(version)
+        || version == IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
 }
 
 pub(crate) fn uses_implicit_source_context(version: &str) -> bool {
@@ -194,6 +200,7 @@ pub(crate) fn uses_implicit_source_context(version: &str) -> bool {
         IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION
             | IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
             | IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+            | IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
     )
 }
 
@@ -455,7 +462,7 @@ pub(crate) fn seal_with_source_context(
     let implicit_source_line_parser = implicit_source_context.and_then(|context| match context {
         SourceContext::Explanation => Some(IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION),
         SourceContext::Summary => Some(IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION),
-        SourceContext::WebAnswerExplanation => None,
+        SourceContext::WebAnswerExplanation | SourceContext::WebBodyQuestion => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
@@ -538,6 +545,17 @@ pub(crate) fn seal_with_source_context(
                 }) =>
         {
             WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        }
+        Intent::AskPreviousSourceQuestion { .. }
+        | Intent::SummarizePreviousSource
+        | Intent::SummarizePreviousSourceConstrained { .. }
+        | Intent::SummarizePreviousSourceLines { .. }
+            if matches!(
+                implicit_source_context,
+                Some(SourceContext::WebBodyQuestion)
+            ) =>
+        {
+            IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
         }
         Intent::SummarizePreviousSourcePacketLines { .. }
             if explicit_source_explanation_candidate
