@@ -13,6 +13,7 @@ pub(crate) const BODY_NODE: &str = "web-question-body";
 pub(crate) const ANSWER_NODE: &str = "web-question-answer";
 
 const MAX_SCAN_BYTES: usize = 131_072;
+const MAX_SUMMARY_PASSAGES: usize = 128;
 const MAX_SENTENCE_BYTES: usize = 1_536;
 const MAX_TOPIC_BYTES: usize = 512;
 
@@ -84,11 +85,11 @@ pub(crate) struct WebAnswer {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-struct Passage {
-    source_start: usize,
-    source_end: usize,
-    source_span_sha256: String,
-    text: String,
+pub(crate) struct Passage {
+    pub(crate) source_start: usize,
+    pub(crate) source_end: usize,
+    pub(crate) source_span_sha256: String,
+    pub(crate) text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -308,37 +309,81 @@ fn find_passage(
     unquoted_only: bool,
     matches_topic: &impl Fn(&str) -> bool,
 ) -> Option<Passage> {
+    let mut selected = None;
+    let _ = visit_passages(
+        article,
+        unquoted_only,
+        false,
+        matches_topic,
+        &mut |passage| {
+            selected = Some(passage);
+            true
+        },
+    );
+    selected
+}
+
+pub(crate) fn readable_passages(article: &str, limit: usize) -> Vec<Passage> {
+    let mut passages = Vec::new();
+    let limit = limit.min(MAX_SUMMARY_PASSAGES);
+    if limit == 0 {
+        return passages;
+    }
+    let _ = visit_passages(article, true, true, &|_| true, &mut |passage| {
+        if !passage.text.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+            passages.push(passage);
+        }
+        passages.len() == limit
+    });
+    passages
+}
+
+fn visit_passages(
+    article: &str,
+    unquoted_only: bool,
+    summary_lead_only: bool,
+    matches_topic: &impl Fn(&str) -> bool,
+    stop: &mut impl FnMut(Passage) -> bool,
+) -> Option<()> {
     let bounded = &article[..article.floor_char_boundary(article.len().min(MAX_SCAN_BYTES))];
     let mut rest = bounded;
     let mut quotes = QuotationContext::default();
     while !rest.is_empty() {
         rest = rest.trim_start();
+        if summary_lead_only && rest.starts_with('=') {
+            break;
+        }
         if rest.starts_with("{{") {
             rest = &rest[template_end(rest)?..];
             continue;
         }
         if let Some(block_end) = block_end(rest) {
-            rest = &rest[rest.find(block_end)? + block_end.len()..];
+            let end = rest.find(block_end)?;
+            if summary_lead_only && block_end == "|}" && rest.get(2..end)?.contains("{|") {
+                return None;
+            }
+            rest = &rest[end + block_end.len()..];
             continue;
         }
-        let line_end = prose_line_end(rest, unquoted_only)?;
+        let line_end = prose_line_end(rest, unquoted_only, summary_lead_only)?;
         let line = &rest[..line_end];
         let article_offset = bounded.len() - rest.len();
         let is_prose = !line.starts_with(['=', '*', '#', ':', ';', '|', '!', '<'])
             && !(unquoted_only && line.starts_with('>'));
         if (is_prose || unquoted_only)
-            && let Some(passage) = line_passage(
+            && line_passage(
                 line,
                 article_offset,
                 &|sentence| is_prose && matches_topic(sentence),
                 unquoted_only.then_some(&mut quotes),
-            )
+                stop,
+            ) == Some(true)
         {
-            return Some(passage);
+            return Some(());
         }
         rest = &rest[(line_end + 1).min(rest.len())..];
     }
-    None
+    Some(())
 }
 
 fn block_end(rest: &str) -> Option<&'static str> {
@@ -358,13 +403,14 @@ fn block_end(rest: &str) -> Option<&'static str> {
 }
 
 /// Do not start a new candidate line inside a multiline note or template.
-fn prose_line_end(text: &str, unquoted_only: bool) -> Option<usize> {
+fn prose_line_end(text: &str, unquoted_only: bool, stop_at_unknown_tag: bool) -> Option<usize> {
     let mut at = 0;
     while at < text.len() {
         let rest = &text[at..];
         match rest.as_bytes()[0] {
             b'\n' => return Some(at),
             b'[' if rest.starts_with("[[") => at += markup_end(rest, unquoted_only)?,
+            b'{' if stop_at_unknown_tag && rest.starts_with("{|") => return None,
             b'{' if rest.starts_with("{{") || rest.starts_with("{|") => {
                 at += markup_end(rest, unquoted_only)?;
             }
@@ -374,6 +420,7 @@ fn prose_line_end(text: &str, unquoted_only: bool) -> Option<usize> {
             {
                 at += markup_end(rest, unquoted_only)?;
             }
+            b'<' if stop_at_unknown_tag => return None,
             _ => at += rest.chars().next()?.len_utf8(),
         }
     }
@@ -408,7 +455,8 @@ fn line_passage(
     article_offset: usize,
     matches_topic: &impl Fn(&str) -> bool,
     mut quotes: Option<&mut QuotationContext>,
-) -> Option<Passage> {
+    stop: &mut impl FnMut(Passage) -> bool,
+) -> Option<bool> {
     let mut at = 0;
     let mut sentence_start = 0;
     let mut text = String::new();
@@ -455,20 +503,21 @@ fn line_passage(
             && visible.len() <= MAX_SENTENCE_BYTES
             && matches_topic(visible)
             && visible.chars().any(|ch| ('ぁ'..='ん').contains(&ch))
-        {
-            return Some(Passage {
+            && stop(Passage {
                 source_start: article_offset + sentence_start,
                 source_end: article_offset + at,
                 source_span_sha256: digest(&line.as_bytes()[sentence_start..at]),
                 text: visible.into(),
-            });
+            })
+        {
+            return Some(true);
         }
         sentence_start = at;
         text.clear();
         recognized = true;
         quoted = quotes.as_deref().is_some_and(QuotationContext::is_open);
     }
-    None
+    Some(false)
 }
 
 fn markup_end(text: &str, unquoted_only: bool) -> Option<usize> {

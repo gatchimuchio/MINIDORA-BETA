@@ -9096,7 +9096,7 @@ impl Engine {
                 for position in active_positions {
                     let (_, packet, packet_ref) = &source_packets[position];
                     let summary_result = crate::text_summary::summarize_fetched_source_for_intent(
-                        intent, &prior.id, packet, packet_ref,
+                        &bundle, &prior.id, packet, packet_ref,
                     );
                     let source_report = match summary_result {
                         Ok(report) => report,
@@ -9116,24 +9116,12 @@ impl Engine {
                             );
                         }
                     };
-                    if crate::text_summary::source_summary_only_wikipedia_closing_tags(
-                        &source_report,
-                    ) {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            "SOURCE_SUMMARY_MARKUP_UNSUPPORTED",
-                            "取得したWikipedia本文から選ばれた候補は記法の終了タグだけです。本文の要約を保留しました。",
-                        );
-                    }
                     let encoded = canonical(&source_report)?;
-                    let unit = crate::text_summary::source_summary_unit(&source_report);
+                    let unit = source_report.unit();
                     report_bytes = report_bytes.saturating_add(encoded.len());
                     if line_summary {
                         report_bytes = report_bytes.saturating_add(unit.len());
-                        if source_report.summary.sentence_count
-                            > request.budget.max_actions as usize
-                        {
+                        if source_report.sentence_count() > request.budget.max_actions as usize {
                             return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,

@@ -97,11 +97,11 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "web-grounded-answer",
-                    scope: "対応する日本語の依頼から候補を検索し、取得した本文の記述を出典・時点・ハッシュ付きで回答します。明示された標高の換算も同じ依頼で処理します。",
+                    scope: "対応する日本語の依頼から候補を検索し、取得した本文の記述を出典・時点・ハッシュ付きで回答します。明示された標高の換算と、保存済み本文からの根拠付き抜粋も扱います。",
                     permission: Some(CapabilityPermission::ExactHttpsHost {
                         host: SearchProvider::Wikipedia.host(),
                     }),
-                    limits: "Wikipedia日本語版の対応本文と短い話題に限られます。本文不足や通信・許可の失敗時は保留します。",
+                    limits: "Wikipedia日本語版の対応本文と短い話題に限られます。抜粋は記事冒頭で読み取れた範囲が対象です。本文不足や通信・許可の失敗時は保留します。",
                 },
                 EngineCapability {
                     id: "local-file-delivery",

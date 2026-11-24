@@ -141,31 +141,85 @@ pub struct SourceExtractiveSummaryCandidates {
     pub summary: ExtractiveSummaryCandidates,
 }
 
-pub(crate) fn source_summary_only_wikipedia_closing_tags(
-    report: &SourceExtractiveSummaryCandidates,
-) -> bool {
-    let Ok(uri) = url::Url::parse(&report.source_final_uri) else {
-        return false;
-    };
-    uri.host_str() == Some(crate::search::SearchProvider::Wikipedia.host())
-        && uri.path().starts_with("/wiki/")
-        && uri
-            .query_pairs()
-            .any(|(key, value)| key == "action" && value == "raw")
-        && !report.summary.sentences.is_empty()
-        && report.summary.sentences.iter().all(|sentence| {
-            let element = sentence
-                .text
-                .trim()
-                .trim_end_matches(['。', '.', '！', '!', '？', '?'])
-                .trim_end();
-            element
-                .strip_prefix("</")
-                .and_then(|element| element.strip_suffix('>'))
-                .is_some_and(|name| {
-                    !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric())
-                })
-        })
+const WIKIPEDIA_SOURCE_SUMMARY: &str = "SOURCE_WIKIPEDIA_PROSE_EXTRACTIVE_CANDIDATES_V1";
+const WIKIPEDIA_SUMMARY_NOTE: &str = "Wikipedia記事の冒頭から読み取れた範囲の抜粋です。記法を除いて表示しています。記事全体の網羅性は未確認です。";
+
+#[derive(Deserialize)]
+struct SourceSummaryVersion {
+    operation: String,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum RetainedSourceSummaryReport {
+    Legacy(Box<SourceExtractiveSummaryCandidates>),
+    Wikipedia(Box<WikipediaSourceSummary>),
+}
+
+#[derive(Serialize)]
+pub(crate) struct WikipediaSourceSummary {
+    operation: &'static str,
+    source_result_id: String,
+    source_packet_id: String,
+    source_packet_ref: String,
+    source_mode: String,
+    source_request_uri: String,
+    source_final_uri: String,
+    observed_at_unix_ms: u64,
+    raw_body_sha256: String,
+    parser_version: String,
+    coverage_verified: bool,
+    max_sentences: usize,
+    max_chars: usize,
+    sentence_count: usize,
+    selected_character_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_limit: Option<SummaryLineLimit>,
+    sentences: Vec<WikipediaSummarySentence>,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct WikipediaSummarySentence {
+    #[serde(flatten)]
+    selected: ExtractedSentence,
+    source_span_sha256: String,
+}
+
+impl RetainedSourceSummaryReport {
+    pub(crate) fn sentence_count(&self) -> usize {
+        match self {
+            Self::Legacy(report) => report.summary.sentence_count,
+            Self::Wikipedia(report) => report.sentence_count,
+        }
+    }
+
+    fn source_packet_id(&self) -> &str {
+        match self {
+            Self::Legacy(report) => &report.source_packet_id,
+            Self::Wikipedia(report) => &report.source_packet_id,
+        }
+    }
+
+    pub(crate) fn unit(&self) -> String {
+        match self {
+            Self::Legacy(report) => legacy_source_summary_unit(report),
+            Self::Wikipedia(report) if report.line_limit.is_some() => format!(
+                "{}（出典: {}、出典packet: {}、原本文SHA-256: {}。ライセンス情報: 未記録。）",
+                report.text,
+                report.source_final_uri.escape_default(),
+                report.source_packet_id,
+                report.raw_body_sha256,
+            ),
+            Self::Wikipedia(report) => format!(
+                "出典: {}\n出典packet: {}\n原本文SHA-256: {}\nライセンス情報: 未記録。\n{}",
+                report.source_final_uri,
+                report.source_packet_id,
+                report.raw_body_sha256,
+                report.text,
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1000,6 +1054,108 @@ pub(crate) fn direct_summary_candidates(
     ))
 }
 
+struct SentenceSelection {
+    selected: Vec<usize>,
+    selection_ranks: BTreeMap<usize, usize>,
+    selected_character_count: usize,
+    length_limited_sentence_indices: Vec<usize>,
+}
+
+fn select_sentences(
+    candidates: &mut [Candidate],
+    required_sentence_indices: &[usize],
+    max_sentences: usize,
+    max_chars: usize,
+    line_limit: Option<SummaryLineLimit>,
+) -> Result<SentenceSelection> {
+    let required_set: std::collections::BTreeSet<_> =
+        required_sentence_indices.iter().copied().collect();
+    let mut selected_ranked = required_sentence_indices.to_vec();
+    let mut selected_character_count = selected_ranked
+        .iter()
+        .map(|index| candidates[*index].text.chars().count())
+        .sum::<usize>();
+    if selected_character_count > max_chars {
+        return Err(failure(
+            "TEXT_SUMMARY_REQUIRED_CHAR_LIMIT",
+            "required source sentences exceed max_chars; no sentence was truncated",
+        ));
+    }
+    score_sentences(candidates);
+    let mut ranking: Vec<usize> = (0..candidates.len()).collect();
+    ranking.sort_by(|left, right| {
+        compare_scores(candidates[*right].score, candidates[*left].score)
+            .then_with(|| right.cmp(left))
+    });
+    let character_counts: Vec<_> = candidates
+        .iter()
+        .map(|candidate| candidate.text.chars().count())
+        .collect();
+    let exact_fit = if matches!(line_limit, Some(SummaryLineLimit::Exact(_))) {
+        let needed = max_sentences - selected_ranked.len();
+        if candidates.len() < max_sentences {
+            return Err(failure(
+                "RESULT_SUMMARY_LINE_COUNT_UNMET",
+                format!(
+                    "元の本文から抽出できる候補は{}行で、指定された{max_sentences}行に足りません。",
+                    candidates.len()
+                ),
+            ));
+        }
+        let minimum = shortest_suffix_totals(&ranking, &character_counts, &required_set, needed);
+        if minimum[0][needed] > max_chars - selected_character_count {
+            return Err(failure(
+                "RESULT_SUMMARY_LINE_COUNT_UNMET",
+                format!("選択文の文字数上限内で指定された{max_sentences}行を確保できません。"),
+            ));
+        }
+        Some(minimum)
+    } else {
+        None
+    };
+    let mut selection_ranks: BTreeMap<usize, usize> = selected_ranked
+        .iter()
+        .enumerate()
+        .map(|(rank, index)| (*index, rank + 1))
+        .collect();
+    let mut length_limited_sentence_indices = Vec::new();
+    for (position, index) in ranking.into_iter().enumerate() {
+        if selected_ranked.len() == max_sentences {
+            break;
+        }
+        if required_set.contains(&index) {
+            continue;
+        }
+        let sentence_characters = character_counts[index];
+        let needed_after = max_sentences - selected_ranked.len() - 1;
+        let reserved = exact_fit
+            .as_ref()
+            .map_or(0, |minimum| minimum[position + 1][needed_after]);
+        if sentence_characters.saturating_add(reserved) <= max_chars - selected_character_count {
+            selected_character_count += sentence_characters;
+            selection_ranks.insert(index, selected_ranked.len() + 1);
+            selected_ranked.push(index);
+        } else {
+            length_limited_sentence_indices.push(index);
+        }
+    }
+    if selected_ranked.is_empty() {
+        return Err(failure(
+            "TEXT_SUMMARY_CHAR_LIMIT",
+            "no complete source sentence fits max_chars; no text was truncated",
+        ));
+    }
+    length_limited_sentence_indices.sort_unstable();
+    let mut selected: Vec<usize> = selected_ranked;
+    selected.sort_unstable();
+    Ok(SentenceSelection {
+        selected,
+        selection_ranks,
+        selected_character_count,
+        length_limited_sentence_indices,
+    })
+}
+
 fn extractive_summary_candidates_internal(
     document: &str,
     line_layout: bool,
@@ -1096,86 +1252,18 @@ fn extractive_summary_candidates_internal(
             "required source sentences exceed max_sentences",
         ));
     }
-    let required_set: std::collections::BTreeSet<_> =
-        required_sentence_indices.iter().copied().collect();
-    let mut selected_ranked = required_sentence_indices.clone();
-    let mut selected_character_count = selected_ranked
-        .iter()
-        .map(|index| candidates[*index].text.chars().count())
-        .sum::<usize>();
-    if selected_character_count > max_chars {
-        return Err(failure(
-            "TEXT_SUMMARY_REQUIRED_CHAR_LIMIT",
-            "required source sentences exceed max_chars; no sentence was truncated",
-        ));
-    }
-    score_sentences(&mut candidates);
-    let mut ranking: Vec<usize> = (0..candidates.len()).collect();
-    ranking.sort_by(|left, right| {
-        compare_scores(candidates[*right].score, candidates[*left].score)
-            .then_with(|| right.cmp(left))
-    });
-    let character_counts: Vec<_> = candidates
-        .iter()
-        .map(|candidate| candidate.text.chars().count())
-        .collect();
-    let exact_fit = if matches!(line_limit, Some(SummaryLineLimit::Exact(_))) {
-        let needed = max_sentences - selected_ranked.len();
-        if candidates.len() < max_sentences {
-            return Err(failure(
-                "RESULT_SUMMARY_LINE_COUNT_UNMET",
-                format!(
-                    "元の本文から抽出できる候補は{}行で、指定された{max_sentences}行に足りません。",
-                    candidates.len()
-                ),
-            ));
-        }
-        let minimum = shortest_suffix_totals(&ranking, &character_counts, &required_set, needed);
-        if minimum[0][needed] > max_chars - selected_character_count {
-            return Err(failure(
-                "RESULT_SUMMARY_LINE_COUNT_UNMET",
-                format!("選択文の文字数上限内で指定された{max_sentences}行を確保できません。"),
-            ));
-        }
-        Some(minimum)
-    } else {
-        None
-    };
-    let mut selection_ranks: BTreeMap<usize, usize> = selected_ranked
-        .iter()
-        .enumerate()
-        .map(|(rank, index)| (*index, rank + 1))
-        .collect();
-    let mut length_limited_sentence_indices = Vec::new();
-    for (position, index) in ranking.into_iter().enumerate() {
-        if selected_ranked.len() == max_sentences {
-            break;
-        }
-        if required_set.contains(&index) {
-            continue;
-        }
-        let sentence_characters = character_counts[index];
-        let needed_after = max_sentences - selected_ranked.len() - 1;
-        let reserved = exact_fit
-            .as_ref()
-            .map_or(0, |minimum| minimum[position + 1][needed_after]);
-        if sentence_characters.saturating_add(reserved) <= max_chars - selected_character_count {
-            selected_character_count += sentence_characters;
-            selection_ranks.insert(index, selected_ranked.len() + 1);
-            selected_ranked.push(index);
-        } else {
-            length_limited_sentence_indices.push(index);
-        }
-    }
-    if selected_ranked.is_empty() {
-        return Err(failure(
-            "TEXT_SUMMARY_CHAR_LIMIT",
-            "no complete source sentence fits max_chars; no text was truncated",
-        ));
-    }
-    length_limited_sentence_indices.sort_unstable();
-    let mut selected: Vec<usize> = selected_ranked;
-    selected.sort_unstable();
+    let SentenceSelection {
+        selected,
+        selection_ranks,
+        selected_character_count,
+        length_limited_sentence_indices,
+    } = select_sentences(
+        &mut candidates,
+        &required_sentence_indices,
+        max_sentences,
+        max_chars,
+        line_limit,
+    )?;
     let selected_set: std::collections::BTreeSet<_> = selected.iter().copied().collect();
 
     let mut output = if line_layout {
@@ -1959,7 +2047,7 @@ pub(crate) struct RetainedSourceSummary {
     pub(crate) source_context_ref: String,
     source_result_id: String,
     partial_notice: Option<&'static str>,
-    reports: Vec<(usize, SourceExtractiveSummaryCandidates)>,
+    reports: Vec<(usize, RetainedSourceSummaryReport)>,
 }
 
 impl RetainedSourceSummary {
@@ -1974,7 +2062,7 @@ impl RetainedSourceSummary {
         let mut matches = self
             .reports
             .iter()
-            .filter(|(_, report)| report.source_packet_id == packet_id);
+            .filter(|(_, report)| report.source_packet_id() == packet_id);
         match (matches.next(), matches.next()) {
             (Some((index, _)), None) => Ok(*index),
             _ => Err(source_summary_packet_not_active()),
@@ -2375,7 +2463,7 @@ fn selected_body_followup<'a>(
     }))
 }
 
-pub(crate) fn source_summary_unit(report: &SourceExtractiveSummaryCandidates) -> String {
+fn legacy_source_summary_unit(report: &SourceExtractiveSummaryCandidates) -> String {
     if report.summary.line_limit.is_some() {
         return format!(
             "{}（出典: {}、出典packet: {}、取得本文SHA-256: {}。ライセンス情報: 未記録。）",
@@ -2533,18 +2621,40 @@ pub(crate) fn verify_retained_source_summary<'a>(
     }
     for position in active_positions {
         let (index, packet, packet_ref) = &source_packets[position];
-        let report = summarize_fetched_source_for_intent(
-            &bundle.meaning.intent,
-            &prior.id,
-            packet,
-            packet_ref,
-        )?;
+        let saved_ref = result.dependencies.get(dependencies.len()).ok_or_else(|| {
+            failure(
+                "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+                "the stored summary dependency is absent",
+            )
+        })?;
+        let stored = store.get_bytes(actor, case, saved_ref)?;
+        let version: SourceSummaryVersion = serde_json::from_slice(&stored)?;
+        let report = match version.operation.as_str() {
+            WIKIPEDIA_SOURCE_SUMMARY => RetainedSourceSummaryReport::Wikipedia(Box::new(
+                summarize_wikipedia_source(bundle, &prior.id, packet, packet_ref)?,
+            )),
+            "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1"
+            | "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1" => {
+                RetainedSourceSummaryReport::Legacy(Box::new(summarize_legacy_source_for_intent(
+                    &bundle.meaning.intent,
+                    &prior.id,
+                    packet,
+                    packet_ref,
+                )?))
+            }
+            _ => {
+                return Err(failure(
+                    "RECOVERY_SOURCE_SUMMARY_MISMATCH",
+                    "the stored summary uses an unsupported derivation version",
+                ));
+            }
+        };
         let encoded = canonical(&report)?;
-        let unit = source_summary_unit(&report);
+        let unit = report.unit();
         report_bytes = report_bytes.saturating_add(encoded.len());
         if line_summary {
             report_bytes = report_bytes.saturating_add(unit.len());
-            if report.summary.sentence_count > request.budget.max_actions as usize {
+            if report.sentence_count() > request.budget.max_actions as usize {
                 return Err(failure(
                     "RECOVERY_SOURCE_SUMMARY_LIMIT",
                     "the retained source sentence scan exceeds the original action budget",
@@ -2558,7 +2668,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
             ));
         }
         let report_ref = digest(&encoded);
-        if store.get_bytes(actor, case, &report_ref)? != encoded {
+        if *saved_ref != report_ref || stored != encoded {
             return Err(failure(
                 "RECOVERY_SOURCE_SUMMARY_MISMATCH",
                 "the retained source summary artifact differs from the exact source packet",
@@ -2680,6 +2790,13 @@ fn previous_source_summary_explanation<'a>(
         units.push(notice.into());
     }
     for (index, (_, report)) in proof.reports.iter().enumerate() {
+        let report = match report {
+            RetainedSourceSummaryReport::Legacy(report) => report,
+            RetainedSourceSummaryReport::Wikipedia(report) => {
+                units.extend(wikipedia_summary_explanation(index + 1, report));
+                continue;
+            }
+        };
         let summary = &report.summary;
         let count_limit = match summary.line_limit {
             Some(SummaryLineLimit::Exact(count)) => format!(
@@ -2750,6 +2867,52 @@ fn previous_source_summary_explanation<'a>(
         source_context_ref: Some(proof.source_context_ref),
         sole_summary_packet_index,
     }))
+}
+
+fn wikipedia_summary_explanation(index: usize, report: &WikipediaSourceSummary) -> Vec<String> {
+    let limit = match report.line_limit {
+        Some(SummaryLineLimit::Exact(count)) => format!("指定行数 {count}"),
+        Some(SummaryLineLimit::AtMost(count)) => format!("行数上限 {count}"),
+        None => format!("文数上限 {}", report.max_sentences),
+    };
+    let mut units = vec![
+        format!("出典{index}: {}", report.source_final_uri),
+        format!("取得URL: {}", report.source_request_uri),
+        format!(
+            "取得モード: {} / 取得時刻（Unix ms）: {}",
+            report.source_mode, report.observed_at_unix_ms
+        ),
+        format!(
+            "出典packet ID: {} / SHA-256: {}",
+            report.source_packet_id, report.source_packet_ref
+        ),
+        format!(
+            "原本文SHA-256: {}。ライセンス情報: 未記録。",
+            report.raw_body_sha256
+        ),
+        format!(
+            "{} 候補文{}件から{}件を選びました。{limit}、文字数上限 {}。",
+            WIKIPEDIA_SUMMARY_NOTE,
+            report.sentence_count,
+            report.sentences.len(),
+            report.max_chars
+        ),
+    ];
+    units.extend(report.sentences.iter().map(|sentence| {
+        let selected = &sentence.selected;
+        format!(
+            "選択文{}（順位{}、原本文byte[{}..{})、範囲SHA-256: {}、要約本文byte[{}..{})）: {:?}",
+            selected.sentence_index + 1,
+            selected.selection_rank,
+            selected.source_start,
+            selected.source_end,
+            sentence.source_span_sha256,
+            selected.output_start,
+            selected.output_end,
+            selected.text,
+        )
+    }));
+    units
 }
 
 pub(crate) fn recompute_source_question_artifact(
@@ -3329,6 +3492,25 @@ pub(crate) fn summarize_fetched_source_with_limits(
 }
 
 pub(crate) fn summarize_fetched_source_for_intent(
+    bundle: &InputBundle,
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+) -> Result<RetainedSourceSummaryReport> {
+    if is_wikipedia_raw_body(packet) {
+        return summarize_wikipedia_source(bundle, source_result_id, packet, source_packet_ref)
+            .map(|report| RetainedSourceSummaryReport::Wikipedia(Box::new(report)));
+    }
+    summarize_legacy_source_for_intent(
+        &bundle.meaning.intent,
+        source_result_id,
+        packet,
+        source_packet_ref,
+    )
+    .map(|report| RetainedSourceSummaryReport::Legacy(Box::new(report)))
+}
+
+fn summarize_legacy_source_for_intent(
     intent: &Intent,
     source_result_id: &str,
     packet: &EvidencePacket,
@@ -3354,6 +3536,131 @@ pub(crate) fn summarize_fetched_source_for_intent(
         );
     }
     summarize_fetched_source(source_result_id, packet, source_packet_ref)
+}
+
+fn is_wikipedia_raw_body(packet: &EvidencePacket) -> bool {
+    url::Url::parse(&packet.final_uri).is_ok_and(|uri| {
+        let mut actions = uri.query_pairs().filter(|(key, _)| key == "action");
+        uri.scheme() == "https"
+            && uri.host_str() == Some(crate::search::SearchProvider::Wikipedia.host())
+            && uri.username().is_empty()
+            && uri.password().is_none()
+            && uri.port().is_none()
+            && uri.path().starts_with("/wiki/")
+            && actions.next().is_some_and(|(_, value)| value == "raw")
+            && actions.next().is_none()
+    })
+}
+
+fn summarize_wikipedia_source(
+    bundle: &InputBundle,
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+) -> Result<WikipediaSourceSummary> {
+    validate_source_summary_body(packet, source_packet_ref)?;
+    let article = packet
+        .extracted_text
+        .as_deref()
+        .filter(|text| text.as_bytes() == packet.raw_body)
+        .filter(|_| {
+            is_wikipedia_raw_body(packet) && packet.mode == "LIVE" && packet.http_status == 200
+        })
+        .filter(|_| sha256_id(source_result_id))
+        .ok_or_else(|| {
+            failure(
+                "SOURCE_EVIDENCE_INVALID",
+                "保存したWikipediaの本文と取得記録を照合できません。",
+            )
+        })?;
+    let intent = &bundle.meaning.intent;
+    let line_limit = match intent {
+        Intent::SummarizePreviousSourceLines { limit }
+        | Intent::SummarizePreviousSourcePacketLines { limit, .. } => Some(*limit),
+        _ => None,
+    };
+    let (max_sentences, max_chars) = match line_limit {
+        Some(SummaryLineLimit::Exact(count) | SummaryLineLimit::AtMost(count)) => (count, None),
+        None => constrained_source_summary_limits(intent).unwrap_or((3, None)),
+    };
+    let max_chars = max_chars.unwrap_or(MAX_TEXT_SCALARS);
+    if !(1..=8).contains(&max_sentences) || !(1..=MAX_TEXT_SCALARS).contains(&max_chars) {
+        return Err(schema("invalid source-summary sentence or character limit"));
+    }
+    let passages =
+        crate::web_answer::readable_passages(article, bundle.request.budget.max_actions as usize);
+    if passages.is_empty() && !matches!(line_limit, Some(SummaryLineLimit::Exact(_))) {
+        return Err(failure(
+            "SOURCE_SUMMARY_MARKUP_UNSUPPORTED",
+            "保存したWikipedia本文の読み取れる範囲に、要約に使える完全な文がありません。",
+        ));
+    }
+    let mut candidates: Vec<_> = passages
+        .iter()
+        .map(|passage| Candidate {
+            start: passage.source_start,
+            end: passage.source_end,
+            text: passage.text.clone(),
+            score: Score {
+                numerator: 0,
+                denominator: 1,
+            },
+        })
+        .collect();
+    let selection = select_sentences(&mut candidates, &[], max_sentences, max_chars, line_limit)?;
+    let mut text = if line_limit.is_some() {
+        String::new()
+    } else {
+        WIKIPEDIA_SUMMARY_NOTE.into()
+    };
+    let mut sentences = Vec::with_capacity(selection.selected.len());
+    for index in selection.selected {
+        let candidate = &candidates[index];
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("- ");
+        let output_start = text.len();
+        text.push_str(&candidate.text);
+        let output_end = text.len();
+        if line_limit.is_some() && sentences.is_empty() {
+            text.push_str("（記事冒頭からの抜粋・網羅性未確認）");
+        }
+        sentences.push(WikipediaSummarySentence {
+            selected: ExtractedSentence {
+                sentence_index: index,
+                selection_rank: selection.selection_ranks[&index],
+                source_start: candidate.start,
+                source_end: candidate.end,
+                output_start,
+                output_end,
+                text: candidate.text.clone(),
+                score_numerator: candidate.score.numerator,
+                score_denominator: candidate.score.denominator,
+            },
+            source_span_sha256: passages[index].source_span_sha256.clone(),
+        });
+    }
+    Ok(WikipediaSourceSummary {
+        operation: WIKIPEDIA_SOURCE_SUMMARY,
+        source_result_id: source_result_id.into(),
+        source_packet_id: packet.id.clone(),
+        source_packet_ref: source_packet_ref.into(),
+        source_mode: packet.mode.clone(),
+        source_request_uri: packet.request_uri.clone(),
+        source_final_uri: packet.final_uri.clone(),
+        observed_at_unix_ms: packet.observed_at_unix_ms,
+        raw_body_sha256: packet.raw_sha256.clone(),
+        parser_version: packet.parser_version.clone(),
+        coverage_verified: false,
+        max_sentences,
+        max_chars,
+        sentence_count: candidates.len(),
+        selected_character_count: selection.selected_character_count,
+        line_limit,
+        sentences,
+        text,
+    })
 }
 
 fn summarize_fetched_source_internal(
