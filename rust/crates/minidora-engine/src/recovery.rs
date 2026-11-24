@@ -32,7 +32,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
-    path::{Component, Path},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -5851,7 +5851,10 @@ fn inspect(
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
     let web_answer = match &goal.intent {
-        Intent::AskWeb { .. } => Some(verify_web_answer(store, bundle, result, plan, nodes.len())?),
+        Intent::AskWeb { .. } => {
+            verify_registered_input(store, bundle, "RECOVERY_WEB_ANSWER_MISMATCH")?;
+            Some(verify_web_answer(store, bundle, result, plan, nodes.len())?.refs)
+        }
         _ => None,
     };
     let search_listing = search::verify_retained_search_listing(store, bundle, result, plan)?
@@ -6573,13 +6576,19 @@ fn inspect(
     Ok((action, receipt, graph, render_ref, explains_sequence))
 }
 
-fn verify_web_answer<'a>(
+pub(crate) struct RetainedWebAnswer<'a> {
+    pub(crate) refs: [&'a str; 3],
+    pub(crate) candidate: search::SearchCandidate,
+    pub(crate) answer: crate::web_answer::WebAnswer,
+}
+
+pub(crate) fn verify_web_answer<'a>(
     store: &Store,
     bundle: &InputBundle,
     result: &'a ResultRecord,
     plan: &ContentPlan,
     graph_nodes: usize,
-) -> Result<[&'a str; 3]> {
+) -> Result<RetainedWebAnswer<'a>> {
     const CODE: &str = "RECOVERY_WEB_ANSWER_MISMATCH";
     let invalid = || {
         failure(
@@ -6603,7 +6612,6 @@ fn verify_web_answer<'a>(
     let [listing, body] = result.evidence.as_slice() else {
         return Err(invalid());
     };
-    verify_registered_input(store, bundle, CODE)?;
     if result.id != identity(request)?
         || result.input_id != request.input_id
         || result.input_version != request.input_version
@@ -6654,7 +6662,11 @@ fn verify_web_answer<'a>(
     {
         return Err(invalid());
     }
-    Ok([listing_ref, body_ref, answer_ref])
+    Ok(RetainedWebAnswer {
+        refs: [listing_ref, body_ref, answer_ref],
+        candidate: candidate.clone(),
+        answer,
+    })
 }
 
 fn verify_previous_assertion_explanation(
@@ -6724,33 +6736,33 @@ fn verified_artifact<T: serde::Serialize>(
 }
 
 fn observe_file(path: &Path, expected: &[u8]) -> Result<()> {
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|p| matches!(p, Component::ParentDir | Component::CurDir))
-        || path.file_name().is_none()
-        || path.to_string_lossy().contains('\\')
-        || path
-            .to_string_lossy()
-            .split('/')
-            .any(|segment| segment == "." || segment == "..")
-    {
-        return Err(failure(
+    crate::durability::validate_local_target_path(path).map_err(|_| {
+        failure(
             "UNSAFE_RECONCILIATION_TARGET",
             "original target is not an unambiguous absolute path",
-        ));
-    }
-    for ancestor in path.ancestors() {
+        )
+    })?;
+    for ancestor in crate::durability::local_target_and_ancestors(path) {
         let metadata = fs::symlink_metadata(ancestor)?;
-        if metadata.file_type().is_symlink()
+        if crate::durability::is_link_or_reparse_point(&metadata)
             || (ancestor != path && !metadata.is_dir())
             || (ancestor == path && !metadata.is_file())
         {
             return Err(failure(
                 "UNSAFE_RECONCILIATION_TARGET",
-                "symlink or non-regular original target",
+                if cfg!(windows) {
+                    "reparse point or non-regular original target"
+                } else {
+                    "symlink or non-regular original target"
+                },
             ));
         }
+    }
+    if !crate::durability::keeps_local_target_name(path)? {
+        return Err(failure(
+            "UNSAFE_RECONCILIATION_TARGET",
+            "Windows paths must identify the original local drive and file names",
+        ));
     }
     let parent = path.parent().ok_or_else(|| {
         failure(

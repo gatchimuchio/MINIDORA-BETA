@@ -6,7 +6,9 @@
 
 use crate::{
     ports,
+    scheduler::GoalNode,
     store::{Store, VerifiedCaseHistory},
+    web_answer,
 };
 use minidora_domain::{
     CaseRevision, ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle,
@@ -803,6 +805,9 @@ pub(crate) fn previous_search_explanation_in_history(
         }
         return Ok(None);
     };
+    if bundle.meaning.parser_version == crate::input::WEB_ANSWER_EXPLANATION_PARSER_VERSION {
+        return explain_web_answer(store, history, bundle, previous, &original).map(Some);
+    }
     match original.meaning.intent {
         Intent::Search { .. } | Intent::SearchWithFallback { .. } => {}
         Intent::FetchPreviousSearchCandidate { rank } => {
@@ -934,6 +939,82 @@ fn validate_search_predecessor(
         ));
     }
     Ok(())
+}
+
+fn explain_web_answer(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    original: &InputBundle,
+) -> Result<SearchExplanation> {
+    use web_answer::{ANSWER_NODE, BODY_NODE, LISTING_NODE};
+
+    const CODE: &str = "WEB_ANSWER_EXPLANATION_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "前回のWeb回答と保存された検索・取得・採用記録が一致しません。",
+        )
+    };
+    validate_search_predecessor(bundle, previous, CODE)?;
+    if history
+        .input_result(&previous.input_id, previous.input_version)?
+        .as_ref()
+        != Some(previous)
+        || !history.contains_committed_result(previous)?
+    {
+        return Err(invalid());
+    }
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let plan = previous.content_plan.as_ref().ok_or_else(invalid)?;
+    let graph_ref = previous.execution_graph_ref.as_ref().ok_or_else(invalid)?;
+    let graph: Value = serde_json::from_slice(&store.get_bytes(actor, case, graph_ref)?)?;
+    let nodes: Vec<GoalNode> = serde_json::from_value(graph[0].clone())?;
+    if !nodes.starts_with(&web_answer::nodes()) {
+        return Err(invalid());
+    }
+    let proof = crate::recovery::verify_web_answer(store, original, previous, plan, nodes.len())?;
+    let [listing_ref, body_ref, answer_ref] = proof.refs;
+    if graph[1][LISTING_NODE].as_str() != Some(listing_ref)
+        || graph[1][BODY_NODE].as_str() != Some(body_ref)
+        || graph[1][ANSWER_NODE].as_str() != Some(answer_ref)
+        || graph[5][LISTING_NODE] != serde_json::json!({})
+        || graph[5][BODY_NODE] != serde_json::json!({ LISTING_NODE: listing_ref })
+        || graph[5][ANSWER_NODE] != serde_json::json!({ BODY_NODE: body_ref })
+        || graph[5]["compute"] != serde_json::json!({ ANSWER_NODE: answer_ref })
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(answer_ref),
+        CODE,
+        "Web answer",
+    )?;
+    let [listing, body] = previous.evidence.as_slice() else {
+        return Err(invalid());
+    };
+    let units = proof
+        .answer
+        .explanation_units(listing, &proof.candidate, body);
+    if units.join("\n").len() > bundle.request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "前回のWeb回答の根拠説明が出力予算を超えました。",
+        ));
+    }
+    let mut dependencies = vec![previous.id.clone()];
+    dependencies.extend(previous.dependencies.iter().cloned());
+    Ok(SearchExplanation {
+        units,
+        dependencies,
+        selected_body_index: None,
+    })
 }
 
 pub(crate) struct RetainedSearchCandidateBody {

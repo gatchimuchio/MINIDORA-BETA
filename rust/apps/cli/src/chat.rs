@@ -1,5 +1,5 @@
 use super::{Options, execute_request};
-use minidora_domain::{CaseRevision, ResultRecord};
+use minidora_domain::{CaseRevision, EffectPhase, ResultRecord};
 use minidora_engine::Engine;
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -20,6 +20,9 @@ const HELP: &str = "\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
 /output PATH        次の一発話の成果を指定先へ保存。起動時の --allow-write の範囲内\n\
 /output off         次の保存指定を解除\n\
+/reconcile          現在の会話の保存を照合。確定済みなら受領記録を表示\n\
+/reconcile-effects  取り消した会話に残る作用を照合\n\
+未確定の会話を取り消すには「中止」と入力してください。\n\
 再開するには、同じ --db、--actor、--case で chat を起動してください。";
 const MAX_CASE_ID_BYTES: usize = 256;
 const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
@@ -95,7 +98,24 @@ fn show_result(result: &ResultRecord) -> io::Result<()> {
             _ => eprintln!("{reason}"),
         }
     }
+    for receipt in &result.receipts {
+        show_effect_record(receipt.phase, &receipt.target, &receipt.action_id);
+    }
     Ok(())
+}
+
+fn show_effect_record(phase: EffectPhase, target: &str, action_id: &str) {
+    let phase = match phase {
+        EffectPhase::Proposed => "提案",
+        EffectPhase::Authorized => "許可済み",
+        EffectPhase::Prepared => "準備済み",
+        EffectPhase::Attempted => "試行済み",
+        EffectPhase::Confirmed => "確認済み",
+        EffectPhase::Failed => "失敗",
+        EffectPhase::Unknown => "結果未確定",
+        EffectPhase::Cancelled => "取消済み",
+    };
+    eprintln!("作用記録 {phase} / 対象 {target:?} / 作用ID {action_id}");
 }
 
 fn saved_result<'a>(case: &'a CaseRevision, result_id: &str) -> Option<&'a ResultRecord> {
@@ -298,6 +318,30 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                 ("/status", "") => {
                     if let Err(error) = show_status(engine, &options) {
                         eprintln!("状態を読み込めませんでした。{error}");
+                    }
+                    continue;
+                }
+                ("/reconcile", "") => {
+                    match engine.reconcile(&options.actor, &options.case_id) {
+                        Ok(result) => {
+                            eprintln!("照合後の結果ID: {} ({:?})", result.id, result.lifecycle);
+                            show_result(&result).map_err(|error| error.to_string())?;
+                        }
+                        Err(error) => eprintln!("保存結果を照合できませんでした。{error}"),
+                    }
+                    continue;
+                }
+                ("/reconcile-effects", "") => {
+                    match engine.reconcile_cancelled_effects(&options.actor, &options.case_id) {
+                        Ok(actions) if actions.is_empty() => {
+                            eprintln!("この会話に保存済みの作用はありません。");
+                        }
+                        Ok(actions) => {
+                            for action in actions {
+                                show_effect_record(action.phase, &action.target, &action.action_id);
+                            }
+                        }
+                        Err(error) => eprintln!("作用を照合できませんでした。{error}"),
                     }
                     continue;
                 }

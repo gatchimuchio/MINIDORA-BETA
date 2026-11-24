@@ -1344,6 +1344,65 @@ impl Store {
         Ok(true)
     }
 
+    /// An already registered request was stopped before sealing or entering the
+    /// case. Preserve its response without changing the predecessor's journal.
+    pub(crate) fn record_admission_stop(
+        &self,
+        actor: &str,
+        request: &RequestEnvelope,
+        result: &ResultRecord,
+    ) -> Result<()> {
+        if actor != request.actor_id
+            || result.id != identity(request)?
+            || result.input_id != request.input_id
+            || result.input_version != request.input_version
+            || result.lifecycle != Lifecycle::Suspend
+            || result.reason.is_none()
+            || result.calculation.is_some()
+            || result.content_plan.is_some()
+            || result.render.is_some()
+            || !result.receipts.is_empty()
+            || !result.evidence.is_empty()
+            || !result.dependencies.is_empty()
+            || result.actor_memory_revision.is_some()
+            || result.execution_graph_ref.is_some()
+        {
+            return Err(failure(
+                "INVALID_ADMISSION_RESULT",
+                "only a stop without execution or effects can be recorded before admission",
+            ));
+        }
+        let case = &request.case_id;
+        let request_sha = digest(&canonical(request)?);
+        Self::require_case(&self.connection, actor, case)?;
+        let (sha, length) = self.publish_blob(result)?;
+        let transaction = self.transaction()?;
+        Self::require_case(&transaction, actor, case)?;
+        Self::reference(&transaction, &sha, length, "result")?;
+        let changed = sql(transaction.execute(
+            "UPDATE input_identity SET result_sha256=?4
+             WHERE case_id=?1 AND input_id=?2 AND input_version=?3
+               AND fingerprint=?5 AND request_sha256=?6
+               AND bundle_sha256 IS NULL AND result_sha256 IS NULL",
+            params![
+                case,
+                result.input_id,
+                integer(result.input_version)?,
+                sha,
+                result.id,
+                request_sha
+            ],
+        ))?;
+        if changed != 1 {
+            return Err(failure(
+                "ADMISSION_RESULT_NOT_RECORDED",
+                "the original registered request is absent or already has a seal or result",
+            ));
+        }
+        sql(transaction.commit())?;
+        Ok(())
+    }
+
     /// Original conflicting envelopes are visible only to the case owner.
     pub fn conflict_attempts(&self, actor: &str, case: &str) -> Result<Vec<RequestEnvelope>> {
         if !Self::actor_for_case(&self.connection, actor, case)? {
@@ -1363,6 +1422,40 @@ impl Store {
         }
         self.verify_case(case)?;
         self.latest_case(case)
+    }
+
+    /// Recover the registered original of a case that was cancelled before sealing.
+    pub(crate) fn registered_request_by_fingerprint(
+        &self,
+        actor: &str,
+        case: &str,
+        fingerprint: &str,
+    ) -> Result<RequestEnvelope> {
+        Self::require_case(&self.connection, actor, case)?;
+        let registered: Option<(String, i64, String)> = sql(self.connection.query_row(
+            "SELECT input_id,input_version,request_sha256 FROM input_identity WHERE case_id=?1 AND fingerprint=?2",
+            params![case, fingerprint],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional())?;
+        let Some((input, version, sha)) = registered else {
+            return Err(failure(
+                "INPUT_NOT_REGISTERED",
+                "the case revision has no registered original request",
+            ));
+        };
+        let request: RequestEnvelope = self.read_blob(&sha)?;
+        if request.actor_id != actor
+            || request.case_id != case
+            || request.input_id != input
+            || integer(request.input_version)? != version
+            || identity(&request)? != fingerprint
+        {
+            return Err(failure(
+                "INTEGRITY_FAILURE",
+                "the registered original request differs from its case identity",
+            ));
+        }
+        Ok(request)
     }
 
     fn latest_case(&self, case: &str) -> Result<Option<CaseRevision>> {

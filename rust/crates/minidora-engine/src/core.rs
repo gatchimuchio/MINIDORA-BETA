@@ -5445,7 +5445,9 @@ impl Engine {
         match attempt {
             Ok(value) => Ok(value),
             Err(error) => {
-                if read_case_changed(&error)
+                if (read_case_changed(&error)
+                    || matches!(&error, Error::Contract { code, .. } if code == "REVISION_CONFLICT"))
+                    && actor == request.actor_id
                     && let Some(saved) = self.store.get_input_result(
                         actor,
                         &request.case_id,
@@ -5454,6 +5456,8 @@ impl Engine {
                     )?
                     && saved.lifecycle == Lifecycle::Cancel
                     && saved.id == identity(&request)?
+                    && saved.input_id == request.input_id
+                    && saved.input_version == request.input_version
                 {
                     return Ok(saved);
                 }
@@ -5554,6 +5558,12 @@ impl Engine {
             result.lifecycle = Lifecycle::Suspend;
             return Ok(result);
         }
+        let stop_admission = |code: &str, message: &str| {
+            let mut result = rejected(&request, code, message);
+            result.lifecycle = Lifecycle::Suspend;
+            self.store.record_admission_stop(actor, &request, &result)?;
+            Ok(result)
+        };
         let mut early_bundle = None;
         let pending = latest.as_ref().is_some_and(|s| {
             matches!(
@@ -5561,30 +5571,25 @@ impl Engine {
                 Lifecycle::Received | Lifecycle::Sealed | Lifecycle::Running | Lifecycle::Adopted
             )
         });
-        if pending && direct_bundle.is_none() {
-            let interpreted =
-                input::seal(&request, latest.as_ref().and_then(|s| s.result.as_ref()))?;
-            if matches!(interpreted.meaning.intent, Intent::Cancel) {
-                let mut old = latest.take().expect("pending case exists");
-                self.advance(
-                    &mut old,
-                    Lifecycle::Cancel,
-                    Some(format!(
-                        "AUTHORIZED_CANCEL_REQUEST:{fingerprint}; past effects retained"
-                    )),
-                )?;
-                latest = Some(old);
-                early_bundle = Some(interpreted);
-            }
+        if pending
+            && direct_bundle.is_none()
+            && let Ok(interpreted) =
+                input::seal(&request, latest.as_ref().and_then(|s| s.result.as_ref()))
+            && matches!(interpreted.meaning.intent, Intent::Cancel)
+        {
+            let mut old = latest.take().expect("pending case exists");
+            self.cancel_prior_input(
+                &mut old,
+                format!("AUTHORIZED_CANCEL_REQUEST:{fingerprint}; past effects retained"),
+            )?;
+            latest = Some(old);
+            early_bundle = Some(interpreted);
         }
         if pending && early_bundle.is_none() {
-            let mut r = rejected(
-                &request,
+            return stop_admission(
                 "CASE_BUSY_OR_RECOVERY_REQUIRED",
                 "未確定のケースがあります。既存作用を照合してから再開してください。",
             );
-            r.lifecycle = Lifecycle::Suspend;
-            return Ok(r);
         }
         let blocked_effect = if let Some(current) = latest.as_ref() {
             let actions = self.store.actions(actor, &request.case_id)?;
@@ -5616,15 +5621,15 @@ impl Engine {
         };
         if let Some((code, message, cancel_reason)) = blocked_effect {
             if direct_bundle.is_some() {
-                let mut r = rejected(&request, code, message);
-                r.lifecycle = Lifecycle::Suspend;
-                return Ok(r);
+                return stop_admission(code, message);
             }
             let candidate = early_bundle.take().map_or_else(
                 || input::seal(&request, latest.as_ref().and_then(|s| s.result.as_ref())),
                 Ok,
-            )?;
-            if matches!(candidate.meaning.intent, Intent::Cancel) {
+            );
+            if let Ok(candidate) = candidate
+                && matches!(candidate.meaning.intent, Intent::Cancel)
+            {
                 if latest.as_ref().is_some_and(|old| {
                     old.lifecycle == Lifecycle::Suspend && old.goal_sha256.is_some()
                 }) {
@@ -5634,14 +5639,12 @@ impl Engine {
                         Lifecycle::Running,
                         Some(format!("AUTHORIZED_CANCEL_REQUEST:{fingerprint}")),
                     )?;
-                    self.advance(&mut old, Lifecycle::Cancel, Some(cancel_reason.into()))?;
+                    self.cancel_prior_input(&mut old, cancel_reason.into())?;
                     latest = Some(old);
                 }
                 early_bundle = Some(candidate);
             } else {
-                let mut r = rejected(&request, code, message);
-                r.lifecycle = Lifecycle::Suspend;
-                return Ok(r);
+                return stop_admission(code, message);
             }
         }
         if let Some(cancelled) = latest
@@ -9113,6 +9116,16 @@ impl Engine {
                             );
                         }
                     };
+                    if crate::text_summary::source_summary_only_wikipedia_closing_tags(
+                        &source_report,
+                    ) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SOURCE_SUMMARY_MARKUP_UNSUPPORTED",
+                            "取得したWikipedia本文から選ばれた候補は記法の終了タグだけです。本文の要約を保留しました。",
+                        );
+                    }
                     let encoded = canonical(&source_report)?;
                     let unit = crate::text_summary::source_summary_unit(&source_report);
                     report_bytes = report_bytes.saturating_add(encoded.len());
@@ -12010,6 +12023,55 @@ impl Engine {
         }
         Ok(result)
     }
+    fn cancel_prior_input(&self, state: &mut CaseRevision, journal_reason: String) -> Result<()> {
+        let fingerprint = state.input_fingerprint.as_deref().ok_or_else(|| {
+            failure(
+                "INPUT_NOT_REGISTERED",
+                "the cancelled revision has no original input",
+            )
+        })?;
+        let registered;
+        let original = match &state.bundle {
+            Some(bundle) => &bundle.request,
+            None => {
+                registered = self.store.registered_request_by_fingerprint(
+                    &state.actor_id,
+                    &state.case_id,
+                    fingerprint,
+                )?;
+                &registered
+            }
+        };
+        if original.actor_id != state.actor_id
+            || original.case_id != state.case_id
+            || identity(original)? != fingerprint
+        {
+            return Err(failure(
+                "INTEGRITY_FAILURE",
+                "the cancelled input differs from the case revision identity",
+            ));
+        }
+        let result = state.result.get_or_insert_with(|| base_result(original));
+        if result.id != fingerprint
+            || result.input_id != original.input_id
+            || result.input_version != original.input_version
+        {
+            return Err(failure(
+                "INTEGRITY_FAILURE",
+                "the cancelled result differs from the original input identity",
+            ));
+        }
+        let message =
+            "この依頼の取消を記録しました。既発生・未確定の作用は消去せず保持しています。";
+        if result.reason.is_none() {
+            result.reason = Some(format!("AUTHORIZED_CANCEL: {message}"));
+        }
+        if result.text.is_empty() {
+            result.text = message.into();
+        }
+        self.advance(state, Lifecycle::Cancel, Some(journal_reason))
+    }
+
     fn advance(
         &self,
         state: &mut CaseRevision,

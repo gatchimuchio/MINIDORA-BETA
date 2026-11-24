@@ -150,6 +150,9 @@ pub(crate) const SEARCH_LISTING_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-en-v112-search-candidate-body-explanation";
 
+pub(crate) const WEB_ANSWER_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v161-web-answer-explanation";
+
 pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v113-explained-search-body-source-followup";
 
@@ -502,6 +505,18 @@ pub(crate) fn seal_with_source_context(
             if previous.is_some_and(|result| result.guarantee == Guarantee::Derived) =>
         {
             PARSER_VERSION
+        }
+        Intent::ExplainPrevious
+            if let Some(result) = previous
+                && result.lifecycle == Lifecycle::Commit
+                && result.guarantee == Guarantee::SourceReport
+                && let [listing, body] = result.evidence.as_slice()
+                && listing.packet_kind == "SEARCH_LIST"
+                && body.packet_kind == "FETCHED_BODY"
+                && let [_, body_ref, _] = result.dependencies.as_slice()
+                && digest(&canonical(body)?) == *body_ref =>
+        {
+            WEB_ANSWER_EXPLANATION_PARSER_VERSION
         }
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
         Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,

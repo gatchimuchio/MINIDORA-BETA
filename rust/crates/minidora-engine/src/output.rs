@@ -4,14 +4,17 @@
 //! module. Parent directories must be controlled by a trusted local owner;
 //! portable `std` path checks do not isolate hostile ancestor replacement.
 
-use crate::durability::{open_file_for_sync, sync_directory};
+use crate::durability::{
+    LocalTargetPathError, is_link_or_reparse_point, keeps_local_target_name,
+    local_target_and_ancestors, open_file_for_sync, sync_directory, validate_local_target_path,
+};
 use minidora_domain::{
     ActionRecord, ContentPlan, DeliveryReceipt, EffectPhase, RenderObservation, RenderTarget,
     Result, digest, failure,
 };
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub(crate) const LEGACY_RENDERER_VERSION: &str = "utf8-bytes-v1";
@@ -59,31 +62,33 @@ fn hash_identity(value: &str) -> bool {
 
 fn checked_target(target: &str) -> Result<PathBuf> {
     let path = Path::new(target);
-    if !path.is_absolute()
-        || path
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
-        || path.file_name().is_none()
-    {
-        return Err(failure(
+    validate_local_target_path(path).map_err(|error| {
+        failure(
             "INVALID_WRITE_TARGET",
-            "An absolute file path without traversal is required",
-        ));
-    }
-    // Reject lexical dot segments too: Path::components normalizes interior '.'
-    // on some hosts. Backslash is conservatively rejected across projections.
-    if target.contains('\\') || target.split('/').any(|s| s == "." || s == "..") {
-        return Err(failure(
-            "INVALID_WRITE_TARGET",
-            "Dot segments and ambiguous separators are unsupported",
-        ));
-    }
-    for ancestor in path.ancestors() {
+            match error {
+                LocalTargetPathError::NotAbsoluteFile => {
+                    "An absolute file path without traversal is required"
+                }
+                LocalTargetPathError::AmbiguousSpelling if cfg!(windows) => {
+                    "An unambiguous absolute Windows drive path is required"
+                }
+                LocalTargetPathError::AmbiguousSpelling => {
+                    "Dot segments and ambiguous separators are unsupported"
+                }
+            },
+        )
+    })?;
+    let mut existing_path = path;
+    for ancestor in local_target_and_ancestors(path) {
         match fs::symlink_metadata(ancestor) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(metadata) if is_link_or_reparse_point(&metadata) => {
                 return Err(failure(
                     "SYMLINK_WRITE_TARGET",
-                    "File targets and their ancestors cannot be symlinks",
+                    if cfg!(windows) {
+                        "File targets and their ancestors cannot be Windows reparse points"
+                    } else {
+                        "File targets and their ancestors cannot be symlinks"
+                    },
                 ));
             }
             Ok(metadata) if ancestor != path && !metadata.is_dir() => {
@@ -99,9 +104,17 @@ fn checked_target(target: &str) -> Result<PathBuf> {
                 ));
             }
             Ok(_) => {}
-            Err(error) if ancestor == path && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if ancestor == path && error.kind() == std::io::ErrorKind::NotFound => {
+                existing_path = path.parent().expect("absolute file parent");
+            }
             Err(error) => return Err(error.into()),
         }
+    }
+    if !keeps_local_target_name(existing_path)? {
+        return Err(failure(
+            "INVALID_WRITE_TARGET",
+            "Windows paths must identify the original local drive and file names",
+        ));
     }
     Ok(path.to_owned())
 }

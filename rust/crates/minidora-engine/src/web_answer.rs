@@ -123,6 +123,54 @@ impl WebAnswer {
         }
         units
     }
+
+    pub(crate) fn explanation_units(
+        &self,
+        listing: &EvidencePacket,
+        candidate: &SearchCandidate,
+        body: &EvidencePacket,
+    ) -> Vec<String> {
+        let mut units = vec![
+            format!(
+                "前回は {:?} を {} で検索しました。一覧取得時刻は Unix時刻 {} ミリ秒です。",
+                self.topic,
+                candidate.provider.provider_id(),
+                listing.observed_at_unix_ms
+            ),
+            format!(
+                "検索一覧: {} / packet ID: {} / 原応答 SHA-256: {}",
+                listing.final_uri, listing.id, listing.raw_sha256
+            ),
+            format!(
+                "本文取得を許可された候補のうち、掲載順位が最上位だった {} 位の {:?} を選びました。候補URL: {}",
+                candidate.rank, candidate.title, candidate.uri
+            ),
+            format!(
+                "本文: {} / HTTP {} / 取得時刻（Unix ms）: {} / packet ID: {} / 原本文 SHA-256: {}",
+                body.final_uri,
+                body.http_status,
+                body.observed_at_unix_ms,
+                body.id,
+                body.raw_sha256
+            ),
+            format!(
+                "回答に使った箇所は原本文の byte[{}..{}) です。採用範囲 SHA-256: {}",
+                self.passage.source_start, self.passage.source_end, self.passage.source_span_sha256
+            ),
+            format!("記法を除いて表示した箇所: 「{}」", self.passage.text),
+        ];
+        if let Some(elevation) = &self.elevation {
+            units.push(format!(
+                "本文中の標高 {} m を 1000 で割り、{} km としました。",
+                elevation.metres, elevation.calculation.exact_value
+            ));
+        }
+        units.push(
+            "今回は前回保存した検索一覧・本文・採用箇所を照合しました。記事全体の網羅性、記述の真偽や最新性は未確認です。"
+                .into(),
+        );
+        units
+    }
 }
 
 pub(crate) fn answer(

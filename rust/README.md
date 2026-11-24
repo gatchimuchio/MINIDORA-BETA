@@ -48,9 +48,15 @@ def square(x):
 
 ローカル会話に外部LLMのキーは不要。Webを使うセッションは `./start-minidora.sh --allow-read-host ja.wikipedia.org` と明示し、`富士山について、出典を付けて教えてください。` と入力する。Windowsの起動方法でも同じオプションを使える。`/net off` で通信を停止し、`/net on` で起動時の許可を再適用する。本文は選んだ記事の観測範囲で使用する。記事の取得時刻で最新性や更新日時を確認できない場合は、回答を保留する。
 
+Web回答の後に `詳しく説明して` と聞くと、保存してある検索一覧、選んだ候補、取得本文、元の本文で使った範囲を照合する。この説明は保存済みの証拠で作るため、通信を停止したまま使える。Wikipedia本文で要約候補が記法の終了タグだけになった場合は、本文の要約を保留する。
+
 `富士山の標高を出典付きで調べてキロメートルに換算して` では、同じ依頼の中で記事を探し、本文が「標高は … m」と述べる箇所を取り出して厳密に換算する。記事名・値・単位を確認できる場合に成立し、本文に別記された最高地点の値と区別する。否定・仮定・引用内の値は換算の根拠から外す。
 
-ファイル出力を利用する場合は、起動時に `--allow-write` で信頼するローカルの絶対パスを指定する。対話で `/output PATH` を入力すると、同じパスを次の一発話の保存先に指定できる。`/output off` で取り消せる。成果や作用の確認はCoreの結果と受領記録で行う。
+ファイル出力を利用する場合は、起動時に `--allow-write` で信頼するローカルの絶対パスを指定する。対話で `/output PATH` を入力すると、同じパスを次の一発話の保存先に指定できる。`/output off` で取り消せる。保存を試みた発話では、結果本文に加えて対象パス・作用ID・受領状態を表示する。
+
+Windowsの保存先には `C:\Users\利用者\Documents\結果.txt` のようなドライブ付き絶対パスを指定する。親ディレクトリは事前に用意する。UNC共有パス、特殊なデバイス名、ジャンクションを経由する保存先は保留または失敗になる。
+
+対話中の `/reconcile` は現在の会話で元の保存作用を照合し、確定済みの場合は当時の受領記録を表示する。`中止` で取り消した会話は `/reconcile-effects` で残る作用を照合できる。照合に使うのは会話に記録された元のパス・内容・権限で、次の発話用の保存指定とは独立している。
 
 ### 標準API
 
@@ -210,7 +216,7 @@ Use the same actor, state directory and case to continue a conversation. Each co
 "$minidora_bin" inspect --db "$minidora_state" --actor demo --case arithmetic
 ```
 
-Arithmetic uses exact integers/rationals, bounded expressions and recorded steps. Binary addition/subtraction preserves identical explicit units and converts mixed `mm`, `cm`, `m` and `km` exactly to metres. An explicit first/second operand correction creates the next input version, links it to the actual prior result and retains that original result. Corrections cover saved binary literals using `+`, `-`, `*`, `/`, `%`, `^` or `**`; unit-bearing correction remains limited to addition/subtraction, and nested or compound expressions suspend. A repeated explicit `--case`, `--input` and `--version` with the same complete request retrieves its saved result; changing the request under that identity is a conflict. Omit `--input` for the CLI to choose an identity from the next case revision. This successor behavior is separate from the frozen beta facade's in-instance duplicate rejection.
+Arithmetic uses exact integers/rationals, bounded expressions and recorded steps. Binary addition/subtraction preserves identical explicit units and converts mixed `mm`, `cm`, `m` and `km` exactly to metres. An explicit first/second operand correction creates the next input version, links it to the actual prior result and retains that original result. Corrections cover saved binary literals using `+`, `-`, `*`, `/`, `%`, `^` or `**`; unit-bearing correction remains limited to addition/subtraction, and nested or compound expressions suspend. A repeated explicit `--case`, `--input` and `--version` with the same complete request retrieves its saved result; changing the request under that identity is a conflict. Omit `--input` for a fresh identity on each CLI invocation. A request blocked by an unresolved predecessor retains its suspension reason under its original identity. Submit a new input after resolving the predecessor. This successor behavior is separate from the frozen beta facade's in-instance duplicate rejection.
 
 ### Bounded calculation sequences
 

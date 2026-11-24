@@ -141,6 +141,33 @@ pub struct SourceExtractiveSummaryCandidates {
     pub summary: ExtractiveSummaryCandidates,
 }
 
+pub(crate) fn source_summary_only_wikipedia_closing_tags(
+    report: &SourceExtractiveSummaryCandidates,
+) -> bool {
+    let Ok(uri) = url::Url::parse(&report.source_final_uri) else {
+        return false;
+    };
+    uri.host_str() == Some(crate::search::SearchProvider::Wikipedia.host())
+        && uri.path().starts_with("/wiki/")
+        && uri
+            .query_pairs()
+            .any(|(key, value)| key == "action" && value == "raw")
+        && !report.summary.sentences.is_empty()
+        && report.summary.sentences.iter().all(|sentence| {
+            let element = sentence
+                .text
+                .trim()
+                .trim_end_matches(['。', '.', '！', '!', '？', '?'])
+                .trim_end();
+            element
+                .strip_prefix("</")
+                .and_then(|element| element.strip_suffix('>'))
+                .is_some_and(|name| {
+                    !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                })
+        })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SourceQuestionCandidate {

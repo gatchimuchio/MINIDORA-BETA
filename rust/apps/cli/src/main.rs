@@ -13,7 +13,7 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const HELP: &str = concat!(
     "MINIDORA Rust ",
@@ -33,7 +33,7 @@ Usage:
 Options:
   --db DIRECTORY             Durable state directory (default .minidora-rust-state)
   --case ID                  Case identity (default default)
-  --input ID                 Explicit durable input identity; omit for next revision
+  --input ID                 Explicit durable identity; omit for a new invocation ID
   --context RESULT_ID        Reference an exact prior result in the same case (run only)
   --version N                Input version (default 1)
   --actor ID                 Trusted local frontend identity
@@ -457,24 +457,16 @@ fn execute_request(
     text: &str,
     read_hosts: &BTreeSet<String>,
 ) -> Result<ResultRecord, String> {
-    let automatic_input_id;
-    let input_id = match options.input_id.as_deref() {
-        Some(id) => id,
+    let input_id = match &options.input_id {
+        Some(id) => id.clone(),
         None => {
-            let revision = engine
-                .latest(&options.actor, &options.case_id)
+            let started = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map_err(|error| error.to_string())?;
-            let next = revision.map_or(Ok(1), |revision| {
-                revision
-                    .revision
-                    .checked_add(1)
-                    .ok_or_else(|| "case revision overflow".to_owned())
-            })?;
-            automatic_input_id = format!("input-{next}");
-            &automatic_input_id
+            format!("run-{:x}-{:x}", started.as_nanos(), std::process::id())
         }
     };
-    let mut request = RequestEnvelope::new(&options.case_id, input_id, &options.actor, text);
+    let mut request = RequestEnvelope::new(&options.case_id, &input_id, &options.actor, text);
     request.input_version = options.input_version;
     request.context_ref = options.context_ref.clone();
     request.permissions.read_hosts = read_hosts.clone();
