@@ -5957,28 +5957,42 @@ impl Engine {
                         &context.input_id,
                         context.input_version,
                     )?
-                    .and_then(|(_, source)| match context.guarantee {
-                        Guarantee::SourceReport
-                            if matches!(source.meaning.intent, Intent::ExplainPrevious) =>
-                        {
-                            match source.meaning.parser_version.as_str() {
-                                input::WEB_ANSWER_EXPLANATION_PARSER_VERSION => {
-                                    Some(input::SourceContext::WebAnswerExplanation)
+                    .map(|(_, source)| -> Result<Option<input::SourceContext>> {
+                        let context = match context.guarantee {
+                            Guarantee::SourceReport
+                                if matches!(source.meaning.intent, Intent::ExplainPrevious) =>
+                            {
+                                match source.meaning.parser_version.as_str() {
+                                    input::WEB_ANSWER_EXPLANATION_PARSER_VERSION => {
+                                        Some(input::SourceContext::WebAnswerExplanation)
+                                    }
+                                    input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION => {
+                                        Some(input::SourceContext::ExplainedDirectSource)
+                                    }
+                                    _ => None,
                                 }
-                                input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION => {
-                                    Some(input::SourceContext::ExplainedDirectSource)
-                                }
-                                _ => None,
                             }
-                        }
-                        Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
-                            Some(input::SourceContext::WebBodyQuestion)
-                        }
-                        Guarantee::Hypothesis if input::is_direct_body_question_input(&source) => {
-                            Some(input::SourceContext::DirectBodyQuestion)
-                        }
-                        _ => None,
+                            Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
+                                Some(input::SourceContext::WebBodyQuestion)
+                            }
+                            Guarantee::Hypothesis
+                                if input::is_direct_body_question_input(&source)
+                                    || crate::text_summary::legacy_body_question_retrieval(
+                                        &self.store,
+                                        &source,
+                                        &state.prior_results,
+                                        None,
+                                    )?
+                                    .is_some() =>
+                            {
+                                Some(input::SourceContext::DirectBodyQuestion)
+                            }
+                            _ => None,
+                        };
+                        Ok(context)
                     })
+                    .transpose()?
+                    .flatten()
             {
                 return input::seal_with_source_context(&request, previous, Some(source_context));
             }

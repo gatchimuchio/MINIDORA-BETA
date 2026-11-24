@@ -2416,6 +2416,71 @@ struct SourceContextStep<'a> {
     requested_summary_packet: Option<String>,
 }
 
+/// Identify a direct retrieval named by a retained, pre-v175 body question.
+pub(crate) fn legacy_body_question_retrieval<'a>(
+    store: &Store,
+    question: &InputBundle,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<Option<(&'a ResultRecord, InputBundle)>> {
+    if question.meaning.parser_version != crate::input::PARSER_VERSION
+        || !matches!(
+            question.meaning.intent,
+            Intent::AskPreviousSourceQuestion { .. }
+        )
+    {
+        return Ok(None);
+    }
+    let request = &question.request;
+    let Some(source) = question
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| prior_results.get(id))
+    else {
+        return Ok(None);
+    };
+    if source.lifecycle != Lifecycle::Commit
+        || source.guarantee != Guarantee::SourceReport
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &source.id)
+        || question.meaning.context_result_ref.as_ref() != Some(&source.id)
+        || question.context_sha256 != identity(&Some(source))?
+    {
+        return Ok(None);
+    }
+    let Some((_, original)) = (match history {
+        Some(history) => history.input_bundle(&source.input_id, source.input_version),
+        None => store.get_input_bundle(
+            &request.actor_id,
+            &request.case_id,
+            &source.input_id,
+            source.input_version,
+        ),
+    })?
+    else {
+        return Ok(None);
+    };
+    let Intent::Retrieve { urls, .. } = &original.meaning.intent else {
+        return Ok(None);
+    };
+    if original.request.actor_id != request.actor_id
+        || original.request.case_id != request.case_id
+        || identity(&original.request)? != source.id
+        || urls.is_empty()
+        || urls.len() != source.evidence.len()
+        || !urls
+            .iter()
+            .zip(&source.evidence)
+            .all(|(uri, packet)| packet.packet_kind == "FETCHED_BODY" && packet.request_uri == *uri)
+    {
+        return Ok(None);
+    }
+    Ok(Some((source, original)))
+}
+
 fn derived_source_followup<'a>(
     store: &Store,
     history: &VerifiedCaseHistory<'_>,
@@ -2502,7 +2567,32 @@ fn derived_source_followup<'a>(
             let valid_target = if follows_web_question {
                 crate::input::is_web_body_question_input(&target_input)
             } else if follows_direct_question {
-                crate::input::is_direct_body_question_input(&target_input)
+                if crate::input::is_direct_body_question_input(&target_input) {
+                    true
+                } else if let Some((source, original)) = legacy_body_question_retrieval(
+                    store,
+                    &target_input,
+                    prior_results,
+                    Some(history),
+                )? {
+                    if history
+                        .input_result(&source.input_id, source.input_version)?
+                        .as_ref()
+                        != Some(source)
+                        || !history.contains_committed_result(source)?
+                    {
+                        return Err(invalid());
+                    }
+                    for packet in &source.evidence {
+                        crate::ports::validate_successful_packet(
+                            packet,
+                            &original.request.permissions,
+                        )?;
+                    }
+                    true
+                } else {
+                    false
+                }
             } else {
                 crate::input::is_source_summary_intent(&target_input.meaning.intent)
             };

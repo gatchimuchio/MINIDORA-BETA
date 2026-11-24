@@ -6015,11 +6015,17 @@ fn inspect(
                 verify_previous_relation_memory_result(store, state, &memory, result, plan, &goal)
             }
         })();
-        current_verification.map_err(|error| {
-            failure(
+        current_verification.map_err(|error| match &error {
+            Error::Contract { code, .. } if code == "RELATION_BUDGET" => failure(
+                "RECOVERY_PROOF_RESOURCE_LIMIT",
+                format!(
+                    "the current prior-relation proof exceeds the original action budget: {error}"
+                ),
+            ),
+            _ => failure(
                 "RECOVERY_PROOF_INVALIDATED",
                 format!("the original prior-relation proof is no longer valid: {error}"),
-            )
+            ),
         })?;
     }
     if let Intent::InspectPremises { subject } = &goal.intent {
