@@ -5722,7 +5722,27 @@ impl Engine {
             reason: None,
             prior_results,
         };
-        self.store.append_case(actor, &state)?;
+        if let Err(error) = self.store.append_case(actor, &state) {
+            // An earlier cancellation may have already changed the predecessor.
+            if early_bundle.is_none()
+                && matches!(&error, Error::Contract { code, .. } if code == "REVISION_CONFLICT")
+                && let Some(current) = self.store.load_case(actor, &request.case_id)?
+                && current.revision >= state.revision
+                && current
+                    .input_fingerprint
+                    .as_deref()
+                    .is_some_and(|accepted| accepted != fingerprint)
+            {
+                return stop_admission(
+                    "CASE_CHANGED_BEFORE_ADMISSION",
+                    &format!(
+                        "別入力の会話記録が先に進みました。競合を確認した保存版は {} です。この入力は実行されていません。状態を確認してから、新しい入力IDで送ってください。",
+                        current.revision,
+                    ),
+                );
+            }
+            return Err(error);
+        }
         let started = Instant::now();
         let has_compute_budget = request.budget.max_actions > 0 && request.budget.deadline_ms > 0;
         let sealed = if let Some(bundle) = early_bundle {
@@ -5761,6 +5781,19 @@ impl Engine {
             input::seal_with_source_context(&request, previous, implicit_source_context)
         };
         let sealed = sealed.and_then(|bundle| {
+            if has_compute_budget
+                && matches!(
+                    bundle.meaning.intent,
+                    Intent::FetchPreviousSearchCandidate { .. }
+                )
+                && previous.is_some_and(search::is_partial_web_candidate_context)
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::PartialWebCandidate),
+                );
+            }
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
                 && let Some(context) = previous.filter(|result| {
@@ -8025,8 +8058,12 @@ impl Engine {
                 }
             }
             Intent::FetchPreviousSearchCandidate { rank } => {
-                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
-                else {
+                let resumes_partial = bundle.meaning.parser_version
+                    == input::PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION;
+                let Some(prior) = previous.filter(|prior| {
+                    prior.lifecycle == Lifecycle::Commit
+                        || (resumes_partial && search::is_partial_web_candidate_context(prior))
+                }) else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -8034,13 +8071,24 @@ impl Engine {
                         "本文取得の対象となる直前の検索結果がありません。",
                     );
                 };
-                let Some((search_ref, observation)) = crate::search::previous_observation(
-                    &self.store,
-                    actor,
-                    &request.case_id,
-                    prior,
-                )?
-                else {
+                let observation = if resumes_partial {
+                    match search::candidate_body_observation(
+                        &self.store,
+                        &bundle,
+                        prior,
+                        None,
+                        "SEARCH_CONTEXT_INVALID",
+                    ) {
+                        Ok(observation) => observation,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    search::previous_observation(&self.store, actor, &request.case_id, prior)?
+                };
+                let Some((search_ref, observation)) = observation else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -11326,7 +11374,9 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
             }
             Intent::JsonPointer { document, pointer } => {
-                match ports::json_pointer(document, pointer) {
+                let object_keys_only =
+                    bundle.meaning.parser_version == input::JSON_OBJECT_KEY_PATH_PARSER_VERSION;
+                match ports::json_pointer_with_mode(document, pointer, object_keys_only) {
                     Ok(value) => units.push(value),
                     Err(e) => {
                         return self.stop(

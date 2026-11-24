@@ -58,6 +58,8 @@ def square(x):
 
 貼り付けた文章の文字列を置き換えるには、`/paste` の次の行に `文章の「猫」を「犬」に置き換えて:` と書き、その下に本文を貼る。対象が複数あるときは、`文章の「猫」を「犬」に2か所置き換えて:` のように件数を指定する。実際の一致数が指示と違う場合は保留する。置換後に `詳しく説明して` と入力すると、保存した置換記録から件数と原文・出力のバイト範囲を確認できる。
 
+貼り付けたJSONから値を取り出すには、`/paste` の次の行に `JSONの「注文」の「配送先」の「市」を取り出して:` と書き、その下にJSONを貼る。キーは記載した順に照合し、選んだ値を原文のまま返す。`詳しく説明して` で選択した値のバイト範囲とハッシュを確認できる。配列の添字を指定するときは [JSON Pointer](#direct-https-source-bodies-and-exact-json-selection) を使う。
+
 二つのCSV表を比較するには、同じ列構成の表を `変更前:` と `変更後:` の見出しで区切って貼り付ける。指定したキー列で対応する行を探し、変更・削除・追加を表示する。
 
 ```text
@@ -77,6 +79,8 @@ C,open
 CSVをJSON表に変換した後は、`前回のJSON表をCSVに変換して` で、保存済みのJSON表を使ってCSVを作れる。途中で別の話題を挟んだ場合は、JSON表の結果IDを `/context` で指定する。CSVに戻した結果の後に `詳しく説明して` と入力すると、元CSV・保存JSON・出力CSVの対応箇所を確認できる。
 
 ローカル会話に外部LLMのキーは不要。Webを使うセッションは `./start-minidora.sh --allow-read-host ja.wikipedia.org` と明示し、`富士山について、出典を付けて教えてください。` と入力する。Windowsの起動方法でも同じオプションを使える。`/net off` で通信を停止し、`/net on` で起動時の許可を再適用する。本文は選んだ記事の観測範囲で使用する。記事の取得時刻で最新性や更新日時を確認できない場合は、回答を保留する。
+
+検索一覧と本文の一部を保存した時点で取得量の上限に達した場合は、`1件目の本文を取得して` のように一覧の順位を指定できる。別の発話を挟んだ場合は `/context 結果ID` でその保留結果を参照する。元の一覧から選び、今回の通信許可と取得枠で本文を取得する。続く `詳しく説明して` で一覧と取得した本文の出典を確認できる。
 
 許可したホストの対応本文は、`https://www.rfc-editor.org/rfc/rfc8259.txt を読んで` のようにURLを直接指定できる。全文が表示枠を超えると、取得した全文を保存し、出典・取得時刻・本文全体のハッシュ・冒頭の引用範囲を表示する。本文が取得予算に収まらない場合は保留する。
 
@@ -728,6 +732,8 @@ Migration requires `--db`, accepts alpha 7, alpha 8, alpha 9 or alpha 10 metadat
 ```
 
 `reconcile` inspects the saved original local-file operation, authority, adopted artifact and actual existing target. It accepts no new request, permissions or output path, performs no write/resend and creates no new action token. An already committed case returns its saved result. An eligible adopted/suspended file case can reach `COMMIT` only after the original content, proof, graph and actual file confirmation are verified. Unsupported or unconfirmed recovery remains suspended.
+
+同じ会話への別入力が先に保存版を進め、処理に入る前に競合した入力は `SUSPEND` の `CASE_CHANGED_BEFORE_ADMISSION` を返す。同じ入力IDで再送するとこの保留結果を取得できる。会話の状態を確認してから、必要な依頼を新しい入力IDで送る。
 
 For a case already cancelled with an unresolved issued effect, the separate command is:
 

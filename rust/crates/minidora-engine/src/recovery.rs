@@ -5821,6 +5821,26 @@ fn inspect(
     {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
+    if bundle.meaning.parser_version == crate::input::JSON_OBJECT_KEY_PATH_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_JSON_OBJECT_KEY_PATH_MISMATCH";
+        let Intent::JsonPointer { document, pointer } = &goal.intent else {
+            return Err(failure(CODE, "the sealed JSON key path intent changed"));
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let selected = crate::ports::json_pointer_with_mode(document, pointer, true)?;
+        if result.guarantee != Guarantee::Computed
+            || !result.dependencies.is_empty()
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [selected.as_str()]
+            || plan.text != selected
+            || result.text != selected
+        {
+            return Err(failure(
+                CODE,
+                "the retained selection differs from the original JSON key path request",
+            ));
+        }
+    }
     if bundle.meaning.parser_version == crate::input::PASTED_TEXT_REPLACEMENT_PARSER_VERSION {
         const CODE: &str = "RECOVERY_TEXT_REPLACEMENT_MISMATCH";
         let Intent::TextReplace {
@@ -6377,6 +6397,20 @@ fn inspect(
                     "the original search predecessor is no longer retained",
                 )
             })?;
+        if bundle.meaning.parser_version
+            == crate::input::PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
+        {
+            const CODE: &str = "RECOVERY_SEARCH_CONTEXT_MISMATCH";
+            verify_registered_input(store, bundle, CODE)?;
+            if request.context_ref.is_none()
+                && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+            {
+                return Err(failure(
+                    CODE,
+                    "the original input did not follow this search stop",
+                ));
+            }
+        }
         let retains_listing = nodes
             .iter()
             .any(|node| node.id == search::SEARCH_CANDIDATE_LISTING_NODE);

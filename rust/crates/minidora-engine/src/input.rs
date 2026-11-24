@@ -9,7 +9,9 @@ use unicode_normalization::char::{canonical_combining_class, compose};
 
 pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary";
 const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conversation";
-const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
+pub(crate) const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
+pub(crate) const PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v180-partial-web-candidate-followup";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
@@ -25,6 +27,8 @@ pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
     "declarative-ja-v174-previous-json-table-to-csv";
 pub(crate) const PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v176-previous-json-table-conversion-explanation";
+pub(crate) const JSON_OBJECT_KEY_PATH_PARSER_VERSION: &str =
+    "declarative-ja-v179-json-object-key-path";
 pub(crate) const PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v171-pasted-text-replacement-explanation";
 pub(crate) const DIRECT_SOURCE_EXPLANATION_PARSER_VERSION: &str =
@@ -201,6 +205,7 @@ pub(crate) enum SourceContext {
     WebAnswerExplanation,
     ResumedWebAnswerExplanation,
     WebBodyQuestion,
+    PartialWebCandidate,
     Summary,
 }
 
@@ -474,7 +479,10 @@ pub(crate) fn seal_with_source_context(
         unresolved
             .push("no actual committed previous result is available for code verification".into());
     }
+    let resumes_partial_web_candidate =
+        matches!(source_context, Some(SourceContext::PartialWebCandidate));
     if matches!(intent, Intent::FetchPreviousSearchCandidate { .. })
+        && !resumes_partial_web_candidate
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
     {
         unresolved.push(
@@ -535,12 +543,16 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::ExplainedDirectSource
         | SourceContext::WebAnswerExplanation
         | SourceContext::ResumedWebAnswerExplanation
-        | SourceContext::WebBodyQuestion => None,
+        | SourceContext::WebBodyQuestion
+        | SourceContext::PartialWebCandidate => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
+        Intent::FetchPreviousSearchCandidate { .. } if resumes_partial_web_candidate => {
+            PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
+        }
         Intent::ExplainCode { .. } => CODE_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
         Intent::GenerateReturnFunction { .. } => RETURN_FUNCTION_PARSER_VERSION,
@@ -597,6 +609,9 @@ pub(crate) fn seal_with_source_context(
             CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION
         }
         Intent::ConvertPreviousJsonTableToCsv => PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION,
+        Intent::JsonPointer { .. } if document_header(&request.text).starts_with("JSONの「") => {
+            JSON_OBJECT_KEY_PATH_PARSER_VERSION
+        }
         Intent::TextReplace { .. }
             if starts_pasted_text_replacement(document_header(&request.text)) =>
         {
@@ -2790,6 +2805,35 @@ fn pasted_text_replacement_intent(text: &str, header: &str) -> Result<Option<Int
     }))
 }
 
+fn json_object_key_path_intent(text: &str, header: &str) -> Result<Option<Intent>> {
+    if !header.starts_with("JSONの「") {
+        return Ok(None);
+    }
+    let Some(parts) = regex(
+        r"\AJSONの「(?P<keys>[^「」\r\n]*(?:」の「[^「」\r\n]*)*)」を(?:取り出して|抽出して)(?:ください)?[:：]\z",
+    )?
+    .captures(header)
+    else {
+        return Ok(None);
+    };
+    let Some((_, document)) = text
+        .split_once('\n')
+        .filter(|(_, document)| !document.is_empty())
+    else {
+        return Ok(Some(Intent::Unknown {
+            reason: "抽出対象のJSONを見出しの次の行に貼り付けてください。".into(),
+        }));
+    };
+    let mut pointer = String::new();
+    for key in parts["keys"].split("」の「") {
+        crate::ports::push_json_pointer_segment(&mut pointer, key);
+    }
+    Ok(Some(Intent::JsonPointer {
+        document: document.into(),
+        pointer,
+    }))
+}
+
 /// Explicit headers separate instructions from document/query data. The body is
 /// sliced from the original request, without trim, newline conversion or NFKC.
 pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
@@ -2798,6 +2842,9 @@ pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(intent));
     }
     if let Some(intent) = pasted_text_replacement_intent(text, header)? {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = json_object_key_path_intent(text, header)? {
         return Ok(Some(intent));
     }
     if matches!(
@@ -9052,6 +9099,34 @@ mod symbolic_and_clause_tests {
 #[cfg(test)]
 mod structured_document_tests {
     use super::*;
+
+    #[test]
+    fn json_object_key_path_seals_encoded_literal_keys_and_original_document() {
+        let document = "{\r\n  \"注文\": {\"a/b\": {\"~０\": 1.2300e+40}}\r\n}\r\n";
+        let request =
+            format!("JSONの「注文」の「a/b」の「~０」を取り出してください：\r\n{document}");
+        let bundle = seal(&RequestEnvelope::new("case", "id", "actor", &request), None).unwrap();
+        assert_eq!(bundle.request.text, request);
+        assert_eq!(
+            bundle.meaning.parser_version,
+            JSON_OBJECT_KEY_PATH_PARSER_VERSION
+        );
+        assert!(matches!(
+            bundle.meaning.intent,
+            Intent::JsonPointer { document: source, pointer }
+                if source == document && pointer == "/注文/a~1b/~0０"
+        ));
+        for malformed in [
+            "JSONの「注文」の「市」を取り出して:",
+            "JSONの「注文」の「市」を取り出して送信して:\n{}",
+            "JSONの「注文」の「市を取り出して:\n{}",
+        ] {
+            assert!(matches!(
+                interpret(malformed).unwrap(),
+                Intent::Unknown { .. }
+            ));
+        }
+    }
 
     #[test]
     fn previous_json_table_conversion_seals_its_own_intent_and_version() {

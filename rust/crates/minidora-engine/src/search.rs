@@ -5,14 +5,16 @@
 //! Core-selected provider; it neither chooses goals nor grants read authority.
 
 use crate::{
+    input::{PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION, WEB_QUESTION_PARSER_VERSION},
     ports,
     scheduler::GoalNode,
     store::{Store, VerifiedCaseHistory},
     web_answer,
 };
 use minidora_domain::{
-    CaseRevision, ContentPlan, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle,
-    Permissions, ResourceBudget, Result, ResultRecord, canonical, digest, failure, identity,
+    CaseRevision, ContentPlan, EvidencePacket, GoalContract, Guarantee, InputBundle, Intent,
+    Lifecycle, Permissions, ResourceBudget, Result, ResultRecord, canonical, digest, failure,
+    identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,6 +23,9 @@ use url::{Host, Url};
 
 const SEARCH_ROWS: usize = 5;
 const MAX_RETAINED_BODY_PACKETS: usize = crate::text_summary::MAX_QUESTION_SOURCE_PACKETS;
+const PARTIAL_WEB_BODY_FAILURE: &str = "EVIDENCE_BYTE_LIMIT_PARTIAL_BODY";
+const PARTIAL_WEB_STOP_MESSAGE: &str =
+    "Web資料を使った回答を保留しました。EVIDENCE_BYTE_LIMIT_PARTIAL_BODY";
 pub(crate) const SEARCH_LISTING_NODE: &str = "search-listing";
 pub(crate) const SEARCH_SELECTION_KIND: &str = "search-listing-selection-v1";
 pub(crate) const SEARCH_CANDIDATE_LISTING_NODE: &str = "search-candidate-listing";
@@ -929,7 +934,21 @@ fn validate_search_predecessor(
     previous: &ResultRecord,
     code: &str,
 ) -> Result<()> {
-    if previous.lifecycle != Lifecycle::Commit
+    let eligible = if bundle.meaning.parser_version == PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
+    {
+        matches!(
+            bundle.meaning.intent,
+            Intent::FetchPreviousSearchCandidate { .. }
+        ) && is_partial_web_candidate_context(previous)
+            && bundle
+                .request
+                .context_ref
+                .as_ref()
+                .is_none_or(|id| id == &previous.id)
+    } else {
+        previous.lifecycle == Lifecycle::Commit
+    };
+    if !eligible
         || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
         || bundle.context_sha256 != identity(&Some(previous))?
     {
@@ -939,6 +958,145 @@ fn validate_search_predecessor(
         ));
     }
     Ok(())
+}
+
+pub(crate) fn is_partial_web_candidate_context(result: &ResultRecord) -> bool {
+    result.lifecycle == Lifecycle::Suspend
+        && result
+            .reason
+            .as_deref()
+            .and_then(|reason| reason.strip_prefix("WEB_BODY_UNAVAILABLE: "))
+            == Some(PARTIAL_WEB_STOP_MESSAGE)
+        && matches!(result.evidence.as_slice(), [_, packet]
+            if packet.failure.as_deref() == Some(PARTIAL_WEB_BODY_FAILURE))
+}
+
+fn partial_web_candidate_observation(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<(String, SearchObservation)> {
+    let invalid = || {
+        failure(
+            "SEARCH_CONTEXT_INVALID",
+            "本文量の上限で保留した元の出典質問と検索一覧を照合できません。",
+        )
+    };
+    if !is_partial_web_candidate_context(previous)
+        || previous.text != PARTIAL_WEB_STOP_MESSAGE
+        || previous.guarantee != Guarantee::Unknown
+        || previous.calculation.is_some()
+        || previous.content_plan.is_some()
+        || previous.render.is_some()
+        || previous.execution_graph_ref.is_some()
+        || !previous.receipts.is_empty()
+    {
+        return Err(invalid());
+    }
+    let [listing_ref, body_ref] = previous.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let [listing, packet] = previous.evidence.as_slice() else {
+        return Err(invalid());
+    };
+    let stopped = match history {
+        Some(history) => history.suspended_result_revision(previous),
+        None => store.load_suspended_result_revision(actor, case, previous),
+    }?
+    .ok_or_else(invalid)?;
+    let (_, original) = match history {
+        Some(history) => history.input_bundle(&previous.input_id, previous.input_version),
+        None => store.get_input_bundle(actor, case, &previous.input_id, previous.input_version),
+    }?
+    .ok_or_else(invalid)?;
+    let request = &original.request;
+    let Intent::AskWeb { topic, .. } = &original.meaning.intent else {
+        return Err(invalid());
+    };
+    if original.meaning.parser_version != WEB_QUESTION_PARSER_VERSION
+        || request.actor_id != actor
+        || request.case_id != case
+        || identity(request)? != previous.id
+        || stopped.actor_id != actor
+        || stopped.case_id != case
+        || stopped.input_fingerprint.as_ref() != Some(&previous.id)
+        || stopped.bundle.as_ref() != Some(&original)
+        || stopped.reason != previous.reason
+    {
+        return Err(invalid());
+    }
+    let goal_ref = stopped.goal_sha256.as_ref().ok_or_else(invalid)?;
+    let goal_bytes = store.get_bytes(actor, case, goal_ref)?;
+    let goal: GoalContract = serde_json::from_slice(&goal_bytes)?;
+    let graph_bytes = store.get_bytes(actor, case, &goal.required_graph_ref)?;
+    let nodes: Vec<GoalNode> = serde_json::from_slice(&graph_bytes)?;
+    let allowed_starts = (goal.budget.max_actions as usize)
+        .checked_sub(nodes.len().saturating_sub(2))
+        .ok_or_else(invalid)?;
+    if canonical(&goal)? != goal_bytes
+        || !nodes.starts_with(&web_answer::nodes())
+        || goal.input_fingerprint != previous.id
+        || goal.intent != original.meaning.intent
+        || goal.permissions != request.permissions
+        || goal.budget != request.budget
+        || goal.output_path != request.output_path
+    {
+        return Err(invalid());
+    }
+    let listing_bytes = store.get_bytes(actor, case, listing_ref)?;
+    let observation: SearchObservation = serde_json::from_slice(&listing_bytes)?;
+    if canonical(&observation)? != listing_bytes
+        || &observation.listing != listing
+        || &observation.query != topic
+    {
+        return Err(invalid());
+    }
+    let candidate = web_answer::select_candidate(&observation, &goal.permissions)?;
+    ports::validate_observed_route(packet, &goal.permissions)?;
+    if packet.mode != "LIVE"
+        || packet.packet_kind != "FETCH_FAILURE"
+        || !(200..300).contains(&packet.http_status)
+        || packet.provider_id != "https-direct-url-v1"
+        || packet.parser_version != "strict-utf8-identity-v1"
+        || packet.independence_group != packet.final_uri
+        || packet.request_uri != candidate_body_uri(candidate)?
+        || packet.observed_at_unix_ms < listing.observed_at_unix_ms
+        || packet.retry_after.is_some()
+        || packet.extracted_text.is_some()
+        || packet.raw_body.is_empty()
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || packet.id != ports::fetch_packet_identity(packet)?
+        || canonical(packet)? != store.get_bytes(actor, case, body_ref)?
+        || listing.raw_body.len().checked_add(packet.raw_body.len())
+            != Some(goal.budget.max_evidence_bytes)
+        || listing
+            .redirect_chain
+            .len()
+            .saturating_add(packet.redirect_chain.len())
+            > allowed_starts
+    {
+        return Err(invalid());
+    }
+    Ok((listing_ref.clone(), observation))
+}
+
+pub(crate) fn candidate_body_observation(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
+    code: &str,
+) -> Result<Option<(String, SearchObservation)>> {
+    validate_search_predecessor(bundle, previous, code)?;
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    if bundle.meaning.parser_version == PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION {
+        return partial_web_candidate_observation(store, actor, case, previous, history).map(Some);
+    }
+    previous_observation_with_history(store, actor, case, previous, history)
 }
 
 fn explain_web_answer(
@@ -1053,13 +1211,16 @@ pub(crate) fn verify_retained_candidate_body(
     let Intent::FetchPreviousSearchCandidate { rank } = bundle.meaning.intent else {
         return Err(invalid());
     };
-    validate_search_predecessor(bundle, previous, CODE)?;
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
+    if bundle.meaning.parser_version == PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
+        && !retains_listing
+    {
+        return Err(invalid());
+    }
     let (search_ref, observation) =
-        previous_observation_with_history(store, actor, case, previous, history)?
-            .ok_or_else(invalid)?;
+        candidate_body_observation(store, bundle, previous, history, CODE)?.ok_or_else(invalid)?;
     let candidate = observation
         .candidates
         .iter()
@@ -1171,6 +1332,28 @@ fn committed_search_result<'a>(
             current = parent;
             continue;
         }
+        if is_partial_web_candidate_context(current) {
+            let request = &bundle.request;
+            let (reference, selected) = partial_web_candidate_observation(
+                store,
+                &request.actor_id,
+                &request.case_id,
+                current,
+                Some(history),
+            )?;
+            if reference != selected_ref {
+                return Err(invalid());
+            }
+            return Ok((
+                current,
+                RetainedSearchListing {
+                    proof_ref: reference.clone(),
+                    selected_ref: reference,
+                    selected,
+                    rejected_primary: None,
+                },
+            ));
+        }
         let plan = current.content_plan.as_ref().ok_or_else(invalid)?;
         let root =
             verify_retained_search_listing(store, &bundle, current, plan)?.ok_or_else(invalid)?;
@@ -1257,15 +1440,17 @@ fn explain_candidate_body(
         &proof.search_ref,
         CODE,
     )?;
-    crate::document::revalidate_previous_document_render(
-        store,
-        actor,
-        case,
-        root_result,
-        Some(&root.selected_ref),
-        CODE,
-        "original search listing",
-    )?;
+    if root_result.lifecycle == Lifecycle::Commit {
+        crate::document::revalidate_previous_document_render(
+            store,
+            actor,
+            case,
+            root_result,
+            Some(&root.selected_ref),
+            CODE,
+            "original search listing",
+        )?;
+    }
     let mut dependencies = vec![previous.id.clone()];
     if bundle.meaning.parser_version
         != crate::input::SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION
@@ -1321,6 +1506,9 @@ fn explain_candidate_body(
             body.parser_version
         ),
     ];
+    if root_result.lifecycle == Lifecycle::Suspend {
+        units.push("元の出典質問は本文量の上限で保留となり、確認できた検索一覧を今回の本文取得に使いました。".into());
+    }
     if let Some(failed) = root.rejected_primary {
         units.push(format!(
             "最初の検索先: {} / HTTP {} / {} / 一覧packet ID: {}",
@@ -1493,7 +1681,8 @@ pub(crate) fn committed_context_after_candidate_failure<'a>(
         .as_deref()
         .and_then(|reason| reason.split_once(": "))
         .map(|(code, _)| code);
-    if case.lifecycle != Lifecycle::Suspend
+    if saved_bundle.meaning.parser_version == PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
+        || case.lifecycle != Lifecycle::Suspend
         || failed.lifecycle != Lifecycle::Suspend
         || requested_rank == Some(rank)
         || !matches!(

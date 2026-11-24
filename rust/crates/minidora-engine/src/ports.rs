@@ -1287,6 +1287,14 @@ impl<'a> JsonParser<'a> {
 /// Select exact original JSON bytes. No floating point conversion, duplicate
 /// key overwrite, implicit missing value, or document rewrite is performed.
 pub(crate) fn json_node_at_pointer<'a>(root: &'a JsonNode, pointer: &str) -> Result<&'a JsonNode> {
+    json_node_at_pointer_with_mode(root, pointer, false)
+}
+
+pub(crate) fn json_node_at_pointer_with_mode<'a>(
+    root: &'a JsonNode,
+    pointer: &str,
+    object_keys_only: bool,
+) -> Result<&'a JsonNode> {
     if !pointer.is_empty() && !pointer.starts_with('/') {
         return Err(failure(
             "INVALID_JSON_POINTER",
@@ -1315,6 +1323,12 @@ pub(crate) fn json_node_at_pointer<'a>(root: &'a JsonNode, pointer: &str) -> Res
         }
         node = match &node.kind {
             JsonKind::Object(entries) => entries.get(&key),
+            JsonKind::Array(_) if object_keys_only => {
+                return Err(failure(
+                    "JSON_PATH_REQUIRES_OBJECT_KEYS",
+                    "配列の要素は既存のjson-pointerで添字を明示してください。",
+                ));
+            }
             JsonKind::Array(entries) => {
                 if key.is_empty()
                     || (key.len() > 1 && key.starts_with('0'))
@@ -1340,8 +1354,16 @@ pub(crate) fn json_node_at_pointer<'a>(root: &'a JsonNode, pointer: &str) -> Res
 }
 
 pub fn json_pointer(document: &str, pointer: &str) -> Result<String> {
+    json_pointer_with_mode(document, pointer, false)
+}
+
+pub(crate) fn json_pointer_with_mode(
+    document: &str,
+    pointer: &str,
+    object_keys_only: bool,
+) -> Result<String> {
     let root = JsonParser::new(document).parse()?;
-    let node = json_node_at_pointer(&root, pointer)?;
+    let node = json_node_at_pointer_with_mode(&root, pointer, object_keys_only)?;
     Ok(document[node.span.clone()].to_owned())
 }
 
@@ -1558,8 +1580,20 @@ fn add_json_difference(
 }
 
 fn json_pointer_child(parent: &str, child: &str) -> String {
-    let escaped = child.replace('~', "~0").replace('/', "~1");
-    format!("{parent}/{escaped}")
+    let mut pointer = parent.to_owned();
+    push_json_pointer_segment(&mut pointer, child);
+    pointer
+}
+
+pub(crate) fn push_json_pointer_segment(pointer: &mut String, child: &str) {
+    pointer.push('/');
+    for character in child.chars() {
+        match character {
+            '~' => pointer.push_str("~0"),
+            '/' => pointer.push_str("~1"),
+            _ => pointer.push(character),
+        }
+    }
 }
 
 fn json_scalar_equal(document: &str, left: &JsonNode, right: &JsonNode) -> Result<bool> {
@@ -3595,6 +3629,29 @@ mod tests {
         assert_eq!(json_pointer(doc, "").unwrap(), doc);
         assert!(json_pointer(doc, "/a~1b/~0key/01").is_err());
         assert!(json_pointer(doc, "/absent").is_err());
+    }
+
+    #[test]
+    fn json_object_key_path_treats_numbers_as_literal_keys() {
+        let document = r#"{"object":{"0":"key","01":"leading zero"},"list":["first"]}"#;
+        assert_eq!(
+            json_pointer_with_mode(document, "/object/0", true).unwrap(),
+            "\"key\""
+        );
+        assert_eq!(
+            json_pointer_with_mode(document, "/object/01", true).unwrap(),
+            "\"leading zero\""
+        );
+        assert_eq!(
+            json_pointer_with_mode(document, "/list", true).unwrap(),
+            "[\"first\"]"
+        );
+        let error = json_pointer_with_mode(document, "/list/0", true).unwrap_err();
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. } if code == "JSON_PATH_REQUIRES_OBJECT_KEYS"
+        ));
+        assert_eq!(json_pointer(document, "/list/0").unwrap(), "\"first\"");
     }
     #[test]
     fn duplicates_nonfinite_and_malformed_documents_fail() {

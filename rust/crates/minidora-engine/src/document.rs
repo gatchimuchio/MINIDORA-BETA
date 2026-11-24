@@ -2,7 +2,7 @@
 //! RFC 4180 record and quote framing in a UTF-8 projection. Conversation input
 //! also admits LF record framing and retains those bytes exactly. No implicit
 //! numeric inference or spreadsheet evaluation occurs.
-use crate::ports::{JsonKind, JsonNode, json_node_at_pointer, strict_json_document};
+use crate::ports::{JsonKind, JsonNode, json_node_at_pointer_with_mode, strict_json_document};
 use crate::text_editing::{
     EditedText, LocatedTextEdit, edit_explicit_text, locate_explicit_replacement,
 };
@@ -1655,7 +1655,9 @@ fn previous_json_value_explanation(
     let (input_node, report_node, document, report_ref, mut lines) = match &bundle.meaning.intent {
         Intent::JsonPointer { document, pointer } => {
             let root = strict_json_document(document)?;
-            let node = json_node_at_pointer(&root, pointer)?;
+            let object_keys_only =
+                bundle.meaning.parser_version == crate::input::JSON_OBJECT_KEY_PATH_PARSER_VERSION;
+            let node = json_node_at_pointer_with_mode(&root, pointer, object_keys_only)?;
             let raw = &document[node.span.clone()];
             if !previous.dependencies.is_empty() || previous.text != raw {
                 return Err(failure(
