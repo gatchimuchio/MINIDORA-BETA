@@ -2558,6 +2558,51 @@ pub(crate) fn previous_code_verification_lines(
     Ok(lines)
 }
 
+pub(crate) fn verification_explanation_lines(report: &CodeCapabilityReport) -> Result<Vec<String>> {
+    let verification = report.verification.as_ref().ok_or_else(|| {
+        failure(
+            "CODE_VERIFICATION_REPORT_INVALID",
+            "a generated-code verification report is required",
+        )
+    })?;
+    let mut lines = vec![
+        format!(
+            "「{}」の検証記録では、保存した関数を指定された試験入力だけで評価しました。",
+            report.function_name
+        ),
+        format!("生成ソースのSHA-256: {}", report.source_sha256),
+        format!(
+            "試験入力と期待値の記録のSHA-256: {}",
+            verification.cases_sha256
+        ),
+    ];
+    for case in &verification.cases {
+        let line = match &case.actual_json {
+            Some(actual) => format!(
+                "試験{}は実際値 {} と期待値 {} が{}ため、{}です。",
+                case.number + 1,
+                actual,
+                case.expected_json,
+                if case.matched {
+                    "同じだった"
+                } else {
+                    "異なった"
+                },
+                if case.matched { "一致" } else { "不一致" },
+            ),
+            None => format!(
+                "試験{}の実際値は確定していません。期待値は {}、記録された状態は {} です。",
+                case.number + 1,
+                case.expected_json,
+                case.evaluation_status,
+            ),
+        };
+        lines.push(line);
+    }
+    lines.push(verification.assurance.clone());
+    Ok(lines)
+}
+
 #[derive(Clone, Debug)]
 struct EvalError {
     kind: String,

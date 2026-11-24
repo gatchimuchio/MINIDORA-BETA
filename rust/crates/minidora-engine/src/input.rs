@@ -21,6 +21,12 @@ pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const PASTED_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v170-pasted-text-replacement";
+pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
+    "declarative-ja-v174-previous-json-table-to-csv";
+pub(crate) const PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v171-pasted-text-replacement-explanation";
+pub(crate) const DIRECT_SOURCE_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v173-direct-source-explanation";
 const PREVIOUS_CODE_CASE_EXPECTED_ROLE: &str = "/VerifyPreviousCode/case/expected_value";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
@@ -181,6 +187,8 @@ pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 #[derive(Clone, Copy)]
 pub(crate) enum SourceContext {
     Explanation,
+    PastedTextReplacementExplanation,
+    DirectSourceExplanation,
     WebAnswerExplanation,
     ResumedWebAnswerExplanation,
     WebBodyQuestion,
@@ -421,6 +429,11 @@ pub(crate) fn seal_with_source_context(
         unresolved
             .push("no actual committed previous grouped-statistics result is available".into());
     }
+    if matches!(intent, Intent::ConvertPreviousJsonTableToCsv)
+        && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+    {
+        unresolved.push("同じ会話に確定した前回の結果がありません。".into());
+    }
     if matches!(intent, Intent::AskPreviousRelation { .. })
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
     {
@@ -500,7 +513,9 @@ pub(crate) fn seal_with_source_context(
     let implicit_source_line_parser = implicit_source_context.and_then(|context| match context {
         SourceContext::Explanation => Some(IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION),
         SourceContext::Summary => Some(IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION),
-        SourceContext::WebAnswerExplanation
+        SourceContext::PastedTextReplacementExplanation
+        | SourceContext::DirectSourceExplanation
+        | SourceContext::WebAnswerExplanation
         | SourceContext::ResumedWebAnswerExplanation
         | SourceContext::WebBodyQuestion => None,
     });
@@ -562,10 +577,24 @@ pub(crate) fn seal_with_source_context(
         {
             CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION
         }
+        Intent::ConvertPreviousJsonTableToCsv => PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION,
         Intent::TextReplace { .. }
             if starts_pasted_text_replacement(document_header(&request.text)) =>
         {
             PASTED_TEXT_REPLACEMENT_PARSER_VERSION
+        }
+        Intent::ExplainPrevious
+            if matches!(
+                source_context,
+                Some(SourceContext::PastedTextReplacementExplanation)
+            ) =>
+        {
+            PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
+        }
+        Intent::ExplainPrevious
+            if matches!(source_context, Some(SourceContext::DirectSourceExplanation)) =>
+        {
+            DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
         }
         // A derived conclusion keeps the existing proof follow-up contract.
         Intent::ExplainPrevious
@@ -4861,6 +4890,15 @@ fn interpret(text: &str) -> Result<Intent> {
                     .into(),
         });
     }
+    if matches!(
+        body,
+        "前回のJSON表をCSVに変換して"
+            | "前回のJSON表をCSVに変換してください"
+            | "前回のJSON表をCSVに戻して"
+            | "前回のJSON表をCSVに戻してください"
+    ) {
+        return Ok(Intent::ConvertPreviousJsonTableToCsv);
+    }
     if let Some(intent) = condition_definition_intent(text)? {
         return Ok(intent);
     }
@@ -8960,6 +8998,27 @@ mod symbolic_and_clause_tests {
 #[cfg(test)]
 mod structured_document_tests {
     use super::*;
+
+    #[test]
+    fn previous_json_table_conversion_seals_its_own_intent_and_version() {
+        let text = "前回のJSON表をCSVに変換してください。";
+        let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
+        assert_eq!(bundle.request.text, text);
+        assert_eq!(bundle.meaning.intent, Intent::ConvertPreviousJsonTableToCsv);
+        assert_eq!(
+            bundle.meaning.parser_version,
+            PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION
+        );
+        assert!(!bundle.meaning.unresolved.is_empty());
+        assert!(matches!(
+            interpret("前回のJSON表をCSVに変換して\n添付の資料も送信して").unwrap(),
+            Intent::Unknown { .. }
+        ));
+        assert!(matches!(
+            interpret("JSONをCSVに変換して:\n{\"columns\":[\"x\"],\"rows\":[[\"001\"]]}").unwrap(),
+            Intent::JsonToCsv { .. }
+        ));
+    }
 
     #[test]
     fn pasted_text_replacement_seals_exact_body_and_explicit_count() {

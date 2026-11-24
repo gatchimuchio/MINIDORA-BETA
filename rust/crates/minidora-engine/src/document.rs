@@ -10,8 +10,8 @@ use crate::text_summary::{
     EXTRACTIVE_SUMMARY_LABEL, ExtractiveSummaryCandidates, direct_summary_candidates,
 };
 use minidora_domain::{
-    Guarantee, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, SourceSpan, canonical,
-    digest, failure,
+    Guarantee, InputBundle, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, SourceSpan,
+    canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -315,6 +315,18 @@ pub(crate) fn previous_document_explanation(
 ) -> Result<Option<PriorDocumentExplanation>> {
     if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
+    }
+    if explanation_parser_version
+        == crate::input::PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
+    {
+        return previous_pasted_text_replacement_explanation(
+            store,
+            actor,
+            case,
+            previous,
+            budget.max_evidence_bytes,
+        )
+        .map(Some);
     }
     let explain_summary = matches!(
         explanation_parser_version,
@@ -750,6 +762,118 @@ pub(crate) fn previous_document_explanation(
         report_ref,
         lines,
     }))
+}
+
+fn previous_pasted_text_replacement_explanation(
+    store: &crate::store::Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+    max_evidence_bytes: usize,
+) -> Result<PriorDocumentExplanation> {
+    const CODE: &str = "PASTED_TEXT_REPLACEMENT_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "前回の置換結果と保存した入力・原文範囲を照合できません。",
+        )
+    };
+    let (bundle_ref, bundle) = store
+        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        .ok_or_else(invalid)?;
+    let Intent::TextReplace {
+        document,
+        old,
+        new,
+        count,
+    } = &bundle.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    if previous.guarantee != Guarantee::Computed
+        || !previous.evidence.is_empty()
+        || previous.calculation.is_some()
+        || previous.id != minidora_domain::identity(&bundle.request)?
+        || bundle_ref != digest(&canonical(&bundle)?)
+    {
+        return Err(invalid());
+    }
+    let report =
+        if bundle.meaning.parser_version == crate::input::PASTED_TEXT_REPLACEMENT_PARSER_VERSION {
+            replace_pasted_text(document, old, new, *count)?
+        } else {
+            replace_exact(document, old, new, *count)?
+        };
+    let report_bytes = canonical(&report)?;
+    let report_ref = digest(&report_bytes);
+    if previous.dependencies.as_slice() != std::slice::from_ref(&report_ref)
+        || previous.text != report.text
+        || store
+            .get_bytes_if_present(actor, case, &report_ref)?
+            .as_deref()
+            != Some(report_bytes.as_slice())
+    {
+        return Err(invalid());
+    }
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&report_ref),
+        CODE,
+        "pasted text replacement",
+    )?;
+
+    const MAX_SHOWN_CHANGES: usize = 8;
+    let changes = report
+        .spans
+        .iter()
+        .filter(|span| span.kind == "EXACT_REPLACEMENT");
+    let change_count = changes.clone().count();
+    let mut lines = vec![
+        format!(
+            "貼り付けた原文と保存結果を照合しました。完全一致で置換した箇所は{change_count}件です。"
+        ),
+        format!(
+            "検索文字列 {:?} → 置換文字列 {:?}",
+            preview(old),
+            preview(new)
+        ),
+        format!("元本文SHA-256: {}", report.source_sha256),
+        format!("置換後本文SHA-256: {}", report.output_sha256),
+        format!("置換記録SHA-256: {report_ref}"),
+    ];
+    for span in changes.take(MAX_SHOWN_CHANGES) {
+        let (start, end) = span.output_start.zip(span.output_end).ok_or_else(invalid)?;
+        let replaced = report.text.get(start..end).ok_or_else(invalid)?;
+        lines.push(format!(
+            "原文byte[{}..{}) SHA-256 {} → 出力byte[{start}..{end}) SHA-256 {}",
+            span.source_start,
+            span.source_end,
+            digest(span.source_text.as_bytes()),
+            digest(replaced.as_bytes()),
+        ));
+    }
+    if change_count > MAX_SHOWN_CHANGES {
+        lines.push(format!(
+            "残り{}件の範囲は置換記録にあります。",
+            change_count - MAX_SHOWN_CHANGES
+        ));
+    }
+    if lines.join("\n").len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "置換の根拠説明が依頼の証拠予算を超えています。",
+        ));
+    }
+    Ok(PriorDocumentExplanation {
+        input_node: "previous-pasted-text-replacement-input",
+        report_node: "previous-pasted-text-replacement-report",
+        bundle_ref,
+        report_ref,
+        lines,
+    })
 }
 
 pub(crate) fn revalidate_previous_document_render(
@@ -5904,6 +6028,120 @@ pub fn json_to_csv(document: &str) -> Result<DocumentResult> {
         ]),
         spans,
     )
+}
+
+pub(crate) struct PreviousJsonTableConversion {
+    source_result_id: String,
+    source_bundle_ref: String,
+    source_report_ref: String,
+    pub(crate) report: DocumentResult,
+}
+
+impl PreviousJsonTableConversion {
+    pub(crate) fn dependencies(&self, report_ref: String) -> [String; 4] {
+        [
+            self.source_result_id.clone(),
+            self.source_bundle_ref.clone(),
+            self.source_report_ref.clone(),
+            report_ref,
+        ]
+    }
+}
+
+pub(crate) fn previous_json_table_to_csv(
+    store: &crate::store::Store,
+    followup: &InputBundle,
+    previous: &ResultRecord,
+) -> Result<PreviousJsonTableConversion> {
+    const INVALID: &str = "PREVIOUS_JSON_TABLE_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            INVALID,
+            "変換元を同じ会話の封印入力と確定結果に結び付けられません。",
+        )
+    };
+    let request = &followup.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    if !matches!(
+        followup.meaning.intent,
+        Intent::ConvertPreviousJsonTableToCsv
+    ) || followup.meaning.parser_version
+        != crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION
+        || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
+        || followup.context_sha256 != identity(&Some(previous))?
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+        || previous.lifecycle != Lifecycle::Commit
+    {
+        return Err(invalid());
+    }
+
+    let (source_bundle_ref, source_bundle) =
+        store.with_verified_case_history(actor, case, |history| {
+            if history
+                .input_result(&previous.input_id, previous.input_version)?
+                .as_ref()
+                != Some(previous)
+            {
+                return Err(invalid());
+            }
+            history
+                .input_bundle(&previous.input_id, previous.input_version)?
+                .ok_or_else(invalid)
+        })?;
+    let Intent::CsvToJson {
+        document,
+        has_header,
+    } = &source_bundle.meaning.intent
+    else {
+        return Err(failure(
+            "PREVIOUS_JSON_TABLE_UNAVAILABLE",
+            "参照先にCSVから変換した確定済みJSON表がありません。",
+        ));
+    };
+    if identity(&source_bundle.request)? != previous.id || previous.guarantee != Guarantee::Computed
+    {
+        return Err(invalid());
+    }
+
+    let source_report = CsvInput::conversation(document).to_json(*has_header)?;
+    let source_report_bytes = canonical(&source_report)?;
+    let source_report_ref = digest(&source_report_bytes);
+    if previous.dependencies.as_slice() != [source_report_ref.as_str()]
+        || previous.text != source_report.text
+        || store
+            .get_bytes_if_present(actor, case, &source_report_ref)?
+            .as_deref()
+            != Some(source_report_bytes.as_slice())
+    {
+        return Err(invalid());
+    }
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&source_report_ref),
+        INVALID,
+        "CSV-to-JSON conversion",
+    )?;
+
+    let report = json_to_csv(&source_report.text)?;
+    if canonical(&report)?.len() > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "CSV変換の記録が証拠予算を超えています。",
+        ));
+    }
+    Ok(PreviousJsonTableConversion {
+        source_result_id: previous.id.clone(),
+        source_bundle_ref,
+        source_report_ref,
+        report,
+    })
 }
 
 /// Replace all original nonoverlapping literal matches. The optional expected

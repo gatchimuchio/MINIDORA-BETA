@@ -18,6 +18,8 @@ use unicode_normalization::UnicodeNormalization;
 const VERSION: &str = "structured-python-generator-v1-ucd15";
 const RETURN_FUNCTION_VERSION: &str = "structured-python-return-function-v1-ucd15";
 const VERIFICATION_CONTEXT_MISMATCH: &str = "CODE_VERIFICATION_CONTEXT_MISMATCH";
+pub(crate) const VERIFICATION_EXPLANATION_PREDICATE: &str =
+    "PREVIOUS_CODE_VERIFICATION_EXPLANATION_V1";
 const PREAMBLE: &str = "# Python 3.12; execution and input/output tests: NOT_RUN.\n";
 const BUILTINS: &[&str] = &[
     "sum", "len", "range", "abs", "min", "max", "sorted", "list", "all", "any",
@@ -611,6 +613,7 @@ pub(crate) fn previous_code_report(
 pub(crate) struct PreviousCodeVerification {
     pub(crate) report: CodeGenerationReport,
     source_dependencies: Vec<String>,
+    verification: Option<crate::code_capability::CodeCapabilityReport>,
 }
 
 impl PreviousCodeVerification {
@@ -619,6 +622,49 @@ impl PreviousCodeVerification {
         dependencies.push(report_ref);
         dependencies
     }
+}
+
+pub(crate) struct CodeVerificationExplanation {
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) units: Vec<String>,
+}
+
+pub(crate) fn previous_verification_explanation(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    deadline: Option<Instant>,
+) -> Result<Option<CodeVerificationExplanation>> {
+    let Some(RetainedCodeContext {
+        output: RetainedCodeOutput::Verification { report_ref, .. },
+        ..
+    }) = retained_code_context(store, state, previous)?
+    else {
+        return Ok(None);
+    };
+    if bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        || bundle.context_sha256 != identity(&Some(previous))?
+    {
+        return Err(verification_mismatch());
+    }
+    let source = previous_code_verification(store, state, previous, deadline)?
+        .ok_or_else(verification_mismatch)?;
+    let verification = source
+        .verification
+        .as_ref()
+        .ok_or_else(verification_mismatch)?;
+    let units = crate::code_capability::verification_explanation_lines(verification)?;
+    if units.join("\n").len() > bundle.request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "検証結果の説明が要求の証拠予算を超えています。",
+        ));
+    }
+    Ok(Some(CodeVerificationExplanation {
+        dependencies: source.dependencies(report_ref.to_owned()),
+        units,
+    }))
 }
 
 /// Resolve only the selected result. A saved explanation or verification
@@ -635,23 +681,34 @@ pub(crate) fn previous_code_verification(
         return Ok(Some(PreviousCodeVerification {
             report,
             source_dependencies: vec![selected.id.clone(), report_ref],
+            verification: None,
         }));
     }
     let Some(context) = retained_code_context(store, state, selected)? else {
         return Ok(None);
     };
-    if context.anchor != context.generation {
+    let anchor = if context.anchor != context.generation {
         let anchor_result = state
             .prior_results
             .get(context.anchor)
             .filter(|result| result.id == context.anchor)
             .ok_or_else(verification_mismatch)?;
-        let anchor = retained_code_context(store, state, anchor_result)?
-            .ok_or_else(verification_mismatch)?;
+        let Some(anchor) = retained_code_context(store, state, anchor_result)? else {
+            if matches!(
+                context.output,
+                RetainedCodeOutput::VerificationExplanation { .. }
+            ) {
+                return Ok(None);
+            }
+            return Err(verification_mismatch());
+        };
         if (anchor.generation, anchor.source_ref) != (context.generation, context.source_ref) {
             return Err(verification_mismatch());
         }
-    }
+        Some((anchor_result, anchor))
+    } else {
+        None
+    };
     let origin = state
         .prior_results
         .get(context.generation)
@@ -689,29 +746,105 @@ pub(crate) fn previous_code_verification(
     {
         return Err(verification_mismatch());
     }
-    let (units, required_report, label) = match &context.output {
-        RetainedCodeOutput::Explanation => (
-            explanation_lines_from_validated(&report)?,
-            context.source_ref,
-            "generated-code explanation",
-        ),
-        RetainedCodeOutput::Verification {
-            document,
-            report_ref,
-        } => {
-            let verification =
-                crate::code_capability::verify_previous_source(&report.source, document, deadline)?;
-            let bytes = canonical(&verification)?;
-            if digest(&bytes) != *report_ref || store.get_bytes(actor, case, report_ref)? != bytes {
+    let verification = match &context.output {
+        RetainedCodeOutput::Explanation => {
+            recheck_code_output(
+                store,
+                state,
+                selected,
+                explanation_lines_from_validated(&report)?,
+                context.source_ref,
+                "generated-code explanation",
+            )?;
+            None
+        }
+        RetainedCodeOutput::Verification { .. } => Some(recheck_code_verification(
+            store,
+            state,
+            selected,
+            &context.output,
+            &report.source,
+            deadline,
+        )?),
+        RetainedCodeOutput::VerificationExplanation { report_ref } => {
+            let Some((anchor_result, anchor)) = anchor else {
+                return Err(verification_mismatch());
+            };
+            if !matches!(&anchor.output, RetainedCodeOutput::Verification { report_ref: expected, .. } if expected == report_ref)
+            {
                 return Err(verification_mismatch());
             }
-            (
-                crate::code_capability::previous_code_verification_lines(&verification)?,
-                *report_ref,
-                "generated-code verification",
-            )
+            let original = recheck_code_verification(
+                store,
+                state,
+                anchor_result,
+                &anchor.output,
+                &report.source,
+                deadline,
+            )?;
+            recheck_code_output(
+                store,
+                state,
+                selected,
+                crate::code_capability::verification_explanation_lines(&original)?,
+                report_ref,
+                "generated-code verification explanation",
+            )?;
+            None
         }
     };
+    Ok(Some(PreviousCodeVerification {
+        report,
+        source_dependencies: vec![
+            selected.id.clone(),
+            context.generation.to_owned(),
+            origin_ref,
+        ],
+        verification,
+    }))
+}
+
+fn recheck_code_verification(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    selected: &ResultRecord,
+    output: &RetainedCodeOutput<'_>,
+    source: &str,
+    deadline: Option<Instant>,
+) -> Result<crate::code_capability::CodeCapabilityReport> {
+    let RetainedCodeOutput::Verification {
+        document,
+        report_ref,
+    } = output
+    else {
+        return Err(verification_mismatch());
+    };
+    let verification = crate::code_capability::verify_previous_source(source, document, deadline)?;
+    let bytes = canonical(&verification)?;
+    if digest(&bytes) != *report_ref
+        || store.get_bytes(&state.actor_id, &state.case_id, report_ref)? != bytes
+    {
+        return Err(verification_mismatch());
+    }
+    recheck_code_output(
+        store,
+        state,
+        selected,
+        crate::code_capability::previous_code_verification_lines(&verification)?,
+        report_ref,
+        "generated-code verification",
+    )?;
+    Ok(verification)
+}
+
+fn recheck_code_output(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    selected: &ResultRecord,
+    units: Vec<String>,
+    required_report: &str,
+    label: &str,
+) -> Result<()> {
     let plan = selected
         .content_plan
         .as_ref()
@@ -724,21 +857,14 @@ pub(crate) fn previous_code_verification(
     }
     crate::document::revalidate_previous_document_render(
         store,
-        actor,
-        case,
+        &state.actor_id,
+        &state.case_id,
         selected,
         Some(required_report),
         VERIFICATION_CONTEXT_MISMATCH,
         label,
     )?;
-    Ok(Some(PreviousCodeVerification {
-        report,
-        source_dependencies: vec![
-            selected.id.clone(),
-            context.generation.to_owned(),
-            origin_ref,
-        ],
-    }))
+    Ok(())
 }
 
 struct RetainedCodeContext<'a> {
@@ -750,6 +876,9 @@ struct RetainedCodeContext<'a> {
 
 enum RetainedCodeOutput<'a> {
     Explanation,
+    VerificationExplanation {
+        report_ref: &'a str,
+    },
     Verification {
         document: String,
         report_ref: &'a str,
@@ -776,14 +905,22 @@ fn retained_code_context<'a>(
                 && result.calculation.is_none()
                 && result.evidence.is_empty() =>
         {
-            let [generation, source_ref] = result.dependencies.as_slice() else {
-                return Ok(None);
-            };
-            RetainedCodeContext {
-                anchor: generation,
-                generation,
-                source_ref,
-                output: RetainedCodeOutput::Explanation,
+            match result.dependencies.as_slice() {
+                [generation, source_ref] => RetainedCodeContext {
+                    anchor: generation,
+                    generation,
+                    source_ref,
+                    output: RetainedCodeOutput::Explanation,
+                },
+                [anchor, generation, source_ref, report_ref] if anchor != generation => {
+                    RetainedCodeContext {
+                        anchor,
+                        generation,
+                        source_ref,
+                        output: RetainedCodeOutput::VerificationExplanation { report_ref },
+                    }
+                }
+                _ => return Ok(None),
             }
         }
         Intent::VerifyPreviousCode { document } => {

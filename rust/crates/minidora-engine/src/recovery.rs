@@ -123,6 +123,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
                         | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
@@ -3753,16 +3754,16 @@ fn verify_direct_continuation_body<'a>(
     {
         return Err(invalid());
     }
-    verify_direct_source_display(store, request, result, Some(&source.id))?;
+    let _ = verify_direct_source_display(store, request, result, Some(&source.id))?;
     Ok(packet)
 }
 
-fn verify_direct_source_display(
+fn verify_direct_source_display<'a>(
     store: &Store,
     request: &RequestEnvelope,
-    result: &ResultRecord,
+    result: &'a ResultRecord,
     predecessor: Option<&str>,
-) -> Result<()> {
+) -> Result<Option<&'a str>> {
     let invalid = || {
         failure(
             "RECOVERY_SOURCE_DISPLAY_MISMATCH",
@@ -3785,7 +3786,7 @@ fn verify_direct_source_display(
     if suffix.is_empty() {
         let full_units = result.evidence.iter().map(crate::core::direct_source_line);
         return if plan.required_units.iter().cloned().eq(full_units) {
-            Ok(())
+            Ok(None)
         } else {
             Err(invalid())
         };
@@ -3805,7 +3806,171 @@ fn verify_direct_source_display(
     {
         return Err(invalid());
     }
-    Ok(())
+    Ok(Some(reference))
+}
+
+pub(crate) struct DirectSourceExplanation {
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+}
+
+pub(crate) fn previous_direct_source_explanation(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+) -> Result<DirectSourceExplanation> {
+    const CODE: &str = "DIRECT_SOURCE_EXPLANATION_CONTEXT_INVALID";
+    let invalid = || failure(CODE, "保存済みの取得入力・本文・表示が照合できません。");
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        || bundle.meaning.parser_version != crate::input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
+        || previous.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        || request
+            .context_ref
+            .as_deref()
+            .is_some_and(|id| id != previous.id)
+        || bundle.context_sha256 != identity(&Some(previous))?
+    {
+        return Err(invalid());
+    }
+    store.with_verified_case_history(actor, case, |history| {
+        let (_, original) = history
+            .input_bundle(&previous.input_id, previous.input_version)?
+            .ok_or_else(invalid)?;
+        let Intent::Retrieve { urls, .. } = &original.meaning.intent else {
+            return Err(invalid());
+        };
+        if urls.is_empty()
+            || urls.len() != previous.evidence.len()
+            || identity(&original.request)? != previous.id
+            || history
+                .input_result(&previous.input_id, previous.input_version)?
+                .as_ref()
+                != Some(previous)
+            || !history.contains_committed_result(previous)?
+        {
+            return Err(invalid());
+        }
+        let display_ref = verify_direct_source_display(store, &original.request, previous, None)?;
+        let render_ref = crate::document::revalidate_previous_document_render(
+            store,
+            actor,
+            case,
+            previous,
+            display_ref,
+            CODE,
+            "direct source report",
+        )?;
+        let graph_ref = previous
+            .execution_graph_ref
+            .as_deref()
+            .ok_or_else(invalid)?;
+        let graph: serde_json::Value =
+            serde_json::from_slice(&store.get_bytes(actor, case, graph_ref)?)?;
+        let graph_parts = graph
+            .as_array()
+            .filter(|parts| matches!(parts.len(), 5 | 6))
+            .ok_or_else(invalid)?;
+        let nodes: Vec<GoalNode> = serde_json::from_value(graph[0].clone())?;
+        let allowed_starts = (original.request.budget.max_actions as usize)
+            .checked_sub(nodes.len().checked_sub(urls.len()).ok_or_else(invalid)?)
+            .ok_or_else(invalid)?;
+        let starts: usize = previous
+            .evidence
+            .iter()
+            .map(|packet| packet.redirect_chain.len())
+            .sum();
+        let source_bytes: usize = previous
+            .evidence
+            .iter()
+            .map(|packet| packet.raw_body.len())
+            .sum();
+        if starts > allowed_starts
+            || source_bytes > original.request.budget.max_evidence_bytes
+            || graph[1]["render"].as_str() != Some(render_ref.as_str())
+        {
+            return Err(invalid());
+        }
+
+        let display = display_ref.map(|_| crate::core::direct_source_display(&previous.evidence));
+        let mut ranges = display
+            .as_ref()
+            .map(crate::core::DirectSourceDisplay::source_ranges);
+        let mut dependencies = vec![previous.id.clone()];
+        let mut evidence_refs = BTreeMap::new();
+        let mut units = vec!["前回の本文取得を、保存した依頼と通信記録から照合しました。".into()];
+        for (index, (uri, packet)) in urls.iter().zip(&previous.evidence).enumerate() {
+            crate::ports::validate_successful_packet(packet, &original.request.permissions)?;
+            if packet.request_uri != *uri {
+                return Err(invalid());
+            }
+            let node = format!("source-{index}");
+            let reference = verified_artifact(store, actor, case, packet)?;
+            if graph[1][&node].as_str() != Some(reference.as_str()) {
+                return Err(invalid());
+            }
+            evidence_refs.insert(node, reference.clone());
+            dependencies.push(reference.clone());
+            let (start, end, hash) = match &mut ranges {
+                Some(ranges) => ranges.next().ok_or_else(invalid)?,
+                None => (0, packet.raw_body.len(), packet.raw_sha256.as_str()),
+            };
+            units.extend([
+                format!(
+                    "依頼URL: {}\n取得した最終URL: {}",
+                    packet.request_uri, packet.final_uri
+                ),
+                format!(
+                    "取得時刻（Unix ms）: {} / HTTP {} / {} / provider: {}",
+                    packet.observed_at_unix_ms, packet.http_status, packet.mode, packet.provider_id
+                ),
+                format!(
+                    "本文packet ID: {} / 保存artifact SHA-256: {}",
+                    packet.id, reference
+                ),
+                format!(
+                    "原本文 {} bytes / SHA-256: {}",
+                    packet.raw_body.len(),
+                    packet.raw_sha256
+                ),
+                format!("前回表示に使った原本文 byte[{start}..{end}) / 範囲SHA-256: {hash}"),
+            ]);
+        }
+        let compute_requires: Vec<_> = (0..urls.len())
+            .map(|index| format!("source-{index}"))
+            .collect();
+        if !nodes
+            .iter()
+            .any(|node| node.id == "compute" && node.requires == compute_requires)
+            || graph_parts
+                .get(5)
+                .is_some_and(|consumed| consumed["compute"] != serde_json::json!(evidence_refs))
+        {
+            return Err(invalid());
+        }
+        if let Some(reference) = display_ref {
+            units.push(format!("保存した引用範囲artifact SHA-256: {reference}"));
+            dependencies.push(reference.into());
+        }
+        units.push(format!("表示の描画artifact SHA-256: {render_ref}"));
+        units.push("資料の記述の真偽や最新性は未確認です。".into());
+        dependencies.push(render_ref);
+        if !language::model_source_bytes_fit(&units)
+            || units.join("\n").len() > request.budget.max_evidence_bytes
+        {
+            return Err(failure(
+                "RESOURCE_LIMIT",
+                "取得記録の説明が表示の予算を超えました。",
+            ));
+        }
+        Ok(DirectSourceExplanation {
+            units,
+            dependencies,
+        })
+    })
 }
 
 fn first_hop_wait_matches(
@@ -4753,11 +4918,18 @@ fn inspect(
             .iter()
             .any(|predicate| predicate == crate::core::PREVIOUS_ASSERTION_EXPLANATION_PREDICATE))
     .then_some(crate::core::PREVIOUS_ASSERTION_EXPLANATION_PREDICATE);
+    let verification_explanation_predicate = (matches!(goal.intent, Intent::ExplainPrevious)
+        && goal.required_predicates.iter().any(|predicate| {
+            predicate == crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE
+        }))
+    .then_some(crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE);
     if goal.required_predicates
         != goal_predicates(
             &bundle.meaning,
             true,
-            sequence_goal_predicate.or(assertion_predicate),
+            sequence_goal_predicate
+                .or(assertion_predicate)
+                .or(verification_explanation_predicate),
         )
         && (requires_generated_comparison
             || requires_generated_calculation
@@ -4777,6 +4949,7 @@ fn inspect(
             )
             || explains_sequence
             || assertion_predicate.is_some()
+            || verification_explanation_predicate.is_some()
             || goal.required_predicates != legacy_predicates)
     {
         return Err(failure(
@@ -4955,6 +5128,34 @@ fn inspect(
     } else {
         None
     };
+    if bundle.meaning.parser_version
+        == crate::input::PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
+    {
+        const CODE: &str = "RECOVERY_TEXT_REPLACEMENT_CONTEXT_CHANGED";
+        let invalid = || {
+            failure(
+                CODE,
+                "the stored replacement explanation no longer binds its original result",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if previous_document_explanation.is_none()
+            || bundle
+                .request
+                .context_ref
+                .as_ref()
+                .is_some_and(|reference| reference != &previous.id)
+            || bundle.context_sha256 != identity(&Some(previous))?
+        {
+            return Err(invalid());
+        }
+    }
     let saved_summary_explanation =
         previous_document_explanation
             .as_ref()
@@ -5007,7 +5208,38 @@ fn inspect(
             ));
         }
     }
-    if matches!(goal.intent, Intent::ExplainPrevious) && result.guarantee == Guarantee::SourceReport
+    if bundle.meaning.parser_version == crate::input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_DIRECT_SOURCE_EXPLANATION_MISMATCH";
+        let invalid = || {
+            failure(
+                CODE,
+                "the adopted explanation differs from its saved source display",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+        {
+            return Err(invalid());
+        }
+        let explanation = previous_direct_source_explanation(store, bundle, previous)?;
+        if result.guarantee != Guarantee::SourceReport
+            || result.dependencies != explanation.dependencies
+            || plan.required_units != explanation.units
+            || result.text != explanation.units.join("\n")
+            || result.calculation.is_some()
+            || !result.evidence.is_empty()
+        {
+            return Err(invalid());
+        }
+    } else if matches!(goal.intent, Intent::ExplainPrevious)
+        && result.guarantee == Guarantee::SourceReport
     {
         const CODE: &str = "RECOVERY_SEARCH_EXPLANATION_MISMATCH";
         let previous = bundle
@@ -5589,6 +5821,32 @@ fn inspect(
             ));
         }
     }
+    if matches!(goal.intent, Intent::ConvertPreviousJsonTableToCsv) {
+        const CODE: &str = "RECOVERY_PREVIOUS_JSON_TABLE_CONVERSION_MISMATCH";
+        let prior = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(|| failure(CODE, "the exact prior table result is missing"))?;
+        verify_registered_input(store, bundle, CODE)?;
+        let conversion = crate::document::previous_json_table_to_csv(store, bundle, prior)?;
+        let reference = verified_artifact(store, actor, case, &conversion.report)?;
+        let dependencies = conversion.dependencies(reference);
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != dependencies
+            || plan.dependencies.get(..dependencies.len()) != Some(dependencies.as_slice())
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [conversion.report.text.as_str()]
+            || plan.text != conversion.report.text
+            || result.text != conversion.report.text
+        {
+            return Err(failure(
+                CODE,
+                "the retained CSV output or source dependency differs from the original conversion",
+            ));
+        }
+    }
     if bundle.meaning.parser_version == crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION {
         const CODE: &str = "RECOVERY_CSV_COMPARE_MISMATCH";
         let Intent::CsvCompare {
@@ -5678,6 +5936,36 @@ fn inspect(
             ));
         }
     }
+    if verification_explanation_predicate.is_some() {
+        const CODE: &str = "RECOVERY_CODE_VERIFICATION_EXPLANATION_CHANGED";
+        let invalid = || {
+            failure(
+                CODE,
+                "the retained verification explanation differs from its original result",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let prior = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
+        let explanation = crate::code_generation::previous_verification_explanation(
+            store, state, bundle, prior, deadline,
+        )?
+        .ok_or_else(invalid)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != explanation.dependencies
+            || plan.required_units != explanation.units
+            || result.text != explanation.units.join("\n")
+            || result.calculation.is_some()
+            || !result.evidence.is_empty()
+        {
+            return Err(invalid());
+        }
+    }
     if let Some((report_ref, expected_units)) = &previous_csv_statistics_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
@@ -5761,6 +6049,10 @@ fn inspect(
     if let Some(explanation) = &previous_document_explanation {
         let code = if saved_summary_explanation {
             "RECOVERY_TEXT_SUMMARY_CONTEXT_CHANGED"
+        } else if bundle.meaning.parser_version
+            == crate::input::PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
+        {
+            "RECOVERY_TEXT_REPLACEMENT_CONTEXT_CHANGED"
         } else {
             "RECOVERY_CSV_TABLE_CONTEXT_CHANGED"
         };
@@ -6154,7 +6446,7 @@ fn inspect(
             });
         }
         if matches!(goal.intent, Intent::Retrieve { .. }) {
-            verify_direct_source_display(store, request, result, None)?;
+            let _ = verify_direct_source_display(store, request, result, None)?;
         }
     } else if search_listing.is_some() {
         if search_requires_listing {

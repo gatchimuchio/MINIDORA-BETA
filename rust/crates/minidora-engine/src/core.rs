@@ -1870,6 +1870,7 @@ fn verify_report_goal_content(
                 | CODE_EXPLANATION_PREDICATE
                 | RETURN_FUNCTION_PREDICATE
                 | PREVIOUS_ASSERTION_EXPLANATION_PREDICATE
+                | crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE
         ) || record_source_contract(&goal.intent)
             .is_some_and(|(_, required)| required == predicate.as_str())
     }) else {
@@ -5721,6 +5722,44 @@ impl Engine {
         };
         let sealed = sealed.and_then(|bundle| {
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+                && let Some(context) = previous.filter(|result| {
+                    result.lifecycle == Lifecycle::Commit
+                        && matches!(
+                            result.guarantee,
+                            Guarantee::Computed | Guarantee::SourceReport
+                        )
+                })
+                && let Some(source_context) = self
+                    .store
+                    .get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &context.input_id,
+                        context.input_version,
+                    )?
+                    .and_then(|(_, source)| match source.meaning.intent {
+                        Intent::TextReplace { .. }
+                            if context.guarantee == Guarantee::Computed
+                                && context.evidence.is_empty() =>
+                        {
+                            Some(input::SourceContext::PastedTextReplacementExplanation)
+                        }
+                        Intent::Retrieve { .. }
+                            if context.guarantee == Guarantee::SourceReport
+                                && context
+                                    .evidence
+                                    .iter()
+                                    .any(|p| p.packet_kind == "FETCHED_BODY") =>
+                        {
+                            Some(input::SourceContext::DirectSourceExplanation)
+                        }
+                        _ => None,
+                    })
+            {
+                return input::seal_with_source_context(&request, previous, Some(source_context));
+            }
+            if has_compute_budget
                 && request.context_ref.is_some()
                 && matches!(
                     bundle.meaning.intent,
@@ -6452,6 +6491,27 @@ impl Engine {
         } else {
             None
         };
+        let verification_explanation = if has_compute_budget
+            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+            && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+        {
+            let deadline = started.checked_add(Duration::from_millis(request.budget.deadline_ms));
+            match crate::code_generation::previous_verification_explanation(
+                &self.store,
+                &state,
+                &bundle,
+                prior,
+                deadline,
+            ) {
+                Ok(explanation) => explanation,
+                Err(Error::Contract { code, message }) => {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
         if direct_continuation.is_some() {
             nodes.push(GoalNode {
                 id: PREVIOUS_DIRECT_RETRIEVAL_NODE.into(),
@@ -6719,7 +6779,10 @@ impl Engine {
                     .or(sequence_edit.as_ref().map(SequenceEdit::predicate))
                     .or(previous_assertion
                         .as_ref()
-                        .map(|_| PREVIOUS_ASSERTION_EXPLANATION_PREDICATE)),
+                        .map(|_| PREVIOUS_ASSERTION_EXPLANATION_PREDICATE))
+                    .or(verification_explanation
+                        .as_ref()
+                        .map(|_| crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE)),
             ),
             renderer_version: Some(output::RENDERER_VERSION.into()),
         };
@@ -7365,6 +7428,36 @@ impl Engine {
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
                 result.dependencies.push(artifact);
                 units.push(value.text);
+                result.guarantee = Guarantee::Computed;
+            }
+            Intent::ConvertPreviousJsonTableToCsv => {
+                let Some(prior) = previous.filter(|result| result.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "同じ会話に確定した変換元がありません。",
+                    );
+                };
+                let conversion = match crate::document::previous_json_table_to_csv(
+                    &self.store,
+                    &bundle,
+                    prior,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let report_ref =
+                    self.store
+                        .put_artifact(actor, &request.case_id, &conversion.report)?;
+                result
+                    .dependencies
+                    .extend(conversion.dependencies(report_ref));
+                units.push(conversion.report.text);
                 result.guarantee = Guarantee::Computed;
             }
             Intent::CsvStatistics { document, column } => {
@@ -8096,6 +8189,40 @@ impl Engine {
                     "SEQUENCE_STEP_EXPLANATION_CONTEXT_REQUIRED",
                     "手順を詳説するには、同じケースの確定済み連続計算が必要です。",
                 );
+            }
+            Intent::ExplainPrevious
+                if bundle.meaning.parser_version
+                    == input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION =>
+            {
+                let Some(prior) = previous else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "DIRECT_SOURCE_EXPLANATION_CONTEXT_INVALID",
+                        "説明する取得結果が保存されていません。",
+                    );
+                };
+                let explanation = match crate::recovery::previous_direct_source_explanation(
+                    &self.store,
+                    &bundle,
+                    prior,
+                ) {
+                    Ok(explanation) => explanation,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "DIRECT_SOURCE_EXPLANATION_CONTEXT_INVALID",
+                            &error.to_string(),
+                        );
+                    }
+                };
+                units = explanation.units;
+                result.dependencies = explanation.dependencies;
+                result.guarantee = Guarantee::SourceReport;
             }
             Intent::ExplainPrevious => {
                 let Some(prior) = previous.filter(|p| p.lifecycle == Lifecycle::Commit) else {
@@ -8919,6 +9046,16 @@ impl Engine {
                     units.extend(explanation.units);
                     result.dependencies.extend(explanation.dependencies);
                     result.guarantee = Guarantee::Hypothesis;
+                } else if let Some(explanation) = verification_explanation {
+                    units = explanation.units;
+                    result.dependencies = explanation.dependencies;
+                    result.guarantee = Guarantee::Computed;
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE,
+                        guarantee: result.guarantee.clone(),
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
                 } else if let Some((report_ref, explanation)) =
                     crate::code_generation::previous_code_explanation(
                         &self.store,
@@ -12931,6 +13068,16 @@ pub(crate) fn direct_source_display(packets: &[EvidencePacket]) -> DirectSourceD
 }
 
 impl DirectSourceDisplay<'_> {
+    pub(crate) fn source_ranges(&self) -> impl Iterator<Item = (usize, usize, &str)> {
+        self.sources.iter().map(|source| {
+            (
+                source.source_start,
+                source.source_end,
+                source.source_span_sha256.as_str(),
+            )
+        })
+    }
+
     pub(crate) fn units(&self) -> Vec<String> {
         let mut units =
             vec!["取得した全文を保存しました。以下の表示は各本文の冒頭からの引用です。".into()];
