@@ -1,10 +1,58 @@
-# MINIDORA Rust successor alpha
+# MINIDORA Rust successor
 
 `0.7.0-alpha.11` is an independently versioned Rust development implementation of the public input → Core → output execution route. It contains bounded mathematical, declared-relation, Core-evaluated condition definitions, temporal-scope, Japanese meaning-comparison, durable-state, source-reading and exact-file-output mechanisms. It is **not an accepted implementation of all 93 capability obligations**. The [implementation status](audit/IMPLEMENTATION_STATUS.md) and [full obligations](audit/implementation-obligations.md) keep missing evidence and functionality visible; they do not reduce the requested scope.
 
 The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.11`; they are not a silent migration of the beta's saved data or duplicate-input guarantees. Alpha 11 is incompatible with alpha 7 through alpha 10 Rust store metadata: ordinary opens return `SCHEMA_MISMATCH` and leave legacy files unchanged. The explicit `migrate` command verifies and upgrades alpha 7, alpha 8, alpha 9 or alpha 10 metadata while preserving old immutable records. Alpha 11 adds versioned Core condition semantics; legacy `condition_refs` remain present, and references without definitions evaluate to `UNKNOWN`.
 
 **Current BUILD authority (2026-11-24):** [BUILD-v4 requirements, design, development schedule and concise Codex order](audit/construction/MB-BUILD-20261124-V4-BUILD/README.md), with [root `AGENTS.md`](../AGENTS.md). The current objective is a **standalone standard engine beta**, not a product release or a consumer-specific adapter. Reuse the existing single Core K1–K7 and normal input→Core→output mechanism; repair only the actual BUILD blockers, preserve safe durable-state/effect handling, create a runnable artifact, and fix the public API/schema/dependency/revision and known-limits identity as one baseline. Build/launch/actual I/O observation is part of construction. **There is no compulsory QC, QA, independent test, GPQA, performance, Windows/8GB or cross-OS acceptance stage in BUILD-v4.** The previous [D2/D3-C](audit/construction/MB-BUILD-20261119-D3-C/README.md) E0–E8 contract, historic Core seven-gate and T01–T03 records, all 93 prior obligations and source/test censuses remain dated reference evidence; they do not define the active BUILD completion gate. [Implementation status](audit/IMPLEMENTATION_STATUS.md) records historical local observations without declaring the current code completed.
+
+## BUILD v4 標準ベータ基線（2026-11-24 JST）
+
+MINIDORAを独立したRustエンジンとしてビルドし、同一ソース版のNative API、CLI実行物、保存契約と依存を固定した。固定対象のパッケージ版は `0.7.0-alpha.11`。
+
+| 固定対象 | 識別情報 |
+|---|---|
+| 実行コードのGit基線 | `0d1a4c1929d806290497c87e3adfff0b2b7f3840` |
+| 保存・正準化 | `minidora-rust/0.7.0-alpha.11`、`utf8-sorted-json-v1`。ローカルSQLite WALと内容ハッシュを使う。 |
+| ツールチェーン | Rust/Cargo `1.99.1`、Rust edition `2024`。`rust-toolchain.toml` のSHA-256は `d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33`。 |
+| 依存 | `Cargo.lock` のSHA-256は `b4e97fecdca8fd1fc863349b1a48eb99a925da7fed0ed6ce6cfe79bdd1cececc`。SQLiteは同梱。観測したLinux実行物はOpenSSL 3とglibcに動的リンクする。 |
+| Linux CLI | Debian 13、`x86_64-unknown-linux-gnu`。Cloud作業領域の `/workspace/.minidora-cloud/build-v4-0d1a4c1/minidora-rust`。SHA-256は `17584905d5fdc825701f9da661accbeefdd240de5958e7238f454646337eaaa3`。 |
+| 生成・描画 | Coreが経路ごとに使った生成モデルの版と成果物参照を `ContentPlan` に記録する。通常経路の描画版は `utf8-bytes-v2`。 |
+
+ビルドは上記Git基線の `rust/` で、[Cloud手順](#build-in-the-cloud-workspace)のツールチェーンを用いて実行した。確認した実行物のビルドコマンドは `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --locked`。実行物のハッシュはこの環境で生成し、観測に使用したファイルの識別値。
+
+### 標準の呼出方法
+
+CLIは原文引数とUTF-8の標準入力を受け、`run --json` で `ResultRecord` を返す。終了コードは `COMMIT=0`、`SUSPEND=2`、`REJECT=3`、`FAIL=4`、`CANCEL=5`。`--version` は入力の版を指定する。状態を継続するときは `--db` と `--actor` を共有し、結果の履歴には同じ `--case` を使う。
+
+```bash
+minidora_bin=/workspace/.minidora-cloud/build-v4-0d1a4c1/minidora-rust
+minidora_state=$(mktemp -d)
+printf '%s' '17*23' | "$minidora_bin" run --db "$minidora_state" \
+  --actor demo --case arithmetic --input first --json
+```
+
+Native利用側は同じソース版の `minidora-domain` と `minidora-engine` を使用する。`RequestEnvelope` はactor、case、入力ID・版、原文、権限、予算を保持する。`Engine::execute` の `ResultRecord` には終端状態、理由、依存、成果物の該当項目が入る。戻り値が `Ok` の場合も、呼出側は `lifecycle` で元Goalの成立を判定する。
+
+```rust
+use minidora_domain::{RequestEnvelope, Result, ResultRecord};
+use minidora_engine::Engine;
+use std::path::Path;
+
+fn calculate(state: &Path) -> Result<ResultRecord> {
+    let actor = "native-demo";
+    let mut engine = Engine::open(state)?;
+    let request = RequestEnvelope::new("arithmetic", "first", actor, "17*23");
+    engine.execute(actor, request)
+}
+```
+
+### 直接確認と提供範囲
+
+- 標準入力とNative APIで `17*23` が `391` を返した。Nativeで状態を開き直し、同じ結果IDと保存schemaを取得した。
+- 別CLIプロセスで保存された2規則と新規の前提を使い、`どうしてマヒワは生物なのですか` が `DERIVED / COMMIT` となった。記憶版3、依存5件、描画1,342 UTF-8バイトを照合した。この入力で記録された `model_revision` は `d44a65503e38be3f4fd4e4f3eccaa47a60c60fd29012332d2fec18b848ffba83`。別actorによる同一caseの要求は `CASE_ACCESS_DENIED` で拒否され、別actor自身のcaseでは前提不足で停止した。
+- 明示許可を付けたファイル出力は47バイトの実ファイルと `CONFIRMED` 受領記録が一致した。同じ入力ID・版の再実行で結果ID、ファイルのinode、更新時刻が一致した。許可を省いた要求は `WRITE_PERMISSION_MISSING` で停止し、要求先のファイルは作成されなかった。
+- 現提供範囲は以下に記載する限定文法・データ形式の数理、宣言関係・条件、文書と表、コード生成・有限評価、資料取得と検索、許可付きローカル出力。既存の認証付きループバックHTTPとブラウザー画面も利用できる。外部資料アクセスは対象ホストの許可、ネットワーク、提供元に依存する。汎用翻訳、無制限の自然言語・コード実行、外部送達、音声・動画入力は標準ベータの提供範囲外。今回の直接観測環境はLinux x86_64。
 
 ## Build in the cloud workspace
 
