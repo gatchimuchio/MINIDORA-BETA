@@ -1703,6 +1703,8 @@ pub(crate) fn condition_evaluation_contract(
     }
 }
 
+const WEB_ANSWER_PREDICATE: &str = "GROUNDED_WEB_ANSWER_V1";
+
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
     requires_file: bool,
@@ -1710,6 +1712,7 @@ pub(crate) fn goal_predicates(
 ) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
+        Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
         Intent::CompareRelationInventories { .. } if input::uses_generated_comparison(meaning) => {
             predicates.push(RELATION_COMPARISON_PREDICATE.into());
         }
@@ -1858,6 +1861,7 @@ fn verify_report_goal_content(
                 | GUARDED_CONJUNCTIVE_RULE_PREDICATE
                 | MULTI_CONDITION_RULE_PREDICATE
                 | MULTI_CONDITION_PREMISE_PREDICATE
+                | WEB_ANSWER_PREDICATE
         ) || record_source_contract(&goal.intent)
             .is_some_and(|(_, required)| required == predicate.as_str())
     }) else {
@@ -6389,6 +6393,10 @@ impl Engine {
                 requires: Vec::new(),
             });
         }
+        if matches!(bundle.meaning.intent, Intent::AskWeb { .. }) {
+            nodes.extend(crate::web_answer::nodes());
+            compute_requires.push(crate::web_answer::ANSWER_NODE.into());
+        }
         if let Intent::FetchPreviousSearchCandidate { rank } = &bundle.meaning.intent {
             let listing_id = search::SEARCH_CANDIDATE_LISTING_NODE.to_string();
             let id = format!("search-candidate-body-{rank}");
@@ -6628,6 +6636,7 @@ impl Engine {
                 | Intent::Search { .. }
                 | Intent::SearchWithFallback { .. }
                 | Intent::FetchPreviousSearchCandidate { .. }
+                | Intent::AskWeb { .. }
         ) {
             state.result = Some(result.clone());
         }
@@ -7487,6 +7496,123 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(display);
                 result.guarantee = Guarantee::UserPremise;
+            }
+            Intent::AskWeb {
+                topic,
+                elevation_in_kilometres,
+            } => {
+                use crate::web_answer::{self, ANSWER_NODE, BODY_NODE, LISTING_NODE};
+
+                let answer = (|| {
+                    let mut budget = retrieval_budget(2, &state, &self.store)?;
+                    let listed = search::search_with_budget(
+                        search::SearchProvider::Wikipedia,
+                        topic,
+                        &goal.permissions,
+                        &goal.budget,
+                        &mut budget,
+                        &read_admission(&state)?,
+                    )?;
+                    let observation = listed.observation;
+                    let listing_ref =
+                        self.store
+                            .put_artifact(actor, &request.case_id, &observation)?;
+                    result.evidence.push(observation.listing.clone());
+                    result.dependencies.push(listing_ref.clone());
+                    state.result = Some(result.clone());
+                    if let Some(wait) = listed.redirect_wait {
+                        return Err(failure(ports::RETRY_DEFERRED, wait));
+                    }
+                    if let Some(reason) = &observation.failure {
+                        return Err(failure("WEB_SEARCH_UNAVAILABLE", reason));
+                    }
+                    let candidate = web_answer::select_candidate(&observation, &goal.permissions)?;
+                    graph.observe(LISTING_NODE, &listing_ref, &BTreeMap::new())?;
+                    self.advance(
+                        &mut state,
+                        Lifecycle::Running,
+                        Some("WEB_SEARCH_OBSERVED".into()),
+                    )?;
+
+                    let fetched = search::fetch_candidate_with_budget(
+                        candidate,
+                        &goal.permissions,
+                        &mut budget,
+                        &read_admission(&state)?,
+                    )?;
+                    let packet = fetched.observation;
+                    let body_ref = self.store.put_artifact(actor, &request.case_id, &packet)?;
+                    result.evidence.push(packet.clone());
+                    result.dependencies.push(body_ref.clone());
+                    state.result = Some(result.clone());
+                    if let Some(wait) = fetched.redirect_wait {
+                        return Err(failure(ports::RETRY_DEFERRED, wait));
+                    }
+                    if let Some(reason) = &packet.failure {
+                        return Err(failure("WEB_BODY_UNAVAILABLE", reason));
+                    }
+                    let answer = web_answer::answer(
+                        topic,
+                        *elevation_in_kilometres,
+                        candidate,
+                        &packet,
+                        &goal.permissions,
+                    )?;
+                    let answer_units = answer.units();
+                    let answer_bytes = canonical(&answer)?;
+                    if answer_bytes
+                        .len()
+                        .saturating_add(answer_units.join("\n").len())
+                        > goal.budget.max_evidence_bytes
+                    {
+                        return Err(failure("RESOURCE_LIMIT", "Web回答が出力予算を超えました。"));
+                    }
+                    graph.observe(
+                        BODY_NODE,
+                        &body_ref,
+                        &BTreeMap::from([(LISTING_NODE.into(), listing_ref)]),
+                    )?;
+                    let answer_ref =
+                        self.store
+                            .put_bytes(actor, &request.case_id, &answer_bytes)?;
+                    graph.observe(
+                        ANSWER_NODE,
+                        &answer_ref,
+                        &BTreeMap::from([(BODY_NODE.into(), body_ref)]),
+                    )?;
+                    result.dependencies.push(answer_ref);
+                    Ok(answer_units)
+                })();
+                units = match answer {
+                    Ok(units) => units,
+                    Err(error) if read_case_changed(&error) => return Err(error),
+                    Err(Error::Contract { code, .. })
+                        if code == ports::READ_PERMISSION_REQUIRED =>
+                    {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            &code,
+                            "許可された接続先の範囲では、Web資料を取得できません。ローカルでの対話は続けられます。",
+                        );
+                    }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            &code,
+                            &format!("Web資料を使った回答を保留しました。{message}"),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                result.guarantee = Guarantee::SourceReport;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: WEB_ANSWER_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::Search { .. } | Intent::SearchWithFallback { .. } => {
                 let search_plan = match search::search_plan(&goal.intent) {
@@ -11268,6 +11394,26 @@ impl Engine {
                 ));
                 result.dependencies.push(condition.id);
                 result.guarantee = Guarantee::UserPremise;
+            }
+            Intent::Greet { salutation } => {
+                units.push(format!("{salutation}。ミニドラです。"));
+                units.push(
+                    if previous.is_some_and(|result| result.lifecycle == Lifecycle::Commit) {
+                        "会話の続きを聞かせてください。新しい質問もどうぞ。".into()
+                    } else {
+                        "質問したいことや、一緒に考えたいことを教えてください。".into()
+                    },
+                );
+                result.guarantee = Guarantee::Computed;
+            }
+            Intent::AskLocalCapabilities => {
+                units.extend([
+                    "計算や、教えてもらった事実と規則を使った推論ができます。".into(),
+                    "例えば『17×23はいくつ？』や『ルリは鳥です』と入力してください。".into(),
+                    "答えが出たあとに『詳しく説明して』と聞くと、計算手順や根拠をたどれます。"
+                        .into(),
+                ]);
+                result.guarantee = Guarantee::Computed;
             }
             Intent::Unknown { reason } => {
                 return self.stop(

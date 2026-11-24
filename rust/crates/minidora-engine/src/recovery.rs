@@ -116,6 +116,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::FetchNextUnobservedSource
                         | Intent::Search { .. }
                         | Intent::SearchWithFallback { .. }
+                        | Intent::AskWeb { .. }
                 ) || matches!(
                     bundle.meaning.parser_version.as_str(),
                     crate::input::SOURCE_SUMMARY_PARSER_VERSION
@@ -4652,6 +4653,7 @@ fn inspect(
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
+            || matches!(goal.intent, Intent::AskWeb { .. })
             || explains_sequence
             || goal.required_predicates != legacy_predicates)
     {
@@ -5793,6 +5795,10 @@ fn inspect(
     }
     let nodes: Vec<GoalNode> =
         serde_json::from_slice(&store.get_bytes(actor, case, &goal.required_graph_ref)?)?;
+    let web_answer = match &goal.intent {
+        Intent::AskWeb { .. } => Some(verify_web_answer(store, bundle, result, plan, nodes.len())?),
+        _ => None,
+    };
     let search_listing = search::verify_retained_search_listing(store, bundle, result, plan)?
         .map(|proof| proof.proof_ref);
     // Older sealed search goals used a compute-only graph. They still
@@ -5934,6 +5940,9 @@ fn inspect(
             kind: GoalNodeKind::Evidence,
             requires,
         });
+    } else if web_answer.is_some() {
+        expected_nodes.extend(crate::web_answer::nodes());
+        sources.push(crate::web_answer::ANSWER_NODE.into());
     } else if !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
@@ -6240,6 +6249,21 @@ fn inspect(
         }
         graph.observe(&candidate.body_id, &candidate.body_ref, &requires)?;
         source_refs.insert(candidate.body_id.clone(), candidate.body_ref.clone());
+    } else if let Some([listing_ref, body_ref, answer_ref]) = web_answer {
+        use crate::web_answer::{ANSWER_NODE, BODY_NODE, LISTING_NODE};
+
+        graph.observe(LISTING_NODE, listing_ref, &BTreeMap::new())?;
+        graph.observe(
+            BODY_NODE,
+            body_ref,
+            &BTreeMap::from([(LISTING_NODE.into(), listing_ref.to_owned())]),
+        )?;
+        graph.observe(
+            ANSWER_NODE,
+            answer_ref,
+            &BTreeMap::from([(BODY_NODE.into(), body_ref.to_owned())]),
+        )?;
+        source_refs.insert(ANSWER_NODE.into(), answer_ref.to_owned());
     } else {
         let mut source_requires = BTreeMap::new();
         if let Some((_, reference)) = direct_continuation {
@@ -6492,6 +6516,90 @@ fn inspect(
         }
     };
     Ok((action, receipt, graph, render_ref, explains_sequence))
+}
+
+fn verify_web_answer<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &'a ResultRecord,
+    plan: &ContentPlan,
+    graph_nodes: usize,
+) -> Result<[&'a str; 3]> {
+    const CODE: &str = "RECOVERY_WEB_ANSWER_MISMATCH";
+    let invalid = || {
+        failure(
+            CODE,
+            "the retained search, body or answer differs from the original web goal",
+        )
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let Intent::AskWeb {
+        topic,
+        elevation_in_kilometres,
+    } = &bundle.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    let [listing_ref, body_ref, answer_ref] = result.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let [listing, body] = result.evidence.as_slice() else {
+        return Err(invalid());
+    };
+    verify_registered_input(store, bundle, CODE)?;
+    if result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.calculation.is_some()
+        || result.guarantee != Guarantee::SourceReport
+        || plan.guarantee != result.guarantee
+        || plan.locale != request.locale
+        || result.text != plan.text
+    {
+        return Err(invalid());
+    }
+    let listing_bytes = store.get_bytes(actor, case, listing_ref)?;
+    let observation: search::SearchObservation = serde_json::from_slice(&listing_bytes)?;
+    if observation.query != *topic
+        || observation.listing != *listing
+        || canonical(&observation)? != listing_bytes
+        || verified_artifact(store, actor, case, body)? != *body_ref
+    {
+        return Err(invalid());
+    }
+    // The original scheduler reserves non-network nodes and shares the
+    // remaining start and byte allowance across the two live reads.
+    let non_read_nodes = graph_nodes.checked_sub(2).ok_or_else(invalid)?;
+    let allowed_starts = (request.budget.max_actions as usize)
+        .checked_sub(non_read_nodes)
+        .ok_or_else(invalid)?;
+    if listing.redirect_chain.len() + body.redirect_chain.len() > allowed_starts
+        || listing.raw_body.len().saturating_add(body.raw_body.len())
+            > request.budget.max_evidence_bytes
+    {
+        return Err(invalid());
+    }
+    let candidate = crate::web_answer::select_candidate(&observation, &request.permissions)?;
+    let answer = crate::web_answer::answer(
+        topic,
+        *elevation_in_kilometres,
+        candidate,
+        body,
+        &request.permissions,
+    )?;
+    let answer_bytes = canonical(&answer)?;
+    let units = answer.units();
+    let text = units.join("\n");
+    if answer_bytes.len().saturating_add(text.len()) > request.budget.max_evidence_bytes
+        || store.get_bytes(actor, case, answer_ref)? != answer_bytes
+        || plan.required_units != units
+        || plan.text != text
+    {
+        return Err(invalid());
+    }
+    Ok([listing_ref, body_ref, answer_ref])
 }
 
 fn verified_artifact<T: serde::Serialize>(

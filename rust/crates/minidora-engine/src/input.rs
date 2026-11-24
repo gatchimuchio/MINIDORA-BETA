@@ -8,6 +8,8 @@ use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
 pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary";
+const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conversation";
+const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
 const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
@@ -443,6 +445,8 @@ pub(crate) fn seal_with_source_context(
         SourceContext::Summary => IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION,
     });
     let parser_version = match &intent {
+        Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
+        Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
@@ -4078,6 +4082,47 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
 
 fn interpret(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
+    match statement {
+        "こんにちは" | "こんばんは" | "おはよう" | "おはようございます" => {
+            let salutation = match statement {
+                "おはよう" => "おはようございます",
+                other => other,
+            };
+            return Ok(Intent::Greet {
+                salutation: salutation.into(),
+            });
+        }
+        "何ができますか" | "何を頼めますか" | "どんなことができますか" => {
+            return Ok(Intent::AskLocalCapabilities);
+        }
+        _ => {}
+    }
+    if let Some((topic, elevation_in_kilometres)) = [
+        ("について出典付きで教えて", false),
+        ("について出典付きで教えてください", false),
+        ("について根拠を示して教えて", false),
+        ("についてウェブで調べて", false),
+        ("についてWebで調べて", false),
+        ("の標高を出典付きで調べてキロメートルに換算して", true),
+    ]
+    .into_iter()
+    .find_map(|(suffix, convert)| {
+        statement
+            .strip_suffix(suffix)
+            .map(|topic| (topic.trim(), convert))
+    })
+    .filter(|(topic, _)| {
+        !topic.is_empty()
+            && topic.len() <= 512
+            && !starts_quoted_source(topic)
+            && !topic.chars().any(char::is_control)
+            && !topic.contains(['。', '！', '!', '？', '?', ':', '：', '/', '\\', '「', '」'])
+    }) {
+        return Ok(Intent::AskWeb {
+            topic: topic.into(),
+            elevation_in_kilometres,
+        });
+    }
     if source_packet_line_summary_request(statement) {
         return Ok(source_packet_line_summary_captures(statement)?
             .map(

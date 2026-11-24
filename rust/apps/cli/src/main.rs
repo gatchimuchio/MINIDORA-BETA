@@ -1,6 +1,8 @@
 //! Thin local frontends: interpretation, execution and judgment remain in Engine.
 #![forbid(unsafe_code)]
 
+mod chat;
+
 use minidora_domain::{
     ActionRecord, EffectPhase, Lifecycle, RequestEnvelope, ResourceBudget, ResultRecord,
     SCHEMA_VERSION,
@@ -13,10 +15,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-const HELP: &str = r#"MINIDORA Rust 0.7.0-alpha.11 — local execution frontend
+const HELP: &str = concat!(
+    "MINIDORA Rust ",
+    env!("CARGO_PKG_VERSION"),
+    r#" — local execution frontend
 
 Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...
+  minidora-rust chat [--db DIRECTORY] [--actor ID] [--case ID] [--allow-read-host HOST]... [--allow-write EXACT_PATH]...
+  minidora-rust capabilities [--json]
   minidora-rust inspect [OPTIONS]
   minidora-rust migrate --db DIRECTORY [--json]
   minidora-rust reconcile [--db DIRECTORY] [--case ID] [--actor ID] [--json]
@@ -43,6 +50,9 @@ Options:
 Without text arguments, run reads bounded UTF-8 text from redirected stdin.
 Use -- before request text beginning with a dash. Retries with an explicit
 (case,input,version) reuse the durable result or report an identity conflict.
+Chat reads one turn at a time from stdin. Type /help inside chat for session,
+multiline input and network controls.
+Capabilities prints the engine's version and implemented capabilities as JSON.
 
 Actor identity comes from --actor, MINIDORA_ACTOR, or the local USER/USERNAME.
 These are trusted local configuration, not remote authentication. State directory
@@ -71,11 +81,14 @@ actor is the only authenticated identity. Request permissions must be subsets of
 --allow-* grants; budgets are capped to server limits. HTTP is local plaintext only.
 
 Exit: COMMIT 0; SUSPEND 2; REJECT 3; FAIL 4; CANCEL 5; frontend error 1.
-"#;
+"#,
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Run,
+    Chat,
+    Capabilities,
     Inspect,
     Migrate,
     Reconcile,
@@ -149,6 +162,14 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         Some("run") => {
             args.next();
         }
+        Some("chat") => {
+            options.mode = Mode::Chat;
+            args.next();
+        }
+        Some("capabilities") => {
+            options.mode = Mode::Capabilities;
+            args.next();
+        }
         Some("inspect") => {
             options.mode = Mode::Inspect;
             args.next();
@@ -172,6 +193,28 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         _ => {}
     }
     while let Some(arg) = args.next() {
+        if options.mode == Mode::Capabilities && !matches!(arg.as_str(), "--json" | "--help" | "-h")
+        {
+            return Err("capabilities accepts only --json and --help".into());
+        }
+        if options.mode == Mode::Chat
+            && !matches!(
+                arg.as_str(),
+                "--db"
+                    | "--case"
+                    | "--actor"
+                    | "--allow-read-host"
+                    | "--allow-write"
+                    | "--max-actions"
+                    | "--deadline-ms"
+                    | "--max-input-bytes"
+                    | "--max-evidence-bytes"
+                    | "--help"
+                    | "-h"
+            )
+        {
+            return Err(format!("chat does not accept {arg}; use chat --help"));
+        }
         if matches!(options.mode, Mode::Reconcile | Mode::ReconcileEffects)
             && !matches!(
                 arg.as_str(),
@@ -303,6 +346,13 @@ fn run(options: Options) -> Result<u8, String> {
         print!("{HELP}");
         return Ok(0);
     }
+    if options.mode == Mode::Capabilities {
+        let mut output = io::stdout().lock();
+        serde_json::to_writer(&mut output, &Engine::capabilities())
+            .map_err(|error| error.to_string())?;
+        writeln!(output).map_err(|error| error.to_string())?;
+        return Ok(0);
+    }
     if options.mode == Mode::Migrate {
         let (from_schema, to_schema) =
             Store::migrate_to_current(&options.db).map_err(|error| error.to_string())?;
@@ -330,6 +380,9 @@ fn run(options: Options) -> Result<u8, String> {
         return run_request(options);
     }
     let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
+    if options.mode == Mode::Chat {
+        return chat::run(&mut engine, options);
+    }
     if options.mode == Mode::ReconcileEffects {
         let actions = engine
             .reconcile_cancelled_effects(&options.actor, &options.case_id)
@@ -393,7 +446,19 @@ fn run_request(options: Options) -> Result<u8, String> {
         return Err("request text is empty".into());
     }
     let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
-    let input_id = match options.input_id {
+    let result = execute_request(&mut engine, &options, &text, &options.read_hosts)?;
+    print_result(&result, options.json)?;
+    Ok(terminal_exit(result.lifecycle))
+}
+
+fn execute_request(
+    engine: &mut Engine,
+    options: &Options,
+    text: &str,
+    read_hosts: &BTreeSet<String>,
+) -> Result<ResultRecord, String> {
+    let automatic_input_id;
+    let input_id = match options.input_id.as_deref() {
         Some(id) => id,
         None => {
             let revision = engine
@@ -405,21 +470,20 @@ fn run_request(options: Options) -> Result<u8, String> {
                     .checked_add(1)
                     .ok_or_else(|| "case revision overflow".to_owned())
             })?;
-            format!("input-{next}")
+            automatic_input_id = format!("input-{next}");
+            &automatic_input_id
         }
     };
-    let mut request = RequestEnvelope::new(&options.case_id, &input_id, &options.actor, &text);
+    let mut request = RequestEnvelope::new(&options.case_id, input_id, &options.actor, text);
     request.input_version = options.input_version;
-    request.context_ref = options.context_ref;
-    request.permissions.read_hosts = options.read_hosts;
-    request.permissions.write_paths = options.write_paths;
-    request.output_path = options.output;
-    request.budget = options.budget;
-    let result = engine
+    request.context_ref = options.context_ref.clone();
+    request.permissions.read_hosts = read_hosts.clone();
+    request.permissions.write_paths = options.write_paths.clone();
+    request.output_path = options.output.clone();
+    request.budget = options.budget.clone();
+    engine
         .execute(&options.actor, request)
-        .map_err(|error| error.to_string())?;
-    print_result(&result, options.json)?;
-    Ok(terminal_exit(result.lifecycle))
+        .map_err(|error| error.to_string())
 }
 
 fn print_actions(actions: &[ActionRecord], json: bool) -> Result<(), String> {

@@ -262,6 +262,15 @@ pub enum SummaryLineLimit {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Intent {
+    Greet {
+        salutation: String,
+    },
+    AskLocalCapabilities,
+    AskWeb {
+        topic: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        elevation_in_kilometres: bool,
+    },
     Calculate {
         expression: String,
     },

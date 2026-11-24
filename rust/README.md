@@ -4,7 +4,31 @@
 
 The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, release records and original distribution hashes remain unchanged. This workspace lives entirely under `rust/`. Its records use the separate schema `minidora-rust/0.7.0-alpha.11`; they are not a silent migration of the beta's saved data or duplicate-input guarantees. Alpha 11 is incompatible with alpha 7 through alpha 10 Rust store metadata: ordinary opens return `SCHEMA_MISMATCH` and leave legacy files unchanged. The explicit `migrate` command verifies and upgrades alpha 7, alpha 8, alpha 9 or alpha 10 metadata while preserving old immutable records. Alpha 11 adds versioned Core condition semantics; legacy `condition_refs` remain present, and references without definitions evaluate to `UNKNOWN`.
 
-**Current BUILD authority (2026-11-24):** [MINIDORA STANDARD BETA BUILD-v5 requirements, design, implementation schedule and work order](audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md) together with [root AGENTS.md](../AGENTS.md). The BUILD must integrate one non-neural Rust Core into **local multi-turn Japanese chat**, remembering context across turns, using available math/document/code Ports from the ordinary interaction, and **discovering and fetching actual web evidence under user-granted host/budget permissions**. It must be easy to start after `git clone`, reusable through versioned Native/CLI interfaces, and only then be fixed as the STANDARD BETA. The existing `50f6514` record verified bounded CLI, Native, state and file actions, **not these complete v5 routes**. The proposed `minidora-rust chat`, `start-minidora.sh` and `start-minidora.cmd` remain BUILD targets, not confirmed existing commands. Compile/launch/real chat/web/Port-use observations belong to BUILD; independent QC, QA, GPQA, benchmarks, all-OS qualification and product release do not.
+**Current BUILD authority (2026-11-24):** [MINIDORA STANDARD BETA BUILD-v5 requirements, design, implementation schedule and work order](audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md) together with [root AGENTS.md](../AGENTS.md). The BUILD integrates local Japanese conversation, durable state, specialist operations and permissioned Web retrieval under the same non-neural Rust Core. The `50f6514` record below describes the earlier scoped BUILD-v4 observation.
+
+## STANDARD BETA v5 の起動
+
+Rustを `rustup` で導入し、`cargo` を使えるようにする。初回ビルドは `rust-toolchain.toml` と `Cargo.lock` を使う。Linuxは対応するCコンパイラ、`pkg-config`、OpenSSL開発ヘッダーを用意する。WindowsのMSVC環境ではC++ビルドツールとWindows SDKを用意する。
+
+```sh
+git clone https://github.com/gatchimuchio/MINIDORA-BETA.git
+cd MINIDORA-BETA
+./start-minidora.sh
+```
+
+Windowsでは同じクローンのルートで `start-minidora.cmd` を実行する。既定の保存先は `rust/.data/standard-beta`。同じ `--db`、`--actor`、`--case` で起動すると会話を再開できる。`/new ID` で別の会話を始め、`/case ID` で切り替える。`/history` は履歴、`/status` はエンジン・API・schema・直前の採用結果のモデル版、`/exit` は終了。
+
+例えば `こんにちは`、`もしXは鳥ならXは動物`、`ルリは鳥です`、`どうしてルリは動物なのですか` と順に入力する。表やコードなどの複数行の依頼は `/paste` で始め、本文の後の独立した行に `/end` と入力する。
+
+ローカル会話に外部LLMのキーは不要。Webを使うセッションは `./start-minidora.sh --allow-read-host ja.wikipedia.org` と明示し、`富士山について出典付きで教えて` と入力する。Windowsの起動方法でも同じオプションを使える。`/net off` で通信を停止し、`/net on` で起動時の許可を再適用する。本文は選んだ記事の観測範囲で使用する。
+
+`富士山の標高を出典付きで調べてキロメートルに換算して` では、同じ依頼の中で記事を探し、本文の「標高は … m」の記述を取り出して厳密に換算する。記事名・値・単位を確認できる場合に成立し、本文に別記された最高地点の値と区別する。
+
+ファイル出力を利用する場合は、起動時に `--allow-write` で信頼するローカルの絶対パスを指定する。対話で `/output PATH` を入力すると、同じパスを次の一発話の保存先に指定できる。`/output off` で取り消せる。成果や作用の確認はCoreの結果と受領記録で行う。
+
+### 標準API
+
+Rustのconsumerは同じソースの `minidora-engine` と `minidora-domain` を使用する。`Engine::capabilities()` は `minidora-native/v1` のAPI版、保存schema、実装済みの提供能力と必要権限を返す。CLIでは `minidora-rust capabilities --json` から同じ情報を得られる。`Engine::execute(actor, RequestEnvelope)` で実行し、`ResultRecord` の `lifecycle`、`reason`、本文、出典、受領を利用する。`engine.case_status(actor, case)` は同じactorの最新結果と、採用済みの実モデル版を返す。 [Nativeの呼出例](#標準の呼出方法)
 
 ## 過去のBUILD-v4限定固定記録（2026-11-24／STANDARD BETA v5は未完成）
 
