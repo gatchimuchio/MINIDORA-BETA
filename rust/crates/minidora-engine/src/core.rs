@@ -5948,6 +5948,7 @@ impl Engine {
                         | Intent::SummarizePreviousSource
                         | Intent::SummarizePreviousSourceConstrained { .. }
                         | Intent::SummarizePreviousSourceLines { .. }
+                        | Intent::SummarizePreviousSourcePacketLines { .. }
                 )
                 && let Some(context) = previous.filter(|result| {
                     result.lifecycle == Lifecycle::Commit

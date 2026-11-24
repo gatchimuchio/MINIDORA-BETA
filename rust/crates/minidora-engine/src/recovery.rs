@@ -4502,6 +4502,7 @@ fn verify_source_summary_context(
                 | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                 | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
                 | crate::input::IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+                | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
         ) || crate::input::source_line_summary_parser(&bundle.meaning.intent).is_some()
     });
     let goal_line = crate::input::source_line_summary_parser(&goal.intent).is_some();

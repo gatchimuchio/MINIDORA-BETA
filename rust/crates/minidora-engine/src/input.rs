@@ -201,6 +201,9 @@ pub(crate) const DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v184-explicit-direct-body-question-followup";
 
+pub(crate) const EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-v194-explicit-direct-body-question-packet-line-summary";
+
 pub(crate) const IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v163-implicit-web-body-question-followup";
 
@@ -265,7 +268,15 @@ pub(crate) fn uses_derived_source_context(version: &str) -> bool {
     uses_summary_source_context(version)
         || uses_source_explanation_context(version)
         || uses_web_body_question_context(version)
-        || version == EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        || uses_direct_body_question_context(version)
+}
+
+pub(crate) fn uses_direct_body_question_context(version: &str) -> bool {
+    matches!(
+        version,
+        EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            | EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
+    )
 }
 
 pub(crate) fn uses_web_body_question_context(version: &str) -> bool {
@@ -852,6 +863,12 @@ pub(crate) fn seal_with_source_context(
             } else {
                 IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
             }
+        }
+        Intent::SummarizePreviousSourcePacketLines { .. }
+            if explicit_source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::DirectBodyQuestion)) =>
+        {
+            EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
         }
         Intent::SummarizePreviousSourcePacketLines { .. }
             if explicit_source_explanation_candidate
