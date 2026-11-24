@@ -7368,8 +7368,8 @@ impl Engine {
                 units.push(value.text);
                 result.guarantee = Guarantee::UserPremise;
             }
-            Intent::TextSummaryCandidates { document } => {
-                let value = match crate::text_summary::extractive_summary_candidates(document) {
+            Intent::TextSummaryCandidates { .. } | Intent::SummarizePastedText { .. } => {
+                let value = match crate::text_summary::direct_summary_candidates(&bundle) {
                     Ok(value) => value,
                     Err(Error::Contract { code, message })
                         if code == "RESULT_SUMMARY_LINE_COUNT_UNMET" =>

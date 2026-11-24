@@ -6,10 +6,11 @@ use crate::text_editing::{
     EditedText, LocatedTextEdit, edit_explicit_text, locate_explicit_replacement,
 };
 use crate::text_summary::{
-    EXTRACTIVE_SUMMARY_LABEL, ExtractiveSummaryCandidates, extractive_summary_candidates,
+    EXTRACTIVE_SUMMARY_LABEL, ExtractiveSummaryCandidates, direct_summary_candidates,
 };
 use minidora_domain::{
-    Guarantee, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, canonical, digest, failure,
+    Guarantee, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, SourceSpan, canonical,
+    digest, failure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -841,7 +842,10 @@ fn previous_text_document_explanation(
         (Intent::ComposeText { .. }, Guarantee::UserPremise) if explain_composition => {
             (COMPOSITION_INVALID, "text composition")
         }
-        (Intent::TextSummaryCandidates { .. }, Guarantee::Hypothesis) if explain_summary => (
+        (
+            Intent::TextSummaryCandidates { .. } | Intent::SummarizePastedText { .. },
+            Guarantee::Hypothesis,
+        ) if explain_summary => (
             TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
             "extractive summary candidates",
         ),
@@ -923,11 +927,19 @@ fn previous_text_document_explanation(
                 lines,
             )
         }
-        Intent::TextSummaryCandidates { document } => {
-            let report = extractive_summary_candidates(document)?;
+        Intent::TextSummaryCandidates { .. } | Intent::SummarizePastedText { .. } => {
+            let report = direct_summary_candidates(&bundle)?;
             let report_ref = verify_report(&canonical(&report)?, &[], report.text.as_bytes())?;
-            let lines =
-                text_summary_candidate_explanation_lines(&report, &bundle_ref, &report_ref)?;
+            let pasted_source = match &bundle.meaning.intent {
+                Intent::SummarizePastedText { source } => Some(source),
+                _ => None,
+            };
+            let lines = text_summary_candidate_explanation_lines(
+                &report,
+                &bundle_ref,
+                &report_ref,
+                pasted_source,
+            )?;
             (
                 "previous-text-summary-candidate-input",
                 TEXT_SUMMARY_CANDIDATE_REPORT_NODE,
@@ -956,19 +968,8 @@ fn text_summary_candidate_explanation_lines(
     report: &ExtractiveSummaryCandidates,
     bundle_ref: &str,
     report_ref: &str,
+    pasted_source: Option<&SourceSpan>,
 ) -> Result<Vec<String>> {
-    let token = report
-        .source_document
-        .get(report.source_text_json_start..report.source_text_json_end)
-        .filter(|token| {
-            serde_json::from_str::<String>(token).is_ok_and(|text| text == report.source_text)
-        })
-        .ok_or_else(|| {
-            failure(
-                TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
-                "the retained JSON text token does not decode to the source text",
-            )
-        })?;
     let count_limit = match report.line_limit {
         Some(minidora_domain::SummaryLineLimit::Exact(count)) => format!(
             "指定行数: {count}。実際の行数: {}",
@@ -994,16 +995,41 @@ fn text_summary_candidate_explanation_lines(
             report.selected_character_count, report.max_chars, report.format,
         ),
         "必須指定の文を先に確保し、残りは語の頻度、先頭文の加点、長文の減点で選びます。同点は元本文の後方を優先し、表示は元本文の順です。".into(),
-        format!("依頼JSON SHA-256: {}", report.source_sha256),
-        format!(
-            "依頼JSONの本文文字列トークン byte[{}..{}) SHA-256: {}",
-            report.source_text_json_start, report.source_text_json_end, digest(token.as_bytes()),
-        ),
+    ];
+    if let Some(source) = pasted_source {
+        lines.push(format!(
+            "貼り付けた本文の入力範囲 byte[{}..{})",
+            source.start, source.end
+        ));
+    } else {
+        let token = report
+            .source_document
+            .get(report.source_text_json_start..report.source_text_json_end)
+            .filter(|token| {
+                serde_json::from_str::<String>(token).is_ok_and(|text| text == report.source_text)
+            })
+            .ok_or_else(|| {
+                failure(
+                    TEXT_SUMMARY_CANDIDATE_CONTEXT_INVALID,
+                    "the retained JSON text token does not decode to the source text",
+                )
+            })?;
+        lines.extend([
+            format!("依頼JSON SHA-256: {}", report.source_sha256),
+            format!(
+                "依頼JSONの本文文字列トークン byte[{}..{}) SHA-256: {}",
+                report.source_text_json_start,
+                report.source_text_json_end,
+                digest(token.as_bytes()),
+            ),
+        ]);
+    }
+    lines.extend([
         format!("元本文 SHA-256: {}", report.source_text_sha256),
         format!("候補出力 SHA-256: {}", report.output_sha256),
         format!("封印済みInputBundle SHA-256: {bundle_ref}"),
         format!("report artifact SHA-256: {report_ref}"),
-    ];
+    ]);
     for sentence in &report.sentences {
         let source = report
             .source_text

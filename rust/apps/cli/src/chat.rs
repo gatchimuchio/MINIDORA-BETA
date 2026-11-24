@@ -1,5 +1,5 @@
 use super::{Options, execute_request};
-use minidora_domain::ResultRecord;
+use minidora_domain::{CaseRevision, ResultRecord};
 use minidora_engine::Engine;
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -13,6 +13,8 @@ const HELP: &str = "\
 /case ID            同じ利用者の会話を選択\n\
 /new ID             未使用の会話IDを選択\n\
 /history [結果ID]   現在の会話の最新結果と履歴ID、または指定結果を表示\n\
+/context 結果ID     現在の会話の保存済み結果を次の一発話で参照\n\
+/context off        次の参照指定を解除\n\
 /status             エンジン、提供能力、現在の会話で採用された模型の版を表示\n\
 /paste              複数行を入力。単独の /end 行でまとめて送信\n\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
@@ -96,6 +98,13 @@ fn show_result(result: &ResultRecord) -> io::Result<()> {
     Ok(())
 }
 
+fn saved_result<'a>(case: &'a CaseRevision, result_id: &str) -> Option<&'a ResultRecord> {
+    case.result
+        .as_ref()
+        .filter(|result| result.id == result_id)
+        .or_else(|| case.prior_results.get(result_id))
+}
+
 fn show_history(engine: &Engine, options: &Options, result_id: &str) -> Result<(), String> {
     let Some(case) = engine
         .latest(&options.actor, &options.case_id)
@@ -105,12 +114,7 @@ fn show_history(engine: &Engine, options: &Options, result_id: &str) -> Result<(
         return Ok(());
     };
     if !result_id.is_empty() {
-        let result = case
-            .result
-            .as_ref()
-            .filter(|result| result.id == result_id)
-            .or_else(|| case.prior_results.get(result_id));
-        match result {
+        match saved_result(&case, result_id) {
             Some(result) => show_result(result).map_err(|error| error.to_string())?,
             None => eprintln!("この会話に該当する結果IDがありません。"),
         }
@@ -164,6 +168,9 @@ fn show_status(engine: &Engine, options: &Options) -> Result<(), String> {
         );
     } else {
         eprintln!("この会話には保存済みの結果がありません。");
+    }
+    if let Some(result_id) = &options.context_ref {
+        eprintln!("次の発話の参照先: {result_id}");
     }
     Ok(())
 }
@@ -244,6 +251,9 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                             eprintln!("使用済みの会話IDです。再開するには /case を使ってください。")
                         }
                         Ok(_) => {
+                            if options.case_id != id {
+                                options.context_ref = None;
+                            }
                             options.case_id = id.to_owned();
                             options.output = None;
                             eprintln!("会話: {}", options.case_id);
@@ -255,6 +265,33 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                 ("/history", id) => {
                     if let Err(error) = show_history(engine, &options, id) {
                         eprintln!("履歴を読み込めませんでした。{error}");
+                    }
+                    continue;
+                }
+                ("/context", "off") => {
+                    options.context_ref = None;
+                    eprintln!("次の発話の参照指定を解除しました。");
+                    continue;
+                }
+                ("/context", id)
+                    if id.len() != 64
+                        || !id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+                {
+                    eprintln!(
+                        "/context の後に /history に表示された結果IDか off を入力してください。"
+                    );
+                    continue;
+                }
+                ("/context", id) => {
+                    match engine.latest(&options.actor, &options.case_id) {
+                        Ok(Some(case)) if saved_result(&case, id).is_some() => {
+                            options.context_ref = Some(id.into());
+                            eprintln!("次の発話の参照先: {id}");
+                        }
+                        Ok(_) => eprintln!("この会話に該当する結果IDがありません。"),
+                        Err(error) => eprintln!("参照先を選択できませんでした。{error}"),
                     }
                     continue;
                 }
@@ -356,6 +393,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
             .ok_or("対話の発話数が上限に達しました。")?;
         options.input_id = Some(format!("{input_prefix}-{turn:x}"));
         let result = execute_request(engine, &options, &text, read_hosts);
+        options.context_ref = None;
         options.output = None;
         match result {
             Ok(result) => show_result(&result).map_err(|error| error.to_string())?,

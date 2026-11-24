@@ -944,6 +944,35 @@ pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummary
     extractive_summary_candidates_internal(document, false)
 }
 
+pub(crate) fn direct_summary_candidates(
+    bundle: &InputBundle,
+) -> Result<ExtractiveSummaryCandidates> {
+    let meaning = &bundle.meaning;
+    if crate::input::structured_intent(&bundle.request.text)?.as_ref() == Some(&meaning.intent) {
+        match &meaning.intent {
+            Intent::TextSummaryCandidates { document }
+                if meaning.parser_version == crate::input::PARSER_VERSION =>
+            {
+                return extractive_summary_candidates(document);
+            }
+            Intent::SummarizePastedText { source }
+                if meaning.parser_version == crate::input::PASTED_TEXT_SUMMARY_PARSER_VERSION =>
+            {
+                let document = serde_json::to_string(&serde_json::json!({
+                    "text": source.text,
+                    "max_sentences": 3,
+                }))?;
+                return extractive_summary_candidates(&document);
+            }
+            _ => {}
+        }
+    }
+    Err(failure(
+        "TEXT_SUMMARY_CANDIDATE_MISMATCH",
+        "the retained summary input version or source changed",
+    ))
+}
+
 fn extractive_summary_candidates_internal(
     document: &str,
     line_layout: bool,

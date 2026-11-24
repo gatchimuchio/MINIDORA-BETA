@@ -467,6 +467,9 @@ pub enum Intent {
     TextSummaryCandidates {
         document: String,
     },
+    SummarizePastedText {
+        source: SourceSpan,
+    },
     ImportText {
         document: String,
     },

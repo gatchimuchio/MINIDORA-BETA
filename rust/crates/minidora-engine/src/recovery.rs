@@ -4108,21 +4108,12 @@ fn verify_text_summary_candidate(
 ) -> Result<String> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
-    let Intent::TextSummaryCandidates { document } = &meaning.intent else {
-        return Err(failure(
-            TEXT_SUMMARY_CANDIDATE_MISMATCH,
-            "no sealed summary input",
-        ));
-    };
-    if meaning.parser_version != crate::input::PARSER_VERSION
-        || meaning.source_kind != "USER_REQUEST"
+    if meaning.source_kind != "USER_REQUEST"
         || !meaning.unresolved.is_empty()
         || request.text.len() > request.budget.max_input_bytes
         || plan.locale != request.locale
         || !matches!(meaning.spans.as_slice(), [span] if span.start == 0
             && span.end == request.text.len() && span.text == request.text)
-        || !matches!(crate::input::structured_intent(&request.text)?,
-            Some(Intent::TextSummaryCandidates { document: raw }) if raw == *document)
         || result.id != identity(request)?
         || result.input_id != request.input_id
         || result.input_version != request.input_version
@@ -4132,7 +4123,7 @@ fn verify_text_summary_candidate(
             "the retained summary input version, raw document or result identity changed",
         ));
     }
-    let report = crate::text_summary::extractive_summary_candidates(document)?;
+    let report = crate::text_summary::direct_summary_candidates(bundle)?;
     let bytes = canonical(&report)?;
     let reference = digest(&bytes);
     if bytes.len() > request.budget.max_evidence_bytes
@@ -4842,7 +4833,10 @@ fn inspect(
             .is_some_and(|explanation| {
                 explanation.report_node == crate::document::TEXT_SUMMARY_CANDIDATE_REPORT_NODE
             });
-    let direct_summary_candidate = matches!(goal.intent, Intent::TextSummaryCandidates { .. });
+    let direct_summary_candidate = matches!(
+        goal.intent,
+        Intent::TextSummaryCandidates { .. } | Intent::SummarizePastedText { .. }
+    );
     if direct_summary_candidate {
         verify_registered_input(store, bundle, TEXT_SUMMARY_CANDIDATE_MISMATCH)?;
         verify_text_summary_candidate(store, bundle, result, plan)?;

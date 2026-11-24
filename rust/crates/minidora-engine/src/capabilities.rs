@@ -85,7 +85,7 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "structured-documents",
-                    scope: "CSV・JSON・表の集計、比較と変換、明示本文の編集と抽出要約を処理します。",
+                    scope: "CSV・JSON・表の集計、比較と変換、本文の編集、貼り付けた文章の抽出要約を処理します。",
                     permission: None,
                     limits: "表と文書は対応形式に限られます。抽出要約の意味範囲や網羅性は保証しません。",
                 },

@@ -12,6 +12,8 @@ const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conve
 const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
+pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-v159-pasted-text-summary";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
 const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
@@ -451,6 +453,7 @@ pub(crate) fn seal_with_source_context(
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
         Intent::ExplainCode { .. } => CODE_EXPLANATION_PARSER_VERSION,
+        Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
@@ -2597,6 +2600,20 @@ pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
             None => Intent::Unknown { reason: "text summary requires a header newline and an explicit text/max_sentences JSON document; output is an unverified extractive candidate".into() },
         }));
     }
+    if matches!(
+        header,
+        "次の文章を要約して:"
+            | "次の文章を要約して："
+            | "次の文章を要約してください:"
+            | "次の文章を要約してください："
+    ) {
+        return Ok(Some(match pasted_source_span(text) {
+            Some(source) => Intent::SummarizePastedText { source },
+            None => Intent::Unknown {
+                reason: "要約する文章を見出しの次行に貼り付けてください。".into(),
+            },
+        }));
+    }
     let text_operation = match header {
         "文章を取り込んで:" | "文章を取り込んで：" => Some(false),
         "文章を編集して:" | "文章を編集して：" => Some(true),
@@ -2628,14 +2645,7 @@ pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
             | "Pythonコードを説明して:"
             | "Pythonコードを説明して："
     ) {
-        let source = text.split_once('\n').and_then(|(prefix, body)| {
-            (!body.trim().is_empty()).then(|| SourceSpan {
-                start: prefix.len() + 1,
-                end: text.len(),
-                text: body.into(),
-            })
-        });
-        return Ok(Some(match source {
+        return Ok(Some(match pasted_source_span(text) {
             Some(source) => Intent::ExplainCode { source },
             None => Intent::Unknown {
                 reason: "コードを説明するには、見出しの次行にPythonの関数を貼り付けてください。"
@@ -4120,6 +4130,15 @@ pub(crate) fn verified_code_explanation_source(bundle: &InputBundle) -> Result<&
         "CODE_EXPLANATION_SOURCE_MISMATCH",
         "封印したコードの範囲が元の入力と一致しません。",
     ))
+}
+
+fn pasted_source_span(text: &str) -> Option<SourceSpan> {
+    let (header, body) = text.split_once('\n')?;
+    (!body.trim().is_empty()).then(|| SourceSpan {
+        start: header.len() + 1,
+        end: text.len(),
+        text: body.into(),
+    })
 }
 
 fn interpret(text: &str) -> Result<Intent> {
