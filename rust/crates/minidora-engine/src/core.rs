@@ -7389,7 +7389,27 @@ impl Engine {
                 new,
                 count,
             } => {
-                let value = crate::document::replace_exact(document, old, new, *count)?;
+                let value = if bundle.meaning.parser_version
+                    == input::PASTED_TEXT_REPLACEMENT_PARSER_VERSION
+                {
+                    match crate::document::replace_pasted_text(document, old, new, *count) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            let code = match &error {
+                                minidora_domain::Error::Contract { code, .. } => code.as_str(),
+                                _ => "TEXT_REPLACEMENT_FAILED",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
+                        }
+                    }
+                } else {
+                    crate::document::replace_exact(document, old, new, *count)?
+                };
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
                 result.dependencies.push(artifact);
                 units.push(value.text);

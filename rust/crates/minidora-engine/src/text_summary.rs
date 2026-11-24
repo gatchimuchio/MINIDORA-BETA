@@ -142,6 +142,7 @@ pub struct SourceExtractiveSummaryCandidates {
 }
 
 const WIKIPEDIA_SOURCE_SUMMARY: &str = "SOURCE_WIKIPEDIA_PROSE_EXTRACTIVE_CANDIDATES_V1";
+const PAGE_BREAK_SOURCE_SUMMARY: &str = "SOURCE_PAGE_BREAK_EXTRACTIVE_CANDIDATES_V1";
 const WIKIPEDIA_SUMMARY_NOTE: &str = "Wikipedia記事の冒頭から読み取れた範囲の抜粋です。記法を除いて表示しています。記事全体の網羅性は未確認です。";
 
 #[derive(Deserialize)]
@@ -154,6 +155,14 @@ struct SourceSummaryVersion {
 pub(crate) enum RetainedSourceSummaryReport {
     Legacy(Box<SourceExtractiveSummaryCandidates>),
     Wikipedia(Box<WikipediaSourceSummary>),
+    PageBreak(Box<PageBreakSourceSummary>),
+}
+
+#[derive(Serialize)]
+pub(crate) struct PageBreakSourceSummary {
+    #[serde(flatten)]
+    source: SourceExtractiveSummaryCandidates,
+    source_span_sha256: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -191,6 +200,7 @@ impl RetainedSourceSummaryReport {
         match self {
             Self::Legacy(report) => report.summary.sentence_count,
             Self::Wikipedia(report) => report.sentence_count,
+            Self::PageBreak(report) => report.source.summary.sentence_count,
         }
     }
 
@@ -198,12 +208,14 @@ impl RetainedSourceSummaryReport {
         match self {
             Self::Legacy(report) => &report.source_packet_id,
             Self::Wikipedia(report) => &report.source_packet_id,
+            Self::PageBreak(report) => &report.source.source_packet_id,
         }
     }
 
     pub(crate) fn unit(&self) -> String {
         match self {
             Self::Legacy(report) => legacy_source_summary_unit(report),
+            Self::PageBreak(report) => legacy_source_summary_unit(&report.source),
             Self::Wikipedia(report) if report.line_limit.is_some() => format!(
                 "{}（出典: {}、出典packet: {}、原本文SHA-256: {}。ライセンス情報: 未記録。）",
                 report.text,
@@ -458,7 +470,21 @@ fn push_sentence(
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SummaryBoundaries {
+    Legacy,
+    FetchedPageBreaks,
+}
+
 fn sentence_candidates(text: &str, line_layout: bool) -> Result<Vec<Candidate>> {
+    sentence_candidates_with_boundaries(text, line_layout, SummaryBoundaries::Legacy)
+}
+
+fn sentence_candidates_with_boundaries(
+    text: &str,
+    line_layout: bool,
+    boundaries: SummaryBoundaries,
+) -> Result<Vec<Candidate>> {
     let mut sentences = Vec::new();
     let mut start = 0usize;
     let mut chars = text.char_indices().peekable();
@@ -483,6 +509,7 @@ fn sentence_candidates(text: &str, line_layout: bool) -> Result<Vec<Candidate>> 
             start = end;
         } else if matches!(character, '\n' | '\r')
             || (line_layout && matches!(character, '\u{2028}' | '\u{2029}'))
+            || (boundaries == SummaryBoundaries::FetchedPageBreaks && character == '\x0c')
         {
             push_sentence(text, start, at, &mut sentences)?;
             start = at + character.len_utf8();
@@ -1022,7 +1049,7 @@ pub(crate) fn source_question_answer_lines_v2(answer: &SourceQuestionAnswerV2) -
 /// extractive ranking family. This is a candidate operation, not a semantic
 /// summary verifier; every selected sentence remains tied to exact source bytes.
 pub fn extractive_summary_candidates(document: &str) -> Result<ExtractiveSummaryCandidates> {
-    extractive_summary_candidates_internal(document, false)
+    extractive_summary_candidates_internal(document, false, SummaryBoundaries::Legacy)
 }
 
 pub(crate) fn direct_summary_candidates(
@@ -1159,6 +1186,7 @@ fn select_sentences(
 fn extractive_summary_candidates_internal(
     document: &str,
     line_layout: bool,
+    boundaries: SummaryBoundaries,
 ) -> Result<ExtractiveSummaryCandidates> {
     if document.is_empty() || document.len() > MAX_REQUEST_BYTES {
         return Err(failure(
@@ -1224,16 +1252,18 @@ fn extractive_summary_candidates_internal(
     if text.trim().is_empty()
         || text.len() > MAX_REQUEST_BYTES
         || text.chars().count() > MAX_TEXT_SCALARS
-        || text
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\t' | '\n' | '\r'))
+        || text.chars().any(|character| {
+            character.is_control()
+                && !matches!(character, '\t' | '\n' | '\r')
+                && !(boundaries == SummaryBoundaries::FetchedPageBreaks && character == '\x0c')
+        })
     {
         return Err(failure(
             "TEXT_SUMMARY_INPUT_LIMIT",
             "text must be nonempty, at most 100000 Unicode scalars/256000 bytes, with supported controls only",
         ));
     }
-    let mut candidates = sentence_candidates(&text, line_layout)?;
+    let mut candidates = sentence_candidates_with_boundaries(&text, line_layout, boundaries)?;
     if candidates.is_empty() {
         return Err(schema("text contains no sentence candidates"));
     }
@@ -1410,7 +1440,11 @@ pub(crate) fn summarize_previous_result_with_limits(
             "format": "bullets"
         }))?,
     };
-    let summary = extractive_summary_candidates_internal(&document, line_limit.is_some())?;
+    let summary = extractive_summary_candidates_internal(
+        &document,
+        line_limit.is_some(),
+        SummaryBoundaries::Legacy,
+    )?;
     if summary.source_text != source_text
         || summary.source_text_sha256 != digest(source_text.as_bytes())
     {
@@ -2738,6 +2772,14 @@ pub(crate) fn verify_retained_source_summary<'a>(
             WIKIPEDIA_SOURCE_SUMMARY => RetainedSourceSummaryReport::Wikipedia(Box::new(
                 summarize_wikipedia_source(bundle, &prior.id, packet, packet_ref)?,
             )),
+            PAGE_BREAK_SOURCE_SUMMARY => RetainedSourceSummaryReport::PageBreak(Box::new(
+                summarize_page_break_source_for_intent(
+                    &bundle.meaning.intent,
+                    &prior.id,
+                    packet,
+                    packet_ref,
+                )?,
+            )),
             "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1"
             | "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1" => {
                 RetainedSourceSummaryReport::Legacy(Box::new(summarize_legacy_source_for_intent(
@@ -2895,8 +2937,11 @@ fn previous_source_summary_explanation<'a>(
         units.push(notice.into());
     }
     for (index, (_, report)) in proof.reports.iter().enumerate() {
-        let report = match report {
-            RetainedSourceSummaryReport::Legacy(report) => report,
+        let (report, spans) = match report {
+            RetainedSourceSummaryReport::Legacy(report) => (report.as_ref(), None),
+            RetainedSourceSummaryReport::PageBreak(report) => {
+                (&report.source, Some(report.source_span_sha256.as_slice()))
+            }
             RetainedSourceSummaryReport::Wikipedia(report) => {
                 units.extend(wikipedia_summary_explanation(index + 1, report));
                 continue;
@@ -2939,18 +2984,29 @@ fn previous_source_summary_explanation<'a>(
                 summary.max_chars
             ),
         ]);
-        for sentence in &summary.sentences {
+        if spans.is_some() {
+            units.push("原本文の改ページ文字（U+000C）を区切りとして扱いました。".into());
+        }
+        for (index, sentence) in summary.sentences.iter().enumerate() {
             let mut chars = sentence.text.chars();
             let mut preview: String = chars.by_ref().take(128).collect();
             if chars.next().is_some() {
                 preview.push('…');
             }
+            let source_range = match spans {
+                Some(spans) => format!(
+                    "原本文byte[{}..{}) / 範囲SHA-256: {}",
+                    sentence.source_start, sentence.source_end, spans[index],
+                ),
+                None => format!(
+                    "抽出本文byte {}..{}",
+                    sentence.source_start, sentence.source_end
+                ),
+            };
             units.push(format!(
-                "選択文{}（順位{}、抽出本文byte {}..{}、要約本文byte {}..{}）: {:?}",
+                "選択文{}（順位{}、{source_range}、要約本文byte {}..{}）: {:?}",
                 sentence.sentence_index + 1,
                 sentence.selection_rank,
-                sentence.source_start,
-                sentence.source_end,
                 sentence.output_start,
                 sentence.output_end,
                 preview,
@@ -3597,6 +3653,7 @@ pub(crate) fn summarize_fetched_source_with_limits(
             max_sentences,
             max_chars,
         },
+        SummaryBoundaries::Legacy,
     )
 }
 
@@ -3609,6 +3666,15 @@ pub(crate) fn summarize_fetched_source_for_intent(
     if is_wikipedia_raw_body(packet) {
         return summarize_wikipedia_source(bundle, source_result_id, packet, source_packet_ref)
             .map(|report| RetainedSourceSummaryReport::Wikipedia(Box::new(report)));
+    }
+    if has_fetched_page_breaks(packet) {
+        return summarize_page_break_source_for_intent(
+            &bundle.meaning.intent,
+            source_result_id,
+            packet,
+            source_packet_ref,
+        )
+        .map(|report| RetainedSourceSummaryReport::PageBreak(Box::new(report)));
     }
     summarize_legacy_source_for_intent(
         &bundle.meaning.intent,
@@ -3625,26 +3691,80 @@ fn summarize_legacy_source_for_intent(
     packet: &EvidencePacket,
     source_packet_ref: &str,
 ) -> Result<SourceExtractiveSummaryCandidates> {
+    summarize_fetched_source_internal(
+        source_result_id,
+        packet,
+        source_packet_ref,
+        source_summary_limits(intent),
+        SummaryBoundaries::Legacy,
+    )
+}
+
+fn source_summary_limits(intent: &Intent) -> PreviousResultSummaryLimits {
     if let Intent::SummarizePreviousSourceLines { limit }
     | Intent::SummarizePreviousSourcePacketLines { limit, .. } = intent
     {
-        return summarize_fetched_source_internal(
-            source_result_id,
-            packet,
-            source_packet_ref,
-            PreviousResultSummaryLimits::Lines(*limit),
-        );
+        return PreviousResultSummaryLimits::Lines(*limit);
     }
-    if let Some((max_sentences, max_chars)) = constrained_source_summary_limits(intent) {
-        return summarize_fetched_source_with_limits(
-            source_result_id,
-            packet,
-            source_packet_ref,
-            max_sentences,
-            max_chars,
-        );
+    let (max_sentences, max_chars) = constrained_source_summary_limits(intent).unwrap_or((3, None));
+    PreviousResultSummaryLimits::Sentences {
+        max_sentences,
+        max_chars,
     }
-    summarize_fetched_source(source_result_id, packet, source_packet_ref)
+}
+
+fn has_fetched_page_breaks(packet: &EvidencePacket) -> bool {
+    packet.mode == "LIVE"
+        && packet.http_status == 200
+        && packet.provider_id == "https-direct-url-v1"
+        && packet.parser_version == "strict-utf8-identity-v1"
+        && packet
+            .extracted_text
+            .as_deref()
+            .is_some_and(|text| text.contains('\x0c') && text.as_bytes() == packet.raw_body)
+}
+
+fn summarize_page_break_source_for_intent(
+    intent: &Intent,
+    source_result_id: &str,
+    packet: &EvidencePacket,
+    source_packet_ref: &str,
+) -> Result<PageBreakSourceSummary> {
+    if !has_fetched_page_breaks(packet) || is_wikipedia_raw_body(packet) {
+        return Err(failure(
+            "SOURCE_EVIDENCE_INVALID",
+            "the retained UTF-8 body does not contain an original page break",
+        ));
+    }
+    let source = summarize_fetched_source_internal(
+        source_result_id,
+        packet,
+        source_packet_ref,
+        source_summary_limits(intent),
+        SummaryBoundaries::FetchedPageBreaks,
+    )?;
+    let source_span_sha256 = source
+        .summary
+        .sentences
+        .iter()
+        .map(|sentence| {
+            let exact = packet
+                .raw_body
+                .get(sentence.source_start..sentence.source_end)
+                .filter(|raw| *raw == sentence.text.as_bytes())
+                .ok_or_else(|| {
+                    failure(
+                        "SOURCE_SUMMARY_SPAN_MISMATCH",
+                        "the extracted range differs from the original body bytes",
+                    )
+                })?;
+            Ok(digest(exact))
+        })
+        .collect::<Result<_>>()?;
+    Ok(PageBreakSourceSummary {
+        source,
+        source_span_sha256,
+    })
 }
 
 fn is_wikipedia_raw_body(packet: &EvidencePacket) -> bool {
@@ -3777,6 +3897,7 @@ fn summarize_fetched_source_internal(
     packet: &EvidencePacket,
     source_packet_ref: &str,
     limits: PreviousResultSummaryLimits,
+    boundaries: SummaryBoundaries,
 ) -> Result<SourceExtractiveSummaryCandidates> {
     if !sha256_id(source_result_id) {
         return Err(failure(
@@ -3813,7 +3934,7 @@ fn summarize_fetched_source_internal(
             "format": "bullets"
         }))?,
     };
-    let summary = extractive_summary_candidates(&document)?;
+    let summary = extractive_summary_candidates_internal(&document, false, boundaries)?;
     if summary.source_text_sha256 != digest(text.as_bytes()) {
         return Err(failure(
             "SOURCE_SUMMARY_SPAN_MISMATCH",
@@ -3821,7 +3942,9 @@ fn summarize_fetched_source_internal(
         ));
     }
     Ok(SourceExtractiveSummaryCandidates {
-        operation: if summary.line_limit.is_some() {
+        operation: if boundaries == SummaryBoundaries::FetchedPageBreaks {
+            PAGE_BREAK_SOURCE_SUMMARY
+        } else if summary.line_limit.is_some() {
             "SOURCE_EXTRACTIVE_LINE_SUMMARY_CANDIDATES_V1"
         } else {
             "SOURCE_EXTRACTIVE_SUMMARY_CANDIDATES_V1"
@@ -3845,6 +3968,36 @@ fn summarize_fetched_source_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetched_page_breaks_split_exact_source_bytes_without_admitting_other_controls() {
+        let text = "表紙\x0c本文";
+        let document = serde_json::json!({"text": text, "max_sentences": 2}).to_string();
+        assert!(extractive_summary_candidates(&document).is_err());
+        let report = extractive_summary_candidates_internal(
+            &document,
+            false,
+            SummaryBoundaries::FetchedPageBreaks,
+        )
+        .unwrap();
+        assert_eq!(report.source_text, text);
+        let spans: Vec<_> = report
+            .sentences
+            .iter()
+            .map(|entry| (entry.source_start, entry.source_end, entry.text.as_str()))
+            .collect();
+        assert_eq!(spans, [(0, 6, "表紙"), (7, 13, "本文")]);
+        let invalid =
+            serde_json::json!({"text": "表紙\x0c本文\x01", "max_sentences": 2}).to_string();
+        assert!(
+            extractive_summary_candidates_internal(
+                &invalid,
+                false,
+                SummaryBoundaries::FetchedPageBreaks,
+            )
+            .is_err()
+        );
+    }
 
     fn source_question_packet(text: &str) -> EvidencePacket {
         let raw_body = text.as_bytes().to_vec();

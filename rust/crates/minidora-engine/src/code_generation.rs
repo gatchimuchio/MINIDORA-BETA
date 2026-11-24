@@ -621,8 +621,8 @@ impl PreviousCodeVerification {
     }
 }
 
-/// Resolve only the selected result. Following a verification keeps its
-/// original generation identity and checks the selected verification again.
+/// Resolve only the selected result. A saved explanation or verification
+/// retains its original generation identity and is rechecked before use.
 pub(crate) fn previous_code_verification(
     store: &crate::store::Store,
     state: &CaseRevision,
@@ -637,40 +637,50 @@ pub(crate) fn previous_code_verification(
             source_dependencies: vec![selected.id.clone(), report_ref],
         }));
     }
-    let Some(bundle) = verification_input(store, state, selected)? else {
+    let Some(context) = retained_code_context(store, state, selected)? else {
         return Ok(None);
     };
-    let (anchor, generation, source_ref, verification_ref) =
-        verification_dependencies(&bundle, selected)?;
-    if anchor != generation {
+    if context.anchor != context.generation {
         let anchor_result = state
             .prior_results
-            .get(anchor)
+            .get(context.anchor)
+            .filter(|result| result.id == context.anchor)
             .ok_or_else(verification_mismatch)?;
-        let anchor_bundle =
-            verification_input(store, state, anchor_result)?.ok_or_else(verification_mismatch)?;
-        let (_, anchor_generation, anchor_source, _) =
-            verification_dependencies(&anchor_bundle, anchor_result)?;
-        if (anchor_generation, anchor_source) != (generation, source_ref) {
+        let anchor = retained_code_context(store, state, anchor_result)?
+            .ok_or_else(verification_mismatch)?;
+        if (anchor.generation, anchor.source_ref) != (context.generation, context.source_ref) {
             return Err(verification_mismatch());
         }
     }
     let origin = state
         .prior_results
-        .get(generation)
+        .get(context.generation)
         .filter(|result| {
-            result.id == generation
+            result.id == context.generation
                 && result.lifecycle == Lifecycle::Commit
                 && result.guarantee == Guarantee::Computed
-        })
-        .ok_or_else(verification_mismatch)?;
-    let (_, origin_bundle) = store
-        .get_input_bundle(actor, case, &origin.input_id, origin.input_version)?
-        .ok_or_else(verification_mismatch)?;
+        });
+    let registered_origin = match origin {
+        Some(origin) => store
+            .get_input_bundle(actor, case, &origin.input_id, origin.input_version)?
+            .map(|(_, bundle)| (origin, bundle)),
+        None => None,
+    };
+    let Some((origin, origin_bundle)) = registered_origin.filter(|(_, bundle)| {
+        matches!(
+            bundle.meaning.intent,
+            Intent::GenerateCode { .. } | Intent::GenerateReturnFunction { .. }
+        )
+    }) else {
+        if matches!(context.output, RetainedCodeOutput::Explanation) {
+            return Ok(None);
+        }
+        return Err(verification_mismatch());
+    };
     let (origin_ref, report) =
         previous_code_report(store, actor, case, origin)?.ok_or_else(verification_mismatch)?;
-    if identity(&origin_bundle.request)? != generation
-        || origin_ref != source_ref
+    if identity(&origin_bundle.request)? != context.generation
+        || origin_ref != context.source_ref
         || !match &origin_bundle.meaning.intent {
             Intent::GenerateCode { document } => report.source_document == *document,
             Intent::GenerateReturnFunction { .. } => report.version == RETURN_FUNCTION_VERSION,
@@ -679,20 +689,34 @@ pub(crate) fn previous_code_verification(
     {
         return Err(verification_mismatch());
     }
-    let Intent::VerifyPreviousCode { document } = &bundle.meaning.intent else {
-        return Err(verification_mismatch());
+    let (units, required_report, label) = match &context.output {
+        RetainedCodeOutput::Explanation => (
+            explanation_lines_from_validated(&report)?,
+            context.source_ref,
+            "generated-code explanation",
+        ),
+        RetainedCodeOutput::Verification {
+            document,
+            report_ref,
+        } => {
+            let verification =
+                crate::code_capability::verify_previous_source(&report.source, document, deadline)?;
+            let bytes = canonical(&verification)?;
+            if digest(&bytes) != *report_ref || store.get_bytes(actor, case, report_ref)? != bytes {
+                return Err(verification_mismatch());
+            }
+            (
+                crate::code_capability::previous_code_verification_lines(&verification)?,
+                *report_ref,
+                "generated-code verification",
+            )
+        }
     };
-    let verification =
-        crate::code_capability::verify_previous_source(&report.source, document, deadline)?;
-    let verification_bytes = canonical(&verification)?;
-    let units = crate::code_capability::previous_code_verification_lines(&verification)?;
     let plan = selected
         .content_plan
         .as_ref()
         .ok_or_else(verification_mismatch)?;
-    if digest(&verification_bytes) != verification_ref
-        || store.get_bytes(actor, case, verification_ref)? != verification_bytes
-        || plan.required_units != units
+    if plan.required_units != units
         || selected.text != units.join("\n")
         || !plan.dependencies.starts_with(&selected.dependencies)
     {
@@ -703,21 +727,40 @@ pub(crate) fn previous_code_verification(
         actor,
         case,
         selected,
-        Some(verification_ref),
+        Some(required_report),
         VERIFICATION_CONTEXT_MISMATCH,
-        "generated-code verification",
+        label,
     )?;
     Ok(Some(PreviousCodeVerification {
         report,
-        source_dependencies: vec![selected.id.clone(), generation.to_owned(), origin_ref],
+        source_dependencies: vec![
+            selected.id.clone(),
+            context.generation.to_owned(),
+            origin_ref,
+        ],
     }))
 }
 
-fn verification_input(
+struct RetainedCodeContext<'a> {
+    anchor: &'a str,
+    generation: &'a str,
+    source_ref: &'a str,
+    output: RetainedCodeOutput<'a>,
+}
+
+enum RetainedCodeOutput<'a> {
+    Explanation,
+    Verification {
+        document: String,
+        report_ref: &'a str,
+    },
+}
+
+fn retained_code_context<'a>(
     store: &crate::store::Store,
     state: &CaseRevision,
-    result: &ResultRecord,
-) -> Result<Option<InputBundle>> {
+    result: &'a ResultRecord,
+) -> Result<Option<RetainedCodeContext<'a>>> {
     let Some((_, bundle)) = store.get_input_bundle(
         &state.actor_id,
         &state.case_id,
@@ -727,45 +770,82 @@ fn verification_input(
     else {
         return Ok(None);
     };
-    if !matches!(bundle.meaning.intent, Intent::VerifyPreviousCode { .. }) {
-        return Ok(None);
-    }
+    let context = match &bundle.meaning.intent {
+        Intent::ExplainPrevious
+            if result.guarantee == Guarantee::Computed
+                && result.calculation.is_none()
+                && result.evidence.is_empty() =>
+        {
+            let [generation, source_ref] = result.dependencies.as_slice() else {
+                return Ok(None);
+            };
+            RetainedCodeContext {
+                anchor: generation,
+                generation,
+                source_ref,
+                output: RetainedCodeOutput::Explanation,
+            }
+        }
+        Intent::VerifyPreviousCode { document } => {
+            let (anchor, generation, source_ref, report_ref) = verification_dependencies(result)?;
+            if bundle.meaning.parser_version
+                == crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
+            {
+                crate::input::verify_previous_code_case_input(&bundle)?;
+            }
+            RetainedCodeContext {
+                anchor,
+                generation,
+                source_ref,
+                output: RetainedCodeOutput::Verification {
+                    document: document.clone(),
+                    report_ref,
+                },
+            }
+        }
+        _ => return Ok(None),
+    };
     if result.lifecycle != Lifecycle::Commit
         || result.guarantee != Guarantee::Computed
         || result.id != identity(&bundle.request)?
         || !bundle.meaning.unresolved.is_empty()
         || result.calculation.is_some()
         || !result.evidence.is_empty()
+        || context.anchor == result.id
+        || bundle.meaning.context_result_ref.as_deref() != Some(context.anchor)
     {
+        if matches!(context.output, RetainedCodeOutput::Explanation) {
+            return Ok(None);
+        }
         return Err(verification_mismatch());
     }
-    if bundle.meaning.parser_version == crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION {
-        crate::input::verify_previous_code_case_input(&bundle)?;
+    let anchor = state
+        .prior_results
+        .get(context.anchor)
+        .filter(|record| record.id == context.anchor && record.lifecycle == Lifecycle::Commit);
+    if anchor.is_none() || bundle.context_sha256 != identity(&anchor)? {
+        if matches!(context.output, RetainedCodeOutput::Explanation) {
+            return Ok(None);
+        }
+        return Err(verification_mismatch());
     }
-    Ok(Some(bundle))
+    Ok(Some(context))
 }
 
-fn verification_dependencies<'a>(
-    bundle: &InputBundle,
-    result: &'a ResultRecord,
-) -> Result<(&'a str, &'a str, &'a str, &'a str)> {
-    let (anchor, generation, source, report) = match result.dependencies.as_slice() {
-        [generation, source, report] => (generation, generation, source, report),
+fn verification_dependencies(result: &ResultRecord) -> Result<(&str, &str, &str, &str)> {
+    match result.dependencies.as_slice() {
+        [generation, source, report] => Ok((generation, generation, source, report)),
         [anchor, generation, source, report] if anchor != generation => {
-            (anchor, generation, source, report)
+            Ok((anchor, generation, source, report))
         }
-        _ => return Err(verification_mismatch()),
-    };
-    if anchor == &result.id || bundle.meaning.context_result_ref.as_ref() != Some(anchor) {
-        return Err(verification_mismatch());
+        _ => Err(verification_mismatch()),
     }
-    Ok((anchor, generation, source, report))
 }
 
 fn verification_mismatch() -> minidora_domain::Error {
     failure(
         VERIFICATION_CONTEXT_MISMATCH,
-        "保存した検証結果と、封印された入力・元の生成コードを同じ会話で照合できません。",
+        "保存したコードの説明・検証結果と、封印された入力・元の生成コードを同じ会話で照合できません。",
     )
 }
 

@@ -5562,6 +5562,33 @@ fn inspect(
     {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
+    if bundle.meaning.parser_version == crate::input::PASTED_TEXT_REPLACEMENT_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_TEXT_REPLACEMENT_MISMATCH";
+        let Intent::TextReplace {
+            document,
+            old,
+            new,
+            count,
+        } = &goal.intent
+        else {
+            return Err(failure(CODE, "the sealed text replacement intent changed"));
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let report = crate::document::replace_pasted_text(document, old, new, *count)?;
+        let reference = verified_artifact(store, actor, case, &report)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != [reference]
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [report.text.as_str()]
+            || plan.text != report.text
+            || result.text != report.text
+        {
+            return Err(failure(
+                CODE,
+                "the retained replacement report differs from the original text request",
+            ));
+        }
+    }
     if bundle.meaning.parser_version == crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION {
         const CODE: &str = "RECOVERY_CSV_COMPARE_MISMATCH";
         let Intent::CsvCompare {

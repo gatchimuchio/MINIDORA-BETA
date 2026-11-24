@@ -6063,6 +6063,30 @@ pub fn replace_unique_exact(document: &str, old: &str, new: &str) -> Result<Docu
     replace_exact(document, old, new, Some(1))
 }
 
+pub(crate) fn replace_pasted_text(
+    document: &str,
+    old: &str,
+    new: &str,
+    count: Option<usize>,
+) -> Result<DocumentResult> {
+    if let Some(count) = count {
+        return replace_exact(document, old, new, Some(count));
+    }
+    admission(document)?;
+    replace_unique_exact(document, old, new).map_err(|error| match &error {
+        minidora_domain::Error::Contract { code, .. } if code == "PREVIOUS_TEXT_NOT_FOUND" => {
+            failure("REPLACEMENT_NOT_FOUND", "貼り付けた本文に指定の文字列がありません。")
+        }
+        minidora_domain::Error::Contract { code, .. } if code == "PREVIOUS_TEXT_AMBIGUOUS" => {
+            failure(
+                "REPLACEMENT_AMBIGUOUS",
+                "重なる位置も含めて指定の文字列が複数あります。非重複の置換件数を指定してください。",
+            )
+        }
+        _ => error,
+    })
+}
+
 pub(crate) fn previous_text_replacement(
     previous: &ResultRecord,
     old: &str,
@@ -6799,6 +6823,37 @@ pub fn compose_explicit_text(document: &str) -> Result<TextCompositionResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pasted_text_replacement_requires_an_unambiguous_match_or_explicit_count() {
+        for (document, old) in [("猫と猫", "猫"), ("あああ", "ああ")] {
+            let error = replace_pasted_text(document, old, "犬", None).unwrap_err();
+            assert!(matches!(
+                error,
+                minidora_domain::Error::Contract { code, .. } if code == "REPLACEMENT_AMBIGUOUS"
+            ));
+        }
+        let source = "Ａ\r\n猫の予定\r\n";
+        let report = replace_pasted_text(source, "猫", "犬", None).unwrap();
+        assert_eq!(report.text, "Ａ\r\n犬の予定\r\n");
+        let span = &report.spans[1];
+        assert_eq!(
+            (span.kind.as_str(), span.source_start, span.source_end),
+            ("EXACT_REPLACEMENT", 5, 8)
+        );
+        assert_eq!(&source[span.source_start..span.source_end], "猫");
+
+        let source = "猫と猫";
+        assert_eq!(
+            replace_pasted_text(source, "猫", "犬", Some(2)).unwrap(),
+            replace_exact(source, "猫", "犬", Some(2)).unwrap()
+        );
+        let error = replace_pasted_text(source, "猫", "犬", Some(3)).unwrap_err();
+        assert!(matches!(
+            error,
+            minidora_domain::Error::Contract { code, .. } if code == "REPLACEMENT_COUNT_MISMATCH"
+        ));
+    }
 
     #[test]
     fn japanese_csv_comparison_preserves_sealed_source_and_ignores_labels_inside_fields() {

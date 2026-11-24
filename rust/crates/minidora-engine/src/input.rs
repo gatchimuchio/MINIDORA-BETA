@@ -19,6 +19,8 @@ pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v165-generated-code-single-case";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
+pub(crate) const PASTED_TEXT_REPLACEMENT_PARSER_VERSION: &str =
+    "declarative-ja-v170-pasted-text-replacement";
 const PREVIOUS_CODE_CASE_EXPECTED_ROLE: &str = "/VerifyPreviousCode/case/expected_value";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
@@ -559,6 +561,11 @@ pub(crate) fn seal_with_source_context(
             if crate::document::starts_japanese_csv_comparison(document) =>
         {
             CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION
+        }
+        Intent::TextReplace { .. }
+            if starts_pasted_text_replacement(document_header(&request.text)) =>
+        {
+            PASTED_TEXT_REPLACEMENT_PARSER_VERSION
         }
         // A derived conclusion keeps the existing proof follow-up contract.
         Intent::ExplainPrevious
@@ -2675,16 +2682,53 @@ fn calculation_sequence_intent(text: &str, header: &str) -> Result<Option<Intent
     Ok(Some(Intent::CalculateSequence { steps }))
 }
 
+fn document_header(text: &str) -> &str {
+    text.split('\n').next().unwrap_or(text).trim()
+}
+
+fn starts_pasted_text_replacement(header: &str) -> bool {
+    ["文章の「", "次の文章の「", "本文の「"]
+        .into_iter()
+        .any(|prefix| header.starts_with(prefix))
+}
+
+fn pasted_text_replacement_intent(text: &str, header: &str) -> Result<Option<Intent>> {
+    if !starts_pasted_text_replacement(header) {
+        return Ok(None);
+    }
+    let Some(parts) = regex(
+        r"\A(?:次の文章|文章|本文)の「([^「」\r\n]+)」を「([^「」\r\n]*)」に(?:([1-9][0-9]{0,3})[か箇]所)?(?:置き換えて|置換して)(?:ください)?[:：]\z",
+    )?
+    .captures(header)
+    else {
+        return Ok(None);
+    };
+    let Some((_, document)) = text.split_once('\n').filter(|(_, body)| !body.is_empty()) else {
+        return Ok(Some(Intent::Unknown {
+            reason: "置き換える本文を見出しの次の行に貼り付けてください。".into(),
+        }));
+    };
+    let count = parts
+        .get(3)
+        .map(|part| part.as_str().parse::<usize>())
+        .transpose()
+        .map_err(|_| failure("REPLACE_COUNT_LIMIT", "replacement count is out of range"))?;
+    Ok(Some(Intent::TextReplace {
+        document: document.into(),
+        old: parts[1].into(),
+        new: parts[2].into(),
+        count,
+    }))
+}
+
 /// Explicit headers separate instructions from document/query data. The body is
 /// sliced from the original request, without trim, newline conversion or NFKC.
 pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
-    let first_line = text
-        .split('\n')
-        .next()
-        .unwrap_or(text)
-        .trim_end_matches('\r');
-    let header = first_line.trim();
+    let header = document_header(text);
     if let Some(intent) = calculation_sequence_intent(text, header)? {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = pasted_text_replacement_intent(text, header)? {
         return Ok(Some(intent));
     }
     if matches!(
@@ -8916,6 +8960,46 @@ mod symbolic_and_clause_tests {
 #[cfg(test)]
 mod structured_document_tests {
     use super::*;
+
+    #[test]
+    fn pasted_text_replacement_seals_exact_body_and_explicit_count() {
+        let body = "猫を迎える。\r\n猫の餌を買う。\r\n";
+        for (header, version, expected_count) in [
+            (
+                "文章の「猫」を「犬」に置き換えて:",
+                PASTED_TEXT_REPLACEMENT_PARSER_VERSION,
+                None,
+            ),
+            (
+                "次の文章の「猫」を「犬」に2か所置き換えてください：",
+                PASTED_TEXT_REPLACEMENT_PARSER_VERSION,
+                Some(2),
+            ),
+            ("置換「猫」→「犬」:", PARSER_VERSION, None),
+        ] {
+            let text = format!("{header}\r\n{body}");
+            let bundle = seal(&RequestEnvelope::new("c", "i", "actor", &text), None).unwrap();
+            assert_eq!(bundle.request.text, text);
+            assert_eq!(bundle.meaning.parser_version, version);
+            assert!(matches!(
+                bundle.meaning.intent,
+                Intent::TextReplace { document, old, new, count }
+                    if document == body && old == "猫" && new == "犬" && count == expected_count
+            ));
+        }
+        for text in [
+            "文章の「猫」を「犬」に置き換えて:",
+            "文章の「猫」を「犬」に0か所置き換えて:\n猫",
+            "文章の「猫」を「犬」に置き換えて送信して:\n猫",
+            "文章の「猫」を「犬に置き換えて:\n猫",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+    }
+
     #[test]
     fn document_body_retains_crlf_trailing_newline_and_instruction_like_text() {
         let csv = "name,price\r\n\"send this\",10\r\n";
