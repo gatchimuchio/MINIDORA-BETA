@@ -2455,6 +2455,24 @@ fn direct_source_followup<'a>(
     let web_followup = crate::input::uses_web_answer_explanation_context(version);
     let explanation_shape =
         context.guarantee == Guarantee::SourceReport && context.evidence.is_empty();
+    if version == crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION {
+        if !explanation_shape
+            || context.lifecycle != Lifecycle::Commit
+            || request
+                .context_ref
+                .as_deref()
+                .is_some_and(|id| id != context.id)
+        {
+            return Ok(None);
+        }
+        let resolve = |history: &VerifiedCaseHistory<'_>| {
+            direct_explanation_followup(store, history, prior_results, context).map(Some)
+        };
+        return match history {
+            Some(history) => resolve(history),
+            None => store.with_verified_case_history(actor, case, resolve),
+        };
+    }
     if version == crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
         && request.context_ref.is_some()
     {
@@ -2498,6 +2516,66 @@ fn direct_source_followup<'a>(
             )
         }),
     }
+}
+
+fn direct_explanation_followup<'a>(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    prior_results: &'a BTreeMap<String, ResultRecord>,
+    context: &'a ResultRecord,
+) -> Result<SourceFollowup<'a>> {
+    const CODE: &str = "SOURCE_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "保存した直接取得の説明と元の本文記録を照合できません。",
+        )
+    };
+    let (_, explanation) = history
+        .input_bundle(&context.input_id, context.input_version)?
+        .ok_or_else(invalid)?;
+    let source = explanation
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| prior_results.get(id))
+        .ok_or_else(invalid)?;
+    let proof = crate::recovery::previous_direct_source_explanation(
+        store,
+        &explanation,
+        source,
+        Some(history),
+    )?;
+    let plan = context.content_plan.as_ref().ok_or_else(invalid)?;
+    if identity(&explanation.request)? != context.id
+        || history
+            .input_result(&context.input_id, context.input_version)?
+            .as_ref()
+            != Some(context)
+        || !history.contains_committed_result(context)?
+        || context.calculation.is_some()
+        || plan.locale != explanation.request.locale
+        || plan.required_units != proof.units
+        || context.text != proof.units.join("\n")
+        || context.dependencies != proof.dependencies
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        &explanation.request.actor_id,
+        &explanation.request.case_id,
+        context,
+        None,
+        CODE,
+        "direct source explanation",
+    )?;
+    Ok(SourceFollowup {
+        context,
+        base_context: source,
+        source,
+        selected_body_index: None,
+    })
 }
 
 fn selected_body_followup<'a>(
@@ -2673,6 +2751,7 @@ pub(crate) fn verify_retained_source_summary<'a>(
                         | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
                         | crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
                         | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
                 )
         }
         _ => false,
@@ -3551,6 +3630,7 @@ fn source_summary_packet_positions(
             | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
             | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
         return Ok((0..packets.len()).collect());
     }

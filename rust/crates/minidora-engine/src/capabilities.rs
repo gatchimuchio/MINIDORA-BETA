@@ -40,6 +40,8 @@ pub struct EngineCaseStatus {
     pub engine: EngineCapabilities,
     pub case_id: String,
     pub case_revision: Option<u64>,
+    /// State of the saved case revision, even before a result is available.
+    pub case_lifecycle: Option<Lifecycle>,
     pub result: Option<EngineResultStatus>,
 }
 
@@ -119,10 +121,11 @@ impl Engine {
         }
     }
 
-    /// Describe only the latest retained result in an actor-owned case.
+    /// Describe the latest saved state and any result in an actor-owned case.
     pub fn case_status(&self, actor: &str, case_id: &str) -> Result<EngineCaseStatus> {
         let case = self.latest(actor, case_id)?;
         let case_revision = case.as_ref().map(|case| case.revision);
+        let case_lifecycle = case.as_ref().map(|case| case.lifecycle);
         let result = case.and_then(|case| case.result).map(|result| {
             let (model_revision, model_artifact_ref) = result
                 .content_plan
@@ -140,6 +143,7 @@ impl Engine {
             engine: Self::capabilities(),
             case_id: case_id.into(),
             case_revision,
+            case_lifecycle,
             result,
         })
     }

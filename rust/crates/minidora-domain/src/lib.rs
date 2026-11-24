@@ -275,6 +275,9 @@ pub enum Intent {
     Calculate {
         expression: String,
     },
+    ConvertPreviousLength {
+        unit: String,
+    },
     CalculateSequence {
         steps: Vec<CalculationSequenceStep>,
     },

@@ -23,6 +23,8 @@ pub(crate) const PASTED_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v170-pasted-text-replacement";
 pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
     "declarative-ja-v174-previous-json-table-to-csv";
+pub(crate) const PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v176-previous-json-table-conversion-explanation";
 pub(crate) const PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v171-pasted-text-replacement-explanation";
 pub(crate) const DIRECT_SOURCE_EXPLANATION_PARSER_VERSION: &str =
@@ -36,6 +38,8 @@ pub(crate) const COMPARISON_PARSER_VERSION: &str = "declarative-ja-en-v91-compar
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
 pub(crate) const CALCULATION_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v118-verified-calculation-correction";
+pub(crate) const PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION: &str =
+    "declarative-ja-v177-previous-length-conversion";
 pub(crate) const SEQUENCE_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v119-calculation-sequence-correction";
 pub(crate) const SEQUENCE_REWIRE_PARSER_VERSION: &str =
@@ -169,6 +173,9 @@ pub(crate) const WEB_ANSWER_EXPLANATION_PARSER_VERSION: &str =
 pub(crate) const WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v162-web-answer-explanation-followup";
 
+pub(crate) const DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v175-direct-source-explanation-followup";
+
 pub(crate) const IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v163-implicit-web-body-question-followup";
 
@@ -188,7 +195,9 @@ pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) enum SourceContext {
     Explanation,
     PastedTextReplacementExplanation,
+    PreviousJsonTableConversionExplanation,
     DirectSourceExplanation,
+    ExplainedDirectSource,
     WebAnswerExplanation,
     ResumedWebAnswerExplanation,
     WebBodyQuestion,
@@ -492,6 +501,13 @@ pub(crate) fn seal_with_source_context(
     {
         unresolved.push("no actual committed calculation is available to correct".into());
     }
+    if matches!(intent, Intent::ConvertPreviousLength { .. })
+        && previous.is_none_or(|result| {
+            result.lifecycle != Lifecycle::Commit || result.calculation.is_none()
+        })
+    {
+        unresolved.push("同じ会話に換算できる確定済み計算結果がありません。".into());
+    }
     let context_sha256 = identity(&previous)?;
     let source_roles = match source_role_spans(&request.text, &intent) {
         Ok(source_roles) => source_roles,
@@ -514,7 +530,9 @@ pub(crate) fn seal_with_source_context(
         SourceContext::Explanation => Some(IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION),
         SourceContext::Summary => Some(IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION),
         SourceContext::PastedTextReplacementExplanation
+        | SourceContext::PreviousJsonTableConversionExplanation
         | SourceContext::DirectSourceExplanation
+        | SourceContext::ExplainedDirectSource
         | SourceContext::WebAnswerExplanation
         | SourceContext::ResumedWebAnswerExplanation
         | SourceContext::WebBodyQuestion => None,
@@ -534,6 +552,7 @@ pub(crate) fn seal_with_source_context(
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
+        Intent::ConvertPreviousLength { .. } => PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION,
         Intent::CorrectCalculationSequenceStep { .. }
         | Intent::AppendCalculationSequenceStep { .. }
         | Intent::RemoveCalculationSequenceStep { .. }
@@ -592,6 +611,14 @@ pub(crate) fn seal_with_source_context(
             PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
         }
         Intent::ExplainPrevious
+            if matches!(
+                source_context,
+                Some(SourceContext::PreviousJsonTableConversionExplanation)
+            ) =>
+        {
+            PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+        }
+        Intent::ExplainPrevious
             if matches!(source_context, Some(SourceContext::DirectSourceExplanation)) =>
         {
             DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
@@ -617,6 +644,19 @@ pub(crate) fn seal_with_source_context(
         Intent::ExplainPrevious => SEARCH_CANDIDATE_BODY_EXPLANATION_PARSER_VERSION,
         Intent::ShowCalculationSequenceHistory => SEQUENCE_HISTORY_PARSER_VERSION,
         Intent::ExplainCalculationSequenceStep { .. } => SEQUENCE_STEP_EXPLANATION_PARSER_VERSION,
+        Intent::AskPreviousSourceQuestion { .. }
+        | Intent::SummarizePreviousSource
+        | Intent::SummarizePreviousSourceConstrained { .. }
+        | Intent::SummarizePreviousSourceLines { .. }
+            if matches!(source_context, Some(SourceContext::ExplainedDirectSource))
+                && previous.is_some_and(|result| {
+                    result.lifecycle == Lifecycle::Commit
+                        && result.guarantee == Guarantee::SourceReport
+                        && result.evidence.is_empty()
+                }) =>
+        {
+            DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource
         | Intent::SummarizePreviousSourceConstrained { .. }
@@ -4898,6 +4938,20 @@ fn interpret(text: &str) -> Result<Intent> {
             | "前回のJSON表をCSVに戻してください"
     ) {
         return Ok(Intent::ConvertPreviousJsonTableToCsv);
+    }
+    if let Some(capture) = regex(
+        r"^(?:前回|前)の計算結果を[ \t　]*(mm|cm|m|km|ミリメートル|センチメートル|メートル|キロメートル)[ \t　]*に換算して(?:ください)?$",
+    )?
+    .captures(body)
+    {
+        let unit = match &capture[1] {
+            "ミリメートル" => "mm",
+            "センチメートル" => "cm",
+            "メートル" => "m",
+            "キロメートル" => "km",
+            unit => unit,
+        };
+        return Ok(Intent::ConvertPreviousLength { unit: unit.into() });
     }
     if let Some(intent) = condition_definition_intent(text)? {
         return Ok(intent);

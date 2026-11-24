@@ -15,12 +15,11 @@ use crate::{
         REWIRED_SEQUENCE_CORRECTION_PREDICATE, REWIRED_SEQUENCE_EXPLANATION_PREDICATE,
         SEQUENCE_APPEND_PREDICATE, SEQUENCE_CORRECTION_PREDICATE, SEQUENCE_EXPLANATION_PREDICATE,
         SEQUENCE_HISTORY_PREDICATE, SEQUENCE_INSERT_PREDICATE, SEQUENCE_MOVE_PREDICATE,
-        SEQUENCE_REMOVE_PREDICATE, SEQUENCE_STEP_EXPLANATION_PREDICATE, calculation_sequence_nodes,
-        calculation_sequence_report, condition_evaluation_contract,
-        corrected_calculation_from_context, exact_calculation_unit, goal_predicates,
-        prepare_sequence_edit, previous_calculation_sequence, run_calculation_sequence,
-        run_sequence_edit, store_execution_graph, validate_goal_render, validate_render,
-        verify_goal_content,
+        SEQUENCE_REMOVE_PREDICATE, SEQUENCE_STEP_EXPLANATION_PREDICATE, calculation_from_context,
+        calculation_sequence_nodes, calculation_sequence_report, condition_evaluation_contract,
+        exact_calculation_unit, goal_predicates, prepare_sequence_edit,
+        previous_calculation_sequence, run_calculation_sequence, run_sequence_edit,
+        store_execution_graph, validate_goal_render, validate_render, verify_goal_content,
     },
     language,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -124,6 +123,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
+                        | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
@@ -3818,6 +3818,7 @@ pub(crate) fn previous_direct_source_explanation(
     store: &Store,
     bundle: &InputBundle,
     previous: &ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<DirectSourceExplanation> {
     const CODE: &str = "DIRECT_SOURCE_EXPLANATION_CONTEXT_INVALID";
     let invalid = || failure(CODE, "保存済みの取得入力・本文・表示が照合できません。");
@@ -3836,7 +3837,7 @@ pub(crate) fn previous_direct_source_explanation(
     {
         return Err(invalid());
     }
-    store.with_verified_case_history(actor, case, |history| {
+    let verify = |history: &VerifiedCaseHistory<'_>| {
         let (_, original) = history
             .input_bundle(&previous.input_id, previous.input_version)?
             .ok_or_else(invalid)?;
@@ -3970,7 +3971,11 @@ pub(crate) fn previous_direct_source_explanation(
             units,
             dependencies,
         })
-    })
+    };
+    match history {
+        Some(history) => verify(history),
+        None => store.with_verified_case_history(actor, case, verify),
+    }
 }
 
 fn first_hop_wait_matches(
@@ -4310,7 +4315,9 @@ fn verify_implicit_source_predecessor(
     bundle: &InputBundle,
 ) -> Result<()> {
     let version = &bundle.meaning.parser_version;
-    if crate::input::uses_web_body_question_context(version) {
+    if crate::input::uses_web_body_question_context(version)
+        || version == crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+    {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
     }
     if version == crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION {
@@ -4340,8 +4347,11 @@ fn verify_implicit_source_predecessor(
         }
     }
     if crate::input::uses_implicit_source_context(version)
-        || (version == crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
-            && bundle.request.context_ref.is_none())
+        || (matches!(
+            version.as_str(),
+            crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        ) && bundle.request.context_ref.is_none())
     {
         let context = bundle
             .meaning
@@ -4731,6 +4741,16 @@ fn inspect(
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
     let requires_verified_correction =
         bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
+    let requires_verified_length_conversion =
+        bundle.meaning.parser_version == crate::input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION;
+    if requires_verified_length_conversion
+        != matches!(goal.intent, Intent::ConvertPreviousLength { .. })
+    {
+        return Err(failure(
+            "RECOVERY_LENGTH_CONVERSION_MISMATCH",
+            "the length conversion no longer matches its sealed input version",
+        ));
+    }
     let condition_contract = condition_evaluation_contract(&goal.intent);
     let sealed_condition_parser = matches!(
         bundle.meaning.parser_version.as_str(),
@@ -4934,6 +4954,7 @@ fn inspect(
         && (requires_generated_comparison
             || requires_generated_calculation
             || requires_verified_correction
+            || requires_verified_length_conversion
             || requires_condition_evaluation
             || requires_record_source
             || requires_guarded_rule
@@ -5048,28 +5069,32 @@ fn inspect(
             "actual retained rendering unavailable",
         )
     })?;
-    if requires_verified_correction {
+    if requires_verified_correction || requires_verified_length_conversion {
         let started = Instant::now();
+        let code = if requires_verified_correction {
+            "RECOVERY_CALCULATION_CORRECTION_MISMATCH"
+        } else {
+            "RECOVERY_LENGTH_CONVERSION_MISMATCH"
+        };
         let invalid = || {
             failure(
-                "RECOVERY_CALCULATION_CORRECTION_MISMATCH",
-                "the adopted correction differs from the exact sealed operand and its prior result",
+                code,
+                if requires_verified_correction {
+                    "the adopted correction differs from the exact sealed operand and its prior result"
+                } else {
+                    "the adopted length conversion differs from the exact sealed unit and its prior result"
+                },
             )
         };
-        verify_registered_input(store, bundle, "RECOVERY_CALCULATION_CORRECTION_MISMATCH")?;
+        verify_registered_input(store, bundle, code)?;
         let previous = bundle
             .meaning
             .context_result_ref
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(invalid)?;
-        let calculation = corrected_calculation_from_context(
-            store,
-            bundle,
-            previous,
-            &state.prior_results,
-            started,
-        )?;
+        let calculation =
+            calculation_from_context(store, bundle, previous, &state.prior_results, started)?;
         let unit = exact_calculation_unit(&calculation);
         if result.calculation.as_ref() != Some(&calculation)
             || result.guarantee != Guarantee::Computed
@@ -5115,8 +5140,7 @@ fn inspect(
             .map(|previous| {
                 crate::document::previous_document_explanation(
                     store,
-                    actor,
-                    case,
+                    state,
                     previous,
                     &goal.budget,
                     &bundle.meaning.parser_version,
@@ -5128,17 +5152,20 @@ fn inspect(
     } else {
         None
     };
-    if bundle.meaning.parser_version
-        == crate::input::PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
-    {
-        const CODE: &str = "RECOVERY_TEXT_REPLACEMENT_CONTEXT_CHANGED";
-        let invalid = || {
-            failure(
-                CODE,
-                "the stored replacement explanation no longer binds its original result",
-            )
-        };
-        verify_registered_input(store, bundle, CODE)?;
+    let document_explanation_context_error = match bundle.meaning.parser_version.as_str() {
+        crate::input::PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION => Some((
+            "RECOVERY_TEXT_REPLACEMENT_CONTEXT_CHANGED",
+            "the stored replacement explanation no longer binds its original result",
+        )),
+        crate::input::PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION => Some((
+            "RECOVERY_CSV_TABLE_CONTEXT_CHANGED",
+            "the stored CSV conversion explanation no longer binds its original result",
+        )),
+        _ => None,
+    };
+    if let Some((code, message)) = document_explanation_context_error {
+        let invalid = || failure(code, message);
+        verify_registered_input(store, bundle, code)?;
         let previous = bundle
             .meaning
             .context_result_ref
@@ -5228,7 +5255,7 @@ fn inspect(
         {
             return Err(invalid());
         }
-        let explanation = previous_direct_source_explanation(store, bundle, previous)?;
+        let explanation = previous_direct_source_explanation(store, bundle, previous, None)?;
         if result.guarantee != Guarantee::SourceReport
             || result.dependencies != explanation.dependencies
             || plan.required_units != explanation.units

@@ -1555,6 +1555,7 @@ const EXACT_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V1";
 pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
 pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_CORRECTION_V1";
+const PREVIOUS_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_LENGTH_CONVERSION_V1";
 pub(crate) const SEQUENCE_CORRECTION_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1";
 pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2";
@@ -1730,6 +1731,11 @@ pub(crate) fn goal_predicates(
         {
             predicates.push(CALCULATION_CORRECTION_PREDICATE.into());
         }
+        Intent::ConvertPreviousLength { .. }
+            if meaning.parser_version == input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION =>
+        {
+            predicates.push(PREVIOUS_LENGTH_CONVERSION_PREDICATE.into());
+        }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             if let Some(predicate) = guarded_rule_predicate(meaning) {
@@ -1850,6 +1856,7 @@ fn verify_report_goal_content(
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
                 | CALCULATION_CORRECTION_PREDICATE
+                | PREVIOUS_LENGTH_CONVERSION_PREDICATE
                 | SEQUENCE_EXPLANATION_PREDICATE
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
@@ -1951,27 +1958,40 @@ pub(crate) fn exact_calculation_unit(calculation: &Calculation) -> String {
     format!("{} = {}", calculation.expression, calculation.exact_value)
 }
 
-pub(crate) fn corrected_calculation_from_context(
+pub(crate) fn calculation_from_context(
     store: &Store,
     bundle: &InputBundle,
     previous: &ResultRecord,
     prior_results: &BTreeMap<String, ResultRecord>,
     started: Instant,
 ) -> Result<Calculation> {
+    let correcting = matches!(bundle.meaning.intent, Intent::CorrectCalculation { .. });
     let invalid = || {
-        failure(
-            "CORRECTION_SOURCE_MISMATCH",
-            "訂正対象を同じケースの封印済み計算と確定結果に結び付けられません。",
-        )
+        if correcting {
+            failure(
+                "CORRECTION_SOURCE_MISMATCH",
+                "訂正対象を同じケースの封印済み計算と確定結果に結び付けられません。",
+            )
+        } else {
+            failure(
+                "LENGTH_CONVERSION_SOURCE_MISMATCH",
+                "換算対象を同じ会話の封印済み計算と確定結果に結び付けられません。",
+            )
+        }
     };
-    let Intent::CorrectCalculation {
-        operand_index,
-        replacement,
-    } = &bundle.meaning.intent
-    else {
+    if !correcting && !matches!(bundle.meaning.intent, Intent::ConvertPreviousLength { .. }) {
         return Err(invalid());
-    };
+    }
     let request = &bundle.request;
+    let apply = |value: Calculation, intent: &Intent| match intent {
+        Intent::ExplainPrevious => Ok(value),
+        Intent::CorrectCalculation {
+            operand_index,
+            replacement,
+        } => language::correct_binary_operand(&value, *operand_index, replacement),
+        Intent::ConvertPreviousLength { unit } => language::convert_exact_length(&value, unit),
+        _ => Err(invalid()),
+    };
     let check_context = |input: &InputBundle, prior: &ResultRecord| -> Result<()> {
         if input.meaning.context_result_ref.as_deref() != Some(prior.id.as_str())
             || input.context_sha256 != identity(&Some(prior))?
@@ -1987,7 +2007,14 @@ pub(crate) fn corrected_calculation_from_context(
     };
     let check_deadline = || {
         if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
-            return Err(failure("DEADLINE", "訂正対象の確認中に締切へ達しました。"));
+            return Err(failure(
+                "DEADLINE",
+                if correcting {
+                    "訂正対象の確認中に締切へ達しました。"
+                } else {
+                    "換算対象の確認中に締切へ達しました。"
+                },
+            ));
         }
         Ok(())
     };
@@ -1995,7 +2022,11 @@ pub(crate) fn corrected_calculation_from_context(
     let insufficient = || {
         failure(
             "ACTION_BUDGET_EXHAUSTED",
-            "訂正に必要な計算と履歴を照合する行動予算が不足しています。",
+            if correcting {
+                "訂正に必要な計算と履歴を照合する行動予算が不足しています。"
+            } else {
+                "換算に必要な計算と履歴を照合する行動予算が不足しています。"
+            },
         )
     };
     let context_actions = request
@@ -2038,11 +2069,16 @@ pub(crate) fn corrected_calculation_from_context(
                     | Intent::InsertCalculationSequenceStep { .. }
                     | Intent::ShowCalculationSequenceHistory
                     | Intent::ExplainCalculationSequenceStep { .. } => {
+                        if !correcting {
+                            return Err(invalid());
+                        }
                         return Err(failure(
                             "SEQUENCE_CORRECTION_REQUIRES_STEP",
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
                         ));
                     }
+                    Intent::ConvertPreviousLength { .. }
+                        if input.meaning.parser_version == input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION => {}
                     Intent::ExplainPrevious | Intent::CorrectCalculation { .. } => {}
                     _ => return Err(invalid()),
                 }
@@ -2061,9 +2097,7 @@ pub(crate) fn corrected_calculation_from_context(
             };
             for (result, intent, parent_id) in links.into_iter().rev() {
                 check_deadline()?;
-                if let Intent::CorrectCalculation { operand_index, replacement } = intent {
-                    value = language::correct_binary_operand(&value, operand_index, &replacement)?;
-                }
+                value = apply(value, &intent)?;
                 if result.calculation.as_ref() != Some(&value)
                     || result.dependencies.as_slice() != std::slice::from_ref(parent_id)
                 {
@@ -2073,9 +2107,9 @@ pub(crate) fn corrected_calculation_from_context(
             Ok(value)
         })?;
     check_deadline()?;
-    let corrected = language::correct_binary_operand(&calculation, *operand_index, replacement)?;
+    let result = apply(calculation, &bundle.meaning.intent)?;
     check_deadline()?;
-    Ok(corrected)
+    Ok(result)
 }
 
 pub(crate) fn verify_goal_content(
@@ -5705,6 +5739,12 @@ impl Engine {
                 .and_then(|bundle| match &bundle.meaning.intent {
                     Intent::ExplainPrevious
                         if bundle.meaning.parser_version
+                            == input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION =>
+                    {
+                        Some(input::SourceContext::ExplainedDirectSource)
+                    }
+                    Intent::ExplainPrevious
+                        if bundle.meaning.parser_version
                             == input::WEB_ANSWER_EXPLANATION_PARSER_VERSION =>
                     {
                         Some(input::SourceContext::WebAnswerExplanation)
@@ -5744,6 +5784,13 @@ impl Engine {
                                 && context.evidence.is_empty() =>
                         {
                             Some(input::SourceContext::PastedTextReplacementExplanation)
+                        }
+                        Intent::ConvertPreviousJsonTableToCsv
+                            if source.meaning.parser_version
+                                == input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION
+                                && context.guarantee == Guarantee::Computed =>
+                        {
+                            Some(input::SourceContext::PreviousJsonTableConversionExplanation)
                         }
                         Intent::Retrieve { .. }
                             if context.guarantee == Guarantee::SourceReport
@@ -5786,11 +5833,17 @@ impl Engine {
                     )?
                     .and_then(|(_, source)| match context.guarantee {
                         Guarantee::SourceReport
-                            if matches!(source.meaning.intent, Intent::ExplainPrevious)
-                                && source.meaning.parser_version
-                                    == input::WEB_ANSWER_EXPLANATION_PARSER_VERSION =>
+                            if matches!(source.meaning.intent, Intent::ExplainPrevious) =>
                         {
-                            Some(input::SourceContext::WebAnswerExplanation)
+                            match source.meaning.parser_version.as_str() {
+                                input::WEB_ANSWER_EXPLANATION_PARSER_VERSION => {
+                                    Some(input::SourceContext::WebAnswerExplanation)
+                                }
+                                input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION => {
+                                    Some(input::SourceContext::ExplainedDirectSource)
+                                }
+                                _ => None,
+                            }
                         }
                         Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
                             Some(input::SourceContext::WebBodyQuestion)
@@ -5826,8 +5879,11 @@ impl Engine {
                 );
             }
             if input::uses_implicit_source_context(&bundle.meaning.parser_version)
-                || bundle.meaning.parser_version
-                    == input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                || matches!(
+                    bundle.meaning.parser_version.as_str(),
+                    input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                )
             {
                 // Preserve the derived result itself before resolving its source.
                 return Ok(bundle);
@@ -6127,8 +6183,7 @@ impl Engine {
                     Some(prior) => {
                         match crate::document::previous_document_explanation(
                             &self.store,
-                            actor,
-                            &request.case_id,
+                            &state,
                             prior,
                             &request.budget,
                             &bundle.meaning.parser_version,
@@ -7049,14 +7104,19 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
                 sequence_result = Some(observed);
             }
-            Intent::CorrectCalculation { .. } => {
+            Intent::CorrectCalculation { .. } | Intent::ConvertPreviousLength { .. } => {
+                let correcting = matches!(goal.intent, Intent::CorrectCalculation { .. });
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
                 else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "MISSING_ACTUAL_RESULT",
-                        "訂正対象となる実際の計算結果がありません。",
+                        if correcting {
+                            "訂正対象となる実際の計算結果がありません。"
+                        } else {
+                            "換算対象となる実際の計算結果がありません。"
+                        },
                     );
                 };
                 if prior.calculation.is_none() {
@@ -7067,7 +7127,7 @@ impl Engine {
                         "直前の採用済み成果に計算式がありません。",
                     );
                 }
-                match corrected_calculation_from_context(
+                match calculation_from_context(
                     &self.store,
                     &bundle,
                     prior,
@@ -7080,7 +7140,11 @@ impl Engine {
                         result.calculation = Some(calculation);
                         result.guarantee = Guarantee::Computed;
                         report_goal_content = Some(ReportGoalContent {
-                            predicate: CALCULATION_CORRECTION_PREDICATE,
+                            predicate: if correcting {
+                                CALCULATION_CORRECTION_PREDICATE
+                            } else {
+                                PREVIOUS_LENGTH_CONVERSION_PREDICATE
+                            },
                             guarantee: Guarantee::Computed,
                             dependencies: result.dependencies.clone(),
                             units: units.clone(),
@@ -7093,7 +7157,11 @@ impl Engine {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
-                            "CORRECTION_UNSUPPORTED",
+                            if correcting {
+                                "CORRECTION_UNSUPPORTED"
+                            } else {
+                                "LENGTH_CONVERSION_UNSUPPORTED"
+                            },
                             &error.to_string(),
                         );
                     }
@@ -8206,6 +8274,7 @@ impl Engine {
                     &self.store,
                     &bundle,
                     prior,
+                    None,
                 ) {
                     Ok(explanation) => explanation,
                     Err(Error::Contract { code, message }) => {

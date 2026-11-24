@@ -16,7 +16,7 @@ const HELP: &str = "\
 /history page N    以前の結果を1ページ20件ずつ表示\n\
 /context 結果ID     現在の会話の保存済み結果を次の一発話で参照\n\
 /context off        次の参照指定を解除\n\
-/status             エンジン、提供能力、現在の会話で採用された模型の版を表示\n\
+/status             エンジン、提供能力、会話の状態と採用された模型の版を表示\n\
 /paste              複数行を入力。単独の /end 行でまとめて送信\n\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
 /output PATH        次の一発話の成果を指定先へ保存。起動時の --allow-write の範囲内\n\
@@ -210,6 +210,14 @@ fn show_status(engine: &Engine, options: &Options) -> Result<(), String> {
     );
     for capability in info.capabilities {
         eprintln!("{}: {}", capability.id, capability.scope);
+    }
+    if let (Some(revision), Some(lifecycle)) = (status.case_revision, status.case_lifecycle) {
+        eprintln!(
+            "会話 {:?} / 保存版 {revision} / 会話状態 {lifecycle:?}",
+            status.case_id
+        );
+    } else {
+        eprintln!("会話 {:?} / 保存版なし", status.case_id);
     }
     if let Some(result) = status.result {
         eprintln!("最新結果 {} ({:?})", result.id, result.lifecycle);

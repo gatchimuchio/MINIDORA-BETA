@@ -10,8 +10,8 @@ use crate::text_summary::{
     EXTRACTIVE_SUMMARY_LABEL, ExtractiveSummaryCandidates, direct_summary_candidates,
 };
 use minidora_domain::{
-    Guarantee, InputBundle, Intent, Lifecycle, ResourceBudget, Result, ResultRecord, SourceSpan,
-    canonical, digest, failure, identity,
+    CaseRevision, Guarantee, InputBundle, Intent, Lifecycle, ResourceBudget, Result, ResultRecord,
+    SourceSpan, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -306,8 +306,7 @@ enum CsvTableOperation<'a> {
 /// before explaining its exact result and source ranges.
 pub(crate) fn previous_document_explanation(
     store: &crate::store::Store,
-    actor: &str,
-    case: &str,
+    state: &CaseRevision,
     previous: &ResultRecord,
     budget: &ResourceBudget,
     explanation_parser_version: &str,
@@ -315,6 +314,19 @@ pub(crate) fn previous_document_explanation(
 ) -> Result<Option<PriorDocumentExplanation>> {
     if previous.lifecycle != Lifecycle::Commit {
         return Ok(None);
+    }
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    if explanation_parser_version
+        == crate::input::PREVIOUS_JSON_TABLE_CONVERSION_EXPLANATION_PARSER_VERSION
+    {
+        return previous_json_table_conversion_explanation(
+            store,
+            state,
+            previous,
+            budget.max_evidence_bytes,
+        )
+        .map(Some);
     }
     if explanation_parser_version
         == crate::input::PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION
@@ -762,6 +774,83 @@ pub(crate) fn previous_document_explanation(
         report_ref,
         lines,
     }))
+}
+
+fn previous_json_table_conversion_explanation(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+    max_evidence_bytes: usize,
+) -> Result<PriorDocumentExplanation> {
+    const CODE: &str = "PREVIOUS_JSON_TABLE_EXPLANATION_CONTEXT_INVALID";
+    let invalid = || failure(CODE, "元のCSV、保存JSON、変換後CSVの対応を照合できません。");
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    let (bundle_ref, bundle) = store
+        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        .ok_or_else(invalid)?;
+    if previous.guarantee != Guarantee::Computed
+        || !previous.evidence.is_empty()
+        || previous.calculation.is_some()
+        || previous.id != identity(&bundle.request)?
+    {
+        return Err(invalid());
+    }
+    let original = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|reference| state.prior_results.get(reference))
+        .ok_or_else(invalid)?;
+    let conversion = previous_json_table_to_csv(store, &bundle, original)?;
+    let report_bytes = canonical(&conversion.report)?;
+    let report_ref = digest(&report_bytes);
+    if previous.dependencies != conversion.dependencies(report_ref.clone())
+        || previous.text != conversion.report.text
+        || store
+            .get_bytes_if_present(actor, case, &report_ref)?
+            .as_deref()
+            != Some(report_bytes.as_slice())
+    {
+        return Err(invalid());
+    }
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(&report_ref),
+        CODE,
+        "retained JSON-table to CSV conversion",
+    )?;
+
+    let mut lines = vec![
+        "元CSV、保存JSON、出力CSVを封印済みの入力から再計算し、保存結果と照合しました。".into(),
+        "二つの一覧は、同じJSON Pointerと保存JSONの同じバイト範囲でつながります。".into(),
+    ];
+    lines.extend(table_conversion_lines(
+        &conversion.source_report,
+        &conversion.source_bundle_ref,
+        &conversion.source_report_ref,
+    )?);
+    lines.extend(table_conversion_lines(
+        &conversion.report,
+        &bundle_ref,
+        &report_ref,
+    )?);
+    if lines.join("\n").len() > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "CSV変換の根拠説明が依頼の証拠予算を超えています。",
+        ));
+    }
+    Ok(PriorDocumentExplanation {
+        input_node: "previous-retained-table-conversion-input",
+        report_node: "previous-retained-table-conversion-report",
+        bundle_ref,
+        report_ref,
+        lines,
+    })
 }
 
 fn previous_pasted_text_replacement_explanation(
@@ -6034,6 +6123,7 @@ pub(crate) struct PreviousJsonTableConversion {
     source_result_id: String,
     source_bundle_ref: String,
     source_report_ref: String,
+    source_report: DocumentResult,
     pub(crate) report: DocumentResult,
 }
 
@@ -6140,6 +6230,7 @@ pub(crate) fn previous_json_table_to_csv(
         source_result_id: previous.id.clone(),
         source_bundle_ref,
         source_report_ref,
+        source_report,
         report,
     })
 }

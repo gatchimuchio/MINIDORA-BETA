@@ -529,6 +529,37 @@ fn exact_rational(expression: &str) -> Result<BigRational> {
     })
 }
 
+/// Convert a canonical result in the existing exact SI length family.
+pub(crate) fn convert_exact_length(prior: &Calculation, target: &str) -> Result<Calculation> {
+    let invalid = || {
+        failure(
+            "LENGTH_UNIT_REQUIRED",
+            "換算には mm、cm、m、km の長さが必要です。",
+        )
+    };
+    let (number, unit) = prior.exact_value.rsplit_once(' ').ok_or_else(invalid)?;
+    let source_scale = crate::math::exact_length_scale_to_meters(unit).ok_or_else(invalid)?;
+    let target_scale = crate::math::exact_length_scale_to_meters(target).ok_or_else(invalid)?;
+    let value = BigRational::from_str(number).map_err(|_| invalid())?;
+    if rational_text(&value) != number {
+        return Err(invalid());
+    }
+    ExpressionParser::check(&value)?;
+    let factor = source_scale / target_scale;
+    let converted = value * &factor;
+    ExpressionParser::check(&converted)?;
+    let factor = rational_text(&factor);
+    let exact_value = format!("{} {target}", rational_text(&converted));
+    Ok(Calculation {
+        expression: format!("{} を {target} に換算", prior.exact_value),
+        steps: vec![
+            format!("1 {unit} = {factor} {target}"),
+            format!("{number} × {factor} = {exact_value}"),
+        ],
+        exact_value,
+    })
+}
+
 /// Return a new exact result after replacing one literal operand in a saved
 /// binary calculation. Unit-bearing corrections are restricted to addition
 /// and subtraction; the caller retains the prior result as a dependency.
