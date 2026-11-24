@@ -5824,6 +5824,18 @@ impl Engine {
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
                 && let Some(prior) = previous
+                && previous_named_correction_context(&self.store, actor, &request.case_id, prior)?
+                    .is_some()
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::NamedCorrectionRelationQuery),
+                );
+            }
+            if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
+                && let Some(prior) = previous
                 && previous_named_derived_relation_has_single_subject_and_multiple_premises(
                     &self.store,
                     actor,
@@ -13782,6 +13794,50 @@ pub(crate) fn resolve_previous_relation_for_bundle(
     }
     let actor = &request.actor_id;
     let case = &request.case_id;
+    if parser_version == input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION {
+        let correction =
+            previous_named_correction_context(store, actor, case, previous)?.ok_or_else(invalid)?;
+        if explicit_scope
+            .as_ref()
+            .is_some_and(|scope| scope != &correction.replacement.scope)
+        {
+            return Ok(PreviousRelationResolution::Missing);
+        }
+        *remaining_actions = remaining_actions.checked_sub(2).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "correction context verification exceeds the sealed action budget",
+            )
+        })?;
+        let (mut negative_matches, mut replacement_matches) = (0, 0);
+        for fact in &memory.facts {
+            if fact.valid
+                && fact.source_input == previous.id
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+                && fact.source_evidence.as_ref() == Some(&correction.source_evidence)
+            {
+                if fact.id == correction.negative_id && fact.proposition == correction.negative {
+                    negative_matches += 1;
+                } else if fact.id == correction.replacement_id
+                    && fact.proposition == correction.replacement
+                {
+                    replacement_matches += 1;
+                }
+            }
+        }
+        if (negative_matches, replacement_matches) != (1, 1) {
+            return Err(failure(
+                "CONTEXT_PROOF_CHANGED",
+                "参照した訂正の否定と置き換えを、現在有効な提示前提として照合できません。",
+            ));
+        }
+        return Ok(PreviousRelationResolution::Resolved(Proposition {
+            subject: correction.replacement.subject,
+            scope: correction.replacement.scope,
+            ..proposition.clone()
+        }));
+    }
     let derived_anchor = match parser_version.as_str() {
         input::NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION => Some((
             previous_named_derived_relation_source(store, actor, case, previous)?
@@ -13858,6 +13914,72 @@ fn registered_relation_context_matches(
             && prior_results.get(&previous.id) == Some(previous)
             && bundle.context_sha256 == identity(&Some(previous))?,
     )
+}
+
+struct PreviousNamedCorrectionContext {
+    negative: Proposition,
+    negative_id: String,
+    replacement: Proposition,
+    replacement_id: String,
+    source_evidence: SealedSourceEvidence,
+}
+
+fn previous_named_correction_context(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &ResultRecord,
+) -> Result<Option<PreviousNamedCorrectionContext>> {
+    if prior.lifecycle != Lifecycle::Commit || prior.guarantee != Guarantee::UserPremise {
+        return Ok(None);
+    }
+    let Some((_, bundle)) =
+        store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
+    else {
+        return Ok(None);
+    };
+    let Intent::CorrectPremise {
+        superseded,
+        replacement,
+    } = &bundle.meaning.intent
+    else {
+        return Ok(None);
+    };
+    // Only the named natural-language correction with one subject and scope.
+    // The typed API may explicitly move a premise to a different scope.
+    if bundle.meaning.parser_version != input::PARSER_VERSION {
+        return Ok(None);
+    }
+    let invalid = || {
+        failure(
+            "PRIOR_INPUT_RESULT_MISMATCH",
+            "参照した訂正と封印された入力・記憶の事実IDを照合できません。",
+        )
+    };
+    let source_evidence = input::assertion_source_evidence(&bundle)?.ok_or_else(invalid)?;
+    let negative = Proposition {
+        negative: true,
+        ..superseded.clone()
+    };
+    let negative_id = relations::user_premise_id(&negative, &prior.id)?;
+    let replacement_id = relations::user_premise_id(replacement, &prior.id)?;
+    // apply_premise_correction appends exactly these two fact IDs, after the
+    // invalidated premises, with the replacement last.
+    if source_evidence.input_fingerprint != prior.id
+        || !matches!(
+            prior.dependencies.as_slice(),
+            [_, .., neg, pos] if neg == &negative_id && pos == &replacement_id
+        )
+    {
+        return Err(invalid());
+    }
+    Ok(Some(PreviousNamedCorrectionContext {
+        negative,
+        negative_id,
+        replacement: replacement.clone(),
+        replacement_id,
+        source_evidence,
+    }))
 }
 
 fn previous_named_derived_relation_source(

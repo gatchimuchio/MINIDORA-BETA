@@ -18,6 +18,8 @@ pub(crate) const NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v187-named-derived-relation-query";
 pub(crate) const DERIVED_RELATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v191-derived-relation-followup";
+pub(crate) const NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
+    "declarative-ja-v195-named-correction-relation-query";
 pub(crate) const PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v193-previous-document-text-replacement";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
@@ -235,6 +237,7 @@ pub(crate) enum SourceContext {
     WebBodyQuestion,
     PartialWebCandidate,
     ContextualAssertionRelationQuery,
+    NamedCorrectionRelationQuery,
     NamedDerivedRelationQuery,
     DerivedRelationFollowup,
     Summary,
@@ -244,6 +247,7 @@ pub(crate) fn is_registered_previous_relation_query(parser_version: &str) -> boo
     matches!(
         parser_version,
         CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+            | NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
             | NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
             | DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
     )
@@ -627,6 +631,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::WebBodyQuestion
         | SourceContext::PartialWebCandidate
         | SourceContext::ContextualAssertionRelationQuery
+        | SourceContext::NamedCorrectionRelationQuery
         | SourceContext::NamedDerivedRelationQuery
         | SourceContext::DerivedRelationFollowup => None,
     });
@@ -679,6 +684,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+        }
+        Intent::AskPreviousRelation { .. }
+            if matches!(
+                source_context,
+                Some(SourceContext::NamedCorrectionRelationQuery)
+            ) =>
+        {
+            NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
         }
         Intent::AskPreviousRelation { .. }
             if matches!(

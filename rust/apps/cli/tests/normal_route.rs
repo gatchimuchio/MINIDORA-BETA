@@ -10785,6 +10785,61 @@ fn repeated_pronoun_questions_reuse_the_committed_multi_premise_subject() {
 }
 
 #[test]
+fn pronoun_questions_reuse_active_premise_correction_across_processes() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| execute_in_case(&scratch.0, "owner", "corrected-pronoun", args);
+    record(&run(&["[scope=物語]ミナは鳥です"]));
+    let correction = record(&run(&["[scope=物語]訂正: ミナは鳥ではなく魚です"]));
+    let correction_id = correction["id"].as_str().unwrap();
+    let replacement_id = correction["dependencies"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+
+    let implicit_request = ["--input", "query-after-correction", "それは魚ですか"];
+    let implicit = record(&run(&implicit_request));
+    assert_eq!(implicit["guarantee"], "USER_PREMISE");
+    assert!(
+        implicit["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは魚である（範囲: 物語）")
+    );
+    assert!(
+        implicit["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(replacement_id)
+    );
+
+    record(&run(&["1+1"]));
+    let explicit_request = ["--context", correction_id, "それは魚ですか"];
+    let explicit = record(&run(&explicit_request));
+    assert_eq!(explicit["text"], implicit["text"]);
+    assert_eq!(explicit["dependencies"], implicit["dependencies"]);
+
+    record(&run(&["[scope=物語]訂正: ミナは魚ではなく猫です"]));
+    let expired = stopped(&run(&explicit_request), 2, "SUSPEND");
+    assert!(
+        expired["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONTEXT_PROOF_CHANGED:")
+    );
+    assert_eq!(expired["guarantee"], "UNKNOWN");
+    assert_eq!(record(&run(&implicit_request)), implicit);
+
+    let current = record(&run(&["[scope=物語]ミナは魚ですか"]));
+    assert!(
+        current["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは魚ではない（範囲: 物語）")
+    );
+}
+
+#[test]
 fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context() {
     let scratch = Scratch::new();
     let rule = record(&execute(
