@@ -1,6 +1,7 @@
-//! Source-preserving explicit document operations. CSV uses RFC 4180 record and
-//! quote framing in a UTF-8 projection; no numeric inference or spreadsheet
-//! evaluation occurs. Editing applies only literal nonoverlapping replacements.
+//! Source-preserving explicit document operations. Public CSV parsers use
+//! RFC 4180 record and quote framing in a UTF-8 projection. Conversation input
+//! also admits LF record framing and retains those bytes exactly. No implicit
+//! numeric inference or spreadsheet evaluation occurs.
 use crate::ports::{JsonKind, JsonNode, json_node_at_pointer, strict_json_document};
 use crate::text_editing::{
     EditedText, LocatedTextEdit, edit_explicit_text, locate_explicit_replacement,
@@ -37,6 +38,71 @@ pub struct CsvTable {
     pub header: Option<Vec<CsvCell>>,
     pub rows: Vec<Vec<CsvCell>>,
 }
+
+/// A borrowed source with an explicit input-framing policy. Both modes retain
+/// the original document bytes and UTF-8 offsets.
+#[derive(Clone, Copy)]
+pub(crate) struct CsvInput<'a> {
+    document: &'a str,
+    allow_lf: bool,
+}
+
+impl<'a> CsvInput<'a> {
+    fn strict(document: &'a str) -> Self {
+        Self {
+            document,
+            allow_lf: false,
+        }
+    }
+
+    pub(crate) fn conversation(document: &'a str) -> Self {
+        Self {
+            document,
+            allow_lf: true,
+        }
+    }
+
+    pub(crate) fn select(self, column: &str) -> Result<DocumentResult> {
+        csv_select_input(self, column)
+    }
+
+    pub(crate) fn select_index(self, index: usize, has_header: bool) -> Result<DocumentResult> {
+        select(parse_csv_input(self, has_header)?, index, None)
+    }
+
+    pub(crate) fn statistics(self, column: &str) -> Result<DocumentResult> {
+        csv_statistics_input(self, column)
+    }
+
+    pub(crate) fn to_json(self, has_header: bool) -> Result<DocumentResult> {
+        csv_to_json_input(self, has_header)
+    }
+
+    pub(crate) fn filter(self, column: &str, equals: &str) -> Result<DocumentResult> {
+        csv_filter_input(self, column, equals)
+    }
+
+    pub(crate) fn sort(self, column: &str, descending: bool) -> Result<DocumentResult> {
+        csv_sort_input(self, column, descending)
+    }
+
+    pub(crate) fn group_count(self, column: &str) -> Result<DocumentResult> {
+        csv_group_count_input(self, column)
+    }
+
+    pub(crate) fn group_statistics(self, group: &str, value: &str) -> Result<DocumentResult> {
+        csv_group_statistics_input(self, group, value)
+    }
+
+    pub(crate) fn compare_by(self, key: &str) -> Result<DocumentResult> {
+        csv_compare_by_input(self, key)
+    }
+
+    pub(crate) fn inner_join(self, left_key: &str, right_key: &str) -> Result<DocumentResult> {
+        csv_inner_join_input(self, left_key, right_key)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentSpan {
     pub kind: String,
@@ -106,7 +172,7 @@ pub(crate) fn previous_csv_statistics_explanation(
                 "The retained statistics report has no selected column",
             )
         })?;
-        let recomputed = csv_statistics(&report.source_document, column)?;
+        let recomputed = CsvInput::conversation(&report.source_document).statistics(column)?;
         if previous.dependencies != [dependency.clone()]
             || previous.text != report.text
             || report.source_sha256 != digest(report.source_document.as_bytes())
@@ -528,22 +594,17 @@ pub(crate) fn previous_document_explanation(
         ));
     }
 
+    let csv = CsvInput::conversation(document);
     let recomputed = match operation {
-        CsvTableOperation::Compare(key_column) => csv_compare_by(document, key_column)?,
-        CsvTableOperation::Join(left_key, right_key) => {
-            csv_inner_join(document, left_key, right_key)?
-        }
-        CsvTableOperation::Filter(column, equals) => csv_filter(document, column, equals)?,
-        CsvTableOperation::Sort(column, descending) => csv_sort(document, column, descending)?,
-        CsvTableOperation::GroupCount(column) => csv_group_count(document, column)?,
-        CsvTableOperation::GroupStatistics(group, value) => {
-            csv_group_statistics(document, group, value)?
-        }
-        CsvTableOperation::Select(column) => csv_select(document, column)?,
-        CsvTableOperation::SelectIndex(index, has_header) => {
-            csv_select_index(document, index, has_header)?
-        }
-        CsvTableOperation::CsvToJson(has_header) => csv_to_json(document, has_header)?,
+        CsvTableOperation::Compare(key_column) => csv.compare_by(key_column)?,
+        CsvTableOperation::Join(left_key, right_key) => csv.inner_join(left_key, right_key)?,
+        CsvTableOperation::Filter(column, equals) => csv.filter(column, equals)?,
+        CsvTableOperation::Sort(column, descending) => csv.sort(column, descending)?,
+        CsvTableOperation::GroupCount(column) => csv.group_count(column)?,
+        CsvTableOperation::GroupStatistics(group, value) => csv.group_statistics(group, value)?,
+        CsvTableOperation::Select(column) => csv.select(column)?,
+        CsvTableOperation::SelectIndex(index, has_header) => csv.select_index(index, has_header)?,
+        CsvTableOperation::CsvToJson(has_header) => csv.to_json(has_header)?,
         CsvTableOperation::JsonToCsv => json_to_csv(document)?,
     };
     let parameter = |key| recomputed.parameters.get(key).map(String::as_str);
@@ -1836,7 +1897,7 @@ fn table_conversion_span(
         (source, output)
     };
     let mut csv_end = 0;
-    let csv_value = cell(csv, &mut csv_end).map_err(|_| invalid())?;
+    let csv_value = cell(CsvInput::strict(csv), &mut csv_end).map_err(|_| invalid())?;
     if source != span.source_text
         || csv_end != csv.len()
         || csv_value.value != decoded
@@ -4041,8 +4102,8 @@ fn input_byte(bytes: &[u8], at: usize) -> Option<u8> {
 fn csv_character(byte: u8) -> bool {
     byte >= 32 && byte != 127
 }
-fn cell(document: &str, at: &mut usize) -> Result<CsvCell> {
-    let bytes = document.as_bytes();
+fn cell(input: CsvInput<'_>, at: &mut usize) -> Result<CsvCell> {
+    let bytes = input.document.as_bytes();
     let start = *at;
     let mut value = Vec::new();
     if input_byte(bytes, *at) == Some(b'"') {
@@ -4071,10 +4132,17 @@ fn cell(document: &str, at: &mut usize) -> Result<CsvCell> {
                 }
             }
         }
-        if !matches!(input_byte(bytes, *at), None | Some(b',' | b'\r')) {
+        let suffix = input_byte(bytes, *at);
+        if !matches!(suffix, None | Some(b',' | b'\r'))
+            && !(input.allow_lf && suffix == Some(b'\n'))
+        {
             return Err(failure(
                 "CSV_QUOTES",
-                "only a comma, CRLF or EOF may follow a closing quote",
+                if input.allow_lf {
+                    "only a comma, record separator or EOF may follow a closing quote"
+                } else {
+                    "only a comma, CRLF or EOF may follow a closing quote"
+                },
             ));
         }
     } else {
@@ -4130,6 +4198,11 @@ fn validate_table(header: Option<&[CsvCell]>, rows: &[Vec<CsvCell>]) -> Result<(
 /// Parse all CSV bytes; CRLF separates records, and quote escapes/embedded line
 /// breaks retain exact source offsets. Header presence is explicit, never guessed.
 pub fn parse_csv(document: &str, has_header: bool) -> Result<CsvTable> {
+    parse_csv_input(CsvInput::strict(document), has_header)
+}
+
+fn parse_csv_input(input: CsvInput<'_>, has_header: bool) -> Result<CsvTable> {
+    let document = input.document;
     admission(document)?;
     let bytes = document.as_bytes();
     let mut at = 0usize;
@@ -4138,7 +4211,7 @@ pub fn parse_csv(document: &str, has_header: bool) -> Result<CsvTable> {
     loop {
         let mut row = Vec::new();
         loop {
-            row.push(cell(document, &mut at)?);
+            row.push(cell(input, &mut at)?);
             cells += 1;
             if row.len() > MAX_COLUMNS || cells > MAX_CELLS {
                 return Err(failure(
@@ -4155,6 +4228,10 @@ pub fn parse_csv(document: &str, has_header: bool) -> Result<CsvTable> {
                         return Err(failure("CSV_LINE_ENDING", "record separator must be CRLF"));
                     }
                     at += 2;
+                    break;
+                }
+                Some(b'\n') if input.allow_lf => {
+                    at += 1;
                     break;
                 }
                 Some(b'\n') => {
@@ -4289,7 +4366,11 @@ fn select(table: CsvTable, index: usize, column_name: Option<&str>) -> Result<Do
 /// Select an exact decoded named header. A numeric name is still a name; use
 /// csv_select_index for an explicit headerless/indexed selection.
 pub fn csv_select(document: &str, column: &str) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
+    CsvInput::strict(document).select(column)
+}
+
+fn csv_select_input(input: CsvInput<'_>, column: &str) -> Result<DocumentResult> {
+    let table = parse_csv_input(input, true)?;
     let index = table
         .header
         .as_ref()
@@ -4305,7 +4386,12 @@ pub fn csv_select(document: &str, column: &str) -> Result<DocumentResult> {
 /// decimal literal plus a unit in every row; mixed/ambiguous interpretation
 /// stops before producing a result.
 pub fn csv_statistics(document: &str, column: &str) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
+    CsvInput::strict(document).statistics(column)
+}
+
+fn csv_statistics_input(input: CsvInput<'_>, column: &str) -> Result<DocumentResult> {
+    let document = input.document;
+    let table = parse_csv_input(input, true)?;
     let header = table.header.as_ref().expect("explicit CSV header");
     let index = header
         .iter()
@@ -4387,13 +4473,18 @@ pub fn csv_statistics(document: &str, column: &str) -> Result<DocumentResult> {
 }
 
 pub fn csv_select_index(document: &str, index: usize, has_header: bool) -> Result<DocumentResult> {
-    select(parse_csv(document, has_header)?, index, None)
+    CsvInput::strict(document).select_index(index, has_header)
 }
 
 /// Export an explicitly string-typed table JSON. Numeric-looking cells remain
 /// JSON strings, including leading zeros, exponent spelling and huge integers.
 pub fn csv_to_json(document: &str, has_header: bool) -> Result<DocumentResult> {
-    let table = parse_csv(document, has_header)?;
+    CsvInput::strict(document).to_json(has_header)
+}
+
+fn csv_to_json_input(input: CsvInput<'_>, has_header: bool) -> Result<DocumentResult> {
+    let document = input.document;
+    let table = parse_csv_input(input, has_header)?;
     let mut text = String::from("{\"columns\":");
     let mut spans = Vec::new();
     if let Some(header) = &table.header {
@@ -4507,7 +4598,12 @@ fn named_rows_as_json(
 /// retains its original source byte range. Predicate spans also include
 /// rejected rows so the exact filter decision remains inspectable.
 pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
+    CsvInput::strict(document).filter(column, equals)
+}
+
+fn csv_filter_input(input: CsvInput<'_>, column: &str, equals: &str) -> Result<DocumentResult> {
+    let document = input.document;
+    let table = parse_csv_input(input, true)?;
     let header = table.header.as_ref().expect("explicit CSV header");
     let column_index = header
         .iter()
@@ -4549,7 +4645,12 @@ pub fn csv_filter(document: &str, column: &str, equals: &str) -> Result<Document
 /// Stably sort a named CSV column by exact decoded string order, without
 /// locale collation, case folding or numeric interpretation.
 pub fn csv_sort(document: &str, column: &str, descending: bool) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
+    CsvInput::strict(document).sort(column, descending)
+}
+
+fn csv_sort_input(input: CsvInput<'_>, column: &str, descending: bool) -> Result<DocumentResult> {
+    let document = input.document;
+    let table = parse_csv_input(input, true)?;
     let header = table.header.as_ref().expect("explicit CSV header");
     let column_index = header
         .iter()
@@ -4591,7 +4692,12 @@ pub fn csv_sort(document: &str, column: &str, descending: bool) -> Result<Docume
 /// Count exact decoded string values in one named CSV column. Groups retain
 /// first-seen order, while every member cell remains in the source map.
 pub fn csv_group_count(document: &str, column: &str) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
+    CsvInput::strict(document).group_count(column)
+}
+
+fn csv_group_count_input(input: CsvInput<'_>, column: &str) -> Result<DocumentResult> {
+    let document = input.document;
+    let table = parse_csv_input(input, true)?;
     let header = table.header.as_ref().expect("explicit CSV header");
     let column_index = header
         .iter()
@@ -4678,7 +4784,16 @@ pub fn csv_group_statistics(
     group_column: &str,
     value_column: &str,
 ) -> Result<DocumentResult> {
-    let table = parse_csv(document, true)?;
+    CsvInput::strict(document).group_statistics(group_column, value_column)
+}
+
+fn csv_group_statistics_input(
+    input: CsvInput<'_>,
+    group_column: &str,
+    value_column: &str,
+) -> Result<DocumentResult> {
+    let document = input.document;
+    let table = parse_csv_input(input, true)?;
     if table.rows.is_empty() {
         return Err(failure(
             "CSV_GROUP_STATISTICS_EMPTY",
@@ -4830,48 +4945,89 @@ pub fn csv_group_statistics(
     )
 }
 
-/// Compare two explicitly supplied, headered CSV tables by an exact unique
-/// string key. The input body uses reserved marker lines to keep both original
-/// tables in one source document:
-/// `--- MINIDORA LEFT CSV ---\n<left CSV>\r\n--- MINIDORA RIGHT CSV ---\n<right CSV>`.
-/// Marker text is reserved and must not occur inside either CSV payload.
-pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult> {
+fn csv_pair_tables(input: CsvInput<'_>, delimiter_error: &str) -> Result<(CsvTable, CsvTable)> {
+    const LEFT_LABEL: &str = "--- MINIDORA LEFT CSV ---";
+    const RIGHT_LABEL: &str = "--- MINIDORA RIGHT CSV ---";
     const LEFT_MARKER: &str = "--- MINIDORA LEFT CSV ---\n";
     const RIGHT_DELIMITER: &str = "\r\n--- MINIDORA RIGHT CSV ---\n";
-    admission(document)?;
-    if key_column.is_empty() {
-        return Err(failure("CSV_COLUMN", "key column name must not be empty"));
-    }
-    if !document.starts_with(LEFT_MARKER)
-        || document.matches(LEFT_MARKER).count() != 1
-        || document.matches(RIGHT_DELIMITER).count() != 1
-    {
-        return Err(failure(
-            "CSV_COMPARE_DELIMITER",
-            "expected one left marker and one CRLF-prefixed right marker; marker text is reserved",
-        ));
-    }
-    let left_start = LEFT_MARKER.len();
-    let delimiter_start = document
-        .find(RIGHT_DELIMITER)
-        .ok_or_else(|| failure("CSV_COMPARE_DELIMITER", "right marker is missing"))?;
-    let right_start = delimiter_start + RIGHT_DELIMITER.len();
-    let left_source = &document[left_start..delimiter_start];
+    const RIGHT_LINE: &str = "\n--- MINIDORA RIGHT CSV ---";
+    let document = input.document;
+    let invalid_markers = || {
+        failure(
+            delimiter_error,
+            if input.allow_lf {
+                "expected one left marker and one right marker on LF or CRLF lines; marker text is reserved"
+            } else {
+                "expected one left marker and one CRLF-prefixed right marker; marker text is reserved"
+            },
+        )
+    };
+    let (left_start, delimiter_start, right_start) = if input.allow_lf {
+        let after_marker = |rest: &str| -> Result<usize> {
+            if rest.starts_with("\r\n") {
+                Ok(2)
+            } else if rest.starts_with('\n') {
+                Ok(1)
+            } else {
+                Err(invalid_markers())
+            }
+        };
+        let left_start = LEFT_LABEL.len()
+            + after_marker(
+                document
+                    .strip_prefix(LEFT_LABEL)
+                    .ok_or_else(invalid_markers)?,
+            )?;
+        let marker = document.find(RIGHT_LINE).ok_or_else(invalid_markers)?;
+        let right_marker_end = marker + RIGHT_LINE.len();
+        let right_start = right_marker_end + after_marker(&document[right_marker_end..])?;
+        let delimiter_start = marker - usize::from(document[..marker].ends_with('\r'));
+        (left_start, delimiter_start, right_start)
+    } else {
+        if !document.starts_with(LEFT_MARKER)
+            || document.matches(LEFT_MARKER).count() != 1
+            || document.matches(RIGHT_DELIMITER).count() != 1
+        {
+            return Err(invalid_markers());
+        }
+        let delimiter_start = document
+            .find(RIGHT_DELIMITER)
+            .ok_or_else(|| failure(delimiter_error, "right marker is missing"))?;
+        (
+            LEFT_MARKER.len(),
+            delimiter_start,
+            delimiter_start + RIGHT_DELIMITER.len(),
+        )
+    };
+    let left_source = document
+        .get(left_start..delimiter_start)
+        .ok_or_else(invalid_markers)?;
     let right_source = &document[right_start..];
-    if left_source.contains("--- MINIDORA LEFT CSV ---")
-        || left_source.contains("--- MINIDORA RIGHT CSV ---")
-        || right_source.contains("--- MINIDORA RIGHT CSV ---")
-        || right_source.contains("--- MINIDORA LEFT CSV ---")
+    if [left_source, right_source]
+        .iter()
+        .any(|source| source.contains(LEFT_LABEL) || source.contains(RIGHT_LABEL))
     {
         return Err(failure(
-            "CSV_COMPARE_DELIMITER",
+            delimiter_error,
             "reserved comparison marker text occurs more than once",
         ));
     }
 
-    let mut left = parse_csv(left_source, true)?;
-    let mut right = parse_csv(right_source, true)?;
-    let shift_table = |table: &mut CsvTable, offset: usize| {
+    let mut left = parse_csv_input(
+        CsvInput {
+            document: left_source,
+            ..input
+        },
+        true,
+    )?;
+    let mut right = parse_csv_input(
+        CsvInput {
+            document: right_source,
+            ..input
+        },
+        true,
+    )?;
+    for (table, offset) in [(&mut left, left_start), (&mut right, right_start)] {
         for cell in table
             .header
             .iter_mut()
@@ -4883,9 +5039,26 @@ pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult
         }
         table.source_document = document.into();
         table.source_sha256 = digest(document.as_bytes());
-    };
-    shift_table(&mut left, left_start);
-    shift_table(&mut right, right_start);
+    }
+    Ok((left, right))
+}
+
+/// Compare two explicitly supplied, headered CSV tables by an exact unique
+/// string key. The input body uses reserved marker lines to keep both original
+/// tables in one source document:
+/// `--- MINIDORA LEFT CSV ---\n<left CSV>\r\n--- MINIDORA RIGHT CSV ---\n<right CSV>`.
+/// Marker text is reserved and must not occur inside either CSV payload.
+pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult> {
+    CsvInput::strict(document).compare_by(key_column)
+}
+
+fn csv_compare_by_input(input: CsvInput<'_>, key_column: &str) -> Result<DocumentResult> {
+    let document = input.document;
+    admission(document)?;
+    if key_column.is_empty() {
+        return Err(failure("CSV_COLUMN", "key column name must not be empty"));
+    }
+    let (left, right) = csv_pair_tables(input, "CSV_COMPARE_DELIMITER")?;
 
     let left_header = left.header.as_deref().expect("header parsing is explicit");
     let right_header = right.header.as_deref().expect("header parsing is explicit");
@@ -5140,8 +5313,15 @@ pub fn csv_inner_join(
     left_key_column: &str,
     right_key_column: &str,
 ) -> Result<DocumentResult> {
-    const LEFT_MARKER: &str = "--- MINIDORA LEFT CSV ---\n";
-    const RIGHT_DELIMITER: &str = "\r\n--- MINIDORA RIGHT CSV ---\n";
+    CsvInput::strict(document).inner_join(left_key_column, right_key_column)
+}
+
+fn csv_inner_join_input(
+    input: CsvInput<'_>,
+    left_key_column: &str,
+    right_key_column: &str,
+) -> Result<DocumentResult> {
+    let document = input.document;
     admission(document)?;
     if left_key_column.is_empty() || right_key_column.is_empty() {
         return Err(failure(
@@ -5149,50 +5329,7 @@ pub fn csv_inner_join(
             "both named key columns must not be empty",
         ));
     }
-    if !document.starts_with(LEFT_MARKER)
-        || document.matches(LEFT_MARKER).count() != 1
-        || document.matches(RIGHT_DELIMITER).count() != 1
-    {
-        return Err(failure(
-            "CSV_INNER_JOIN_DELIMITER",
-            "expected one left marker and one CRLF-prefixed right marker; marker text is reserved",
-        ));
-    }
-    let left_start = LEFT_MARKER.len();
-    let delimiter_start = document
-        .find(RIGHT_DELIMITER)
-        .ok_or_else(|| failure("CSV_INNER_JOIN_DELIMITER", "right marker is missing"))?;
-    let right_start = delimiter_start + RIGHT_DELIMITER.len();
-    let left_source = &document[left_start..delimiter_start];
-    let right_source = &document[right_start..];
-    if left_source.contains("--- MINIDORA LEFT CSV ---")
-        || left_source.contains("--- MINIDORA RIGHT CSV ---")
-        || right_source.contains("--- MINIDORA RIGHT CSV ---")
-        || right_source.contains("--- MINIDORA LEFT CSV ---")
-    {
-        return Err(failure(
-            "CSV_INNER_JOIN_DELIMITER",
-            "reserved comparison marker text occurs more than once",
-        ));
-    }
-
-    let mut left = parse_csv(left_source, true)?;
-    let mut right = parse_csv(right_source, true)?;
-    let shift_table = |table: &mut CsvTable, offset: usize| {
-        for cell in table
-            .header
-            .iter_mut()
-            .flatten()
-            .chain(table.rows.iter_mut().flatten())
-        {
-            cell.source_start += offset;
-            cell.source_end += offset;
-        }
-        table.source_document = document.into();
-        table.source_sha256 = digest(document.as_bytes());
-    };
-    shift_table(&mut left, left_start);
-    shift_table(&mut right, right_start);
+    let (left, right) = csv_pair_tables(input, "CSV_INNER_JOIN_DELIMITER")?;
     let left_header = left.header.as_deref().expect("header parsing is explicit");
     let right_header = right.header.as_deref().expect("header parsing is explicit");
     let left_key_index = left_header

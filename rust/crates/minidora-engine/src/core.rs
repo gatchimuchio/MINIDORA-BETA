@@ -1,5 +1,6 @@
 use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
 use crate::{
+    document::CsvInput,
     input, language, output, ports,
     recovery::PREVIOUS_DIRECT_RETRIEVAL_NODE,
     relations, search,
@@ -7082,7 +7083,7 @@ impl Engine {
                 }
             },
             Intent::CsvSelect { document, column } => {
-                let value = crate::document::csv_select(document, column)?;
+                let value = CsvInput::conversation(document).select(column)?;
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
                 result.dependencies.push(artifact);
                 units.push(value.text);
@@ -7093,22 +7094,18 @@ impl Engine {
                 column_index,
                 has_header,
             } => {
-                let value =
-                    match crate::document::csv_select_index(document, *column_index, *has_header) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            let code = match &error {
-                                Error::Contract { code, .. } => code.as_str(),
-                                _ => "CSV_SELECT_UNSUPPORTED",
-                            };
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                code,
-                                &error.to_string(),
-                            );
-                        }
-                    };
+                let value = match CsvInput::conversation(document)
+                    .select_index(*column_index, *has_header)
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let code = match &error {
+                            Error::Contract { code, .. } => code.as_str(),
+                            _ => "CSV_SELECT_UNSUPPORTED",
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
+                    }
+                };
                 if value.text.len() > request.budget.max_evidence_bytes {
                     return self.stop(
                         &mut state,
@@ -7127,7 +7124,7 @@ impl Engine {
                 column,
                 equals,
             } => {
-                let value = match crate::document::csv_filter(document, column, equals) {
+                let value = match CsvInput::conversation(document).filter(column, equals) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7147,7 +7144,7 @@ impl Engine {
                 column,
                 descending,
             } => {
-                let value = match crate::document::csv_sort(document, column, *descending) {
+                let value = match CsvInput::conversation(document).sort(column, *descending) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7163,7 +7160,7 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
             }
             Intent::CsvGroupCount { document, column } => {
-                let value = match crate::document::csv_group_count(document, column) {
+                let value = match CsvInput::conversation(document).group_count(column) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7183,11 +7180,9 @@ impl Engine {
                 group_column,
                 value_column,
             } => {
-                let value = match crate::document::csv_group_statistics(
-                    document,
-                    group_column,
-                    value_column,
-                ) {
+                let value = match CsvInput::conversation(document)
+                    .group_statistics(group_column, value_column)
+                {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7206,7 +7201,7 @@ impl Engine {
                 document,
                 key_column,
             } => {
-                let value = match crate::document::csv_compare_by(document, key_column) {
+                let value = match CsvInput::conversation(document).compare_by(key_column) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7226,11 +7221,9 @@ impl Engine {
                 left_key_column,
                 right_key_column,
             } => {
-                let value = match crate::document::csv_inner_join(
-                    document,
-                    left_key_column,
-                    right_key_column,
-                ) {
+                let value = match CsvInput::conversation(document)
+                    .inner_join(left_key_column, right_key_column)
+                {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7249,7 +7242,7 @@ impl Engine {
                 document,
                 has_header,
             } => {
-                let value = match crate::document::csv_to_json(document, *has_header) {
+                let value = match CsvInput::conversation(document).to_json(*has_header) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -7281,7 +7274,7 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
             }
             Intent::CsvStatistics { document, column } => {
-                let value = match crate::document::csv_statistics(document, column) {
+                let value = match CsvInput::conversation(document).statistics(column) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
