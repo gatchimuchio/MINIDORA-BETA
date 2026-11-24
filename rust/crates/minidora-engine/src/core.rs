@@ -5802,6 +5802,22 @@ impl Engine {
                 );
             }
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
+                && let Some(prior) = previous
+                && previous_named_derived_relation_has_single_subject_and_multiple_premises(
+                    &self.store,
+                    actor,
+                    &request.case_id,
+                    prior,
+                )?
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::NamedDerivedRelationQuery),
+                );
+            }
+            if has_compute_budget
                 && matches!(
                     bundle.meaning.intent,
                     Intent::FetchPreviousSearchCandidate { .. }
@@ -6992,11 +7008,10 @@ impl Engine {
                 &prior.input_id,
                 prior.input_version,
             )?
-            && prior_bundle.meaning.parser_version
-                == input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+            && input::is_registered_previous_relation_query(&prior_bundle.meaning.parser_version)
         {
             let memory = self.store.load_memory(actor)?;
-            match crate::recovery::verify_current_contextual_assertion_relation_result(
+            match crate::recovery::verify_current_registered_previous_relation_result(
                 &self.store,
                 &state,
                 prior,
@@ -10599,18 +10614,27 @@ impl Engine {
                 }
 
                 let query =
-                    if bundle.meaning.parser_version
-                        == input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+                    if input::is_registered_previous_relation_query(&bundle.meaning.parser_version)
                     {
                         let memory = self.store.load_memory(actor)?;
+                        let mut remaining_actions = request.budget.max_actions;
                         let resolution = match resolve_previous_relation_for_bundle(
                             &self.store,
                             &bundle,
                             &state.prior_results,
                             prior,
                             &memory,
+                            &mut remaining_actions,
                         ) {
                             Ok(resolution) => resolution,
+                            Err(Error::Contract { code, message }) if code == "RELATION_BUDGET" => {
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    "RESOURCE_LIMIT",
+                                    &message,
+                                );
+                            }
                             Err(Error::Contract { code, message })
                                 if matches!(
                                     code.as_str(),
@@ -10621,11 +10645,7 @@ impl Engine {
                             }
                             Err(error) => return Err(error),
                         };
-                        PreviousRelationQuery::from_snapshot(
-                            memory,
-                            resolution,
-                            request.budget.max_actions,
-                        )
+                        PreviousRelationQuery::from_snapshot(memory, resolution, remaining_actions)
                     } else {
                         let query = self.active_previous_relation_query(
                             actor,
@@ -13601,6 +13621,7 @@ pub(crate) fn resolve_previous_relation_for_bundle(
     prior_results: &BTreeMap<String, ResultRecord>,
     previous: &ResultRecord,
     memory: &MemoryState,
+    remaining_actions: &mut u32,
 ) -> Result<PreviousRelationResolution> {
     let invalid = || {
         failure(
@@ -13616,7 +13637,8 @@ pub(crate) fn resolve_previous_relation_for_bundle(
     else {
         return Err(invalid());
     };
-    if bundle.meaning.parser_version != input::CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION {
+    let parser_version = &bundle.meaning.parser_version;
+    if !input::is_registered_previous_relation_query(parser_version) {
         return Ok(resolve_previous_relation_proposition(
             memory,
             previous,
@@ -13634,6 +13656,30 @@ pub(crate) fn resolve_previous_relation_for_bundle(
         || bundle.context_sha256 != identity(&Some(previous))?
     {
         return Err(invalid());
+    }
+    if parser_version == input::NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION {
+        let anchor = previous_named_derived_relation_source(
+            store,
+            &request.actor_id,
+            &request.case_id,
+            previous,
+        )?
+        .ok_or_else(invalid)?;
+        if explicit_scope
+            .as_ref()
+            .is_some_and(|scope| scope != &anchor.scope)
+        {
+            return Ok(PreviousRelationResolution::Missing);
+        }
+        return resolve_named_derived_relation_context(
+            store,
+            request,
+            previous,
+            memory,
+            &anchor,
+            proposition,
+            remaining_actions,
+        );
     }
     let assertion = previous_assertion_context(
         store,
@@ -13655,6 +13701,149 @@ pub(crate) fn resolve_previous_relation_for_bundle(
         subject: anchor.subject.clone(),
         scope: anchor.scope.clone(),
         ..proposition.clone()
+    }))
+}
+
+fn previous_named_derived_relation_source(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &ResultRecord,
+) -> Result<Option<Proposition>> {
+    if prior.lifecycle != Lifecycle::Commit
+        || prior.guarantee != Guarantee::Derived
+        || prior.actor_memory_revision.is_none()
+    {
+        return Ok(None);
+    }
+    let Some((_, registered)) =
+        store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
+    else {
+        return Ok(None);
+    };
+    let Intent::Ask { proposition } = registered.meaning.intent else {
+        return Ok(None);
+    };
+    if identity(&registered.request)? != prior.id {
+        return Err(failure(
+            "PRIOR_INPUT_RESULT_MISMATCH",
+            "代名詞が参照する関係質問の確定済み入力と結果IDが一致しません。",
+        ));
+    }
+    Ok(Some(proposition))
+}
+
+fn previous_named_derived_relation_has_single_subject_and_multiple_premises(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &ResultRecord,
+) -> Result<bool> {
+    let Some(revision) = prior.actor_memory_revision else {
+        return Ok(false);
+    };
+    // A derived answer with at least two direct premises also contains a derived fact.
+    if prior
+        .dependencies
+        .iter()
+        .filter(|id| id.starts_with("fact:"))
+        .take(3)
+        .count()
+        < 3
+    {
+        return Ok(false);
+    }
+    let Some(anchor) = previous_named_derived_relation_source(store, actor, case, prior)? else {
+        return Ok(false);
+    };
+    let memory = store
+        .load_memory_revision(actor, revision)?
+        .ok_or_else(|| {
+            failure(
+                "PRIOR_INPUT_RESULT_MISMATCH",
+                "代名詞が参照する関係質問の記憶版を照合できません。",
+            )
+        })?;
+    let mut premises = previous_named_derived_direct_premises(&memory, prior);
+    let (Some(first), Some(second)) = (premises.next(), premises.next()) else {
+        return Ok(false);
+    };
+    Ok([first, second].into_iter().chain(premises).all(|fact| {
+        fact.proposition.subject == anchor.subject && fact.proposition.scope == anchor.scope
+    }))
+}
+
+fn previous_named_derived_direct_premises<'a>(
+    memory: &'a MemoryState,
+    previous: &'a ResultRecord,
+) -> impl Iterator<Item = &'a Fact> {
+    memory.facts.iter().filter(|fact| {
+        fact.valid
+            && fact.guarantee == Guarantee::UserPremise
+            && fact.dependencies.is_empty()
+            && !fact.source_input.is_empty()
+            && previous.dependencies.binary_search(&fact.id).is_ok()
+    })
+}
+
+fn resolve_named_derived_relation_context(
+    store: &Store,
+    request: &RequestEnvelope,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+    anchor: &Proposition,
+    question: &Proposition,
+    remaining_actions: &mut u32,
+) -> Result<PreviousRelationResolution> {
+    const CODE: &str = "CONTEXT_PROOF_CHANGED";
+    let proof_changed = || {
+        failure(
+            CODE,
+            "参照した関係質問の命題と確定時の根拠を現在の記憶で照合できません。",
+        )
+    };
+    let answer = relations::query(memory, anchor, *remaining_actions)?;
+    *remaining_actions = remaining_actions
+        .checked_sub(answer.steps)
+        .ok_or_else(|| failure("RELATION_BUDGET", "relation action count overflowed"))?;
+    let contradicted = match answer.status.as_str() {
+        "SUPPORTED" => false,
+        "CONTRADICTED" => true,
+        _ => return Err(proof_changed()),
+    };
+    let expected_unit = relation_answer_surface(anchor, contradicted);
+    if relations::answer_dependencies(&answer) != previous.dependencies
+        || relations::answer_guarantee(&answer) != previous.guarantee
+        || !previous.content_plan.as_ref().is_some_and(|plan| {
+            plan.required_units.as_slice() == std::slice::from_ref(&expected_unit)
+                && plan.dependencies.starts_with(&previous.dependencies)
+        })
+    {
+        return Err(proof_changed());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        &request.actor_id,
+        &request.case_id,
+        previous,
+        None,
+        CODE,
+        "named derived relation answer",
+    )?;
+
+    let mut direct_premises = previous_named_derived_direct_premises(memory, previous);
+    let Some(first) = direct_premises.next() else {
+        return Ok(PreviousRelationResolution::Missing);
+    };
+    if std::iter::once(first).chain(direct_premises).any(|fact| {
+        fact.proposition.subject != anchor.subject || fact.proposition.scope != anchor.scope
+    }) {
+        return Ok(PreviousRelationResolution::Ambiguous);
+    }
+    Ok(PreviousRelationResolution::Resolved(Proposition {
+        subject: anchor.subject.clone(),
+        scope: anchor.scope.clone(),
+        ..question.clone()
     }))
 }
 

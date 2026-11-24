@@ -14,6 +14,8 @@ pub(crate) const PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v180-partial-web-candidate-followup";
 pub(crate) const CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v181-contextual-assertion-relation-query";
+pub(crate) const NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION: &str =
+    "declarative-ja-v187-named-derived-relation-query";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
@@ -220,7 +222,16 @@ pub(crate) enum SourceContext {
     WebBodyQuestion,
     PartialWebCandidate,
     ContextualAssertionRelationQuery,
+    NamedDerivedRelationQuery,
     Summary,
+}
+
+pub(crate) fn is_registered_previous_relation_query(parser_version: &str) -> bool {
+    matches!(
+        parser_version,
+        CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+            | NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
+    )
 }
 
 pub(crate) fn uses_adopted_summary_packet_context(version: &str) -> bool {
@@ -444,7 +455,24 @@ pub(crate) fn seal_with_source_context(
         ));
     }
     let intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
-        interpret(&request.text)?
+        if asks_for_previous_answer_source(&request.text)? {
+            if previous.is_some_and(|result| {
+                result.lifecycle == Lifecycle::Commit
+                    && result.guarantee == Guarantee::SourceReport
+                    && result
+                        .evidence
+                        .iter()
+                        .any(|packet| packet.packet_kind == "FETCHED_BODY")
+            }) {
+                Intent::ExplainPrevious
+            } else {
+                Intent::Unknown {
+                    reason: "今回の参照先から、確定した取得本文を確認できません。".into(),
+                }
+            }
+        } else {
+            interpret(&request.text)?
+        }
     } else {
         Intent::Unknown {
             reason: "semantic verification supports only the declared Japanese/English grammar"
@@ -573,7 +601,8 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::ResumedWebAnswerExplanation
         | SourceContext::WebBodyQuestion
         | SourceContext::PartialWebCandidate
-        | SourceContext::ContextualAssertionRelationQuery => None,
+        | SourceContext::ContextualAssertionRelationQuery
+        | SourceContext::NamedDerivedRelationQuery => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
@@ -619,6 +648,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
+        }
+        Intent::AskPreviousRelation { .. }
+            if matches!(
+                source_context,
+                Some(SourceContext::NamedDerivedRelationQuery)
+            ) =>
+        {
+            NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
         }
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             guarded_relation_rule_parser(&intent).unwrap_or(PARSER_VERSION)
@@ -2524,6 +2561,11 @@ fn terminal_trim(text: &str) -> &str {
     text.trim()
         .trim_end_matches(['。', '.', '!', '！', '?', '？'])
         .trim()
+}
+
+fn asks_for_previous_answer_source(text: &str) -> Result<bool> {
+    Ok(regex(r"^(?:この|その|前の|前回の)(?:回答|答え)の出典(?:は(?:何|どこ)(?:ですか|でしょうか)|を(?:教えて|示して)(?:ください)?)$")?
+        .is_match(terminal_trim(text)))
 }
 
 fn valid_calculation_step_id(value: &str) -> bool {
@@ -5125,7 +5167,7 @@ fn interpret(text: &str) -> Result<Intent> {
     if regex(r"(?i)^(?:(?:(?:前回|前)(?:の)?(?:取得した)?|取得した)(?:資料|本文|出典)|その(?:資料|本文|出典))(?:を)?要約(?:してください|して|せよ)$|^(?:summarize|summarise) (?:the )?(?:previous|retrieved) (?:source|body|document)$")?.is_match(body) {
         return Ok(Intent::SummarizePreviousSource);
     }
-    if regex(r"(?i)^(?:explain (?:that|it|the (?:previous )?(?:result|answer))|(?:それ|その答え|その結果|前の結果|直前の結果|さっきの答え)(?:を)?(?:詳しく)?説明(?:してください|して|せよ)|詳しく説明して)$")?.is_match(body) {
+    if regex(r"(?i)^(?:explain (?:that|it|the (?:previous )?(?:result|answer))|(?:それ|その答え|その結果|前の結果|直前の結果|さっきの答え)(?:を)?(?:詳しく)?説明(?:してください|して|せよ)|詳しく説明して(?:ください)?)$")?.is_match(body) {
         return Ok(Intent::ExplainPrevious);
     }
     if let Some(capture) = regex(r"(?i)^(?:invalidate|retract)\s+([^\s]+)$")?.captures(body) {
