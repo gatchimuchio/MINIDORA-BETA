@@ -1,5 +1,14 @@
 # Documentation Revision — English Accessibility Layer
 
+## MINIDORA STANDARD BETA BUILD-v5 documents adopted — 2026-11-24
+
+The owner explicitly instructed repository adoption of the [v5 requirements, design, implementation schedule, Codex work order, original AGENTS draft and source index](rust/audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md). All independent source materials retain their original contents, record counts and SHA-256; source-time labels such as 'repo unchanged' remain historical metadata. The root `AGENTS.md` was minimally adapted from the candidate to become the active procedure, with the actual documentation-only authorization reflected. The construction register, root/Rust README, contribution guide, documentation/audit indexes and imported-file checksum entries are aligned.
+
+**New BUILD exit:** one local Rust non-neural engine with easy clone-to-chat startup, Japanese multi-turn conversation, same-Core memory/reasoning/adaptation, Core-driven permissioned web candidate discovery and actual source-body acquisition, inherited math/document/code Ports on ordinary chat routes, actor/effect/Goal handling, and a stable reusable API and versioned artifact. The prior [v4 source set](rust/audit/construction/MB-BUILD-20261124-V4-BUILD/README.md) and `50f6514` described scoped arithmetic CLI/Native, local file effects and a limited version freeze; they are preserved as historical evidence, not v5 BUILD completion.
+
+Compilation, startup and actual feature use are construction observations, not standalone quality gates. QC, QA, GPQA/benchmarks, full OS qualification, downstream products and distribution remain separate and unrequested. This adoption changes **documentation only**, not Rust/Python implementation, previous tests, manifests, frozen packages, the upstream repository, releases or external services. Only the imported `AGENTS.md` and root `README.md` lines in `checksums.repo.sha256` are updated. Dated sections below retain their historical meanings.
+
+
 ## BUILD-v4 construction documents and AGENTS adopted — 2026-11-24
 
 The owner explicitly requested adoption of four **Japanese-base JSONL source documents** (requirements, design, development/implementation schedule, concise Codex order) and subsequent reconciliation of root `AGENTS.md` and repository navigation. See [BUILD-v4 adoption record](rust/audit/construction/MB-BUILD-20261124-V4-BUILD/README.md) for the four original filenames, record counts and SHA-256 hashes.
