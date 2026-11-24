@@ -2322,8 +2322,7 @@ impl CalculationMeaningPlan {
 
 pub(crate) fn verify_generated_calculation_computation(
     store: &Store,
-    actor: &str,
-    case: &str,
+    original: &RequestEnvelope,
     goal: &GoalContract,
     result: &ResultRecord,
     plan: &ContentPlan,
@@ -2357,7 +2356,7 @@ pub(crate) fn verify_generated_calculation_computation(
         &replay.emission,
         &[],
         &compute_ref,
-        "ja",
+        &original.locale,
         plan,
     )?;
     if result.text != replay.report.text {
@@ -2366,8 +2365,8 @@ pub(crate) fn verify_generated_calculation_computation(
             "the saved result differs from the replayed arithmetic sequence",
         ));
     }
-    store.get_bytes(actor, case, &compute_ref)?;
-    verify_generated_model_artifacts(store, actor, case, plan)?;
+    store.get_bytes(&original.actor_id, &original.case_id, &compute_ref)?;
+    verify_generated_model_artifacts(store, &original.actor_id, &original.case_id, plan)?;
     Ok(compute_ref)
 }
 
@@ -4759,7 +4758,7 @@ impl Engine {
                 "direct atomic explanation accepts typed relation fields, not text",
             ));
         }
-        if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+        if !supports_japanese_output_locale(&request.locale) {
             return Err(failure(
                 "DIRECT_LOCALE_UNSUPPORTED",
                 "the atomic explanation surface currently supports Japanese",
@@ -4982,7 +4981,7 @@ impl Engine {
                 "direct relation comparison accepts typed subject and scope fields, not text",
             ));
         }
-        if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+        if !supports_japanese_output_locale(&request.locale) {
             return Err(failure(
                 "DIRECT_LOCALE_UNSUPPORTED",
                 "the atomic relation comparison surface currently supports Japanese",
@@ -5833,6 +5832,9 @@ impl Engine {
                         context.input_version,
                     )?
                     .and_then(|(_, source)| match source.meaning.intent {
+                        Intent::VerifyCode { .. } if context.guarantee == Guarantee::Computed => {
+                            Some(input::SourceContext::DirectCodeVerificationExplanation)
+                        }
                         Intent::TextReplace { .. }
                             if context.guarantee == Guarantee::Computed
                                 && context.evidence.is_empty() =>
@@ -6608,13 +6610,27 @@ impl Engine {
             && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
         {
             let deadline = started.checked_add(Duration::from_millis(request.budget.deadline_ms));
-            match crate::code_generation::previous_verification_explanation(
-                &self.store,
-                &state,
-                &bundle,
-                prior,
-                deadline,
-            ) {
+            let explanation = if bundle.meaning.parser_version
+                == input::DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
+            {
+                crate::code_generation::direct_verification_explanation(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    prior,
+                    deadline,
+                )
+                .map(Some)
+            } else {
+                crate::code_generation::previous_verification_explanation(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    prior,
+                    deadline,
+                )
+            };
+            match explanation {
                 Ok(explanation) => explanation,
                 Err(Error::Contract { code, message }) => {
                     return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
@@ -6939,7 +6955,7 @@ impl Engine {
                 "取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
             );
         }
-        if request.locale != "ja" {
+        if !supports_japanese_output_locale(&request.locale) {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
@@ -8986,6 +9002,7 @@ impl Engine {
                             subject_a: &artifact.subject_a,
                             subject_b: &artifact.subject_b,
                             scope: &artifact.scope,
+                            locale: &prior_bundle.request.locale,
                             format: *format,
                             max_actions: request.budget.max_actions,
                             max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
@@ -12681,6 +12698,10 @@ impl Engine {
     }
 }
 
+pub(crate) fn supports_japanese_output_locale(locale: &str) -> bool {
+    matches!(locale, "ja" | "ja-JP")
+}
+
 fn validate_direct_relation_request(actor: &str, request: &RequestEnvelope) -> Result<()> {
     if actor != request.actor_id {
         return Err(failure(
@@ -12700,7 +12721,7 @@ fn validate_direct_relation_request(actor: &str, request: &RequestEnvelope) -> R
             "typed relation construction accepts typed fields, not caller-supplied prose",
         ));
     }
-    if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+    if !supports_japanese_output_locale(&request.locale) {
         return Err(failure(
             "DIRECT_LOCALE_UNSUPPORTED",
             "typed relation construction currently supports Japanese output",
@@ -17268,6 +17289,7 @@ pub(crate) struct RelationComparisonReplay<'a> {
     pub subject_a: &'a str,
     pub subject_b: &'a str,
     pub scope: &'a str,
+    pub locale: &'a str,
     pub format: Option<MeaningCompositionFormat>,
     pub max_actions: u32,
     pub max_evidence_bytes: usize,
@@ -17518,6 +17540,7 @@ fn verify_generated_comparison(
     if result.actor_memory_revision.is_none()
         || meaning_plan != &expected_plan
         || artifact.kind != relation_comparison_generated_kind(replay.format)
+        || !supports_japanese_output_locale(replay.locale)
     {
         return Err(failure(
             "CONTENT_PLAN_INVALID",
@@ -17551,7 +17574,7 @@ fn verify_generated_comparison(
         &generation.emission,
         &meaning_plan.proof_ids,
         compute_ref,
-        "ja",
+        replay.locale,
         plan,
     )?;
     Ok((

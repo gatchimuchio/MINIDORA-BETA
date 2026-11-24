@@ -39,6 +39,8 @@ pub(crate) const PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v171-pasted-text-replacement-explanation";
 pub(crate) const DIRECT_SOURCE_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v173-direct-source-explanation";
+pub(crate) const DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v185-direct-code-verification-explanation";
 const PREVIOUS_CODE_CASE_EXPECTED_ROLE: &str = "/VerifyPreviousCode/case/expected_value";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
@@ -210,6 +212,7 @@ pub(crate) enum SourceContext {
     PastedTextReplacementExplanation,
     PreviousJsonTableConversionExplanation,
     DirectSourceExplanation,
+    DirectCodeVerificationExplanation,
     ExplainedDirectSource,
     DirectBodyQuestion,
     WebAnswerExplanation,
@@ -563,6 +566,7 @@ pub(crate) fn seal_with_source_context(
         SourceContext::PastedTextReplacementExplanation
         | SourceContext::PreviousJsonTableConversionExplanation
         | SourceContext::DirectSourceExplanation
+        | SourceContext::DirectCodeVerificationExplanation
         | SourceContext::ExplainedDirectSource
         | SourceContext::DirectBodyQuestion
         | SourceContext::WebAnswerExplanation
@@ -680,6 +684,14 @@ pub(crate) fn seal_with_source_context(
             if matches!(source_context, Some(SourceContext::DirectSourceExplanation)) =>
         {
             DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
+        }
+        Intent::ExplainPrevious
+            if matches!(
+                source_context,
+                Some(SourceContext::DirectCodeVerificationExplanation)
+            ) =>
+        {
+            DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
         }
         // A derived conclusion keeps the existing proof follow-up contract.
         Intent::ExplainPrevious

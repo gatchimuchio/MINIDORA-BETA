@@ -2559,6 +2559,13 @@ pub(crate) fn previous_code_verification_lines(
 }
 
 pub(crate) fn verification_explanation_lines(report: &CodeCapabilityReport) -> Result<Vec<String>> {
+    verification_explanation_lines_for_source(report, "生成ソース")
+}
+
+pub(crate) fn verification_explanation_lines_for_source(
+    report: &CodeCapabilityReport,
+    source_label: &str,
+) -> Result<Vec<String>> {
     let verification = report.verification.as_ref().ok_or_else(|| {
         failure(
             "CODE_VERIFICATION_REPORT_INVALID",
@@ -2570,7 +2577,7 @@ pub(crate) fn verification_explanation_lines(report: &CodeCapabilityReport) -> R
             "「{}」の検証記録では、保存した関数を指定された試験入力だけで評価しました。",
             report.function_name
         ),
-        format!("生成ソースのSHA-256: {}", report.source_sha256),
+        format!("{source_label}のSHA-256: {}", report.source_sha256),
         format!(
             "試験入力と期待値の記録のSHA-256: {}",
             verification.cases_sha256

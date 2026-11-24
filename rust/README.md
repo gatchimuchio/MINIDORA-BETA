@@ -40,6 +40,8 @@ Windowsではクローンのルートから、PowerShellでは `.\start-minidora
 
 確認結果の後に `詳しく説明して` と入力すると、保存された引数と実値・期待値の照合を説明する。その説明に続けて同じ関数を別の引数で確認できる。
 
+`コードを検証して:` でコードと試験を直接貼り付けた場合も、続けて `詳しく説明して` と聞ける。元のコードと保存された検証結果を照合し、各試験の実値・期待値・一致、不一致、未完了を表示する。
+
 貼り付けたPython関数を説明するには、次の行を順に入力する。対応構文を静的に読み、元のコードを解析記録に保持する。
 
 ```text
@@ -100,6 +102,8 @@ record_id,kind
 
 ローカル会話に外部LLMのキーは不要。Webを使うセッションは `./start-minidora.sh --allow-read-host ja.wikipedia.org` と明示し、`富士山について、出典を付けて教えてください。` と入力する。Windowsの起動方法でも同じオプションを使える。`/net off` で通信を停止し、`/net on` で起動時の許可を再適用する。本文は選んだ記事の観測範囲で使用する。記事の取得時刻で最新性や更新日時を確認できない場合は、回答を保留する。
 
+質問語が本文にそのまま見つからず、取得した記事名との違いが英字の大文字・小文字だけなら、同じ本文を記事名で照合する。たとえば `pythonについて出典付きで教えて` では、選んだ記事名が `Python` のときにこの照合を使える。
+
 検索一覧と本文の一部を保存した時点で取得量の上限に達した場合は、`1件目の本文を取得して` のように一覧の順位を指定できる。別の発話を挟んだ場合は `/context 結果ID` でその保留結果を参照する。元の一覧から選び、今回の通信許可と取得枠で本文を取得する。続く `詳しく説明して` で一覧と取得した本文の出典を確認できる。
 
 許可したホストの対応本文は、`https://www.rfc-editor.org/rfc/rfc8259.txt を読んで` のようにURLを直接指定できる。全文が表示枠を超えると、取得した全文を保存し、出典・取得時刻・本文全体のハッシュ・冒頭の引用範囲を表示する。本文が取得予算に収まらない場合は保留する。
@@ -131,6 +135,8 @@ Windowsの保存先には `C:\Users\利用者\Documents\結果.txt` のような
 ### 標準API
 
 Rustのconsumerは同じソースの `minidora-engine` と `minidora-domain` を使用する。`Engine::capabilities()` は `minidora-native/v1` のAPI版、保存schema、実装済みの提供能力と必要権限を返す。CLIでは `minidora-rust capabilities --json` から同じ情報を得られる。`Engine::execute(actor, RequestEnvelope)` で実行し、`ResultRecord` の `lifecycle`、`reason`、本文、出典、受領を利用する。`engine.case_status(actor, case)` は同じactorの最新結果と、採用済みの実モデル版を返す。
+
+日本語の `RequestEnvelope.locale` は `ja` と `ja-JP` を受け付け、指定された綴りを入力と採用結果に保持する。
 
 ```rust
 use minidora_domain::{RequestEnvelope, Result, ResultRecord};

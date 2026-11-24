@@ -73,6 +73,8 @@ pub(crate) fn select_candidate<'a>(
 pub(crate) struct WebAnswer {
     kind: &'static str,
     topic: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    case_matched_article_title: Option<String>,
     candidate_id: String,
     search_packet_id: String,
     source_packet_id: String,
@@ -113,6 +115,15 @@ impl WebAnswer {
             ),
             "本文の記述に基づく回答です。表示時にリンクや注記などの記法を取り除きました。内容の真偽や網羅性は確認していません。".into(),
         ];
+        if let Some(title) = &self.case_matched_article_title {
+            units.insert(
+                2,
+                format!(
+                    "質問語「{}」と記事名「{title}」は英字の大文字・小文字だけが異なります。",
+                    self.topic
+                ),
+            );
+        }
         if let Some(elevation) = &self.elevation {
             units.insert(
                 2,
@@ -160,6 +171,12 @@ impl WebAnswer {
             ),
             format!("記法を除いて表示した箇所: 「{}」", self.passage.text),
         ];
+        if let Some(title) = &self.case_matched_article_title {
+            units.push(format!(
+                "質問語「{}」と記事名「{title}」の英字の大小を照合し、原本文を記事名と同じ表記で確認しました。",
+                self.topic,
+            ));
+        }
         if let Some(elevation) = &self.elevation {
             units.push(format!(
                 "本文中の標高 {} m を 1000 で割り、{} km としました。",
@@ -211,14 +228,15 @@ pub(crate) fn answer(
             "検索候補の記事名と標高を調べる対象が一致しません。",
         ));
     }
-    let passage = find_passage(article, elevation_in_kilometres, &|line| {
-        if elevation_in_kilometres {
+    let selected = if elevation_in_kilometres {
+        find_passage(article, true, &|line| {
             stated_elevation_metres(line).is_some()
-        } else {
-            line.contains(topic)
-        }
-    })
-    .ok_or_else(|| {
+        })
+        .map(|passage| (passage, None))
+    } else {
+        find_topic_passage(article, topic, &candidate.title)
+    };
+    let (passage, case_matched_article_title) = selected.ok_or_else(|| {
         failure(
             "WEB_ANSWER_NO_SUPPORTED_PASSAGE",
             "取得本文で話題に一致する読み取れる日本語の文を確認できませんでした。",
@@ -239,8 +257,13 @@ pub(crate) fn answer(
         None
     };
     Ok(WebAnswer {
-        kind: "minidora.web-answer.wikipedia-prose.v1",
+        kind: if case_matched_article_title.is_some() {
+            "minidora.web-answer.wikipedia-prose.v2"
+        } else {
+            "minidora.web-answer.wikipedia-prose.v1"
+        },
         topic: topic.into(),
+        case_matched_article_title: case_matched_article_title.map(str::to_owned),
         candidate_id: candidate.id.clone(),
         search_packet_id: candidate.search_packet_id.clone(),
         source_packet_id: packet.id.clone(),
@@ -321,6 +344,37 @@ fn find_passage(
         },
     );
     selected
+}
+
+fn find_topic_passage<'a>(
+    article: &str,
+    topic: &str,
+    title: &'a str,
+) -> Option<(Passage, Option<&'a str>)> {
+    if !topic.is_ascii() || title == topic || !title.eq_ignore_ascii_case(topic) {
+        return find_passage(article, false, &|sentence| sentence.contains(topic))
+            .map(|passage| (passage, None));
+    }
+
+    // Keep the first title spelling as a possible result while looking for the
+    // exact original spelling in the same bounded source scan.
+    let mut exact = None;
+    let mut by_title = None;
+    let _ = visit_passages(
+        article,
+        false,
+        false,
+        &|sentence| sentence.contains(topic) || sentence.contains(title),
+        &mut |passage| {
+            if passage.text.contains(topic) {
+                exact = Some((passage, None));
+                return true;
+            }
+            by_title.get_or_insert((passage, Some(title)));
+            false
+        },
+    );
+    exact.or(by_title)
 }
 
 pub(crate) fn readable_passages(article: &str, limit: usize) -> Vec<Passage> {
@@ -672,6 +726,24 @@ fn safe_label(label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_case_uses_the_exact_article_title_only_without_a_topic_hit() {
+        let article = "'''Python'''は、[[プログラミング言語]]である。\n";
+        let (passage, matched_title) = find_topic_passage(article, "python", "Python").unwrap();
+        assert_eq!(matched_title, Some("Python"));
+        assert_eq!(passage.text, "Pythonは、プログラミング言語である。");
+        let raw = &article[passage.source_start..passage.source_end];
+        assert!(raw.contains("[[プログラミング言語]]"));
+        assert_eq!(passage.source_span_sha256, digest(raw.as_bytes()));
+
+        let both = format!("{article}pythonという小文字表記もある。\n");
+        let (passage, matched_title) = find_topic_passage(&both, "python", "Python").unwrap();
+        assert_eq!(matched_title, None);
+        assert_eq!(passage.text, "pythonという小文字表記もある。");
+        assert!(find_topic_passage(article, "python", "Python (言語)").is_none());
+        assert!(find_topic_passage(article, "py", "Python").is_none());
+    }
 
     #[test]
     fn elevation_requires_an_unquoted_positive_measurement() {

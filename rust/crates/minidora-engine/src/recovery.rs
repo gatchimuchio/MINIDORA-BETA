@@ -1878,8 +1878,7 @@ fn verify_common_relations_evaluation(
 
 fn verify_relation_comparison_memory_result(
     store: &Store,
-    actor: &str,
-    case: &str,
+    request: &RequestEnvelope,
     memory: &MemoryState,
     result: &ResultRecord,
     plan: &ContentPlan,
@@ -1900,7 +1899,7 @@ fn verify_relation_comparison_memory_result(
             "the retained comparison has no report artifact reference",
         )
     })?;
-    let artifact = store.get_bytes(actor, case, report_ref)?;
+    let artifact = store.get_bytes(&request.actor_id, &request.case_id, report_ref)?;
     crate::core::verify_relation_comparison_memory_result(
         memory,
         &artifact,
@@ -1910,6 +1909,7 @@ fn verify_relation_comparison_memory_result(
             subject_a,
             subject_b,
             scope,
+            locale: &request.locale,
             format: *format,
             max_actions: goal.budget.max_actions,
             max_evidence_bytes: goal.budget.max_evidence_bytes,
@@ -1923,8 +1923,7 @@ fn verify_relation_comparison_memory_result(
 
 fn verify_relation_comparison_memory_result_with_index(
     store: &Store,
-    actor: &str,
-    case: &str,
+    request: &RequestEnvelope,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
@@ -1944,10 +1943,10 @@ fn verify_relation_comparison_memory_result_with_index(
             "the retained comparison has no report artifact reference",
         )
     })?;
-    let artifact = store.get_bytes(actor, case, report_ref)?;
+    let artifact = store.get_bytes(&request.actor_id, &request.case_id, report_ref)?;
     crate::core::verify_relation_comparison_memory_result_with_index(
         store,
-        actor,
+        &request.actor_id,
         &artifact,
         result,
         plan,
@@ -1955,6 +1954,7 @@ fn verify_relation_comparison_memory_result_with_index(
             subject_a,
             subject_b,
             scope,
+            locale: &request.locale,
             format: *format,
             max_actions: goal.budget.max_actions,
             max_evidence_bytes: goal.budget.max_evidence_bytes,
@@ -2349,6 +2349,7 @@ fn verify_explain_previous_relation_comparison_memory_result(
         subject_a,
         subject_b,
         scope,
+        locale: &prior_bundle.request.locale,
         format: *format,
         max_actions: prior_bundle.request.budget.max_actions,
         max_evidence_bytes: prior_bundle.request.budget.max_evidence_bytes,
@@ -3110,13 +3111,14 @@ fn verify_condition_evaluation_result(
 
 fn verify_result_memory_provenance(
     store: &Store,
-    actor: &str,
-    case: &str,
+    request: &RequestEnvelope,
     state: &CaseRevision,
     result: &ResultRecord,
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<Option<RetainedRelationProof>> {
+    let actor = request.actor_id.as_str();
+    let case = request.case_id.as_str();
     let Some((memory, snapshot_sha256)) = result_memory_snapshot_with_digest(store, actor, result)?
     else {
         if matches!(goal.intent, Intent::AskPreviousRelation { .. })
@@ -3184,9 +3186,7 @@ fn verify_result_memory_provenance(
             verify_common_relations_memory_result(store, actor, case, &memory, result, plan, goal)?;
         }
         Intent::CompareRelationInventories { .. } => {
-            verify_relation_comparison_memory_result(
-                store, actor, case, &memory, result, plan, goal,
-            )?;
+            verify_relation_comparison_memory_result(store, request, &memory, result, plan, goal)?;
         }
         Intent::DraftRelationProfile { .. } => {
             verify_relation_profile_memory_result(&memory, result, plan, goal)?;
@@ -5521,7 +5521,7 @@ fn inspect(
         || plan.text != result.text
         || plan.guarantee != result.guarantee
         || plan.locale != request.locale
-        || plan.locale != "ja"
+        || !crate::core::supports_japanese_output_locale(&plan.locale)
         || plan.required_units.is_empty()
         || plan.guarantee == Guarantee::Unknown
         || (plan.guarantee == Guarantee::Hypothesis
@@ -5604,7 +5604,7 @@ fn inspect(
     } else if requires_condition_evaluation || requires_record_source {
         None
     } else {
-        verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?
+        verify_result_memory_provenance(store, request, state, result, plan, &goal)?
     };
     let source_summary =
         verify_source_summary_context(store, actor, case, state, result, plan, &goal)?;
@@ -5717,7 +5717,7 @@ fn inspect(
     };
     let mut generated_compute_ref = if requires_generated_calculation {
         Some(crate::core::verify_generated_calculation_computation(
-            store, actor, case, &goal, result, plan,
+            store, request, &goal, result, plan,
         )?)
     } else {
         None
@@ -5906,7 +5906,7 @@ fn inspect(
         // memory before their retained report can be confirmed.
         let current_verification = (|| {
             match verify_relation_comparison_memory_result_with_index(
-                store, actor, case, result, plan, &goal,
+                store, request, result, plan, &goal,
             )? {
                 Some(()) => Ok(()),
                 None => {
@@ -5914,7 +5914,7 @@ fn inspect(
                     // has not yet been built for the current memory head.
                     let memory = store.load_memory(actor)?;
                     verify_relation_comparison_memory_result(
-                        store, actor, case, &memory, result, plan, &goal,
+                        store, request, &memory, result, plan, &goal,
                     )
                 }
             }
@@ -6268,7 +6268,9 @@ fn inspect(
             ));
         }
     }
-    if verification_explanation_predicate.is_some() {
+    let direct_verification_explanation = bundle.meaning.parser_version
+        == crate::input::DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION;
+    if verification_explanation_predicate.is_some() || direct_verification_explanation {
         const CODE: &str = "RECOVERY_CODE_VERIFICATION_EXPLANATION_CHANGED";
         let invalid = || {
             failure(
@@ -6276,6 +6278,9 @@ fn inspect(
                 "the retained verification explanation differs from its original result",
             )
         };
+        if verification_explanation_predicate.is_none() {
+            return Err(invalid());
+        }
         verify_registered_input(store, bundle, CODE)?;
         let prior = bundle
             .meaning
@@ -6284,10 +6289,16 @@ fn inspect(
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(invalid)?;
         let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
-        let explanation = crate::code_generation::previous_verification_explanation(
-            store, state, bundle, prior, deadline,
-        )?
-        .ok_or_else(invalid)?;
+        let explanation = if direct_verification_explanation {
+            crate::code_generation::direct_verification_explanation(
+                store, state, bundle, prior, deadline,
+            )?
+        } else {
+            crate::code_generation::previous_verification_explanation(
+                store, state, bundle, prior, deadline,
+            )?
+            .ok_or_else(invalid)?
+        };
         if result.guarantee != Guarantee::Computed
             || result.dependencies != explanation.dependencies
             || plan.required_units != explanation.units
@@ -15704,8 +15715,7 @@ mod tests {
         engine.store.save_memory("alice", &current_memory).unwrap();
         let full_snapshot_error = verify_relation_comparison_memory_result(
             &engine.store,
-            "alice",
-            "case",
+            &retained.bundle.as_ref().unwrap().request,
             &current_memory,
             &retained_result,
             retained_result.content_plan.as_ref().unwrap(),

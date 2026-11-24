@@ -667,6 +667,123 @@ pub(crate) fn previous_verification_explanation(
     }))
 }
 
+pub(crate) fn direct_verification_explanation(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    deadline: Option<Instant>,
+) -> Result<CodeVerificationExplanation> {
+    const CODE: &str = "DIRECT_CODE_VERIFICATION_CONTEXT_MISMATCH";
+    let invalid = || {
+        failure(
+            CODE,
+            "前回の直接検証を封印入力と保存した試験結果に照合できません。",
+        )
+    };
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        || bundle.meaning.parser_version
+            != crate::input::DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
+        || bundle.meaning.context_result_ref.as_deref() != Some(previous.id.as_str())
+        || bundle.context_sha256 != identity(&Some(previous))?
+        || bundle
+            .request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.guarantee != Guarantee::Computed
+        || previous.calculation.is_some()
+        || !previous.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    let [report_ref] = previous.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let (source_ref, source_bundle) = store
+        .get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+        .ok_or_else(invalid)?;
+    let Intent::VerifyCode { document } = &source_bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    let (header, raw_document) = source_bundle
+        .request
+        .text
+        .split_once('\n')
+        .ok_or_else(invalid)?;
+    if identity(&source_bundle.request)? != previous.id || raw_document != document {
+        return Err(invalid());
+    }
+
+    let verification = crate::code_capability::run(
+        document,
+        crate::code_capability::CodeOperation::Verify,
+        deadline,
+    )?;
+    let checked = canonical(&verification)?;
+    if digest(&checked) != *report_ref || store.get_bytes(actor, case, report_ref)? != checked {
+        return Err(invalid());
+    }
+    recheck_code_output(
+        store,
+        state,
+        previous,
+        vec![serde_json::to_string_pretty(&verification)?],
+        report_ref,
+        "direct code verification",
+    )?;
+
+    let root = strict_json_document(document)?;
+    let span = crate::ports::json_node_at_pointer(&root, "/情報源")?
+        .span
+        .clone();
+    let source_token = document.get(span.clone()).ok_or_else(invalid)?;
+    if serde_json::from_str::<String>(source_token)? != verification.source {
+        return Err(invalid());
+    }
+    let offset = header.len() + 1;
+    let mut units = crate::code_capability::verification_explanation_lines_for_source(
+        &verification,
+        "入力コード",
+    )?;
+    units.insert(
+        2,
+        format!(
+            "封印入力の情報源文字列 byte[{}..{}) SHA-256: {}",
+            offset + span.start,
+            offset + span.end,
+            digest(source_token.as_bytes()),
+        ),
+    );
+    units.insert(3, format!("試験レポートSHA-256: {report_ref}"));
+    for observation in &verification
+        .verification
+        .as_ref()
+        .ok_or_else(invalid)?
+        .cases
+    {
+        if let Some(diagnostic) = &observation.diagnostic {
+            units.push(format!(
+                "試験{}の診断: {diagnostic}",
+                observation.number + 1
+            ));
+        }
+    }
+    if units.join("\n").len() > bundle.request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "検証結果の説明が要求の証拠予算を超えています。",
+        ));
+    }
+    Ok(CodeVerificationExplanation {
+        dependencies: vec![previous.id.clone(), source_ref, report_ref.clone()],
+        units,
+    })
+}
+
 /// Resolve only the selected result. A saved explanation or verification
 /// retains its original generation identity and is rechecked before use.
 pub(crate) fn previous_code_verification(
