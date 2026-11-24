@@ -1,6 +1,6 @@
 # Contributing and reviewing MINIDORA-BETA
 
-For the present Rust successor work, use the [current Japanese-base BUILD-v4 requirements, design, implementation schedule and concise Codex order](rust/audit/construction/MB-BUILD-20261124-V4-BUILD/README.md) with [root `AGENTS.md`](AGENTS.md). The frozen Python `0.6.0b1` remains a separate accepted historical beta. The prior [R2 logical specification](docs/redesign/01_SYSTEM_SPECIFICATION.md), [D2/D3-C construction set](rust/audit/construction/MB-BUILD-20261119-D3-C/README.md), capability/verification registers and past B observations remain available as dated context, not the current BUILD completion or QC/QA obligations. Source documents and prior implementation history do not themselves grant permission for a new code change, release or deployment.
+For current Rust successor work, use [MINIDORA STANDARD BETA BUILD-v5 source documents](rust/audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md) and [AGENTS.md](AGENTS.md). Required construction includes easy local clone-to-chat startup, Japanese multi-turn conversation, Core-owned generation/memory/inference/adaptation, permissioned autonomous network discovery and real page retrieval, existing specialist Ports, effects and reusable versioned APIs. Earlier BUILD-v4 `50f6514` local CLI/API observations are historical and do not prove completion. Prior [R2](docs/redesign/01_SYSTEM_SPECIFICATION.md), D2/D3-C and audit data remain dated reference evidence. Document adoption gives no independent permission for implementation, deployment or release.
 
 MINIDORA-BETA is an independent, historically pinned **engine beta**, not an invitation to silently rewrite the upstream implementation.
 
@@ -25,9 +25,9 @@ python -X utf8 examples/controlled_smoke.py
 
 `tools/beta_acceptance.py` covers the **selected 313-case beta regression set**; it does not stand for all upstream test files or the Rust successor. The frozen Python implementation and its release artifacts are not modified by current Rust construction. The optional multi-OS GitHub Actions workflow is manually triggered and must be assessed separately.
 
-## Rust successor: current BUILD-only scope
+## Rust successor: MINIDORA STANDARD BETA v5 BUILD-only scope
 
-Follow [BUILD-v4](rust/audit/construction/MB-BUILD-20261124-V4-BUILD/README.md) and [AGENTS.md](AGENTS.md). The task is to construct, connect and pin the independent general-purpose Rust beta, using the existing Core, input/output, persistent state and declared specialist capabilities. Compilation, launch and actual I/O are construction observations. **Systematic QC, independent QA, benchmarking, Windows/8GB quality qualification and the complete historic 93-capability/416-source/360-test evaluation are not construction gates.** Keep past evidence and unknowns intact. An explicit, separate owner requirement would be needed to undertake quality work or publish/distribute artifacts.
+Follow [BUILD-v5](rust/audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md) and root [AGENTS](AGENTS.md). Construct and connect the required ordinary-user paths before claiming BUILD complete. An arithmetic CLI, Native API, old source checksum, README entry, Port stub, synthetic web result or fixed greeting is insufficient. Build/launch and actual chat/network/specialist-use checks establish the built machine's existence, not independent product QA. No compulsory QC, QA, benchmark/GPQA, all-OS performance certification, future application integration or release step is added.
 
 ## Documentation changes
 
