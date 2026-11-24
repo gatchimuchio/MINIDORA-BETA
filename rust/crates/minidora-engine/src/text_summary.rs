@@ -2147,6 +2147,9 @@ fn derived_source_followup<'a>(
                 crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION => {
                     "the preceding Web body question differs from the retained proof"
                 }
+                crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION => {
+                    "the selected Web body question differs from the retained proof"
+                }
                 crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                 | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION => {
                     "the explicitly referenced source summary differs from the retained proof"
@@ -2199,18 +2202,10 @@ fn derived_source_followup<'a>(
             return Err(invalid());
         }
         let target_input = registered(target)?;
-        let follows_web_question =
-            parser_version == crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION;
+        let follows_web_question = crate::input::uses_web_body_question_context(parser_version);
         if follows_web_question || crate::input::uses_summary_source_context(parser_version) {
             let valid_target = if follows_web_question {
-                matches!(
-                    target_input.meaning.intent,
-                    Intent::AskPreviousSourceQuestion { .. }
-                ) && matches!(
-                    target_input.meaning.parser_version.as_str(),
-                    crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
-                        | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
-                )
+                crate::input::is_web_body_question_input(&target_input)
             } else {
                 crate::input::is_source_summary_intent(&target_input.meaning.intent)
             };
@@ -2423,9 +2418,14 @@ fn direct_source_followup<'a>(
     }
     let direct = SourceFollowup::direct(context);
     let version = bundle.meaning.parser_version.as_str();
-    let web_followup = version == crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION;
+    let web_followup = crate::input::uses_web_answer_explanation_context(version);
     let explanation_shape =
         context.guarantee == Guarantee::SourceReport && context.evidence.is_empty();
+    if version == crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+        && request.context_ref.is_some()
+    {
+        return Ok(None);
+    }
     if web_followup
         && (!explanation_shape
             || context.lifecycle != Lifecycle::Commit
@@ -2637,6 +2637,8 @@ pub(crate) fn verify_retained_source_summary<'a>(
                         | crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                         | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                 )
         }
         _ => false,
@@ -3491,6 +3493,8 @@ fn source_summary_packet_positions(
             | crate::input::EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
             | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
             | crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            | crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
     ) {
         return Ok((0..packets.len()).collect());
     }

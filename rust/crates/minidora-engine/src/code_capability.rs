@@ -256,7 +256,7 @@ fn input_error(message: impl Into<String>) -> Error {
     failure("CODE_CAPABILITY_INPUT", message)
 }
 
-fn parse_integer(raw: &str) -> Result<BigInt> {
+pub(crate) fn parse_integer(raw: &str) -> Result<BigInt> {
     if raw.contains(['.', 'e', 'E']) {
         return Err(input_error("only integer values are supported"));
     }

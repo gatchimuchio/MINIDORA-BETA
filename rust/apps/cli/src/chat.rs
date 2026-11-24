@@ -12,7 +12,8 @@ const HELP: &str = "\
 /exit               対話を終了\n\
 /case ID            同じ利用者の会話を選択\n\
 /new ID             未使用の会話IDを選択\n\
-/history [結果ID]   現在の会話の最新結果と履歴ID、または指定結果を表示\n\
+/history [結果ID]   現在の会話の最新結果と履歴、または指定結果を表示\n\
+/history page N    以前の結果を1ページ20件ずつ表示\n\
 /context 結果ID     現在の会話の保存済み結果を次の一発話で参照\n\
 /context off        次の参照指定を解除\n\
 /status             エンジン、提供能力、現在の会話で採用された模型の版を表示\n\
@@ -26,6 +27,7 @@ const HELP: &str = "\
 再開するには、同じ --db、--actor、--case で chat を起動してください。";
 const MAX_CASE_ID_BYTES: usize = 256;
 const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
+const HISTORY_PAGE_SIZE: usize = 20;
 
 enum Line {
     Input(Vec<u8>),
@@ -125,7 +127,7 @@ fn saved_result<'a>(case: &'a CaseRevision, result_id: &str) -> Option<&'a Resul
         .or_else(|| case.prior_results.get(result_id))
 }
 
-fn show_history(engine: &Engine, options: &Options, result_id: &str) -> Result<(), String> {
+fn show_history(engine: &Engine, options: &Options, selection: &str) -> Result<(), String> {
     let Some(case) = engine
         .latest(&options.actor, &options.case_id)
         .map_err(|error| error.to_string())?
@@ -133,29 +135,61 @@ fn show_history(engine: &Engine, options: &Options, result_id: &str) -> Result<(
         eprintln!("この会話には保存済みの結果がありません。");
         return Ok(());
     };
-    if !result_id.is_empty() {
-        match saved_result(&case, result_id) {
+    let page = if selection.is_empty() {
+        if let Some(result) = &case.result {
+            eprintln!(
+                "会話 {id} の最新結果ID: {result_id}",
+                id = case.case_id,
+                result_id = result.id
+            );
+            show_result(result).map_err(|error| error.to_string())?;
+        }
+        1
+    } else if selection == "page" || selection.starts_with("page ") {
+        let Ok(page) = selection["page".len()..].trim().parse::<usize>() else {
+            eprintln!("/history page の後に1以上のページ番号を指定してください。");
+            return Ok(());
+        };
+        page
+    } else {
+        match saved_result(&case, selection) {
             Some(result) => show_result(result).map_err(|error| error.to_string())?,
             None => eprintln!("この会話に該当する結果IDがありません。"),
         }
         return Ok(());
+    };
+
+    let count = case.prior_results.len();
+    let pages = count.div_ceil(HISTORY_PAGE_SIZE);
+    if pages == 0 && selection.is_empty() {
+        return Ok(());
     }
-    if let Some(result) = &case.result {
-        eprintln!(
-            "会話 {id} の最新結果ID: {result_id}",
-            id = case.case_id,
-            result_id = result.id
-        );
-        show_result(result).map_err(|error| error.to_string())?;
+    if page == 0 || page > pages {
+        eprintln!("そのページには以前の結果がありません（全{pages}ページ）。");
+        return Ok(());
     }
-    if !case.prior_results.is_empty() {
-        eprintln!(
-            "以前の結果ID（全{}件、先頭20件まで）:",
-            case.prior_results.len()
-        );
-        for id in case.prior_results.keys().take(20) {
-            eprintln!("{id}");
+    eprintln!("以前の結果ID（{page}/{pages}ページ、全{count}件）:");
+    for (id, result) in case
+        .prior_results
+        .iter()
+        .skip((page - 1) * HISTORY_PAGE_SIZE)
+        .take(HISTORY_PAGE_SIZE)
+    {
+        let message = result
+            .text
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .or(result.reason.as_deref())
+            .unwrap_or_default();
+        let mut characters = message.chars();
+        let mut preview: String = characters.by_ref().take(48).collect();
+        if characters.next().is_some() {
+            preview.push('…');
         }
+        eprintln!("{id} [{:?}] {preview:?}", result.lifecycle);
+    }
+    if page < pages {
+        eprintln!("続きは /history page {}", page + 1);
     }
     Ok(())
 }

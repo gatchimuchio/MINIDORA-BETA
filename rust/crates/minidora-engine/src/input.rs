@@ -15,6 +15,9 @@ const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanat
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-v159-pasted-text-summary";
 const RETURN_FUNCTION_PARSER_VERSION: &str = "declarative-ja-v160-python-return-function";
+pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
+    "declarative-ja-v165-generated-code-single-case";
+const PREVIOUS_CODE_CASE_EXPECTED_ROLE: &str = "/VerifyPreviousCode/case/expected_value";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
 const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
@@ -159,6 +162,12 @@ pub(crate) const WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v163-implicit-web-body-question-followup";
 
+pub(crate) const EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v164-explicit-web-body-question-followup";
+
+pub(crate) const RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v166-resumed-web-answer-explanation-followup";
+
 pub(crate) const EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-en-v113-explained-search-body-source-followup";
 
@@ -169,6 +178,7 @@ pub(crate) const EXPLICIT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) enum SourceContext {
     Explanation,
     WebAnswerExplanation,
+    ResumedWebAnswerExplanation,
     WebBodyQuestion,
     Summary,
 }
@@ -191,7 +201,31 @@ pub(crate) fn uses_summary_source_context(version: &str) -> bool {
 pub(crate) fn uses_derived_source_context(version: &str) -> bool {
     uses_summary_source_context(version)
         || uses_source_explanation_context(version)
-        || version == IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        || uses_web_body_question_context(version)
+}
+
+pub(crate) fn uses_web_body_question_context(version: &str) -> bool {
+    matches!(
+        version,
+        IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            | EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+    )
+}
+
+pub(crate) fn is_web_body_question_input(bundle: &InputBundle) -> bool {
+    matches!(
+        bundle.meaning.intent,
+        Intent::AskPreviousSourceQuestion { .. }
+    ) && (uses_web_answer_explanation_context(&bundle.meaning.parser_version)
+        || uses_web_body_question_context(&bundle.meaning.parser_version))
+}
+
+pub(crate) fn uses_web_answer_explanation_context(version: &str) -> bool {
+    matches!(
+        version,
+        WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            | RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+    )
 }
 
 pub(crate) fn uses_implicit_source_context(version: &str) -> bool {
@@ -462,7 +496,9 @@ pub(crate) fn seal_with_source_context(
     let implicit_source_line_parser = implicit_source_context.and_then(|context| match context {
         SourceContext::Explanation => Some(IMPLICIT_EXPLANATION_LINE_SUMMARY_PARSER_VERSION),
         SourceContext::Summary => Some(IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION),
-        SourceContext::WebAnswerExplanation | SourceContext::WebBodyQuestion => None,
+        SourceContext::WebAnswerExplanation
+        | SourceContext::ResumedWebAnswerExplanation
+        | SourceContext::WebBodyQuestion => None,
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
@@ -471,6 +507,11 @@ pub(crate) fn seal_with_source_context(
         Intent::ExplainCode { .. } => CODE_EXPLANATION_PARSER_VERSION,
         Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
         Intent::GenerateReturnFunction { .. } => RETURN_FUNCTION_PARSER_VERSION,
+        Intent::VerifyPreviousCode { .. }
+            if source_roles.contains_key(PREVIOUS_CODE_CASE_EXPECTED_ROLE) =>
+        {
+            PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
+        }
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
@@ -537,25 +578,40 @@ pub(crate) fn seal_with_source_context(
         | Intent::SummarizePreviousSource
         | Intent::SummarizePreviousSourceConstrained { .. }
         | Intent::SummarizePreviousSourceLines { .. }
-            if matches!(source_context, Some(SourceContext::WebAnswerExplanation))
-                && previous.is_some_and(|result| {
-                    result.lifecycle == Lifecycle::Commit
-                        && result.guarantee == Guarantee::SourceReport
-                        && result.evidence.is_empty()
-                }) =>
+            if matches!(
+                source_context,
+                Some(
+                    SourceContext::WebAnswerExplanation
+                        | SourceContext::ResumedWebAnswerExplanation
+                )
+            ) && previous.is_some_and(|result| {
+                result.lifecycle == Lifecycle::Commit
+                    && result.guarantee == Guarantee::SourceReport
+                    && result.evidence.is_empty()
+            }) =>
         {
-            WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            if matches!(
+                source_context,
+                Some(SourceContext::ResumedWebAnswerExplanation)
+            ) && request.context_ref.is_none()
+            {
+                RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            } else {
+                WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+            }
         }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource
         | Intent::SummarizePreviousSourceConstrained { .. }
         | Intent::SummarizePreviousSourceLines { .. }
-            if matches!(
-                implicit_source_context,
-                Some(SourceContext::WebBodyQuestion)
-            ) =>
+            if source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::WebBodyQuestion)) =>
         {
-            IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            if request.context_ref.is_some() {
+                EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            } else {
+                IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            }
         }
         Intent::SummarizePreviousSourcePacketLines { .. }
             if explicit_source_explanation_candidate
@@ -1891,6 +1947,14 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
+    }
+    if let Intent::VerifyPreviousCode { document } = intent
+        && previous_code_case_body(terminal_trim(text)).is_some()
+    {
+        return previous_code_case_source(text)?
+            .filter(|source| source.document == *document)
+            .map(|source| source.roles)
+            .ok_or_else(previous_code_case_source_mismatch);
     }
     if guarded_relation_rule_parser(intent).is_some() {
         return guarded_relation_rule_source(text)?
@@ -4244,6 +4308,119 @@ pub(crate) fn verify_return_function_input(bundle: &InputBundle) -> Result<()> {
     ))
 }
 
+struct PreviousCodeCaseSource {
+    document: String,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+fn previous_code_case_body(statement: &str) -> Option<&str> {
+    statement
+        .strip_prefix("前に作ったコードで")
+        .or_else(|| statement.strip_prefix("直前に作ったコードで"))
+}
+
+fn previous_code_case_source(text: &str) -> Result<Option<PreviousCodeCaseSource>> {
+    let statement = terminal_trim(text);
+    let Some(body) = previous_code_case_body(statement).filter(|_| !text.contains(['\r', '\n']))
+    else {
+        return Ok(None);
+    };
+    let Some(parts) = regex(concat!(
+        r"\A[ 　]*[、,]?[ 　]*(?P<arguments>[^\r\n]*)の結果が[ 　]*",
+        r"(?P<expected>-?(?:0|[1-9][0-9]{0,77}))[ 　]*になるか確認(?:して|してください)\z",
+    ))?
+    .captures(body) else {
+        return Ok(None);
+    };
+    let expected = parts.name("expected").expect("matched expected value");
+    if crate::code_capability::parse_integer(expected.as_str()).is_err() {
+        return Ok(None);
+    }
+    let arguments = parts.name("arguments").expect("matched arguments");
+    let offset = text.len() - text.trim_start().len() + statement.len() - body.len();
+    let Some(expected_span) = captured_source_span(text, offset, expected) else {
+        return Ok(None);
+    };
+    let argument_pattern = regex(concat!(
+        r"\A[ 　]*(?P<name>[_\p{XID_Start}][_\p{XID_Continue}]*)[ 　]*[=＝][ 　]*",
+        r"(?P<value>-?(?:0|[1-9][0-9]{0,77}))[ 　]*\z",
+    ))?;
+    let mut values = BTreeMap::new();
+    let mut name_spans = Vec::new();
+    let mut value_spans = Vec::new();
+    let raw_arguments = arguments.as_str();
+    let mut argument_start = 0;
+    for argument in raw_arguments.split([',', '、']) {
+        let Some(parts) = argument_pattern.captures(argument) else {
+            return Ok(None);
+        };
+        let name = parts.name("name").expect("matched argument name");
+        let value = parts.name("value").expect("matched argument value");
+        if values.len() == 16
+            || !name.as_str().nfkc().eq(name.as_str().chars())
+            || crate::code_capability::parse_integer(value.as_str()).is_err()
+            || values.insert(name.as_str(), value.as_str()).is_some()
+        {
+            return Ok(None);
+        }
+        let argument_offset = offset + arguments.start() + argument_start;
+        let Some(name_span) = captured_source_span(text, argument_offset, name) else {
+            return Ok(None);
+        };
+        let Some(value_span) = captured_source_span(text, argument_offset, value) else {
+            return Ok(None);
+        };
+        name_spans.push(name_span);
+        value_spans.push(value_span);
+        argument_start += argument.len();
+        argument_start += raw_arguments[argument_start..]
+            .chars()
+            .next()
+            .map_or(0, char::len_utf8);
+    }
+    let arguments = values
+        .into_iter()
+        .map(|(name, value)| Ok(format!("{}:{value}", serde_json::to_string(name)?)))
+        .collect::<Result<Vec<_>>>()?
+        .join(",");
+    // The existing evaluator accepts the exact integer lexemes in this case document.
+    let document = format!(
+        r#"{{"試験":[{{"引数":{{{arguments}}},"期待値":{}}}]}}"#,
+        expected.as_str()
+    );
+    Ok(Some(PreviousCodeCaseSource {
+        document,
+        roles: BTreeMap::from([
+            ("/VerifyPreviousCode/case/argument_names".into(), name_spans),
+            (
+                "/VerifyPreviousCode/case/argument_values".into(),
+                value_spans,
+            ),
+            (PREVIOUS_CODE_CASE_EXPECTED_ROLE.into(), vec![expected_span]),
+        ]),
+    }))
+}
+
+fn previous_code_case_source_mismatch() -> Error {
+    failure(
+        "CODE_VERIFICATION_SOURCE_MISMATCH",
+        "封印した引数と期待値が元の入力と一致しません。",
+    )
+}
+
+pub(crate) fn verify_previous_code_case_input(bundle: &InputBundle) -> Result<()> {
+    if bundle.meaning.parser_version == PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
+        && bundle.meaning.source_kind == "USER_REQUEST"
+        && let Intent::VerifyPreviousCode { document } = &bundle.meaning.intent
+        && let Some(source) = previous_code_case_source(&bundle.request.text)?
+        && source.document == *document
+        && source.roles == bundle.meaning.source_roles
+    {
+        return Ok(());
+    }
+    Err(previous_code_case_source_mismatch())
+}
+
 fn web_question_intent(statement: &str) -> Option<Intent> {
     let (topic, elevation_in_kilometres) = if let Some(topic) =
         statement.strip_suffix("の標高を出典付きで調べてキロメートルに換算して")
@@ -4591,6 +4768,16 @@ fn interpret(text: &str) -> Result<Intent> {
     }
     if let Some(intent) = calculation_sequence_correction_intent(text)? {
         return Ok(intent);
+    }
+    if previous_code_case_body(terminal_trim(text)).is_some() {
+        return Ok(match previous_code_case_source(text)? {
+            Some(source) => Intent::VerifyPreviousCode {
+                document: source.document,
+            },
+            None => Intent::Unknown {
+                reason: "名前付きの整数引数と整数の期待値を一組だけ指定してください。".into(),
+            },
+        });
     }
     let header = text
         .split_once('\n')
@@ -7808,6 +7995,85 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn generated_code_single_case_seals_the_authored_arguments_and_expectation() {
+        let text = "　前に作ったコードで、値=-3、倍率＝4 の結果が-12になるか確認してください。";
+        let bundle = seal(&RequestEnvelope::new("case", "check", "actor", text), None).unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
+        );
+        assert_eq!(bundle.request.text, text);
+        let Intent::VerifyPreviousCode { document } = &bundle.meaning.intent else {
+            panic!("expected a finite code verification")
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(document).unwrap(),
+            serde_json::json!({"試験":[{"引数":{"値":-3,"倍率":4},"期待値":-12}]})
+        );
+        for (role, expected) in [
+            (
+                "/VerifyPreviousCode/case/argument_names",
+                &["値", "倍率"][..],
+            ),
+            ("/VerifyPreviousCode/case/argument_values", &["-3", "4"][..]),
+            (PREVIOUS_CODE_CASE_EXPECTED_ROLE, &["-12"][..]),
+        ] {
+            let spans = &bundle.meaning.source_roles[role];
+            assert_eq!(spans.len(), expected.len());
+            for (span, expected) in spans.iter().zip(expected) {
+                assert_eq!(span.text, *expected);
+                assert_eq!(&text[span.start..span.end], *expected);
+            }
+        }
+        verify_previous_code_case_input(&bundle).unwrap();
+        let mut changed = bundle.clone();
+        changed.meaning.source_roles.clear();
+        assert!(verify_previous_code_case_input(&changed).is_err());
+
+        let legacy = seal(
+            &RequestEnvelope::new(
+                "case",
+                "legacy",
+                "actor",
+                &format!("生成コードを検証して:\n{document}"),
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(legacy.meaning.parser_version, PARSER_VERSION);
+        assert_eq!(legacy.meaning.intent, bundle.meaning.intent);
+    }
+
+    #[test]
+    fn generated_code_single_case_rejects_ambiguous_or_invalid_values() {
+        for text in [
+            "前に作ったコードで、の結果が1になるか確認して",
+            "前に作ったコードで、x=1、の結果が1になるか確認して",
+            "前に作ったコードで、x=1, x=2 の結果が1になるか確認して",
+            "前に作ったコードで、x=1.5 の結果が1になるか確認して",
+            "前に作ったコードで、x=01 の結果が1になるか確認して",
+            "前に作ったコードで、x=1 の結果が1e3になるか確認して",
+            "前に作ったコードで、x=1 の結果が1になるか",
+            "前に作ったコードで、x=1 の結果が1になるか確認してから外部へ送って",
+            "前に作ったコードで、x=1\nの結果が1になるか確認して",
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
+        let overflow = format!(
+            "前に作ったコードで、x=1 の結果が{}になるか確認して",
+            "9".repeat(78)
+        );
+        assert!(matches!(
+            interpret(&overflow).unwrap(),
+            Intent::Unknown { .. }
+        ));
+    }
+
     #[test]
     fn bounded_code_capability_headers_preserve_original_body() {
         let document =

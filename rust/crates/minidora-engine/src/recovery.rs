@@ -122,6 +122,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                     crate::input::SOURCE_SUMMARY_PARSER_VERSION
                         | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
                         | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                        | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
                         | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
@@ -3827,6 +3828,21 @@ fn first_hop_wait_matches(
 }
 
 /// Authenticate the original source of a committed follow-up or a no-match question.
+pub(crate) fn is_web_body_question_no_match(state: &CaseRevision) -> bool {
+    state.lifecycle == Lifecycle::Suspend
+        && state
+            .bundle
+            .as_ref()
+            .is_some_and(crate::input::is_web_body_question_input)
+        && state.result.as_ref().is_some_and(|result| {
+            result.lifecycle == Lifecycle::Suspend
+                && result
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.starts_with("SOURCE_QUESTION_NO_MATCH: "))
+        })
+}
+
 pub(crate) fn source_followup_anchor<'a>(
     store: &Store,
     state: &'a CaseRevision,
@@ -4076,8 +4092,34 @@ fn verify_implicit_source_predecessor(
     bundle: &InputBundle,
 ) -> Result<()> {
     let version = &bundle.meaning.parser_version;
-    if version == crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION {
+    if crate::input::uses_web_body_question_context(version) {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
+    }
+    if version == crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_SOURCE_CONTEXT_MISMATCH";
+        let invalid = || {
+            failure(
+                CODE,
+                "the sealed source context differs from the preceding unmatched Web body question",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let preceding = store.input_start_predecessor(state)?.ok_or_else(invalid)?;
+        let stopped = store
+            .load_suspended_result_revision(&state.actor_id, &state.case_id, &preceding)?
+            .ok_or_else(invalid)?;
+        let context = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if bundle.request.context_ref.is_some()
+            || !is_web_body_question_no_match(&stopped)
+            || source_followup_anchor(store, &stopped, true)? != Some(context)
+        {
+            return Err(invalid());
+        }
     }
     if crate::input::uses_implicit_source_context(version)
         || (version == crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
@@ -5021,7 +5063,10 @@ fn inspect(
         }
         hypothesis.verify_artifacts(store, actor, case)?;
     }
-    let original_relation = if requires_condition_evaluation || requires_record_source {
+    let original_relation = if assertion_predicate.is_some() {
+        verify_previous_assertion_explanation(store, state, bundle, result, plan)?;
+        None
+    } else if requires_condition_evaluation || requires_record_source {
         None
     } else {
         verify_result_memory_provenance(store, actor, case, state, result, plan, &goal)?
@@ -5458,7 +5503,10 @@ fn inspect(
             ));
         }
     }
-    if matches!(goal.intent, Intent::ExplainPrevious) && !explains_sequence {
+    if matches!(goal.intent, Intent::ExplainPrevious)
+        && !explains_sequence
+        && assertion_predicate.is_none()
+    {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
     if matches!(goal.intent, Intent::GenerateReturnFunction { .. }) {
@@ -5523,9 +5571,6 @@ fn inspect(
                 "the code-generation source or structured explanation no longer matches the prior result",
             ));
         }
-    }
-    if assertion_predicate.is_some() {
-        verify_previous_assertion_explanation(store, state, bundle, result, plan)?;
     }
     if let Some((report_ref, expected_units)) = &previous_csv_statistics_explanation {
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
@@ -5705,8 +5750,19 @@ fn inspect(
             | "declarative-ja-en-v62-constrained-source-summary"
             | "declarative-ja-en-v63-previous-output-edit"
             | "declarative-ja-en-v70-generic-transitive-verbs"
+            | crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
     ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
+        if bundle.meaning.parser_version == crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION {
+            if bundle.meaning.intent != goal.intent {
+                return Err(failure(
+                    "RECOVERY_CODE_VERIFICATION_CHANGED",
+                    "the original verification intent differs from the adopted goal",
+                ));
+            }
+            crate::input::verify_previous_code_case_input(bundle)?;
+            verify_registered_input(store, bundle, "RECOVERY_CODE_VERIFICATION_CHANGED")?;
+        }
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
                 "RECOVERY_CODE_CONTEXT_CHANGED",
@@ -6710,9 +6766,14 @@ fn verify_previous_assertion_explanation(
         .and_then(|id| state.prior_results.get(id))
         .ok_or_else(invalid)?;
     verify_registered_input(store, bundle, CODE)?;
-    let assertion =
-        crate::core::previous_assertion_context(store, &request.actor_id, &request.case_id, prior)?
-            .ok_or_else(invalid)?;
+    let assertion = crate::core::previous_assertion_context(
+        store,
+        &request.actor_id,
+        &request.case_id,
+        &state.prior_results,
+        prior,
+    )?
+    .ok_or_else(invalid)?;
     // Recheck the state at adoption, without changing an attempted effect's
     // original input or treating the current memory revision as its source.
     let revision = result.actor_memory_revision.ok_or_else(invalid)?;

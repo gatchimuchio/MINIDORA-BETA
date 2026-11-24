@@ -5709,13 +5709,7 @@ impl Engine {
                         Some(input::SourceContext::WebAnswerExplanation)
                     }
                     Intent::ExplainPrevious => Some(input::SourceContext::Explanation),
-                    Intent::AskPreviousSourceQuestion { .. }
-                        if matches!(
-                            bundle.meaning.parser_version.as_str(),
-                            input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
-                                | input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
-                        ) =>
-                    {
+                    _ if input::is_web_body_question_input(bundle) => {
                         Some(input::SourceContext::WebBodyQuestion)
                     }
                     intent if input::is_source_summary_intent(intent) => {
@@ -5737,10 +5731,13 @@ impl Engine {
                 )
                 && let Some(context) = previous.filter(|result| {
                     result.lifecycle == Lifecycle::Commit
-                        && result.guarantee == Guarantee::SourceReport
+                        && matches!(
+                            result.guarantee,
+                            Guarantee::SourceReport | Guarantee::Hypothesis
+                        )
                         && result.evidence.is_empty()
                 })
-                && self
+                && let Some(source_context) = self
                     .store
                     .get_input_bundle(
                         actor,
@@ -5748,17 +5745,21 @@ impl Engine {
                         &context.input_id,
                         context.input_version,
                     )?
-                    .is_some_and(|(_, source)| {
-                        matches!(source.meaning.intent, Intent::ExplainPrevious)
-                            && source.meaning.parser_version
-                                == input::WEB_ANSWER_EXPLANATION_PARSER_VERSION
+                    .and_then(|(_, source)| match context.guarantee {
+                        Guarantee::SourceReport
+                            if matches!(source.meaning.intent, Intent::ExplainPrevious)
+                                && source.meaning.parser_version
+                                    == input::WEB_ANSWER_EXPLANATION_PARSER_VERSION =>
+                        {
+                            Some(input::SourceContext::WebAnswerExplanation)
+                        }
+                        Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
+                            Some(input::SourceContext::WebBodyQuestion)
+                        }
+                        _ => None,
                     })
             {
-                return input::seal_with_source_context(
-                    &request,
-                    previous,
-                    Some(input::SourceContext::WebAnswerExplanation),
-                );
+                return input::seal_with_source_context(&request, previous, Some(source_context));
             }
             if has_compute_budget
                 && matches!(
@@ -5816,6 +5817,16 @@ impl Engine {
                         .iter()
                         .any(|packet| packet.packet_kind == "SEARCH_LIST"))
             {
+                if requested_rank.is_none()
+                    && crate::recovery::is_web_body_question_no_match(prior_case)
+                {
+                    previous = Some(source);
+                    return input::seal_with_source_context(
+                        &request,
+                        previous,
+                        Some(input::SourceContext::ResumedWebAnswerExplanation),
+                    );
+                }
                 Some(source)
             } else {
                 search::committed_context_after_candidate_failure(
@@ -6425,7 +6436,19 @@ impl Engine {
         let previous_assertion = if matches!(bundle.meaning.intent, Intent::ExplainPrevious)
             && let Some(prior) = previous
         {
-            previous_assertion_context(&self.store, actor, &request.case_id, prior)?
+            match previous_assertion_context(
+                &self.store,
+                actor,
+                &request.case_id,
+                &state.prior_results,
+                prior,
+            ) {
+                Ok(context) => context,
+                Err(Error::Contract { code, message }) if code == "PRIOR_INPUT_RESULT_MISMATCH" => {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
@@ -13054,7 +13077,13 @@ pub(crate) struct PreviousAssertionContext {
     bundle_ref: String,
     fact_id: String,
     proposition: Proposition,
+    context: Option<AssertionSubjectContext>,
     source_evidence: Option<SealedSourceEvidence>,
+}
+
+struct AssertionSubjectContext {
+    result_id: String,
+    explicit_scope: Option<String>,
 }
 
 pub(crate) struct PreviousAssertionExplanation {
@@ -13064,40 +13093,74 @@ pub(crate) struct PreviousAssertionExplanation {
 
 impl PreviousAssertionContext {
     pub(crate) fn explain(&self, memory: &MemoryState) -> Result<PreviousAssertionExplanation> {
-        let fact = memory.facts.iter().find(|fact| {
-            fact.id == self.fact_id
-                && fact.source_input == self.result_id
-                && fact.proposition == self.proposition
-                && fact.guarantee == Guarantee::UserPremise
-                && fact.dependencies.is_empty()
-                && fact
-                    .source_evidence
-                    .as_ref()
-                    .is_none_or(|evidence| self.source_evidence.as_ref() == Some(evidence))
-        });
-        if !fact.is_some_and(|fact| fact.valid) {
-            return Err(failure(
+        let changed = || {
+            failure(
                 "CONTEXT_PROOF_CHANGED",
                 "前回の提示前提は現在有効な記憶として確認できません。元の回答は履歴で確認できます。",
-            ));
+            )
+        };
+        let fact = memory
+            .facts
+            .iter()
+            .find(|fact| {
+                fact.valid
+                    && fact.id == self.fact_id
+                    && fact.source_input == self.result_id
+                    && fact.guarantee == Guarantee::UserPremise
+                    && fact.dependencies.is_empty()
+                    && fact
+                        .source_evidence
+                        .as_ref()
+                        .is_none_or(|evidence| self.source_evidence.as_ref() == Some(evidence))
+            })
+            .ok_or_else(changed)?;
+        let proposition = &fact.proposition;
+        let expected = if let Some(context) = &self.context {
+            if input::singular_previous_subject(&proposition.subject) {
+                return Err(changed());
+            }
+            Proposition {
+                subject: proposition.subject.clone(),
+                scope: context
+                    .explicit_scope
+                    .clone()
+                    .unwrap_or_else(|| proposition.scope.clone()),
+                ..self.proposition.clone()
+            }
+        } else {
+            self.proposition.clone()
+        };
+        if *proposition != expected
+            || relations::user_premise_id(proposition, &self.result_id)? != self.fact_id
+        {
+            return Err(changed());
         }
+        let mut dependencies = vec![
+            self.result_id.clone(),
+            self.bundle_ref.clone(),
+            self.fact_id.clone(),
+        ];
         let mut units = vec![
             "前回の回答は、あなたが入力した前提を記録したものです。".into(),
             format!(
                 "提示前提: {}（範囲: {}）。",
-                describe(&self.proposition),
-                self.proposition.scope
+                describe(proposition),
+                proposition.scope
             ),
             format!("前提ID: {}", self.fact_id),
             "記憶状態: 有効。".into(),
         ];
-        if let Some(time) = &self.proposition.temporal_scope {
+        if let Some(context) = &self.context {
+            dependencies.push(context.result_id.clone());
+            units.push(format!("主語を参照した結果ID: {}", context.result_id));
+        }
+        if let Some(time) = &proposition.temporal_scope {
             units.push(format!("適用時点: {time}"));
         }
-        if !self.proposition.condition_refs.is_empty() {
+        if !proposition.condition_refs.is_empty() {
             units.push(format!(
                 "適用条件ID: {}",
-                self.proposition
+                proposition
                     .condition_refs
                     .iter()
                     .cloned()
@@ -13107,11 +13170,7 @@ impl PreviousAssertionContext {
         }
         units.push("この説明では、適用条件や現実世界の真偽を評価していません。".into());
         Ok(PreviousAssertionExplanation {
-            dependencies: vec![
-                self.result_id.clone(),
-                self.bundle_ref.clone(),
-                self.fact_id.clone(),
-            ],
+            dependencies,
             units,
         })
     }
@@ -13121,6 +13180,7 @@ pub(crate) fn previous_assertion_context(
     store: &Store,
     actor: &str,
     case: &str,
+    prior_results: &BTreeMap<String, ResultRecord>,
     prior: &ResultRecord,
 ) -> Result<Option<PreviousAssertionContext>> {
     if prior.lifecycle != Lifecycle::Commit || prior.guarantee != Guarantee::UserPremise {
@@ -13131,23 +13191,55 @@ pub(crate) fn previous_assertion_context(
     else {
         return Ok(None);
     };
-    let Intent::Assert { proposition } = &bundle.meaning.intent else {
-        return Ok(None);
-    };
-    let fact_id = relations::user_premise_id(proposition, &prior.id)?;
-    if identity(&bundle.request)? != prior.id
-        || prior.dependencies.as_slice() != std::slice::from_ref(&fact_id)
-    {
-        return Err(failure(
+    let invalid = || {
+        failure(
             "PRIOR_INPUT_RESULT_MISMATCH",
             "説明対象の前提と確定済み入力・記録IDが一致しません。",
-        ));
+        )
+    };
+    let (proposition, fact_id, context) = match &bundle.meaning.intent {
+        Intent::Assert { proposition } => {
+            let fact_id = relations::user_premise_id(proposition, &prior.id)?;
+            if prior.dependencies.as_slice() != std::slice::from_ref(&fact_id) {
+                return Err(invalid());
+            }
+            (proposition, fact_id, None)
+        }
+        Intent::AssertPreviousRelation {
+            proposition,
+            explicit_scope,
+        } => {
+            let [.., reference, fact] = prior.dependencies.as_slice() else {
+                return Err(invalid());
+            };
+            if bundle.meaning.context_result_ref.as_ref() != Some(reference)
+                || !prior_results.get(reference).is_some_and(|result| {
+                    result.id == *reference && result.lifecycle == Lifecycle::Commit
+                })
+                || reference == &prior.id
+            {
+                return Err(invalid());
+            }
+            (
+                proposition,
+                fact.clone(),
+                Some(AssertionSubjectContext {
+                    result_id: reference.clone(),
+                    explicit_scope: explicit_scope.clone(),
+                }),
+            )
+        }
+        _ => return Ok(None),
+    };
+    if identity(&bundle.request)? != prior.id {
+        return Err(invalid());
     }
     Ok(Some(PreviousAssertionContext {
         result_id: prior.id.clone(),
         bundle_ref,
         fact_id,
         proposition: proposition.clone(),
+        context,
         source_evidence: input::assertion_source_evidence(&bundle)?,
     }))
 }
