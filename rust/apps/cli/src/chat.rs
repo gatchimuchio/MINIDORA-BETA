@@ -1,5 +1,5 @@
 use super::{Options, execute_request};
-use minidora_domain::{CaseRevision, EffectPhase, ResultRecord};
+use minidora_domain::{CaseRevision, DeliveryReceipt, EffectPhase, ResultRecord};
 use minidora_engine::Engine;
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -101,12 +101,21 @@ fn show_result(result: &ResultRecord) -> io::Result<()> {
         }
     }
     for receipt in &result.receipts {
-        show_effect_record(receipt.phase, &receipt.target, &receipt.action_id);
+        show_receipt(receipt);
     }
     Ok(())
 }
 
-fn show_effect_record(phase: EffectPhase, target: &str, action_id: &str) {
+pub(super) fn show_receipt(receipt: &DeliveryReceipt) {
+    show_effect_record(
+        receipt.phase,
+        &receipt.target,
+        &receipt.action_id,
+        receipt.reason.as_deref(),
+    );
+}
+
+fn show_effect_record(phase: EffectPhase, target: &str, action_id: &str, reason: Option<&str>) {
     let phase = match phase {
         EffectPhase::Proposed => "提案",
         EffectPhase::Authorized => "許可済み",
@@ -117,7 +126,11 @@ fn show_effect_record(phase: EffectPhase, target: &str, action_id: &str) {
         EffectPhase::Unknown => "結果未確定",
         EffectPhase::Cancelled => "取消済み",
     };
-    eprintln!("作用記録 {phase} / 対象 {target:?} / 作用ID {action_id}");
+    let reason = reason.map_or_else(String::new, |reason| format!(" / 理由 {reason:?}"));
+    let _ = writeln!(
+        io::stderr().lock(),
+        "作用記録 {phase} / 対象 {target:?} / 作用ID {action_id}{reason}"
+    );
 }
 
 fn saved_result<'a>(case: &'a CaseRevision, result_id: &str) -> Option<&'a ResultRecord> {
@@ -380,7 +393,15 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                         }
                         Ok(actions) => {
                             for action in actions {
-                                show_effect_record(action.phase, &action.target, &action.action_id);
+                                show_effect_record(
+                                    action.phase,
+                                    &action.target,
+                                    &action.action_id,
+                                    action
+                                        .receipt
+                                        .as_ref()
+                                        .and_then(|receipt| receipt.reason.as_deref()),
+                                );
                             }
                         }
                         Err(error) => eprintln!("作用を照合できませんでした。{error}"),

@@ -6332,10 +6332,11 @@ impl Engine {
                                 "前回の採用結果に再検証できる取得本文がありません。",
                             );
                         }
-                        match crate::text_summary::answer_fetched_source_question_v2(
+                        match crate::text_summary::answer_fetched_source_question(
                             &prior.id,
                             query,
                             &source_packets,
+                            request.budget.max_actions as usize,
                         ) {
                             Ok(answer) => Some((
                                 prior.id.clone(),
@@ -6576,11 +6577,10 @@ impl Engine {
             None
         };
         let previous_math_report_explanation =
-            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
-                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => crate::math::previous_math_report_explanation(prior)?,
-                    None => None,
-                }
+            if matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+                && let Some(prior) = previous
+            {
+                registered_math_report_explanation(&self.store, actor, &request.case_id, prior)?
             } else {
                 None
             };
@@ -13328,6 +13328,43 @@ fn rejected(request: &RequestEnvelope, code: &str, message: &str) -> ResultRecor
     r.text = message.into();
     r
 }
+pub(crate) fn registered_math_report_explanation(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    previous: &ResultRecord,
+) -> Result<Option<Vec<String>>> {
+    if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let Some((_, bundle)) =
+        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        bundle.meaning.intent,
+        Intent::Statistics { .. }
+            | Intent::NormalizeProbabilityWeights { .. }
+            | Intent::FiniteProbabilityStatistics { .. }
+            | Intent::FiniteEventProbability { .. }
+            | Intent::EvaluatePolynomial { .. }
+            | Intent::LinearSystem { .. }
+            | Intent::QuadraticEquation { .. }
+            | Intent::LinearEquation { .. }
+            | Intent::Symbolic { .. }
+    ) {
+        return Ok(None);
+    }
+    if identity(&bundle.request)? != previous.id {
+        return Err(failure(
+            "MATH_CONTEXT_INVALID",
+            "the previous mathematical result does not match its registered input identity",
+        ));
+    }
+    crate::math::previous_math_report_explanation(previous)
+}
+
 pub(crate) fn previous_relation_answer(text: &str) -> Result<Option<Proposition>> {
     let Some(mut statement) = text
         .strip_prefix("提示された前提の範囲では、")

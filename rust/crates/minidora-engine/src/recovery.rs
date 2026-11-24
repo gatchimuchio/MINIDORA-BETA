@@ -4362,23 +4362,38 @@ pub(crate) fn source_followup_anchor<'a>(
                 && result.reason.as_deref()
                     == Some(format!("SOURCE_QUESTION_NO_MATCH: {error}").as_str())
         };
-        // Stopped questions predate operation-tagged answer artifacts. Require
-        // the full recorded diagnostic from the matching lexical version.
-        if !same_stop(
-            crate::text_summary::answer_fetched_source_question_v2(
-                &context.source.id,
-                query,
-                &packets,
+        // Stopped questions have no adopted answer artifact. Require the exact
+        // diagnostic and the same derivation with the original request budget.
+        let same_diagnostic = if result.reason.as_deref().is_some_and(|reason| {
+            reason.ends_with(crate::text_summary::WIKIPEDIA_SOURCE_QUESTION_NO_MATCH)
+        }) {
+            same_stop(
+                crate::text_summary::answer_fetched_source_question(
+                    &context.source.id,
+                    query,
+                    &packets,
+                    bundle.request.budget.max_actions as usize,
+                )
+                .err(),
             )
-            .err(),
-        ) && !same_stop(
-            crate::text_summary::answer_fetched_source_question_v1(
-                &context.source.id,
-                query,
-                &packets,
+        } else {
+            same_stop(
+                crate::text_summary::answer_fetched_source_question_v2(
+                    &context.source.id,
+                    query,
+                    &packets,
+                )
+                .err(),
+            ) || same_stop(
+                crate::text_summary::answer_fetched_source_question_v1(
+                    &context.source.id,
+                    query,
+                    &packets,
+                )
+                .err(),
             )
-            .err(),
-        ) {
+        };
+        if !same_diagnostic {
             return Err(mismatch());
         }
         return Ok(Some(if allow_explanation {
@@ -5692,7 +5707,9 @@ fn inspect(
             .context_result_ref
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
-            .map(crate::math::previous_math_report_explanation)
+            .map(|previous| {
+                crate::core::registered_math_report_explanation(store, actor, case, previous)
+            })
             .transpose()?
             .flatten()
     } else {
@@ -8436,6 +8453,7 @@ mod tests {
                 &"a".repeat(64),
                 "photosynthesis",
                 &packets,
+                ResourceBudget::development().max_actions as usize,
             )
             .unwrap();
             let artifact: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -8695,6 +8713,7 @@ mod tests {
                 &"a".repeat(64),
                 "photosynthesis",
                 &packets,
+                ResourceBudget::development().max_actions as usize,
             )
             .unwrap();
         assert_eq!(replayed_bytes, expected_bytes);
@@ -8705,6 +8724,7 @@ mod tests {
                 &"a".repeat(64),
                 "photosynthesis",
                 &packets,
+                ResourceBudget::development().max_actions as usize,
             )
             .unwrap_err()
             .to_string()

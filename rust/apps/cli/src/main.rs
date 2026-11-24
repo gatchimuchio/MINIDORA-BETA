@@ -337,6 +337,9 @@ fn print_result(result: &ResultRecord, json: bool) -> Result<(), String> {
         if let Some(reason) = &result.reason {
             writeln!(output, "reason={reason}").map_err(|error| error.to_string())?;
         }
+        for receipt in &result.receipts {
+            chat::show_receipt(receipt);
+        }
     }
     Ok(())
 }

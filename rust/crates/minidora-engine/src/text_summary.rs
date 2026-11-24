@@ -322,6 +322,9 @@ struct SourceQuestionPacketVersion {
 pub(crate) const MAX_QUESTION_SOURCE_PACKETS: usize = 16;
 const MAX_QUESTION_TERMS: usize = 32;
 const MAX_QUESTION_CANDIDATES: usize = 5;
+const WIKIPEDIA_SOURCE_QUESTION: &str = "SOURCE_QUESTION_WIKIPEDIA_PROSE_EXTRACTIVE_CANDIDATES_V3";
+pub(crate) const WIKIPEDIA_SOURCE_QUESTION_NO_MATCH: &str =
+    "保存済みWikipedia本文の冒頭で、今回の予算内に読み取れた文には質問語句が見つかりませんでした。";
 
 fn sha256_id(value: &str) -> bool {
     value.len() == 64
@@ -968,6 +971,47 @@ pub(crate) fn answer_fetched_source_question_v2(
     question_topic: &str,
     packets: &[(usize, &EvidencePacket, String)],
 ) -> Result<SourceQuestionAnswerV2> {
+    answer_fetched_source_question_versioned(source_result_id, question_topic, packets, None)
+}
+
+pub(crate) fn answer_fetched_source_question(
+    source_result_id: &str,
+    question_topic: &str,
+    packets: &[(usize, &EvidencePacket, String)],
+    candidate_limit: usize,
+) -> Result<SourceQuestionAnswerV2> {
+    if is_wikipedia_source_question_scope(packets) {
+        return answer_fetched_source_question_versioned(
+            source_result_id,
+            question_topic,
+            packets,
+            Some(candidate_limit),
+        );
+    }
+    answer_fetched_source_question_v2(source_result_id, question_topic, packets)
+}
+
+fn is_wikipedia_source_question_scope(packets: &[(usize, &EvidencePacket, String)]) -> bool {
+    !packets.is_empty()
+        && packets.iter().all(|(_, packet, _)| {
+            packet.mode == "LIVE"
+                && packet.http_status == 200
+                && packet.provider_id == "https-direct-url-v1"
+                && packet.parser_version == "strict-utf8-identity-v1"
+                && packet
+                    .extracted_text
+                    .as_deref()
+                    .is_some_and(|text| text.as_bytes() == packet.raw_body)
+                && is_wikipedia_raw_body(packet)
+        })
+}
+
+fn answer_fetched_source_question_versioned(
+    source_result_id: &str,
+    question_topic: &str,
+    packets: &[(usize, &EvidencePacket, String)],
+    mut wikipedia_remaining: Option<usize>,
+) -> Result<SourceQuestionAnswerV2> {
     if !sha256_id(source_result_id)
         || question_topic.is_empty()
         || question_topic.len() > 512
@@ -977,6 +1021,13 @@ pub(crate) fn answer_fetched_source_question_v2(
         return Err(failure(
             "SOURCE_QUESTION_INPUT_LIMIT",
             "expected a committed source result, a topic up to 512 bytes and 1..16 fetched-body packets",
+        ));
+    }
+    let wiki_prose = wikipedia_remaining.is_some();
+    if wiki_prose && !is_wikipedia_source_question_scope(packets) {
+        return Err(failure(
+            "SOURCE_QUESTION_EVIDENCE_INVALID",
+            "the Wikipedia question requires intact original live UTF-8 article bodies",
         ));
     }
     let mut query_terms = Vec::new();
@@ -1046,11 +1097,27 @@ pub(crate) fn answer_fetched_source_question_v2(
             .as_deref()
             .expect("validated active source body has extracted text");
         let extracted_text_sha256 = digest(extracted_text.as_bytes());
-        for sentence in sentence_candidates(extracted_text, false)? {
-            let sentence_tokens = tokens(&sentence.text);
+        let passages: Vec<_> = if let Some(remaining) = &mut wikipedia_remaining {
+            if *remaining == 0 {
+                break;
+            }
+            let passages = crate::web_answer::readable_passages(extracted_text, *remaining);
+            *remaining -= passages.len();
+            passages
+                .into_iter()
+                .map(|passage| (passage.source_start, passage.source_end, passage.text))
+                .collect()
+        } else {
+            sentence_candidates(extracted_text, false)?
+                .into_iter()
+                .map(|sentence| (sentence.start, sentence.end, sentence.text))
+                .collect()
+        };
+        for (source_start, source_end, text) in passages {
+            let sentence_tokens = tokens(&text);
             let matched_query_terms: Vec<_> = query_terms
                 .iter()
-                .filter(|term| query_term_matches_sentence(term, &sentence.text, &sentence_tokens))
+                .filter(|term| query_term_matches_sentence(term, &text, &sentence_tokens))
                 .cloned()
                 .collect();
             if matched_query_terms.is_empty() {
@@ -1065,10 +1132,10 @@ pub(crate) fn answer_fetched_source_question_v2(
                 source_final_uri: packet.final_uri.clone(),
                 raw_body_sha256: packet.raw_sha256.clone(),
                 extracted_text_sha256: extracted_text_sha256.clone(),
-                source_start: sentence.start,
-                source_end: sentence.end,
-                source_span_sha256: digest(sentence.text.as_bytes()),
-                text: sentence.text,
+                source_start,
+                source_end,
+                source_span_sha256: digest(&extracted_text.as_bytes()[source_start..source_end]),
+                text,
                 matched_query_terms,
             };
             ordered.push((
@@ -1082,7 +1149,11 @@ pub(crate) fn answer_fetched_source_question_v2(
     if ordered.is_empty() {
         return Err(failure(
             "SOURCE_QUESTION_NO_MATCH",
-            "no sentence in the newest body version for any exact final URI contains a supported topic term",
+            if wiki_prose {
+                WIKIPEDIA_SOURCE_QUESTION_NO_MATCH
+            } else {
+                "no sentence in the newest body version for any exact final URI contains a supported topic term"
+            },
         ));
     }
     ordered.sort_by(|left, right| {
@@ -1105,7 +1176,11 @@ pub(crate) fn answer_fetched_source_question_v2(
         })
         .collect();
     Ok(SourceQuestionAnswerV2 {
-        operation: "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2".into(),
+        operation: if wiki_prose {
+            WIKIPEDIA_SOURCE_QUESTION
+        } else {
+            "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2"
+        }.into(),
         source_result_id: source_result_id.into(),
         question_topic: question_topic.into(),
         query_terms,
@@ -1115,13 +1190,31 @@ pub(crate) fn answer_fetched_source_question_v2(
         source_versions,
         matched_sentence_count,
         candidates,
-        guarantee: "exact English-token or Japanese-substring matches from the latest observed body/parser version for each exact final URI; older distinct versions and repeated observations remain linked, while source independence, semantic relevance, completeness, reliability and factual truth are not verified".into(),
+        guarantee: if wiki_prose {
+            "各URLの最新取得版から、候補予算内で読み取れた記事冒頭の表示文と語句を照合しました。原本文の範囲とSHA-256には表示時に除いた記法も含まれます。回答の意味・網羅性・資料の信頼性と事実性は未検証です"
+        } else {
+            "exact English-token or Japanese-substring matches from the latest observed body/parser version for each exact final URI; older distinct versions and repeated observations remain linked, while source independence, semantic relevance, completeness, reliability and factual truth are not verified"
+        }.into(),
     })
 }
 
 pub(crate) fn source_question_answer_lines_v2(answer: &SourceQuestionAnswerV2) -> Vec<String> {
+    let wiki_prose = answer.operation == WIKIPEDIA_SOURCE_QUESTION;
+    let (intro, span_label, candidate_label) = if wiki_prose {
+        (
+            "取得済みWikipedia本文の冒頭から、予算内で読み取れた文を質問語句と照合しました。表示ではリンクや注記の記法を除いています。",
+            "原本文",
+            "表示候補",
+        )
+    } else {
+        (
+            "前回取得した実本文の最新版から、質問語句と一致する原文候補を抽出しました。",
+            "extracted-text ",
+            "原文候補",
+        )
+    };
     let mut lines = vec![
-        "前回取得した実本文の最新版から、質問語句と一致する原文候補を抽出しました。".into(),
+        intro.into(),
         format!(
             "照合topic: {:?}。照合語: {}。本文packet: {}件、exact final URI: {}件、旧本文版: {}件。",
             answer.question_topic,
@@ -1173,13 +1266,13 @@ pub(crate) fn source_question_answer_lines_v2(answer: &SourceQuestionAnswerV2) -
             candidate.extracted_text_sha256
         ));
         lines.push(format!(
-            "  matched: {} / extracted-text byte[{}..{}) / span SHA-256: {}",
+            "  matched: {} / {span_label}byte[{}..{}) / span SHA-256: {}",
             candidate.matched_query_terms.join("、"),
             candidate.source_start,
             candidate.source_end,
             candidate.source_span_sha256
         ));
-        lines.push(format!("  原文候補: {}", candidate.text));
+        lines.push(format!("  {candidate_label}: {}", candidate.text));
     }
     lines.push("出典license情報: packetに記録されていないため未検証です。".into());
     lines.push(format!("保証範囲: {}。", answer.guarantee));
@@ -3353,6 +3446,7 @@ pub(crate) fn recompute_source_question_artifact(
     source_result_id: &str,
     query: &str,
     packets: &[(usize, &EvidencePacket, String)],
+    candidate_limit: usize,
 ) -> Result<(Vec<u8>, Vec<String>)> {
     match operation {
         "SOURCE_QUESTION_EXTRACTIVE_CANDIDATES_V1" => {
@@ -3364,6 +3458,18 @@ pub(crate) fn recompute_source_question_artifact(
         }
         "SOURCE_QUESTION_VERSIONED_EXTRACTIVE_CANDIDATES_V2" => {
             let answer = answer_fetched_source_question_v2(source_result_id, query, packets)?;
+            Ok((
+                canonical(&answer)?,
+                source_question_answer_lines_v2(&answer),
+            ))
+        }
+        WIKIPEDIA_SOURCE_QUESTION => {
+            let answer = answer_fetched_source_question_versioned(
+                source_result_id,
+                query,
+                packets,
+                Some(candidate_limit),
+            )?;
             Ok((
                 canonical(&answer)?,
                 source_question_answer_lines_v2(&answer),
@@ -3521,6 +3627,15 @@ fn previous_source_question_explanation<'a>(
         format!("回答レポート: {} / SHA-256: {}", proof.operation, proof.answer_ref),
         format!("一致した{matched}文から{}候補を採用。一致した語の種類が多い文を優先し、同数のときは資料と抽出位置の順で並べました。", candidates.len()),
     ]);
+    let (span_label, candidate_label) = if proof.operation == WIKIPEDIA_SOURCE_QUESTION {
+        units.push(format!(
+            "記事冒頭から読み取れた文を候補{}件まで照合しました。表示候補では記法を除き、原本文の範囲にはその記法も含まれます。",
+            question_bundle.request.budget.max_actions,
+        ));
+        ("原本文", "表示候補")
+    } else {
+        ("抽出本文", "原文候補")
+    };
     for candidate in candidates {
         let packet = proof
             .source_packet_refs
@@ -3553,7 +3668,7 @@ fn previous_source_question_explanation<'a>(
                 candidate.raw_body_sha256, candidate.extracted_text_sha256
             ),
             format!(
-                "  抽出本文byte[{}..{}) / 範囲SHA-256: {} / 原文候補: {:?}",
+                "  {span_label}byte[{}..{}) / 範囲SHA-256: {} / {candidate_label}: {:?}",
                 candidate.source_start, candidate.source_end, candidate.source_span_sha256, preview
             ),
         ]);
@@ -3645,8 +3760,13 @@ pub(crate) fn verify_retained_source_question<'a>(
                 "the retained source-question artifact has no derivation version",
             )
         })?;
-    let (encoded, mut expected_units) =
-        recompute_source_question_artifact(operation, &prior.id, query, &packets)?;
+    let (encoded, mut expected_units) = recompute_source_question_artifact(
+        operation,
+        &prior.id,
+        query,
+        &packets,
+        request.budget.max_actions as usize,
+    )?;
     if let Some(stop) = partial_retrieval_stop(prior) {
         expected_units.insert(0, stop.notice().into());
     }
@@ -4414,6 +4534,35 @@ mod tests {
             );
         }
         assert!(answer.guarantee.contains("semantic relevance"));
+    }
+
+    #[test]
+    fn wiki_source_question_matches_visible_prose_and_hashes_the_raw_span() {
+        let text = "{{Photo|marksize=18}}\n'''富士山'''は、[[日本]]の活火山である。\n静岡県と山梨県にまたがる。\n";
+        let mut packet = source_question_packet(text);
+        packet.request_uri = "https://ja.wikipedia.org/wiki/Fuji?action=raw".into();
+        packet.final_uri = packet.request_uri.clone();
+        packet.independence_group = packet.final_uri.clone();
+        let packet_ref = digest(&canonical(&packet).unwrap());
+        let sources = [(0, &packet, packet_ref)];
+        let result_id = "a".repeat(64);
+        let answer = answer_fetched_source_question(&result_id, "富士山", &sources, 2).unwrap();
+        assert_eq!(answer.operation, WIKIPEDIA_SOURCE_QUESTION);
+        let candidate = &answer.candidates[0];
+        assert_eq!(candidate.text, "富士山は、日本の活火山である。");
+        let raw = &text[candidate.source_start..candidate.source_end];
+        assert!(raw.contains("[[日本]]"));
+        assert_eq!(candidate.source_span_sha256, digest(raw.as_bytes()));
+        assert!(answer_fetched_source_question_v2(&result_id, "marksize", &sources).is_ok());
+        for (topic, limit) in [("marksize", 2), ("静岡県", 1)] {
+            let error =
+                answer_fetched_source_question(&result_id, topic, &sources, limit).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(WIKIPEDIA_SOURCE_QUESTION_NO_MATCH)
+            );
+        }
     }
 
     #[test]
