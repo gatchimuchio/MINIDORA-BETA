@@ -10,6 +10,8 @@ use unicode_normalization::char::{canonical_combining_class, compose};
 pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary";
 const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conversation";
 const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
+const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
+const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
 const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
@@ -446,7 +448,9 @@ pub(crate) fn seal_with_source_context(
     });
     let parser_version = match &intent {
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
+        Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
+        Intent::ExplainCode { .. } => CODE_EXPLANATION_PARSER_VERSION,
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
@@ -2617,6 +2621,28 @@ pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
             None => Intent::Unknown { reason: "text location requires a header newline and one complete explicit JSON document".into() },
         }));
     }
+    if matches!(
+        header,
+        "コードを説明して:"
+            | "コードを説明して："
+            | "Pythonコードを説明して:"
+            | "Pythonコードを説明して："
+    ) {
+        let source = text.split_once('\n').and_then(|(prefix, body)| {
+            (!body.trim().is_empty()).then(|| SourceSpan {
+                start: prefix.len() + 1,
+                end: text.len(),
+                text: body.into(),
+            })
+        });
+        return Ok(Some(match source {
+            Some(source) => Intent::ExplainCode { source },
+            None => Intent::Unknown {
+                reason: "コードを説明するには、見出しの次行にPythonの関数を貼り付けてください。"
+                    .into(),
+            },
+        }));
+    }
     let code_operation = match header {
         "コードを読んで:" | "コードを読んで：" => Some(0),
         "コードを評価して:" | "コードを評価して：" => Some(1),
@@ -4080,8 +4106,36 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
         || source_role_spans(&bundle.request.text, intent)? == bundle.meaning.source_roles)
 }
 
+pub(crate) fn verified_code_explanation_source(bundle: &InputBundle) -> Result<&str> {
+    if let Intent::ExplainCode { source } = &bundle.meaning.intent
+        && bundle.meaning.parser_version == CODE_EXPLANATION_PARSER_VERSION
+        && matches!(
+            structured_intent(&bundle.request.text)?,
+            Some(Intent::ExplainCode { source: parsed }) if parsed == *source
+        )
+    {
+        return Ok(&source.text);
+    }
+    Err(failure(
+        "CODE_EXPLANATION_SOURCE_MISMATCH",
+        "封印したコードの範囲が元の入力と一致しません。",
+    ))
+}
+
 fn interpret(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
+    if matches!(
+        statement,
+        "ミニドラとは何ですか"
+            | "ミニドラとは何"
+            | "ミニドラって何"
+            | "ミニドラって何ですか"
+            | "あなたは誰"
+            | "あなたは誰ですか"
+    ) || statement.eq_ignore_ascii_case("MINIDORAとは何ですか")
+    {
+        return Ok(Intent::AskLocalIdentity);
+    }
     match statement {
         "こんにちは" | "こんばんは" | "おはよう" | "おはようございます" => {
             let salutation = match statement {
@@ -4092,7 +4146,12 @@ fn interpret(text: &str) -> Result<Intent> {
                 salutation: salutation.into(),
             });
         }
-        "何ができますか" | "何を頼めますか" | "どんなことができますか" => {
+        "何ができますか"
+        | "何を頼めますか"
+        | "どんなことができますか"
+        | "例えば何ができますか"
+        | "ミニドラは何ができますか"
+        | "あなたは何ができますか" => {
             return Ok(Intent::AskLocalCapabilities);
         }
         _ => {}

@@ -12,6 +12,7 @@ use std::time::Instant;
 use unicode_normalization::UnicodeNormalization;
 
 const VERSION: &str = "bounded-python-function-reader-interpreter-v1";
+const MAX_SOURCE_BYTES: usize = 32_768;
 const CALLS: &[&str] = &[
     "abs", "len", "min", "max", "sum", "range", "sorted", "list", "all", "any",
 ];
@@ -1403,7 +1404,7 @@ struct PythonParser<'a> {
 }
 impl<'a> PythonParser<'a> {
     fn parse(source: &'a str) -> Result<Function> {
-        if source.trim().is_empty() || source.len() > 32_768 {
+        if source.trim().is_empty() || source.len() > MAX_SOURCE_BYTES {
             return Err(input_error("source must contain 1..32768 UTF-8 bytes"));
         }
         let lines = lex_source(source)?;
@@ -2186,7 +2187,7 @@ fn parse_input(document: &str, operation: CodeOperation) -> Result<CodeInput> {
     };
     exact_fields(entries, required, optional)?;
     let source = string_field(document, field(entries, "情報源")?)?;
-    if source.is_empty() || source.len() > 32_768 {
+    if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
         return Err(input_error("source must contain 1..32768 UTF-8 bytes"));
     }
     let max_steps = entries
@@ -2328,6 +2329,88 @@ pub fn run(
         verification,
         assurance: "限定Python AST読解・ネイティブ評価。ホストPython、exec、eval、コンパイラ、外部作用は使用していない".into(),
     })
+}
+
+pub(crate) fn explain_source(source: &str) -> Result<(CodeCapabilityReport, Vec<String>)> {
+    const MAX_STATEMENTS: usize = 8;
+
+    if !(1..=MAX_SOURCE_BYTES).contains(&source.len()) {
+        return Err(input_error("source must contain 1..32768 UTF-8 bytes"));
+    }
+    let document = serde_json::json!({ "情報源": source }).to_string();
+    let report = run(&document, CodeOperation::Read, None)?;
+    let mut units = vec![format!(
+        "`{}({})` を定義します。",
+        report.function_name,
+        report.parameters.join(", ")
+    )];
+    let mut statements = report
+        .structure
+        .iter()
+        .filter(|node| !matches!(node.syntax.as_str(), "FunctionDef" | "Call" | "Compare"))
+        .collect::<Vec<_>>();
+    statements.sort_by_key(|node| (node.line, node.utf8_column));
+    for node in statements.iter().take(MAX_STATEMENTS) {
+        let line = node.line;
+        let source = node.source_segment.as_str();
+        let description = match node.syntax.as_str() {
+            "Return" => {
+                let expression = source.strip_prefix("return").unwrap_or(source).trim_start();
+                if expression.is_empty() {
+                    "値を指定せずに関数から戻ります。".into()
+                } else {
+                    format!("式 `{}` の値を返します。", explanation_excerpt(expression))
+                }
+            }
+            "Assign" => format!("代入 `{}` を行います。", explanation_excerpt(source)),
+            "AugAssign" => format!("複合代入 `{}` を行います。", explanation_excerpt(source)),
+            "If" => format!("条件分岐 `{}` があります。", explanation_excerpt(source)),
+            "For" => format!("反復 `{}` があります。", explanation_excerpt(source)),
+            "Break" => "反復を打ち切ります。".into(),
+            "Continue" => "次の反復へ進みます。".into(),
+            "Pass" => "処理を行わない `pass` があります。".into(),
+            "Expr" => format!(
+                "式 `{}` を評価する文があります。",
+                explanation_excerpt(source)
+            ),
+            _ => continue,
+        };
+        units.push(format!("{line}行目: {description}"));
+    }
+    if statements.len() > MAX_STATEMENTS {
+        units.push(format!(
+            "後続の文の説明は{}件省略しました。",
+            statements.len() - MAX_STATEMENTS
+        ));
+    }
+    units.push(
+        "対応する構文を静的に読み取りました。実行結果・型・仕様への適合は未検証です。".into(),
+    );
+    Ok((report, units))
+}
+
+fn explanation_excerpt(source: &str) -> String {
+    const MAX_CHARS: usize = 120;
+
+    let mut lines = source.lines();
+    let mut chars = lines.next().unwrap_or_default().trim_end().chars();
+    let mut excerpt = String::new();
+    for character in (&mut chars).take(MAX_CHARS) {
+        if character.is_control()
+            || matches!(
+                character,
+                '`' | '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+            )
+        {
+            excerpt.extend(character.escape_unicode());
+        } else {
+            excerpt.push(character);
+        }
+    }
+    if chars.next().is_some() || lines.next().is_some() {
+        excerpt.push('…');
+    }
+    excerpt
 }
 
 pub(crate) fn verify_previous_source(

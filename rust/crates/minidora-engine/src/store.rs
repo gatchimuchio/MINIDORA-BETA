@@ -1,6 +1,7 @@
 //! Core-owned persistence adapter. SQLite owns logical transactions; immutable
 //! blobs are durably published first. Orphan blobs are harmless, while a
 //! missing or corrupt referenced blob is an integrity failure.
+use crate::durability::sync_directory;
 use minidora_domain::{
     ALPHA8_SCHEMA_VERSION, ALPHA10_SCHEMA_VERSION, ActionRecord, CaseRevision, ConditionRecord,
     EffectPhase, Fact, InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
@@ -49,13 +50,6 @@ fn valid_digest(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
-fn sync_directory(path: &Path) -> Result<()> {
-    // Unsupported directory fsync is a typed I/O failure, never a silent claim
-    // of the durable profile on that filesystem/target.
-    File::open(path)?.sync_all()?;
-    Ok(())
-}
-
 fn install_action_identity_guards(connection: &Connection) -> Result<()> {
     sql(connection.execute_batch(
         "CREATE TRIGGER IF NOT EXISTS action_identity_no_update BEFORE UPDATE ON action_identity BEGIN SELECT RAISE(ABORT,'immutable action identity'); END;

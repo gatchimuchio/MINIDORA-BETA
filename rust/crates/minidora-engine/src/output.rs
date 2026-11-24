@@ -4,6 +4,7 @@
 //! module. Parent directories must be controlled by a trusted local owner;
 //! portable `std` path checks do not isolate hostile ancestor replacement.
 
+use crate::durability::{open_file_for_sync, sync_directory};
 use minidora_domain::{
     ActionRecord, ContentPlan, DeliveryReceipt, EffectPhase, RenderObservation, RenderTarget,
     Result, digest, failure,
@@ -130,7 +131,13 @@ fn confirm_existing(action: &ActionRecord, path: &Path, bytes: &[u8]) -> Result<
             "An existing different artifact will not be overwritten",
         ));
     }
-    let mut file = File::open(path)?;
+    let (mut file, can_sync) = match open_file_for_sync(path) {
+        Ok(file) => (file, true),
+        // A read-only Windows handle can still distinguish matching bytes
+        // from a conflicting artifact, but cannot confirm durability.
+        Err(_) if cfg!(windows) => (File::open(path)?, false),
+        Err(error) => return Err(error.into()),
+    };
     let mut actual = Vec::new();
     Read::by_ref(&mut file)
         .take(bytes.len() as u64 + 1)
@@ -142,10 +149,9 @@ fn confirm_existing(action: &ActionRecord, path: &Path, bytes: &[u8]) -> Result<
         ));
     }
     checked_target(&action.target)?;
-    if file.sync_all().is_err()
-        || File::open(path.parent().expect("absolute file parent"))
-            .and_then(|dir| dir.sync_all())
-            .is_err()
+    if !can_sync
+        || file.sync_all().is_err()
+        || sync_directory(path.parent().expect("absolute file parent")).is_err()
     {
         return Ok(receipt(
             action,
@@ -224,7 +230,7 @@ fn write_file_inner(
         file.write_all(bytes)?;
         file.flush()?;
         file.sync_all()?;
-        File::open(parent)?.sync_all()?;
+        sync_directory(parent)?;
         checked_target(&action.target)?;
         if parent.canonicalize()? != original_parent {
             return Err(failure(

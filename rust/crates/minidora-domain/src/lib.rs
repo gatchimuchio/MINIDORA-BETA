@@ -265,6 +265,7 @@ pub enum Intent {
     Greet {
         salutation: String,
     },
+    AskLocalIdentity,
     AskLocalCapabilities,
     AskWeb {
         topic: String,
@@ -347,6 +348,9 @@ pub enum Intent {
     },
     ReadCode {
         document: String,
+    },
+    ExplainCode {
+        source: SourceSpan,
     },
     EvaluateCode {
         document: String,

@@ -1704,6 +1704,7 @@ pub(crate) fn condition_evaluation_contract(
 }
 
 const WEB_ANSWER_PREDICATE: &str = "GROUNDED_WEB_ANSWER_V1";
+const CODE_EXPLANATION_PREDICATE: &str = "SOURCE_CODE_EXPLANATION_V1";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1713,6 +1714,7 @@ pub(crate) fn goal_predicates(
     let mut predicates = Vec::new();
     match &meaning.intent {
         Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
+        Intent::ExplainCode { .. } => predicates.push(CODE_EXPLANATION_PREDICATE.into()),
         Intent::CompareRelationInventories { .. } if input::uses_generated_comparison(meaning) => {
             predicates.push(RELATION_COMPARISON_PREDICATE.into());
         }
@@ -1862,6 +1864,7 @@ fn verify_report_goal_content(
                 | MULTI_CONDITION_RULE_PREDICATE
                 | MULTI_CONDITION_PREMISE_PREDICATE
                 | WEB_ANSWER_PREDICATE
+                | CODE_EXPLANATION_PREDICATE
         ) || record_source_contract(&goal.intent)
             .is_some_and(|(_, required)| required == predicate.as_str())
     }) else {
@@ -10886,6 +10889,46 @@ impl Engine {
                 )?);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::ExplainCode { .. } => {
+                let source = input::verified_code_explanation_source(&bundle)?;
+                let (report, explanation) = match crate::code_capability::explain_source(source) {
+                    Ok(explanation) => explanation,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            &code,
+                            &format!("このPythonコードの説明を保留しました。{message}"),
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                let report_bytes = canonical(&report)?;
+                if report_bytes
+                    .len()
+                    .saturating_add(explanation.join("\n").len())
+                    > goal.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "コードの解析結果と説明が証拠予算を超えました。",
+                    );
+                }
+                let report_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &report_bytes)?;
+                result.dependencies.push(report_ref);
+                result.guarantee = Guarantee::Computed;
+                units = explanation;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: CODE_EXPLANATION_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
             Intent::ReadCode { document }
             | Intent::EvaluateCode { document }
             | Intent::VerifyCode { document } => {
@@ -11404,6 +11447,18 @@ impl Engine {
                         "質問したいことや、一緒に考えたいことを教えてください。".into()
                     },
                 );
+                result.guarantee = Guarantee::Computed;
+            }
+            Intent::AskLocalIdentity => {
+                let engine = Self::capabilities();
+                units.extend([
+                    "ミニドラは、この端末で日本語の会話や推論、計算を行うRustエンジンです。".into(),
+                    format!(
+                        "この実行版は {}、標準APIは {} です。",
+                        engine.version, engine.api_version
+                    ),
+                    "教えてもらった事実や規則を、同じ利用者との後続の会話で使えます。".into(),
+                ]);
                 result.guarantee = Guarantee::Computed;
             }
             Intent::AskLocalCapabilities => {

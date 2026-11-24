@@ -67,7 +67,7 @@ impl Engine {
             capabilities: vec![
                 EngineCapability {
                     id: "japanese-dialogue",
-                    scope: "日本語の挨拶、関係の質問、比較、説明、追問、訂正を同じCoreで処理します。",
+                    scope: "日本語の挨拶、ミニドラ自身についての質問、関係の質問、比較、説明、追問、訂正を同じCoreで処理します。",
                     permission: None,
                     limits: "入力形式は実装済みの文型に限られ、不明な依頼は保留します。",
                 },
@@ -91,7 +91,7 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "bounded-code",
-                    scope: "構造化仕様からのPythonコード生成、対応文法の読取、説明と有限評価を行います。",
+                    scope: "構造化仕様からのPythonコード生成、貼り付けたPython関数の日本語説明、対応文法の読取と有限評価を行います。",
                     permission: None,
                     limits: "生成は明示されたアルゴリズムに、評価は単一関数の対応文法に限られます。ホストのPythonは実行しません。",
                 },

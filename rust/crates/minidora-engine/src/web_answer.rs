@@ -162,7 +162,7 @@ pub(crate) fn answer(
             "検索候補の記事名と標高を調べる対象が一致しません。",
         ));
     }
-    let passage = find_passage(article, &|line| {
+    let passage = find_passage(article, elevation_in_kilometres, &|line| {
         if elevation_in_kilometres {
             stated_elevation_metres(line).is_some()
         } else {
@@ -204,7 +204,31 @@ pub(crate) fn answer(
 }
 
 fn stated_elevation_metres(sentence: &str) -> Option<&str> {
-    let value = sentence.strip_prefix("標高は")?.trim_start();
+    let (number, tail) = metre_value(sentence.strip_prefix("標高は")?)?;
+    if positive_measurement_end(tail) {
+        return Some(number);
+    }
+
+    // The article can state a separately named highest point alongside its
+    // elevation. Require both direct measurements before accepting the first.
+    let (_, peak_tail) = metre_value(tail.strip_prefix("、山体の最高地点は")?)?;
+    if positive_measurement_end(peak_tail) {
+        return Some(number);
+    }
+    let (peak_description, recognition) = peak_tail.strip_prefix("で、")?.split_once("で、その")?;
+    let peak_description = peak_description.strip_suffix("の独立峰")?;
+    let (subject, recognition) = recognition.split_once('は')?;
+    let (region, symbol) = recognition
+        .strip_suffix("の象徴として広く知られている。")?
+        .split_once("でも")?;
+    [peak_description, subject, region, symbol]
+        .into_iter()
+        .all(description_phrase)
+        .then_some(number)
+}
+
+fn metre_value(value: &str) -> Option<(&str, &str)> {
+    let value = value.trim_start();
     let end = value
         .bytes()
         .take_while(|byte| byte.is_ascii_digit() || *byte == b'.')
@@ -214,15 +238,31 @@ fn stated_elevation_metres(sentence: &str) -> Option<&str> {
     if integral.is_empty() || fraction.is_empty() || fraction.contains('.') || number.len() > 24 {
         return None;
     }
-    let after_unit = rest.trim_start().strip_prefix('m')?;
-    after_unit
-        .starts_with(['、', '。', 'で', '（'])
-        .then_some(number)
+    Some((number, rest.trim_start().strip_prefix('m')?))
 }
 
-fn find_passage(article: &str, matches_topic: &impl Fn(&str) -> bool) -> Option<Passage> {
+fn positive_measurement_end(tail: &str) -> bool {
+    matches!(tail, "。" | "です。" | "だ。" | "である。")
+}
+
+fn description_phrase(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            matches!(character, 'ぁ'..='ゖ' | 'ァ'..='ヺ' | '一'..='龯' | '（' | '）' | '々')
+        })
+        && !["もし", "ない", "なら", "仮", "疑", "誤", "説", "過去", "以前", "かつて"]
+            .into_iter()
+            .any(|qualifier| value.contains(qualifier))
+}
+
+fn find_passage(
+    article: &str,
+    unquoted_only: bool,
+    matches_topic: &impl Fn(&str) -> bool,
+) -> Option<Passage> {
     let bounded = &article[..article.floor_char_boundary(article.len().min(MAX_SCAN_BYTES))];
     let mut rest = bounded;
+    let mut quotes = QuotationContext::default();
     while !rest.is_empty() {
         rest = rest.trim_start();
         if rest.starts_with("{{") {
@@ -233,11 +273,18 @@ fn find_passage(article: &str, matches_topic: &impl Fn(&str) -> bool) -> Option<
             rest = &rest[rest.find(block_end)? + block_end.len()..];
             continue;
         }
-        let line_end = prose_line_end(rest)?;
+        let line_end = prose_line_end(rest, unquoted_only)?;
         let line = &rest[..line_end];
         let article_offset = bounded.len() - rest.len();
-        if !line.starts_with(['=', '*', '#', ':', ';', '|', '!', '<'])
-            && let Some(passage) = line_passage(line, article_offset, matches_topic)
+        let is_prose = !line.starts_with(['=', '*', '#', ':', ';', '|', '!', '<'])
+            && !(unquoted_only && line.starts_with('>'));
+        if (is_prose || unquoted_only)
+            && let Some(passage) = line_passage(
+                line,
+                article_offset,
+                &|sentence| is_prose && matches_topic(sentence),
+                unquoted_only.then_some(&mut quotes),
+            )
         {
             return Some(passage);
         }
@@ -263,16 +310,21 @@ fn block_end(rest: &str) -> Option<&'static str> {
 }
 
 /// Do not start a new candidate line inside a multiline note or template.
-fn prose_line_end(text: &str) -> Option<usize> {
+fn prose_line_end(text: &str, unquoted_only: bool) -> Option<usize> {
     let mut at = 0;
     while at < text.len() {
         let rest = &text[at..];
         match rest.as_bytes()[0] {
             b'\n' => return Some(at),
-            b'[' if rest.starts_with("[[") => at += markup_end(rest)?,
-            b'{' if rest.starts_with("{{") || rest.starts_with("{|") => at += markup_end(rest)?,
-            b'<' if is_reference(rest) || block_end(rest).is_some() => {
-                at += markup_end(rest)?;
+            b'[' if rest.starts_with("[[") => at += markup_end(rest, unquoted_only)?,
+            b'{' if rest.starts_with("{{") || rest.starts_with("{|") => {
+                at += markup_end(rest, unquoted_only)?;
+            }
+            b'<' if is_reference(rest)
+                || block_end(rest).is_some()
+                || unquoted_only && quotation_block(rest).is_some() =>
+            {
+                at += markup_end(rest, unquoted_only)?;
             }
             _ => at += rest.chars().next()?.len_utf8(),
         }
@@ -307,16 +359,25 @@ fn line_passage(
     line: &str,
     article_offset: usize,
     matches_topic: &impl Fn(&str) -> bool,
+    mut quotes: Option<&mut QuotationContext>,
 ) -> Option<Passage> {
     let mut at = 0;
     let mut sentence_start = 0;
     let mut text = String::new();
     let mut recognized = true;
+    let mut quoted = quotes.as_deref().is_some_and(QuotationContext::is_open);
     while at < line.len() {
         let remaining = &line[at..];
-        if let Some(end) = markup_end(remaining) {
+        if let Some(end) = markup_end(remaining, quotes.is_some()) {
             match visible_markup(&remaining[..end]) {
-                Some(visible) => text.push_str(visible),
+                Some(visible) => {
+                    if let Some(context) = quotes.as_deref_mut() {
+                        for character in visible.chars() {
+                            quoted |= context.observe(character);
+                        }
+                    }
+                    text.push_str(visible);
+                }
                 None => recognized = false,
             }
             at += end;
@@ -326,7 +387,13 @@ fn line_passage(
         if matches!(next, '[' | ']' | '{' | '}' | '<' | '>' | '&')
             || next.is_control() && next != '\t'
         {
-            return None;
+            if quotes.is_none() {
+                return None;
+            }
+            recognized = false;
+        }
+        if let Some(context) = quotes.as_deref_mut() {
+            quoted |= context.observe(next);
         }
         text.push(next);
         at += next.len_utf8();
@@ -335,6 +402,7 @@ fn line_passage(
         }
         let visible = text.trim();
         if recognized
+            && !quoted
             && !visible.is_empty()
             && visible.len() <= MAX_SENTENCE_BYTES
             && matches_topic(visible)
@@ -350,11 +418,15 @@ fn line_passage(
         sentence_start = at;
         text.clear();
         recognized = true;
+        quoted = quotes.as_deref().is_some_and(QuotationContext::is_open);
     }
     None
 }
 
-fn markup_end(text: &str) -> Option<usize> {
+fn markup_end(text: &str, unquoted_only: bool) -> Option<usize> {
+    if unquoted_only && let Some((opening, ending)) = quotation_block(text) {
+        return quotation_block_end(text, opening, ending);
+    }
     if text.starts_with("[[") {
         return text[2..].find("]]").map(|end| end + 4);
     }
@@ -377,6 +449,77 @@ fn markup_end(text: &str) -> Option<usize> {
     ["'''", "''", "&nbsp;", "&amp;"]
         .into_iter()
         .find_map(|markup| text.starts_with(markup).then_some(markup.len()))
+}
+
+fn quotation_block(text: &str) -> Option<(&'static str, &'static str)> {
+    [("<blockquote", "</blockquote>"), ("<q", "</q>")]
+        .into_iter()
+        .find(|(opening, _)| starts_quotation_tag(text, opening))
+}
+
+fn starts_quotation_tag(text: &str, opening: &str) -> bool {
+    text.get(..opening.len())
+        .is_some_and(|part| part.eq_ignore_ascii_case(opening))
+        && text[opening.len()..].starts_with(['>', ' ', '\t', '\n'])
+}
+
+fn quotation_block_end(text: &str, opening: &str, ending: &str) -> Option<usize> {
+    let mut depth = 1;
+    let mut at = opening_tag_end(text)?;
+    while let Some(next) = text[at..].find('<') {
+        at += next;
+        let rest = &text[at..];
+        if starts_quotation_tag(rest, opening) {
+            depth += 1;
+            at += opening_tag_end(rest)?;
+        } else if rest
+            .get(..ending.len())
+            .is_some_and(|part| part.eq_ignore_ascii_case(ending))
+        {
+            depth -= 1;
+            at += ending.len();
+            if depth == 0 {
+                return Some(at);
+            }
+        } else if let Some(end) = markup_end(rest, false) {
+            at += end;
+        } else {
+            at += opening_tag_end(rest).unwrap_or(1);
+        }
+    }
+    None
+}
+
+#[derive(Default)]
+struct QuotationContext {
+    expected_closers: Vec<char>,
+}
+
+impl QuotationContext {
+    fn is_open(&self) -> bool {
+        !self.expected_closers.is_empty()
+    }
+
+    /// Returns true if the character starts, ends or occurs within a quote.
+    fn observe(&mut self, character: char) -> bool {
+        if self.expected_closers.last() == Some(&character) {
+            self.expected_closers.pop();
+            return true;
+        }
+        let closing = match character {
+            '「' => '」',
+            '『' => '』',
+            '“' => '”',
+            '‘' => '’',
+            '〈' => '〉',
+            '《' => '》',
+            '"' | '\'' | '＂' => character,
+            '」' | '』' | '”' | '’' | '〉' | '》' => return true,
+            _ => return self.is_open(),
+        };
+        self.expected_closers.push(closing);
+        true
+    }
 }
 
 fn is_reference(text: &str) -> bool {
@@ -427,4 +570,37 @@ fn safe_label(label: &str) -> bool {
     !label.is_empty()
         && !label.contains(['|', '[', ']', '{', '}', '<', '>', '&'])
         && !label.chars().any(char::is_control)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn elevation_requires_an_unquoted_positive_measurement() {
+        let find_elevation = |article: &str| {
+            find_passage(article, true, &|line| {
+                stated_elevation_metres(line).is_some()
+            })
+        };
+        for not_asserted in [
+            "標高は1000 mではない。",
+            "標高は1000 mであると仮定する。",
+            "標高は1000 m、という説が広まった。",
+            "標高は1000 m、山体の最高地点は1100 mではない。",
+            "記録には「数値は不明である。標高は1000 mです。」とある。",
+            "記録には「数値は不明である。\n標高は1000 mです。」とある。",
+            "<BLOCKQUOTE>\n<blockquote>調査中。</blockquote>\n標高は1000 mです。\n</BLOCKQUOTE>",
+            "<blockquote>\n<!-- </blockquote> -->\n標高は1000 mです。\n</blockquote>",
+        ] {
+            assert!(find_elevation(not_asserted).is_none(), "{not_asserted}");
+        }
+
+        let stated = "標高は3775.56 m、山体の最高地点は3776.12 mで、日本最高峰（剣ヶ峰）の独立峰で、その優美な風貌は日本国外でも日本の象徴として広く知られている。";
+        let article = format!("標高は3000 mではない。\n{stated}\n");
+        let passage = find_elevation(&article).unwrap();
+        assert_eq!(stated_elevation_metres(&passage.text), Some("3775.56"));
+        assert_eq!(&article[passage.source_start..passage.source_end], stated);
+        assert_eq!(passage.source_span_sha256, digest(stated.as_bytes()));
+    }
 }

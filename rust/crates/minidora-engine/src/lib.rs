@@ -6,6 +6,7 @@ pub mod code_capability;
 pub mod code_generation;
 pub mod core;
 pub mod document;
+mod durability;
 pub mod input;
 pub mod language;
 pub mod math;

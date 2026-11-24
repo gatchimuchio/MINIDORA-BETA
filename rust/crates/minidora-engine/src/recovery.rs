@@ -30,7 +30,7 @@ use crate::{
 use minidora_domain::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
+    fs,
     io::Read,
     path::{Component, Path},
     time::{Duration, Instant},
@@ -4653,7 +4653,10 @@ fn inspect(
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
-            || matches!(goal.intent, Intent::AskWeb { .. })
+            || matches!(
+                goal.intent,
+                Intent::AskWeb { .. } | Intent::ExplainCode { .. }
+            )
             || explains_sequence
             || goal.required_predicates != legacy_predicates)
     {
@@ -5430,6 +5433,28 @@ fn inspect(
     }
     if matches!(goal.intent, Intent::ExplainPrevious) && !explains_sequence {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
+    }
+    if matches!(goal.intent, Intent::ExplainCode { .. }) {
+        const CODE: &str = "RECOVERY_SOURCE_CODE_EXPLANATION_MISMATCH";
+        verify_registered_input(store, bundle, CODE)?;
+        let source = crate::input::verified_code_explanation_source(bundle)?;
+        let (report, units) = crate::code_capability::explain_source(source)?;
+        let expected_text = units.join("\n");
+        let report_size = canonical(&report)?.len();
+        let report_ref = verified_artifact(store, actor, case, &report)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != [report_ref]
+            || plan.guarantee != result.guarantee
+            || plan.required_units != units
+            || plan.text != expected_text
+            || result.text != expected_text
+            || report_size.saturating_add(expected_text.len()) > goal.budget.max_evidence_bytes
+        {
+            return Err(failure(
+                CODE,
+                "The retained source report or explanation differs from the original code.",
+            ));
+        }
     }
     if matches!(
         bundle.meaning.parser_version.as_str(),
@@ -6655,7 +6680,7 @@ fn observe_file(path: &Path, expected: &[u8]) -> Result<()> {
         )
     })?;
     let parent_identity = parent.canonicalize()?;
-    let mut file = File::open(path)?;
+    let mut file = crate::durability::open_file_for_sync(path)?;
     if file.metadata()?.len() != expected.len() as u64 {
         return Err(failure(
             "LOCAL_EFFECT_UNCONFIRMED",
@@ -6674,7 +6699,7 @@ fn observe_file(path: &Path, expected: &[u8]) -> Result<()> {
     }
     // Confirm durability of the existing object; never create or rewrite it.
     file.sync_all()?;
-    File::open(parent)?.sync_all()?;
+    crate::durability::sync_directory(parent)?;
     Ok(())
 }
 
