@@ -17,6 +17,8 @@ pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
 const RETURN_FUNCTION_PARSER_VERSION: &str = "declarative-ja-v160-python-return-function";
 pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v165-generated-code-single-case";
+pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
+    "declarative-ja-v167-csv-before-after-compare";
 const PREVIOUS_CODE_CASE_EXPECTED_ROLE: &str = "/VerifyPreviousCode/case/expected_value";
 const LEGACY_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v85-generated-relation-comparison";
@@ -553,6 +555,11 @@ pub(crate) fn seal_with_source_context(
         Intent::SearchWithFallback { .. } => SEARCH_FALLBACK_PARSER_VERSION,
         Intent::FetchNextUnobservedSource => "direct-source-continuation-v10",
         Intent::CsvSelectIndex { .. } => CSV_POSITIONAL_SELECTION_PARSER_VERSION,
+        Intent::CsvCompare { document, .. }
+            if crate::document::starts_japanese_csv_comparison(document) =>
+        {
+            CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION
+        }
         // A derived conclusion keeps the existing proof follow-up contract.
         Intent::ExplainPrevious
             if previous.is_some_and(|result| result.guarantee == Guarantee::Derived) =>

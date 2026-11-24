@@ -3350,8 +3350,14 @@ fn next_direct_retrieval_in_history<'a>(
             continue;
         }
         let uri = urls.next().ok_or_else(invalid)?;
-        let packet =
-            verify_direct_continuation_body(parent, result, request, &uri, &observed_routes)?;
+        let packet = verify_direct_continuation_body(
+            store,
+            parent,
+            result,
+            request,
+            &uri,
+            &observed_routes,
+        )?;
         let parent_ref = verified_artifact(store, actor, case, parent)?;
         let packet_ref = verified_artifact(store, actor, case, packet)?;
         let graph_ref = result.execution_graph_ref.as_ref().ok_or_else(invalid)?;
@@ -3721,6 +3727,7 @@ fn direct_continuation_stop_nodes(includes_retrieval: bool, includes_file: bool)
 }
 
 fn verify_direct_continuation_body<'a>(
+    store: &Store,
     source: &ResultRecord,
     result: &'a ResultRecord,
     request: &RequestEnvelope,
@@ -3743,16 +3750,62 @@ fn verify_direct_continuation_body<'a>(
             .redirect_chain
             .iter()
             .any(|route| observed_routes.contains(route))
-        || result.dependencies != [source.id.clone(), packet.id.clone()]
-        || result.guarantee != Guarantee::SourceReport
-        || result
-            .content_plan
-            .as_ref()
-            .is_none_or(|plan| plan.required_units != [crate::core::direct_source_line(packet)])
     {
         return Err(invalid());
     }
+    verify_direct_source_display(store, request, result, Some(&source.id))?;
     Ok(packet)
+}
+
+fn verify_direct_source_display(
+    store: &Store,
+    request: &RequestEnvelope,
+    result: &ResultRecord,
+    predecessor: Option<&str>,
+) -> Result<()> {
+    let invalid = || {
+        failure(
+            "RECOVERY_SOURCE_DISPLAY_MISMATCH",
+            "the retained display differs from the original retrieved body and its byte ranges",
+        )
+    };
+    let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
+    if result.guarantee != Guarantee::SourceReport {
+        return Err(invalid());
+    }
+    let original_dependencies: Vec<_> = predecessor
+        .into_iter()
+        .map(str::to_owned)
+        .chain(result.evidence.iter().map(|packet| packet.id.clone()))
+        .collect();
+    let suffix = result
+        .dependencies
+        .strip_prefix(original_dependencies.as_slice())
+        .ok_or_else(invalid)?;
+    if suffix.is_empty() {
+        let full_units = result.evidence.iter().map(crate::core::direct_source_line);
+        return if plan.required_units.iter().cloned().eq(full_units) {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
+    }
+    let [reference] = suffix else {
+        return Err(invalid());
+    };
+    for packet in &result.evidence {
+        crate::ports::validate_successful_packet(packet, &request.permissions)?;
+    }
+    let display = crate::core::direct_source_display(&result.evidence);
+    let units = display.units();
+    let encoded = canonical(&display)?;
+    if encoded.len().saturating_add(units.join("\n").len()) > request.budget.max_evidence_bytes
+        || plan.required_units != units
+        || store.get_bytes(&request.actor_id, &request.case_id, reference)? != encoded
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn first_hop_wait_matches(
@@ -5509,6 +5562,32 @@ fn inspect(
     {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
+    if bundle.meaning.parser_version == crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_CSV_COMPARE_MISMATCH";
+        let Intent::CsvCompare {
+            document,
+            key_column,
+        } = &goal.intent
+        else {
+            return Err(failure(CODE, "the sealed CSV comparison intent changed"));
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let report = crate::document::CsvInput::conversation(document)
+            .compare_by_parser(key_column, &bundle.meaning.parser_version)?;
+        let reference = verified_artifact(store, actor, case, &report)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != [reference]
+            || plan.guarantee != result.guarantee
+            || plan.required_units != [report.text.as_str()]
+            || plan.text != report.text
+            || result.text != report.text
+        {
+            return Err(failure(
+                CODE,
+                "the retained comparison report differs from the original CSV request",
+            ));
+        }
+    }
     if matches!(goal.intent, Intent::GenerateReturnFunction { .. }) {
         const CODE: &str = "RECOVERY_RETURN_FUNCTION_MISMATCH";
         verify_registered_input(store, bundle, CODE)?;
@@ -5750,19 +5829,20 @@ fn inspect(
             | "declarative-ja-en-v62-constrained-source-summary"
             | "declarative-ja-en-v63-previous-output-edit"
             | "declarative-ja-en-v70-generic-transitive-verbs"
+            | "declarative-ja-en-v89-sealed-relation-boundary"
             | crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
     ) && let Intent::VerifyPreviousCode { document } = &goal.intent
     {
-        if bundle.meaning.parser_version == crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION {
-            if bundle.meaning.intent != goal.intent {
-                return Err(failure(
-                    "RECOVERY_CODE_VERIFICATION_CHANGED",
-                    "the original verification intent differs from the adopted goal",
-                ));
-            }
-            crate::input::verify_previous_code_case_input(bundle)?;
-            verify_registered_input(store, bundle, "RECOVERY_CODE_VERIFICATION_CHANGED")?;
+        if bundle.meaning.intent != goal.intent {
+            return Err(failure(
+                "RECOVERY_CODE_VERIFICATION_CHANGED",
+                "the original verification intent differs from the adopted goal",
+            ));
         }
+        if bundle.meaning.parser_version == crate::input::PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION {
+            crate::input::verify_previous_code_case_input(bundle)?;
+        }
+        verify_registered_input(store, bundle, "RECOVERY_CODE_VERIFICATION_CHANGED")?;
         let previous_id = bundle.meaning.context_result_ref.as_ref().ok_or_else(|| {
             failure(
                 "RECOVERY_CODE_CONTEXT_CHANGED",
@@ -5775,24 +5855,23 @@ fn inspect(
                 "the adopted verification's prior result is no longer available",
             )
         })?;
-        let (source_ref, source_report) =
-            crate::code_generation::previous_code_report(store, actor, case, previous)?
-                .ok_or_else(|| {
-                    failure(
-                        "RECOVERY_CODE_CONTEXT_CHANGED",
-                        "the original generated-code report is no longer available unchanged",
-                    )
-                })?;
         let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
+        let source =
+            crate::code_generation::previous_code_verification(store, state, previous, deadline)?
+                .ok_or_else(|| {
+                failure(
+                    "RECOVERY_CODE_CONTEXT_CHANGED",
+                    "the original generated-code report is no longer available unchanged",
+                )
+            })?;
         let verification = crate::code_capability::verify_previous_source(
-            &source_report.source,
+            &source.report.source,
             document,
             deadline,
         )?;
         let verification_bytes = canonical(&verification)?;
         let verification_ref = digest(&verification_bytes);
-        let verification_dependencies =
-            vec![previous.id.clone(), source_ref, verification_ref.clone()];
+        let verification_dependencies = source.dependencies(verification_ref.clone());
         let stored_verification = store.get_bytes(actor, case, &verification_ref)?;
         let expected_units =
             crate::code_capability::previous_code_verification_lines(&verification)?;
@@ -5985,6 +6064,7 @@ fn inspect(
             next_direct_retrieval(store, actor, bundle, previous, &state.prior_results, None)?
                 .ok_or_else(invalid)?;
         let packet = verify_direct_continuation_body(
+            store,
             continuation.source,
             result,
             request,
@@ -6045,6 +6125,9 @@ fn inspect(
                     .into_iter()
                     .collect(),
             });
+        }
+        if matches!(goal.intent, Intent::Retrieve { .. }) {
+            verify_direct_source_display(store, request, result, None)?;
         }
     } else if search_listing.is_some() {
         if search_requires_listing {

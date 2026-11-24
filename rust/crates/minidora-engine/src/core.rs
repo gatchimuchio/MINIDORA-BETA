@@ -7293,7 +7293,9 @@ impl Engine {
                 document,
                 key_column,
             } => {
-                let value = match CsvInput::conversation(document).compare_by(key_column) {
+                let value = match CsvInput::conversation(document)
+                    .compare_by_parser(key_column, &bundle.meaning.parser_version)
+                {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -9581,41 +9583,37 @@ impl Engine {
                     );
                 }
                 let mut memory = self.store.load_memory(actor)?;
-                let previous_assertion = previous_contextual_assertion_fact(
+                let previous_assertion = match previous_contextual_assertion_fact(
                     &self.store,
                     actor,
                     &request.case_id,
+                    &state.prior_results,
                     prior,
                     &memory,
-                )?;
+                ) {
+                    Ok(assertion) => assertion,
+                    Err(Error::Contract { code, message })
+                        if matches!(
+                            code.as_str(),
+                            "CONTEXT_PROOF_CHANGED" | "PRIOR_INPUT_RESULT_MISMATCH"
+                        ) =>
+                    {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
                 let (anchor, expected_proof_dependencies, adopted_conclusion, assertion_fact_id) =
                     if let Some(previous_assertion) = previous_assertion {
                         let PreviousContextualAssertion {
                             fact,
                             has_contextual_assertion_parent,
                         } = previous_assertion;
-                        if !fact.valid {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "CONTEXT_PROOF_CHANGED",
-                                "直前の代名詞前提が現在の記憶で無効です。新しい関係結果を確認してください。",
-                            );
-                        }
-                        if input::singular_previous_subject(&fact.proposition.subject) {
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                "MISSING_RELATION_CONTEXT",
-                                "直前の前提自体に未解決の代名詞主語が残っています。主語を推測しません。",
-                            );
-                        }
                         if has_contextual_assertion_parent {
                             return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,
                                 "CONTEXT_CHAIN_DEPTH_LIMIT",
-                                "代名詞主語の継承は、型付き関係回答に続く一段までです。三つ目の連続した代名詞前提は保存していません。",
+                                "関係についての回答から続けて主語を引き継げる前提は二つまでです。新しい関係結果を確認してから続けてください。",
                             );
                         }
                         (
@@ -10894,8 +10892,27 @@ impl Engine {
                 }
                 // Exact quotations are source reports. No open-domain factual
                 // comparison or unverified summary is fabricated from a URL.
-                for packet in &result.evidence {
-                    units.push(direct_source_line(packet));
+                units = result.evidence.iter().map(direct_source_line).collect();
+                if !language::model_source_bytes_fit(&units) {
+                    let display = direct_source_display(&result.evidence);
+                    units = display.units();
+                    let display_bytes = canonical(&display)?;
+                    if !language::model_source_bytes_fit(&units)
+                        || display_bytes.len().saturating_add(units.join("\n").len())
+                            > request.budget.max_evidence_bytes
+                    {
+                        state.result = Some(result);
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "SOURCE_DISPLAY_RESOURCE_LIMIT",
+                            "取得した本文は保存しました。出典と引用を表示する予算が不足しています。",
+                        );
+                    }
+                    let reference =
+                        self.store
+                            .put_bytes(actor, &request.case_id, &display_bytes)?;
+                    result.dependencies.push(reference);
                 }
                 result.guarantee = Guarantee::SourceReport;
                 state.result = Some(result.clone());
@@ -10946,14 +10963,21 @@ impl Engine {
                         "直前に採用されたコード生成結果がありません。",
                     );
                 };
-                let Some((source_ref, source_report)) =
-                    crate::code_generation::previous_code_report(
-                        &self.store,
-                        actor,
-                        &request.case_id,
-                        prior,
-                    )?
-                else {
+                let deadline =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
+                let source = match crate::code_generation::previous_code_verification(
+                    &self.store,
+                    &state,
+                    prior,
+                    deadline,
+                ) {
+                    Ok(source) => source,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let Some(source) = source else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -10961,7 +10985,7 @@ impl Engine {
                         "直前の採用結果に、同一ケースで再検証できる構造化コード生成レポートがありません。",
                     );
                 };
-                if source_report.source_sha256 != digest(source_report.source.as_bytes()) {
+                if source.report.source_sha256 != digest(source.report.source.as_bytes()) {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -10969,10 +10993,8 @@ impl Engine {
                         "直前の生成レポートのソースハッシュが保存済みコードと一致しません。",
                     );
                 }
-                let deadline =
-                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
                 let report = match crate::code_capability::verify_previous_source(
-                    &source_report.source,
+                    &source.report.source,
                     document,
                     deadline,
                 ) {
@@ -10997,7 +11019,7 @@ impl Engine {
                 let verification_ref = self.store.put_artifact(actor, &request.case_id, &report)?;
                 result
                     .dependencies
-                    .extend([prior.id.clone(), source_ref, verification_ref]);
+                    .extend(source.dependencies(verification_ref));
                 units.extend(crate::code_capability::previous_code_verification_lines(
                     &report,
                 )?);
@@ -12839,6 +12861,68 @@ pub(crate) fn direct_source_line(packet: &EvidencePacket) -> String {
         packet.extracted_text.as_deref().unwrap_or_default()
     )
 }
+
+#[derive(serde::Serialize)]
+pub(crate) struct DirectSourceDisplay<'a> {
+    operation: &'static str,
+    sources: Vec<DirectSourceExcerpt<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct DirectSourceExcerpt<'a> {
+    packet_id: &'a str,
+    final_uri: &'a str,
+    observed_at_unix_ms: u64,
+    raw_body_bytes: usize,
+    raw_body_sha256: &'a str,
+    source_start: usize,
+    source_end: usize,
+    source_span_sha256: String,
+    text: &'a str,
+}
+
+pub(crate) fn direct_source_display(packets: &[EvidencePacket]) -> DirectSourceDisplay<'_> {
+    const PER_SOURCE_QUOTE_BYTES: usize = 512;
+    const TOTAL_QUOTE_BYTES: usize = 4_096;
+    let each = PER_SOURCE_QUOTE_BYTES.min(TOTAL_QUOTE_BYTES / packets.len().max(1));
+    let sources = packets
+        .iter()
+        .map(|packet| {
+            let text = packet.extracted_text.as_deref().unwrap_or_default();
+            let source_end = text.floor_char_boundary(text.len().min(each));
+            let excerpt = &text[..source_end];
+            DirectSourceExcerpt {
+                packet_id: &packet.id,
+                final_uri: &packet.final_uri,
+                observed_at_unix_ms: packet.observed_at_unix_ms,
+                raw_body_bytes: packet.raw_body.len(),
+                raw_body_sha256: &packet.raw_sha256,
+                source_start: 0,
+                source_end,
+                source_span_sha256: digest(excerpt.as_bytes()),
+                text: excerpt,
+            }
+        })
+        .collect();
+    DirectSourceDisplay {
+        operation: "minidora.direct-source-display.v1",
+        sources,
+    }
+}
+
+impl DirectSourceDisplay<'_> {
+    pub(crate) fn units(&self) -> Vec<String> {
+        let mut units =
+            vec!["取得した全文を保存しました。以下の表示は各本文の冒頭からの引用です。".into()];
+        units.extend(self.sources.iter().map(|source| format!(
+            "出典: {}\n取得時刻（Unix ms）: {}\n本文packet ID: {}\n原本文 {} bytes / SHA-256: {}\n引用範囲 byte[{}..{}) / SHA-256: {}\n{}",
+            source.final_uri, source.observed_at_unix_ms, source.packet_id, source.raw_body_bytes, source.raw_body_sha256,
+            source.source_start, source.source_end, source.source_span_sha256, source.text,
+        )));
+        units
+    }
+}
+
 fn rejected(request: &RequestEnvelope, code: &str, message: &str) -> ResultRecord {
     let mut r = base_result(request);
     r.lifecycle = Lifecycle::Reject;
@@ -13092,7 +13176,7 @@ pub(crate) struct PreviousAssertionExplanation {
 }
 
 impl PreviousAssertionContext {
-    pub(crate) fn explain(&self, memory: &MemoryState) -> Result<PreviousAssertionExplanation> {
+    fn active_fact<'a>(&self, memory: &'a MemoryState) -> Result<&'a Fact> {
         let changed = || {
             failure(
                 "CONTEXT_PROOF_CHANGED",
@@ -13135,6 +13219,11 @@ impl PreviousAssertionContext {
         {
             return Err(changed());
         }
+        Ok(fact)
+    }
+
+    pub(crate) fn explain(&self, memory: &MemoryState) -> Result<PreviousAssertionExplanation> {
+        let proposition = &self.active_fact(memory)?.proposition;
         let mut dependencies = vec![
             self.result_id.clone(),
             self.bundle_ref.clone(),
@@ -13253,55 +13342,25 @@ fn previous_contextual_assertion_fact(
     store: &Store,
     actor: &str,
     case: &str,
+    prior_results: &BTreeMap<String, ResultRecord>,
     previous: &ResultRecord,
     memory: &MemoryState,
 ) -> Result<Option<PreviousContextualAssertion>> {
-    let Some((_, bundle)) =
-        store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
+    let Some(assertion) = previous_assertion_context(store, actor, case, prior_results, previous)?
     else {
         return Ok(None);
     };
-    if identity(&bundle.request)? != previous.id {
-        return Err(failure(
-            "PRIOR_INPUT_RESULT_MISMATCH",
-            "the sealed prior assertion and committed result identities differ",
-        ));
-    }
-    if !matches!(
-        &bundle.meaning.intent,
-        Intent::AssertPreviousRelation { .. }
-    ) {
-        return Ok(None);
-    }
-
-    let facts: Vec<_> = memory
-        .facts
-        .iter()
-        .filter(|fact| {
-            fact.source_input == previous.id
-                && fact.guarantee == Guarantee::UserPremise
-                && fact.dependencies.is_empty()
-        })
-        .collect();
-    let [fact] = facts.as_slice() else {
+    let Some(context) = &assertion.context else {
         return Ok(None);
     };
-    let Some(context_result_ref) = bundle.meaning.context_result_ref.as_ref() else {
-        return Ok(None);
-    };
+    let fact = assertion.active_fact(memory)?;
     let has_contextual_assertion_parent = memory.facts.iter().any(|fact| {
-        fact.source_input == context_result_ref.as_str()
+        fact.source_input == context.result_id
             && fact.guarantee == Guarantee::UserPremise
             && fact.dependencies.is_empty()
     });
-    let expected_dependencies = vec![context_result_ref.clone(), fact.id.clone()];
-    if previous.guarantee != Guarantee::UserPremise
-        || previous.dependencies != expected_dependencies
-    {
-        return Ok(None);
-    }
     Ok(Some(PreviousContextualAssertion {
-        fact: (*fact).clone(),
+        fact: fact.clone(),
         has_contextual_assertion_parent,
     }))
 }

@@ -48,6 +48,19 @@ fn model_bytes(length: usize) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn model_source_bytes_fit(documents: &[String]) -> bool {
+    let combined = documents
+        .iter()
+        .map(String::len)
+        .fold(documents.len().saturating_sub(1), usize::saturating_add);
+    combined <= MAX_MODEL_BYTES
+        && documents.iter().all(|text| {
+            let normalized = text.nfkc().collect::<String>().replace("\r\n", "\n");
+            normalized.len() <= MAX_MODEL_BYTES
+        })
+}
+
 fn probability_product(
     left: BigRational,
     right: BigRational,

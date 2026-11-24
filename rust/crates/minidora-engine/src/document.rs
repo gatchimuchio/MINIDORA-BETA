@@ -94,8 +94,16 @@ impl<'a> CsvInput<'a> {
         csv_group_statistics_input(self, group, value)
     }
 
-    pub(crate) fn compare_by(self, key: &str) -> Result<DocumentResult> {
-        csv_compare_by_input(self, key)
+    pub(crate) fn compare_by_parser(
+        self,
+        key: &str,
+        parser_version: &str,
+    ) -> Result<DocumentResult> {
+        csv_compare_by_input(
+            self,
+            key,
+            parser_version == crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION,
+        )
     }
 
     pub(crate) fn inner_join(self, left_key: &str, right_key: &str) -> Result<DocumentResult> {
@@ -596,7 +604,9 @@ pub(crate) fn previous_document_explanation(
 
     let csv = CsvInput::conversation(document);
     let recomputed = match operation {
-        CsvTableOperation::Compare(key_column) => csv.compare_by(key_column)?,
+        CsvTableOperation::Compare(key_column) => {
+            csv.compare_by_parser(key_column, &bundle.meaning.parser_version)?
+        }
         CsvTableOperation::Join(left_key, right_key) => csv.inner_join(left_key, right_key)?,
         CsvTableOperation::Filter(column, equals) => csv.filter(column, equals)?,
         CsvTableOperation::Sort(column, descending) => csv.sort(column, descending)?,
@@ -4202,13 +4212,73 @@ pub fn parse_csv(document: &str, has_header: bool) -> Result<CsvTable> {
 }
 
 fn parse_csv_input(input: CsvInput<'_>, has_header: bool) -> Result<CsvTable> {
+    parse_csv_section(input, has_header, None).map(|(table, _)| table)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JapaneseCsvPairLabel {
+    Before,
+    After,
+}
+
+fn japanese_csv_pair_label(line: &str) -> Option<(JapaneseCsvPairLabel, usize)> {
+    let (label, rest) = if let Some(rest) = line.strip_prefix("変更前") {
+        (JapaneseCsvPairLabel::Before, rest)
+    } else {
+        (JapaneseCsvPairLabel::After, line.strip_prefix("変更後")?)
+    };
+    let rest = rest.strip_prefix(':').or_else(|| rest.strip_prefix('：'))?;
+    let remaining = if rest.is_empty() {
+        ""
+    } else {
+        rest.strip_prefix("\r\n")
+            .or_else(|| rest.strip_prefix('\n'))?
+    };
+    Some((label, line.len() - remaining.len()))
+}
+
+pub(crate) fn starts_japanese_csv_comparison(document: &str) -> bool {
+    matches!(
+        japanese_csv_pair_label(document),
+        Some((JapaneseCsvPairLabel::Before, _))
+    )
+}
+
+fn invalid_japanese_csv_pair() -> minidora_domain::Error {
+    failure(
+        "CSV_COMPARE_DELIMITER",
+        "変更前: と変更後: の見出しをこの順に各1行置き、それぞれにCSV表を続けてください。",
+    )
+}
+
+fn parse_csv_section(
+    input: CsvInput<'_>,
+    has_header: bool,
+    section: Option<JapaneseCsvPairLabel>,
+) -> Result<(CsvTable, Option<usize>)> {
     let document = input.document;
     admission(document)?;
     let bytes = document.as_bytes();
     let mut at = 0usize;
     let mut rows = Vec::new();
     let mut cells = 0usize;
+    let mut next_section = None;
     loop {
+        // A quoted cell is consumed in full by `cell`, so this check only
+        // sees logical record boundaries.
+        if let Some(section) = section
+            && let Some((label, length)) = japanese_csv_pair_label(&document[at..])
+        {
+            if section != JapaneseCsvPairLabel::Before
+                || label != JapaneseCsvPairLabel::After
+                || rows.is_empty()
+                || at + length == bytes.len()
+            {
+                return Err(invalid_japanese_csv_pair());
+            }
+            next_section = Some(at + length);
+            break;
+        }
         let mut row = Vec::new();
         loop {
             row.push(cell(input, &mut at)?);
@@ -4258,12 +4328,16 @@ fn parse_csv_input(input: CsvInput<'_>, has_header: bool) -> Result<CsvTable> {
         None
     };
     validate_table(header.as_deref(), &rows)?;
-    Ok(CsvTable {
-        source_document: document.into(),
-        source_sha256: digest(document.as_bytes()),
-        header,
-        rows,
-    })
+    let section_source = &document[..at];
+    Ok((
+        CsvTable {
+            source_document: section_source.into(),
+            source_sha256: digest(section_source.as_bytes()),
+            header,
+            rows,
+        },
+        next_section,
+    ))
 }
 fn source_span(
     document: &str,
@@ -5027,7 +5101,48 @@ fn csv_pair_tables(input: CsvInput<'_>, delimiter_error: &str) -> Result<(CsvTab
         },
         true,
     )?;
-    for (table, offset) in [(&mut left, left_start), (&mut right, right_start)] {
+    retain_csv_pair_source(
+        document,
+        [(&mut left, left_start), (&mut right, right_start)],
+    );
+    Ok((left, right))
+}
+
+fn japanese_csv_pair_tables(input: CsvInput<'_>) -> Result<(CsvTable, CsvTable)> {
+    let document = input.document;
+    let Some((JapaneseCsvPairLabel::Before, left_start)) = japanese_csv_pair_label(document) else {
+        return Err(invalid_japanese_csv_pair());
+    };
+    if left_start == document.len() {
+        return Err(invalid_japanese_csv_pair());
+    }
+    let (mut left, next_section) = parse_csv_section(
+        CsvInput {
+            document: &document[left_start..],
+            ..input
+        },
+        true,
+        Some(JapaneseCsvPairLabel::Before),
+    )?;
+    let right_start = left_start + next_section.ok_or_else(invalid_japanese_csv_pair)?;
+    let (mut right, _) = parse_csv_section(
+        CsvInput {
+            document: &document[right_start..],
+            ..input
+        },
+        true,
+        Some(JapaneseCsvPairLabel::After),
+    )?;
+    retain_csv_pair_source(
+        document,
+        [(&mut left, left_start), (&mut right, right_start)],
+    );
+    Ok((left, right))
+}
+
+fn retain_csv_pair_source(document: &str, tables: [(&mut CsvTable, usize); 2]) {
+    let source_sha256 = digest(document.as_bytes());
+    for (table, offset) in tables {
         for cell in table
             .header
             .iter_mut()
@@ -5038,9 +5153,8 @@ fn csv_pair_tables(input: CsvInput<'_>, delimiter_error: &str) -> Result<(CsvTab
             cell.source_end += offset;
         }
         table.source_document = document.into();
-        table.source_sha256 = digest(document.as_bytes());
+        table.source_sha256 = source_sha256.clone();
     }
-    Ok((left, right))
 }
 
 /// Compare two explicitly supplied, headered CSV tables by an exact unique
@@ -5049,16 +5163,24 @@ fn csv_pair_tables(input: CsvInput<'_>, delimiter_error: &str) -> Result<(CsvTab
 /// `--- MINIDORA LEFT CSV ---\n<left CSV>\r\n--- MINIDORA RIGHT CSV ---\n<right CSV>`.
 /// Marker text is reserved and must not occur inside either CSV payload.
 pub fn csv_compare_by(document: &str, key_column: &str) -> Result<DocumentResult> {
-    CsvInput::strict(document).compare_by(key_column)
+    csv_compare_by_input(CsvInput::strict(document), key_column, false)
 }
 
-fn csv_compare_by_input(input: CsvInput<'_>, key_column: &str) -> Result<DocumentResult> {
+fn csv_compare_by_input(
+    input: CsvInput<'_>,
+    key_column: &str,
+    japanese_labels: bool,
+) -> Result<DocumentResult> {
     let document = input.document;
     admission(document)?;
     if key_column.is_empty() {
         return Err(failure("CSV_COLUMN", "key column name must not be empty"));
     }
-    let (left, right) = csv_pair_tables(input, "CSV_COMPARE_DELIMITER")?;
+    let (left, right) = if japanese_labels {
+        japanese_csv_pair_tables(input)?
+    } else {
+        csv_pair_tables(input, "CSV_COMPARE_DELIMITER")?
+    };
 
     let left_header = left.header.as_deref().expect("header parsing is explicit");
     let right_header = right.header.as_deref().expect("header parsing is explicit");
@@ -6677,6 +6799,75 @@ pub fn compose_explicit_text(document: &str) -> Result<TextCompositionResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn japanese_csv_comparison_preserves_sealed_source_and_ignores_labels_inside_fields() {
+        let before = "id,note\nA,\"旧文\n変更後:\n続き\"\n変更後:,左";
+        let after = "id,note\nA,\"新文\n変更前：\n続き\"\n変更後:,右";
+        let source = format!("変更前:\r\n{before}\r\n変更後：\n{after}");
+        let legacy =
+            format!("--- MINIDORA LEFT CSV ---\n{before}\r\n--- MINIDORA RIGHT CSV ---\n{after}");
+        let compare = |body: &str, expected_parser: &str| {
+            let text = format!("CSVを列「id」で2つの表を比較して:\n{body}");
+            let request = minidora_domain::RequestEnvelope::new("case", "compare", "actor", &text);
+            let bundle = crate::input::seal(&request, None).unwrap();
+            assert_eq!(bundle.request.text, text);
+            assert_eq!(bundle.meaning.parser_version, expected_parser);
+            let Intent::CsvCompare {
+                document,
+                key_column,
+            } = &bundle.meaning.intent
+            else {
+                panic!("expected a CSV comparison")
+            };
+            assert_eq!(document, body);
+            CsvInput::conversation(document)
+                .compare_by_parser(key_column, &bundle.meaning.parser_version)
+                .unwrap()
+        };
+        let report = compare(
+            &source,
+            crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION,
+        );
+        let legacy_report = compare(&legacy, crate::input::PARSER_VERSION);
+        assert_eq!(report.text, legacy_report.text);
+        assert_eq!(report.source_document, source);
+        assert_eq!(report.source_sha256, digest(source.as_bytes()));
+        assert_eq!(report.parameters, legacy_report.parameters);
+        for span in &report.spans {
+            assert_eq!(
+                &source[span.source_start..span.source_end],
+                span.source_text
+            );
+        }
+        assert!(report.spans.iter().any(|span| {
+            span.kind == "CSV_COMPARE_LEFT_CELL" && span.source_text == "\"旧文\n変更後:\n続き\""
+        }));
+    }
+
+    #[test]
+    fn japanese_csv_comparison_holds_incomplete_or_repeated_labels() {
+        for source in [
+            "変更前:",
+            "変更前:\nid,note\nA,左",
+            "変更前:\n変更後:\nid,note\nA,右",
+            "変更前:\nid,note\nA,左\n変更後:\n",
+            "変更前:\n変更前:\nid,note\nA,左\n変更後:\nid,note\nA,右",
+            "変更前:\nid,note\nA,左\n変更後:\nid,note\nA,右\n変更後:",
+        ] {
+            let error = CsvInput::conversation(source)
+                .compare_by_parser("id", crate::input::CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION)
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    minidora_domain::Error::Contract { code, .. } if code == "CSV_COMPARE_DELIMITER"
+                ),
+                "{source:?}"
+            );
+        }
+    }
+
     fn explicit_composition(max_chars: usize) -> String {
         let material = "ねこ\n地元で開催\n雨天中止";
         let title_end = "ねこ".len();
