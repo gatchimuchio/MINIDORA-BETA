@@ -5803,6 +5803,7 @@ impl Engine {
             input::seal_with_source_context(&request, previous, implicit_source_context)
         };
         let mut resumed_summary_scope = None;
+        let mut explicit_summary_question_scope = None;
         let sealed = sealed.and_then(|bundle| {
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
@@ -5972,72 +5973,86 @@ impl Engine {
                         )
                         && result.evidence.is_empty()
                 })
-                && let Some(source_context) = self
-                    .store
-                    .get_input_bundle(
-                        actor,
-                        &request.case_id,
-                        &context.input_id,
-                        context.input_version,
-                    )?
-                    .map(|(_, source)| -> Result<Option<input::SourceContext>> {
-                        let context = match context.guarantee {
-                            Guarantee::SourceReport
-                                if matches!(source.meaning.intent, Intent::ExplainPrevious) =>
-                            {
-                                match source.meaning.parser_version.as_str() {
-                                    input::WEB_ANSWER_EXPLANATION_PARSER_VERSION => {
-                                        Some(input::SourceContext::WebAnswerExplanation)
-                                    }
-                                    input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION => {
-                                        Some(input::SourceContext::ExplainedDirectSource)
-                                    }
-                                    _ => None,
+            {
+                let classify_and_prepare = |history: &VerifiedCaseHistory<'_>| {
+                    let Some((_, source)) =
+                        history.input_bundle(&context.input_id, context.input_version)?
+                    else {
+                        return Ok(None);
+                    };
+                    let source_context = match context.guarantee {
+                        Guarantee::SourceReport
+                            if matches!(source.meaning.intent, Intent::ExplainPrevious) =>
+                        {
+                            match source.meaning.parser_version.as_str() {
+                                input::WEB_ANSWER_EXPLANATION_PARSER_VERSION => {
+                                    Some(input::SourceContext::WebAnswerExplanation)
                                 }
+                                input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION => {
+                                    Some(input::SourceContext::ExplainedDirectSource)
+                                }
+                                _ => None,
                             }
-                            Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
-                                Some(input::SourceContext::WebBodyQuestion)
-                            }
-                            Guarantee::Hypothesis
-                                if input::is_direct_body_question_input(&source) =>
-                            {
+                        }
+                        Guarantee::Hypothesis if input::is_web_body_question_input(&source) => {
+                            Some(input::SourceContext::WebBodyQuestion)
+                        }
+                        Guarantee::Hypothesis if input::is_direct_body_question_input(&source) => {
+                            Some(input::SourceContext::DirectBodyQuestion)
+                        }
+                        Guarantee::Hypothesis
+                            if matches!(
+                                bundle.meaning.intent,
+                                Intent::AskPreviousSourceQuestion { .. }
+                            ) && input::is_source_summary_intent(&source.meaning.intent) =>
+                        {
+                            Some(input::SourceContext::Summary)
+                        }
+                        Guarantee::Hypothesis => crate::text_summary::legacy_body_question_source(
+                            &self.store,
+                            &source,
+                            &state.prior_results,
+                            Some(history),
+                        )?
+                        .and_then(|(_, original)| match original.meaning.intent {
+                            Intent::AskWeb { .. } => Some(input::SourceContext::WebBodyQuestion),
+                            Intent::Retrieve { .. } => {
                                 Some(input::SourceContext::DirectBodyQuestion)
                             }
-                            Guarantee::Hypothesis
-                                if matches!(
-                                    bundle.meaning.intent,
-                                    Intent::AskPreviousSourceQuestion { .. }
-                                ) && input::is_source_summary_intent(&source.meaning.intent) =>
-                            {
-                                Some(input::SourceContext::Summary)
-                            }
-                            Guarantee::Hypothesis => {
-                                crate::text_summary::legacy_body_question_source(
-                                    &self.store,
-                                    &source,
-                                    &state.prior_results,
-                                    None,
-                                )?
-                                .and_then(|(_, original)| {
-                                    match original.meaning.intent {
-                                        Intent::AskWeb { .. } => {
-                                            Some(input::SourceContext::WebBodyQuestion)
-                                        }
-                                        Intent::Retrieve { .. } => {
-                                            Some(input::SourceContext::DirectBodyQuestion)
-                                        }
-                                        _ => None,
-                                    }
-                                })
-                            }
                             _ => None,
-                        };
-                        Ok(context)
-                    })
-                    .transpose()?
-                    .flatten()
-            {
-                return input::seal_with_source_context(&request, previous, Some(source_context));
+                        }),
+                        _ => None,
+                    };
+                    let Some(source_context) = source_context else {
+                        return Ok(None);
+                    };
+                    let sealed =
+                        input::seal_with_source_context(&request, previous, Some(source_context))?;
+                    // A typed summary question can use the same verified
+                    // history for routing and replaying the source proof.
+                    // Process its outcome only after SEALED, as before.
+                    if sealed.meaning.parser_version
+                        == input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
+                        && let Some(prior_case) = latest.as_ref()
+                    {
+                        explicit_summary_question_scope =
+                            Some(crate::text_summary::source_followup_context_with_history(
+                                &self.store,
+                                &sealed,
+                                &prior_case.prior_results,
+                                context,
+                                Some(history),
+                            ));
+                    }
+                    Ok(Some(sealed))
+                };
+                if let Some(sealed) = self.store.with_verified_case_history(
+                    actor,
+                    &request.case_id,
+                    classify_and_prepare,
+                )? {
+                    return Ok(sealed);
+                }
             }
             if has_compute_budget
                 && matches!(
@@ -6208,12 +6223,14 @@ impl Engine {
             previous.filter(|source| has_compute_budget || source.lifecycle == Lifecycle::Commit)
             && let Some(prior_case) = latest.as_ref()
         {
-            match crate::text_summary::source_followup_context(
-                &self.store,
-                &bundle,
-                &prior_case.prior_results,
-                source,
-            ) {
+            match explicit_summary_question_scope.unwrap_or_else(|| {
+                crate::text_summary::source_followup_context(
+                    &self.store,
+                    &bundle,
+                    &prior_case.prior_results,
+                    source,
+                )
+            }) {
                 Ok(context) => context,
                 Err(Error::Contract { code, message })
                     if matches!(
