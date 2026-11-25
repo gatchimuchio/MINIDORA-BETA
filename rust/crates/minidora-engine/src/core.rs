@@ -1581,6 +1581,8 @@ pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_CORRECTION_V1";
 const PREVIOUS_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_LENGTH_CONVERSION_V1";
 const PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_WEB_LENGTH_CONVERSION_V1";
+const PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE: &str =
+    "EXACT_PREVIOUS_FINITE_EVENT_PROBABILITY_V1";
 pub(crate) const SEQUENCE_CORRECTION_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1";
 pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2";
@@ -1771,6 +1773,12 @@ pub(crate) fn goal_predicates(
         {
             predicates.push(PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE.into());
         }
+        Intent::PreviousFiniteEventProbability { .. }
+            if meaning.parser_version
+                == input::PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION =>
+        {
+            predicates.push(PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE.into());
+        }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             if let Some(predicate) = guarded_rule_predicate(meaning) {
@@ -1903,6 +1911,7 @@ fn verify_report_goal_content(
                 | CALCULATION_CORRECTION_PREDICATE
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
                 | PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE
+                | PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE
                 | SEQUENCE_EXPLANATION_PREDICATE
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
@@ -7895,6 +7904,38 @@ impl Engine {
                     return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
                 }
             },
+            Intent::PreviousFiniteEventProbability { .. } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_FINITE_DISTRIBUTION_CONTEXT",
+                        "同じ会話で確定した有限分布の期待値・分散を先に計算してください。",
+                    );
+                };
+                let probability = match previous_finite_event(&self.store, &bundle, prior, started)
+                {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                self.store
+                    .put_bytes(actor, &request.case_id, &probability.distribution_bytes)?;
+                self.store
+                    .put_bytes(actor, &request.case_id, &probability.event_bytes)?;
+                result.dependencies = probability.dependencies;
+                result.guarantee = Guarantee::Computed;
+                units = probability.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
             Intent::CsvSelect { document, column } => {
                 let value = CsvInput::conversation(document).select(column)?;
                 let artifact = self.store.put_artifact(actor, &request.case_id, &value)?;
@@ -13966,6 +14007,177 @@ fn rejected(request: &RequestEnvelope, code: &str, message: &str) -> ResultRecor
     r.text = message.into();
     r
 }
+pub(crate) struct PreviousFiniteEvent {
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) distribution_bytes: Vec<u8>,
+    pub(crate) event_bytes: Vec<u8>,
+    pub(crate) units: Vec<String>,
+}
+
+/// Reproduce the exact selected distribution from its authored values before
+/// allowing the existing finite-event evaluator to consume any of them.
+pub(crate) fn previous_finite_event(
+    store: &Store,
+    bundle: &InputBundle,
+    prior: &ResultRecord,
+    started: Instant,
+) -> Result<PreviousFiniteEvent> {
+    const CODE: &str = "FINITE_DISTRIBUTION_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "確定した分布を元の入力と保存した集計結果から照合できません。",
+        )
+    };
+    let limit = || {
+        failure(
+            "RESOURCE_LIMIT",
+            "分布と事象確率の記録が要求の証拠予算を超えています。",
+        )
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let check_deadline = || {
+        if started.elapsed() >= Duration::from_millis(request.budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "前回の分布と事象の照合中に締切へ達しました。",
+            ));
+        }
+        Ok(())
+    };
+    let Intent::PreviousFiniteEventProbability { event_value } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    if !input::verified_previous_finite_event(bundle)?
+        || prior.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_ref() != Some(&prior.id)
+        || bundle.context_sha256 != identity(&Some(prior))?
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &prior.id)
+    {
+        return Err(invalid());
+    }
+    if request.budget.max_actions < 5 + u32::from(request.output_path.is_some()) {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "元の分布の照合と確率計算に必要な行動予算が不足しています。",
+        ));
+    }
+    check_deadline()?;
+    let (input_ref, original) = store.with_verified_case_history(actor, case, |history| {
+        if history
+            .input_result(&prior.input_id, prior.input_version)?
+            .as_ref()
+            != Some(prior)
+        {
+            return Err(invalid());
+        }
+        history
+            .input_bundle(&prior.input_id, prior.input_version)?
+            .ok_or_else(invalid)
+    })?;
+    let Intent::FiniteProbabilityStatistics { outcomes, weights } = &original.meaning.intent else {
+        return Err(failure(
+            "MISSING_FINITE_DISTRIBUTION_CONTEXT",
+            "参照した結果は確定した有限分布の期待値・分散ではありません。",
+        ));
+    };
+    if original.request.actor_id != *actor
+        || original.request.case_id != *case
+        || identity(&original.request)? != prior.id
+        || !input::verified_finite_distribution_input(&original)?
+        || prior.guarantee != Guarantee::Computed
+        || prior.calculation.is_some()
+        || !prior.evidence.is_empty()
+        || !prior.dependencies.is_empty()
+    {
+        return Err(invalid());
+    }
+    if prior.text.len() > request.budget.max_evidence_bytes {
+        return Err(limit());
+    }
+    let distribution = crate::math::finite_probability_statistics(outcomes, weights)?;
+    let exact_text = serde_json::to_string_pretty(&distribution)?;
+    if prior.text != exact_text
+        || prior
+            .content_plan
+            .as_ref()
+            .is_none_or(|plan| plan.required_units != [exact_text.as_str()])
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        prior,
+        None,
+        CODE,
+        "finite distribution",
+    )?;
+    check_deadline()?;
+    let event = crate::math::finite_event_probability(
+        &distribution.input_outcomes,
+        &distribution.input_weights,
+        std::slice::from_ref(&event_value.text),
+    )?;
+    let distribution_bytes = canonical(&distribution)?;
+    let event_bytes = canonical(&event)?;
+    let distribution_ref = digest(&distribution_bytes);
+    let event_ref = digest(&event_bytes);
+    let matches = event
+        .event_membership
+        .iter()
+        .filter(|member| **member)
+        .count();
+    let mut units = vec![
+        format!("事象値: {}", event_value.text),
+        format!("確率: {}", event.event_probability),
+        format!("該当する入力: {matches} / {}件", event.count),
+        format!("照合した元の分布 SHA-256: {distribution_ref}"),
+    ];
+    for (index, _) in event
+        .event_membership
+        .iter()
+        .enumerate()
+        .filter(|(_, member)| **member)
+        .take(8)
+    {
+        units.push(format!(
+            "元の{}番目: 重み {}、確率への寄与 {}",
+            index + 1,
+            event.input_weights[index],
+            event.event_probability_contributions[index]
+        ));
+    }
+    if matches > 8 {
+        units.push(format!(
+            "残り{}件の寄与は計算記録に保持しました。",
+            matches - 8
+        ));
+    }
+    units.push("入力された値と重みによる有限分布での確率です。実測値や現実の確率を推定したものではありません。".into());
+    if distribution_bytes
+        .len()
+        .saturating_add(event_bytes.len())
+        .saturating_add(units.join("\n").len())
+        > request.budget.max_evidence_bytes
+    {
+        return Err(limit());
+    }
+    check_deadline()?;
+    Ok(PreviousFiniteEvent {
+        dependencies: vec![prior.id.clone(), input_ref, distribution_ref, event_ref],
+        distribution_bytes,
+        event_bytes,
+        units,
+    })
+}
+
 pub(crate) fn registered_math_report_explanation(
     store: &Store,
     actor: &str,

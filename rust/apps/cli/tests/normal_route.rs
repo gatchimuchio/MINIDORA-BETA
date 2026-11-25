@@ -4123,6 +4123,174 @@ fn finite_event_probability_reports_membership_and_exact_mass_on_the_normal_rout
 }
 
 #[test]
+fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
+    const DISTRIBUTION: &str = "値が0、2、2、4で、重みが1、2、3、4のときの期待値を求めて";
+    const QUESTION: &str = "前回の分布で、値が2になる確率を求めて";
+    const PARSER: &str = "declarative-ja-v209-previous-finite-event-probability";
+
+    let scratch = Scratch::new();
+    let chat = |input: &str| {
+        let mut process = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args(["--case", "normal-route", "--actor", "owner"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        process
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = process.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let transcript = chat(&format!("{DISTRIBUTION}\n{QUESTION}\n/exit\n"));
+    for expected in [
+        "\"expected_value\": \"13/5\"",
+        "事象値: 2",
+        "確率: 1/2",
+        "該当する入力: 2 / 4件",
+    ] {
+        assert!(
+            transcript.contains(expected),
+            "missing {expected:?}: {transcript}"
+        );
+    }
+    let stored = inspect_normal_case(&scratch.0, "owner");
+    let answer = &stored["result"];
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "COMPUTED");
+    assert_eq!(answer["content_plan"]["text"], answer["text"]);
+    assert_eq!(stored["bundle"]["request"]["text"], QUESTION);
+    assert!(stored["bundle"]["request"]["context_ref"].is_null());
+    let meaning = &stored["bundle"]["meaning"];
+    assert_eq!(meaning["parser_version"], PARSER);
+    assert_eq!(
+        meaning["intent"]["kind"],
+        "PREVIOUS_FINITE_EVENT_PROBABILITY"
+    );
+    let event_start = QUESTION.find('2').unwrap();
+    assert_eq!(
+        meaning["intent"]["event_value"],
+        serde_json::json!({
+            "start": event_start, "end": event_start + 1, "text": "2"
+        })
+    );
+
+    let [prior, bundle, distribution, event] =
+        answer["dependencies"].as_array().unwrap().as_slice()
+    else {
+        panic!("expected the previous result, sealed input, distribution report and event report");
+    };
+    let prior_id = prior.as_str().unwrap();
+    assert_eq!(meaning["context_result_ref"], *prior);
+    let producer = &stored["prior_results"][prior_id];
+    assert_eq!(producer["lifecycle"], "COMMIT");
+    assert_eq!(producer["guarantee"], "COMPUTED");
+    assert!(producer["dependencies"].as_array().unwrap().is_empty());
+    let bundle = bundle.as_str().unwrap();
+    let original_bytes = std::fs::read(scratch.0.join("blobs").join(bundle)).unwrap();
+    assert_eq!(minidora_domain::digest(&original_bytes), bundle);
+    let original_bundle: Value = serde_json::from_slice(&original_bytes).unwrap();
+    assert_eq!(original_bundle["request"]["text"], DISTRIBUTION);
+    assert_eq!(original_bundle["request"]["actor_id"], "owner");
+    assert_eq!(original_bundle["request"]["case_id"], "normal-route");
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let read_artifact = |reference: &Value| -> Value {
+        let reference = reference.as_str().unwrap();
+        let bytes = store.get_bytes("owner", "normal-route", reference).unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), reference);
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    let saved_distribution = read_artifact(distribution);
+    let original_report: Value = serde_json::from_str(producer["text"].as_str().unwrap()).unwrap();
+    assert_eq!(saved_distribution, original_report);
+    let report = read_artifact(event);
+    for key in [
+        "input_outcomes",
+        "input_weights",
+        "normalized_probabilities",
+    ] {
+        assert_eq!(report[key], saved_distribution[key]);
+    }
+    assert_eq!(report["event_values"], serde_json::json!(["2"]));
+    assert_eq!(
+        report["event_membership"],
+        serde_json::json!([false, true, true, false])
+    );
+    assert_eq!(
+        report["event_probability_contributions"],
+        serde_json::json!(["0", "1/5", "3/10", "0"])
+    );
+    assert_eq!(report["event_probability"], "1/2");
+
+    let reopened = chat(&format!("2+3\n/context {prior_id}\n{QUESTION}\n/exit\n"));
+    assert!(reopened.contains("2+3 = 5"), "{reopened}");
+    assert!(reopened.contains("確率: 1/2"), "{reopened}");
+    let historical = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(historical["bundle"]["request"]["context_ref"], *prior);
+    assert_eq!(historical["result"]["text"], answer["text"]);
+    assert_eq!(historical["result"]["dependencies"], answer["dependencies"]);
+    assert_eq!(historical["prior_results"][prior_id], *producer);
+
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let outside = record(&run(&[
+        "--context",
+        prior_id,
+        "前回の分布で、値が3になる確率を求めて",
+    ]));
+    assert_eq!(outside["lifecycle"], "COMMIT");
+    assert!(outside["text"].as_str().unwrap().contains("確率: 0"));
+    let outside_deps = outside["dependencies"].as_array().unwrap();
+    assert_eq!(
+        &outside_deps[..3],
+        &answer["dependencies"].as_array().unwrap()[..3]
+    );
+    assert_eq!(read_artifact(&outside_deps[3])["event_probability"], "0");
+
+    let no_context = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "different-case",
+            &["--context", prior_id, QUESTION],
+        ),
+        4,
+        "FAIL",
+    );
+    assert!(
+        no_context["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH")
+    );
+    let limited = stopped(
+        &run(&["--context", prior_id, "--max-evidence-bytes", "1", QUESTION]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:"),
+        "{limited}"
+    );
+    for rejected in [no_context, limited] {
+        assert!(rejected["dependencies"].as_array().unwrap().is_empty());
+        assert!(rejected["content_plan"].is_null());
+        assert!(rejected["receipts"].as_array().unwrap().is_empty());
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn polynomial_evaluation_reports_each_exact_contribution_on_the_normal_route() {
     let scratch = Scratch::new();
     let japanese = record(&execute(

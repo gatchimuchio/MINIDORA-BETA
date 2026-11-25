@@ -524,6 +524,9 @@ pub enum Intent {
         weights: Vec<String>,
         event_values: Vec<String>,
     },
+    PreviousFiniteEventProbability {
+        event_value: SourceSpan,
+    },
     EvaluatePolynomial {
         expression: String,
         bindings: BTreeMap<String, String>,

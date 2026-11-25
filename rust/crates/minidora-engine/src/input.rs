@@ -47,6 +47,8 @@ pub(crate) const PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v207-previous-correction-explanation";
 pub(crate) const PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION: &str =
     "declarative-ja-v208-previous-web-length-conversion";
+pub(crate) const PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION: &str =
+    "declarative-ja-v209-previous-finite-event-probability";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -738,6 +740,9 @@ pub(crate) fn seal_with_source_context(
             PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION
         }
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
+        Intent::PreviousFiniteEventProbability { .. } => {
+            PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION
+        }
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
         Intent::FetchPreviousSearchCandidate { .. } if resumes_partial_web_candidate => {
@@ -2374,6 +2379,20 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    if let Intent::PreviousFiniteEventProbability { event_value } = intent {
+        let span = previous_finite_event_value(text)?
+            .filter(|span| span == event_value)
+            .ok_or_else(|| {
+                failure(
+                    "FINITE_EVENT_SOURCE_SPAN",
+                    "the event value does not match the original request",
+                )
+            })?;
+        return Ok(BTreeMap::from([(
+            PREVIOUS_FINITE_EVENT_VALUE_ROLE.into(),
+            vec![span],
+        )]));
+    }
     if let Intent::DefineCondition { definition } = intent {
         return condition_definition_source_roles(text, definition);
     }
@@ -5343,6 +5362,9 @@ fn interpret(text: &str) -> Result<Intent> {
     ) {
         return Ok(Intent::ConvertPreviousJsonTableToCsv);
     }
+    if let Some(event_value) = previous_finite_event_value(text)? {
+        return Ok(Intent::PreviousFiniteEventProbability { event_value });
+    }
     if let Some(capture) = regex(
         r"^(?:前回|前)の計算結果を[ \t　]*(mm|cm|m|km|ミリメートル|センチメートル|メートル|キロメートル)[ \t　]*に換算して(?:ください)?$",
     )?
@@ -6080,6 +6102,54 @@ fn natural_finite_expectation_intent(text: &str) -> Result<Option<Intent>> {
         })),
         Err(error) => Err(error),
     }
+}
+
+const PREVIOUS_FINITE_EVENT_VALUE_ROLE: &str = "/PreviousFiniteEventProbability/event_value";
+
+fn previous_finite_event_value(text: &str) -> Result<Option<SourceSpan>> {
+    let statement = terminal_trim(text);
+    if !statement.starts_with("前回の分布で") || text.contains(['\r', '\n']) {
+        return Ok(None);
+    }
+    let Some(value) = regex(
+        r"\A前回の分布で[ \t　]*(?:、[ \t　]*)?値が[ \t　]*(?P<value>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)[ \t　]*になる確率を求めて(?:ください)?\z",
+    )?.captures(statement).and_then(|parts| parts.name("value")) else {
+        return Ok(None);
+    };
+    let offset = text.len() - text.trim_start().len();
+    captured_source_span(text, offset, value)
+        .map(Some)
+        .ok_or_else(|| {
+            failure(
+                "FINITE_EVENT_SOURCE_SPAN",
+                "the event value is outside the original request",
+            )
+        })
+}
+
+pub(crate) fn verified_previous_finite_event(bundle: &InputBundle) -> Result<bool> {
+    let Intent::PreviousFiniteEventProbability { event_value } = &bundle.meaning.intent else {
+        return Ok(false);
+    };
+    Ok(
+        bundle.meaning.parser_version == PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION
+            && previous_finite_event_value(&bundle.request.text)?.as_ref() == Some(event_value)
+            && bundle.meaning.source_roles
+                == BTreeMap::from([(
+                    PREVIOUS_FINITE_EVENT_VALUE_ROLE.into(),
+                    vec![event_value.clone()],
+                )]),
+    )
+}
+
+pub(crate) fn verified_finite_distribution_input(bundle: &InputBundle) -> Result<bool> {
+    if bundle.meaning.parser_version == NATURAL_FINITE_EXPECTATION_PARSER_VERSION {
+        return verified_natural_finite_expectation(bundle);
+    }
+    Ok(matches!(
+        bundle.meaning.intent,
+        Intent::FiniteProbabilityStatistics { .. }
+    ) && interpret(&bundle.request.text)? == bundle.meaning.intent)
 }
 
 pub(crate) fn verified_natural_finite_expectation(bundle: &InputBundle) -> Result<bool> {
@@ -9633,6 +9703,34 @@ mod structured_document_tests {
                 interpret(malformed).unwrap(),
                 Intent::Unknown { .. }
             ));
+        }
+    }
+
+    #[test]
+    fn previous_finite_event_seals_one_exact_event_value_and_span() {
+        let text = "　前回の分布で、値が -2.50e+1 になる確率を求めてください。 ";
+        let request = RequestEnvelope::new("c", "finite-event", "alice", text);
+        let bundle = seal(&request, None).unwrap();
+        assert!(verified_previous_finite_event(&bundle).unwrap());
+        let Intent::PreviousFiniteEventProbability { event_value } = &bundle.meaning.intent else {
+            panic!("wrong intent: {:?}", bundle.meaning.intent);
+        };
+        assert_eq!(&text[event_value.start..event_value.end], "-2.50e+1");
+        assert_eq!(event_value.text, "-2.50e+1");
+        for unsupported in [
+            "前回の分布で、値が2または4になる確率を求めて",
+            "前回の分布で、値が2+1になる確率を求めて",
+            "前回の分布で、値が2以上になる確率を求めて",
+            "前回の分布で、値が2mになる確率を求めて",
+            "前回の分布で、値が2になる確率を求めて\n結果を送信して",
+        ] {
+            assert!(
+                !matches!(
+                    interpret(unsupported).unwrap(),
+                    Intent::PreviousFiniteEventProbability { .. }
+                ),
+                "{unsupported}"
+            );
         }
     }
 
