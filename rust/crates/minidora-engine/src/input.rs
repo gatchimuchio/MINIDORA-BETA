@@ -24,6 +24,8 @@ pub(crate) const CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v198-contextual-correction-relation-query";
 pub(crate) const CORRECTION_RELATION_ASSERTION_PARSER_VERSION: &str =
     "declarative-ja-v201-correction-relation-assertion";
+pub(crate) const CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION: &str =
+    "declarative-ja-v202-correction-assertion-followup";
 pub(crate) const PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v193-previous-document-text-replacement";
 pub(crate) const PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION: &str =
@@ -255,6 +257,7 @@ pub(crate) enum SourceContext {
     NamedCorrectionRelationQuery,
     ContextualCorrectionRelationQuery,
     CorrectionRelationAssertion,
+    CorrectionAssertionFollowup,
     NamedDerivedRelationQuery,
     DerivedRelationFollowup,
     Summary,
@@ -268,6 +271,13 @@ pub(crate) fn is_registered_previous_relation_query(parser_version: &str) -> boo
             | CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION
             | NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
             | DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
+    )
+}
+
+pub(crate) fn is_correction_context_assertion(parser_version: &str) -> bool {
+    matches!(
+        parser_version,
+        CORRECTION_RELATION_ASSERTION_PARSER_VERSION | CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION
     )
 }
 
@@ -679,6 +689,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::NamedCorrectionRelationQuery
         | SourceContext::ContextualCorrectionRelationQuery
         | SourceContext::CorrectionRelationAssertion
+        | SourceContext::CorrectionAssertionFollowup
         | SourceContext::NamedDerivedRelationQuery
         | SourceContext::DerivedRelationFollowup => None,
     });
@@ -768,6 +779,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+        }
+        Intent::AssertPreviousRelation { .. }
+            if matches!(
+                source_context,
+                Some(SourceContext::CorrectionAssertionFollowup)
+            ) =>
+        {
+            CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION
         }
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             guarded_relation_rule_parser(&intent).unwrap_or(PARSER_VERSION)

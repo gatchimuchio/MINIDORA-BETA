@@ -1748,7 +1748,7 @@ pub(crate) fn goal_predicates(
             predicates.push(MULTI_CONDITION_PREMISE_PREDICATE.into());
         }
         Intent::AssertPreviousRelation { .. }
-            if meaning.parser_version == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION =>
+            if input::is_correction_context_assertion(&meaning.parser_version) =>
         {
             predicates.push(CORRECTION_ASSERTION_PREDICATE.into());
         }
@@ -5845,14 +5845,10 @@ impl Engine {
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AssertPreviousRelation { .. })
                 && let Some(prior) = previous
-                && previous_natural_correction_input(&self.store, actor, &request.case_id, prior)?
-                    .is_some()
+                && let Some(context) =
+                    correction_assertion_source(&self.store, actor, &request.case_id, prior)?
             {
-                return input::seal_with_source_context(
-                    &request,
-                    previous,
-                    Some(input::SourceContext::CorrectionRelationAssertion),
-                );
+                return input::seal_with_source_context(&request, previous, Some(context));
             }
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
@@ -10207,8 +10203,8 @@ impl Engine {
                 proposition,
                 explicit_scope,
             } => {
-                let after_correction = bundle.meaning.parser_version
-                    == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION;
+                let after_correction =
+                    input::is_correction_context_assertion(&bundle.meaning.parser_version);
                 if after_correction
                     && let Some((code, message)) = relation_registration_stop(
                         &goal,
@@ -14095,21 +14091,51 @@ fn previous_natural_correction_input(
     case: &str,
     prior: &ResultRecord,
 ) -> Result<Option<InputBundle>> {
+    Ok(committed_user_premise_input(store, actor, case, prior)?.filter(is_natural_correction))
+}
+
+fn committed_user_premise_input(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &ResultRecord,
+) -> Result<Option<InputBundle>> {
     if prior.lifecycle != Lifecycle::Commit || prior.guarantee != Guarantee::UserPremise {
         return Ok(None);
     }
-    let Some((_, bundle)) =
-        store.get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
-    else {
-        return Ok(None);
-    };
+    Ok(store
+        .get_input_bundle(actor, case, &prior.input_id, prior.input_version)?
+        .map(|(_, bundle)| bundle))
+}
+
+fn is_natural_correction(bundle: &InputBundle) -> bool {
     // The typed API may explicitly move a premise to a different scope.
-    Ok((bundle.meaning.parser_version == input::PARSER_VERSION
+    bundle.meaning.parser_version == input::PARSER_VERSION
         && matches!(
             bundle.meaning.intent,
             Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
-        ))
-    .then_some(bundle))
+        )
+}
+
+fn correction_assertion_source(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    prior: &ResultRecord,
+) -> Result<Option<input::SourceContext>> {
+    let Some(bundle) = committed_user_premise_input(store, actor, case, prior)? else {
+        return Ok(None);
+    };
+    if is_natural_correction(&bundle) {
+        return Ok(Some(input::SourceContext::CorrectionRelationAssertion));
+    }
+    // A second assertion can inherit the first one, but cannot itself serve
+    // as the first step of another implicit continuation.
+    Ok(
+        (bundle.meaning.parser_version == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+            && matches!(bundle.meaning.intent, Intent::AssertPreviousRelation { .. }))
+        .then_some(input::SourceContext::CorrectionAssertionFollowup),
+    )
 }
 
 fn correction_context_mismatch() -> Error {
@@ -14315,6 +14341,88 @@ fn active_previous_correction(
     Ok(Some(correction))
 }
 
+fn correction_assertion_anchor(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+    remaining: &mut u32,
+) -> Result<Proposition> {
+    let starts_with_correction =
+        bundle.meaning.parser_version == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION;
+    let missing_scope = || {
+        failure(
+            "MISSING_RELATION_CONTEXT",
+            if starts_with_correction {
+                "指定した範囲は参照した訂正の範囲と一致しません。"
+            } else {
+                "指定した範囲は参照した前提の範囲と一致しません。"
+            },
+        )
+    };
+    if starts_with_correction {
+        return active_previous_correction(
+            store,
+            bundle,
+            prior_results,
+            previous,
+            memory,
+            remaining,
+        )?
+        .map(|correction| correction.replacement)
+        .ok_or_else(missing_scope);
+    }
+    let invalid = correction_context_mismatch;
+    let Intent::AssertPreviousRelation { explicit_scope, .. } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    if bundle.meaning.parser_version != input::CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION {
+        return Err(invalid());
+    }
+    *remaining = remaining.checked_sub(1).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "the first assertion exceeds the sealed action budget",
+        )
+    })?;
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let first = committed_user_premise_input(store, actor, case, previous)?.ok_or_else(invalid)?;
+    let [correction_id, _] = previous.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let correction = prior_results.get(correction_id).ok_or_else(invalid)?;
+    if first.meaning.parser_version != input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+        || !matches!(first.meaning.intent, Intent::AssertPreviousRelation { .. })
+        || !registered_relation_context_matches(&first, prior_results, correction)?
+        || previous_natural_correction_input(store, actor, case, correction)?.is_none()
+    {
+        return Err(invalid());
+    }
+    let assertion = previous_assertion_context(store, actor, case, prior_results, previous)?
+        .filter(|assertion| assertion.context.is_some())
+        .ok_or_else(invalid)?;
+    let fact = assertion.active_fact(memory)?;
+    let revision = previous.actor_memory_revision.ok_or_else(invalid)?;
+    // The accepted first assertion is now its own user premise. The historical
+    // correction proves the chain's origin, but is not re-applied to today's memory.
+    if fact.source_evidence.is_none()
+        || !store
+            .load_memory_revision(actor, revision)?
+            .is_some_and(|saved| saved.facts.contains(fact))
+    {
+        return Err(invalid());
+    }
+    if explicit_scope
+        .as_ref()
+        .is_some_and(|scope| scope != &fact.proposition.scope)
+    {
+        return Err(missing_scope());
+    }
+    Ok(fact.proposition.clone())
+}
+
 pub(crate) fn verified_correction_assertion_proposition(
     store: &Store,
     bundle: &InputBundle,
@@ -14326,7 +14434,7 @@ pub(crate) fn verified_correction_assertion_proposition(
         return Err(correction_context_mismatch());
     };
     let request = &bundle.request;
-    if bundle.meaning.parser_version != input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+    if !input::is_correction_context_assertion(&bundle.meaning.parser_version)
         || !registered_relation_context_matches(bundle, prior_results, previous)?
         || store
             .get_input_result(
@@ -14351,21 +14459,15 @@ pub(crate) fn verified_correction_assertion_proposition(
                 "the assertion has no action budget for correction context",
             )
         })?;
-    let correction = active_previous_correction(
+    let anchor = correction_assertion_anchor(
         store,
         bundle,
         prior_results,
         previous,
         memory,
         &mut remaining,
-    )?
-    .ok_or_else(|| {
-        failure(
-            "MISSING_RELATION_CONTEXT",
-            "指定した範囲は参照した訂正の範囲と一致しません。",
-        )
-    })?;
-    let answer = relations::query(memory, &correction.replacement, remaining)?;
+    )?;
+    let answer = relations::query(memory, &anchor, remaining)?;
     if let Some((_, code, message)) = condition_block(&answer) {
         return Err(failure(code, message));
     }
@@ -14374,12 +14476,17 @@ pub(crate) fn verified_correction_assertion_proposition(
     {
         return Err(failure(
             "CONTEXT_PROOF_CHANGED",
-            "参照した訂正の置き換えを、現在有効な提示前提として確認できません。",
+            if bundle.meaning.parser_version == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+            {
+                "参照した訂正の置き換えを、現在有効な提示前提として確認できません。"
+            } else {
+                "先に追加した前提を、現在有効な提示前提として確認できません。"
+            },
         ));
     }
     Ok(Proposition {
-        subject: correction.replacement.subject,
-        scope: correction.replacement.scope,
+        subject: anchor.subject,
+        scope: anchor.scope,
         ..proposition.clone()
     })
 }
@@ -14392,15 +14499,14 @@ pub(crate) fn verify_correction_assertion_context_active(
     memory: &MemoryState,
 ) -> Result<()> {
     let mut remaining = bundle.request.budget.max_actions;
-    active_previous_correction(
+    correction_assertion_anchor(
         store,
         bundle,
         prior_results,
         previous,
         memory,
         &mut remaining,
-    )?
-    .ok_or_else(correction_context_mismatch)?;
+    )?;
     Ok(())
 }
 

@@ -174,6 +174,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
                         | crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+                        | crate::input::CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION
                 ) || crate::input::uses_derived_source_context(&bundle.meaning.parser_version)
             })
         {
@@ -2880,7 +2881,7 @@ fn verify_correction_assertion(
         return Err(invalid());
     }
     let revision = result.actor_memory_revision.ok_or_else(invalid)?;
-    // The new fact itself may contradict the correction's replacement. Replay
+    // The new fact itself may contradict the prior premise. Replay
     // the admission proof before it was registered, not in the adopted state.
     let before = store
         .load_memory_revision(actor, revision.checked_sub(1).ok_or_else(invalid)?)?
@@ -5309,7 +5310,7 @@ fn inspect(
     let requires_multi_condition_relation =
         bundle.meaning.parser_version == crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION;
     let requires_correction_assertion =
-        bundle.meaning.parser_version == crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION;
+        crate::input::is_correction_context_assertion(&bundle.meaning.parser_version);
     if requires_correction_assertion
         && !matches!(goal.intent, Intent::AssertPreviousRelation { .. })
     {
@@ -9136,6 +9137,15 @@ mod tests {
 
     #[test]
     fn correction_assertion_recovery_verifies_the_pre_addition_anchor_without_rewriting() {
+        assert_correction_assertion_recovery(false);
+    }
+
+    #[test]
+    fn correction_assertion_followup_recovery_reconciles_the_same_effect_without_rewriting() {
+        assert_correction_assertion_recovery(true);
+    }
+
+    fn assert_correction_assertion_recovery(followup: bool) {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
         let execute = |engine: &mut Engine, id, text| {
@@ -9147,7 +9157,21 @@ mod tests {
         };
         execute(&mut engine, "initial", "ミナは鳥です");
         execute(&mut engine, "correction", "訂正: ミナは鳥ではなく魚です");
-        let mut request = RequestEnvelope::new("case", "new-negative", "alice", "それは魚ではない");
+        let (negative, parser, invalidate) = if followup {
+            execute(&mut engine, "first", "それは生物です");
+            (
+                "それは生物ではない",
+                crate::input::CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION,
+                "訂正: ミナは生物ではなくロボットです",
+            )
+        } else {
+            (
+                "それは魚ではない",
+                crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION,
+                "訂正: ミナは魚ではなく猫です",
+            )
+        };
+        let mut request = RequestEnvelope::new("case", "new-negative", "alice", negative);
         request.output_path = Some(fixture.target.clone());
         request
             .permissions
@@ -9157,10 +9181,7 @@ mod tests {
         assert_eq!(committed.lifecycle, Lifecycle::Commit, "{committed:?}");
         let state = engine.latest("alice", "case").unwrap().unwrap();
         let bundle = state.bundle.as_ref().unwrap();
-        assert_eq!(
-            bundle.meaning.parser_version,
-            crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
-        );
+        assert_eq!(bundle.meaning.parser_version, parser);
         let plan = committed.content_plan.as_ref().unwrap();
         let store = Store::open(&fixture.state).unwrap();
         let file = fs::read(&fixture.target).unwrap();
@@ -9200,11 +9221,7 @@ mod tests {
         let actions = store.actions("alice", "case").unwrap();
         assert_eq!(actions.len(), 1);
         let mut engine = Engine::open(&fixture.state).unwrap();
-        execute(
-            &mut engine,
-            "new-correction",
-            "訂正: ミナは魚ではなく猫です",
-        );
+        execute(&mut engine, "new-correction", invalidate);
         let error =
             verify_correction_assertion(&store, &state, bundle, &committed, plan).unwrap_err();
         assert!(matches!(error, Error::Contract { code, .. } if code == "CONTEXT_PROOF_CHANGED"));

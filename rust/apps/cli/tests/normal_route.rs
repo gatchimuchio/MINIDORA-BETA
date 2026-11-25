@@ -10925,7 +10925,40 @@ fn pronoun_assertions_use_only_an_active_correction_and_consistent_scope() {
             panic!("the assertion must retain its exact correction and the new premise");
         };
         assert_eq!(reference, correction_id);
-        let explanation = record(&run(&["詳しく説明して"]));
+        let added_id = added["id"].as_str().unwrap();
+        let continued = record(&run(&["それは動物です"]));
+        let [parent, second_fact] = continued["dependencies"].as_array().unwrap().as_slice() else {
+            panic!("the second assertion must depend on the first, not the correction");
+        };
+        assert_eq!(parent, added_id);
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let memory = store.load_memory(actor).unwrap();
+        let third = stopped(&run(&["それは脊椎動物です"]), 2, "SUSPEND");
+        assert!(
+            third["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("CONTEXT_CHAIN_DEPTH_LIMIT:")
+        );
+        let wrong_scope = stopped(
+            &run(&["--context", added_id, "[scope=実験]それは動物です"]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            wrong_scope["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("MISSING_RELATION_CONTEXT:")
+        );
+        assert_eq!(store.load_memory(actor).unwrap(), memory);
+        let found_second = record(&run(&["[scope=物語]ミナは動物ですか"]));
+        assert_eq!(
+            &found_second["dependencies"],
+            &serde_json::json!([second_fact])
+        );
+
+        let explanation = record(&run(&["--context", added_id, "詳しく説明して"]));
         assert!(
             explanation["text"]
                 .as_str()
@@ -10935,7 +10968,6 @@ fn pronoun_assertions_use_only_an_active_correction_and_consistent_scope() {
         let found = record(&run(&["[scope=物語]ミナは生物ですか"]));
         assert_eq!(&found["dependencies"], &serde_json::json!([fact_ref]));
 
-        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
         let memory = store.load_memory(actor).unwrap();
         let fact = memory
             .facts
@@ -10992,6 +11024,22 @@ fn pronoun_assertions_use_only_an_active_correction_and_consistent_scope() {
             record(&run(&["[scope=物語]ミナは生物ですか"]))["dependencies"],
             found["dependencies"]
         );
+        let new_branch = record(&run(&["--context", added_id, "それは個体です"]));
+        assert_eq!(new_branch["dependencies"][0], added_id);
+        record(&run(&["[scope=物語]訂正: ミナは生物ではなくロボットです"]));
+        let before = store.load_memory(actor).unwrap();
+        let expired = stopped(
+            &run(&["--context", added_id, "それは記録対象です"]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            expired["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("CONTEXT_PROOF_CHANGED:")
+        );
+        assert_eq!(store.load_memory(actor).unwrap(), before);
     }
 }
 
