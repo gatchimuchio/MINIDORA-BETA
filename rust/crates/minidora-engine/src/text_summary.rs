@@ -2542,6 +2542,20 @@ impl<'a> SourceFollowup<'a> {
         }
         dependencies
     }
+
+    pub(crate) fn matches_resumed_summary_question(self, bundle: &InputBundle) -> Result<bool> {
+        Ok(self.context == self.base_context
+            && self.selected_body_index.is_some()
+            && bundle.meaning.parser_version
+                == crate::input::IMPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
+            && matches!(
+                bundle.meaning.intent,
+                Intent::AskPreviousSourceQuestion { .. }
+            )
+            && bundle.request.context_ref.is_none()
+            && bundle.meaning.context_result_ref.as_deref() == Some(self.context.id.as_str())
+            && bundle.context_sha256 == identity(&Some(self.context))?)
+    }
 }
 
 fn source_followup_for_replay<'a>(
@@ -3015,7 +3029,7 @@ pub(crate) fn source_followup_context<'a>(
     source_followup_context_with_history(store, bundle, prior_results, context, None)
 }
 
-fn source_followup_context_with_history<'a>(
+pub(crate) fn source_followup_context_with_history<'a>(
     store: &Store,
     bundle: &InputBundle,
     prior_results: &'a BTreeMap<String, ResultRecord>,

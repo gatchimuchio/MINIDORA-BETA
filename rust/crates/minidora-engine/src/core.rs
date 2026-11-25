@@ -5802,6 +5802,7 @@ impl Engine {
                 });
             input::seal_with_source_context(&request, previous, implicit_source_context)
         };
+        let mut resumed_summary_scope = None;
         let sealed = sealed.and_then(|bundle| {
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
@@ -6076,6 +6077,29 @@ impl Engine {
             let Some(prior_case) = latest.as_ref().filter(|_| implicit_context) else {
                 return Ok(bundle);
             };
+            if has_compute_budget
+                && matches!(
+                    bundle.meaning.intent,
+                    Intent::AskPreviousSourceQuestion { .. }
+                )
+                && let Some(scope) =
+                    crate::recovery::resume_summary_question_scope(&self.store, prior_case)?
+            {
+                previous = Some(scope.base_context);
+                let sealed = input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::Summary),
+                )?;
+                if !scope.matches_resumed_summary_question(&sealed)? {
+                    return Err(failure(
+                        "SOURCE_CONTEXT_INVALID",
+                        "The resumed question does not preserve the verified summary scope",
+                    ));
+                }
+                resumed_summary_scope = Some(scope);
+                return Ok(sealed);
+            }
             let requested_rank = match bundle.meaning.intent {
                 Intent::FetchPreviousSearchCandidate { rank } => Some(rank),
                 Intent::AskPreviousSourceQuestion { .. }
@@ -6169,7 +6193,11 @@ impl Engine {
                 reason,
             );
         }
-        let previous_source = if matches!(
+        let previous_source = if resumed_summary_scope.is_some() {
+            // The predecessor's exact NO_MATCH and this turn's scope were
+            // already authenticated together before sealing this question.
+            resumed_summary_scope
+        } else if matches!(
             bundle.meaning.intent,
             Intent::AskPreviousSourceQuestion { .. }
                 | Intent::SummarizePreviousSource

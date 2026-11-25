@@ -4325,21 +4325,7 @@ fn source_followup_anchor_at<'a>(
         && committed
         && result.guarantee == Guarantee::Hypothesis
         && matches!(bundle.meaning.intent, Intent::ExplainPrevious);
-    let no_match_query = match &bundle.meaning.intent {
-        Intent::AskPreviousSourceQuestion { query }
-            if state.lifecycle == Lifecycle::Suspend
-                && result.lifecycle == Lifecycle::Suspend
-                && bundle.request.budget.max_actions > 0
-                && bundle.request.budget.deadline_ms > 0
-                && result
-                    .reason
-                    .as_deref()
-                    .is_some_and(|reason| reason.starts_with("SOURCE_QUESTION_NO_MATCH: ")) =>
-        {
-            Some(query.as_str())
-        }
-        _ => None,
-    };
+    let no_match_query = resumable_source_question(state, bundle, result);
     if !source_followup && !explanation && no_match_query.is_none() {
         return Ok(None);
     }
@@ -4368,64 +4354,7 @@ fn source_followup_anchor_at<'a>(
         .ok_or_else(mismatch)?;
     let source = state.prior_results.get(source_id).ok_or_else(mismatch)?;
     if let Some(query) = no_match_query {
-        if state.goal_sha256.is_some()
-            || state.reason != result.reason
-            || result.guarantee != Guarantee::Unknown
-            || result.content_plan.is_some()
-            || result.render.is_some()
-            || !result.receipts.is_empty()
-            || !result.evidence.is_empty()
-            || !result.dependencies.is_empty()
-            || result.execution_graph_ref.is_some()
-        {
-            return Err(mismatch());
-        }
-        let context = crate::text_summary::source_followup_context(
-            store,
-            bundle,
-            &state.prior_results,
-            source,
-        )?
-        .ok_or_else(mismatch)?;
-        let packets =
-            crate::text_summary::verified_source_question_packets(store, actor, case, context)?;
-        let same_stop = |error: Option<Error>| {
-            let Some(error) = error else { return false };
-            matches!(&error, Error::Contract { code, .. } if code == "SOURCE_QUESTION_NO_MATCH")
-                && result.reason.as_deref()
-                    == Some(format!("SOURCE_QUESTION_NO_MATCH: {error}").as_str())
-        };
-        // Stopped questions have no adopted answer artifact. Require the exact
-        // diagnostic and the same derivation with the original request budget.
-        let prose_replay = crate::text_summary::replay_stopped_prose_source_question(
-            result.reason.as_deref().unwrap_or_default(),
-            &context.source.id,
-            query,
-            &packets,
-            bundle.request.budget.max_actions as usize,
-        );
-        let same_diagnostic = if let Some(replay) = prose_replay {
-            same_stop(replay.err())
-        } else {
-            same_stop(
-                crate::text_summary::answer_fetched_source_question_v2(
-                    &context.source.id,
-                    query,
-                    &packets,
-                )
-                .err(),
-            ) || same_stop(
-                crate::text_summary::answer_fetched_source_question_v1(
-                    &context.source.id,
-                    query,
-                    &packets,
-                )
-                .err(),
-            )
-        };
-        if !same_diagnostic {
-            return Err(mismatch());
-        }
+        let context = verify_no_match_source(store, state, bundle, result, source, query, None)?;
         return Ok(Some(if allow_explanation {
             context.base_context
         } else {
@@ -4504,6 +4433,149 @@ fn source_followup_anchor_at<'a>(
         source
     };
     Ok(Some(anchor))
+}
+
+// Only the previous, durably stopped scoped question can supply this proof.
+// The read transaction is closed before Core seals or applies a new turn.
+pub(crate) fn resume_summary_question_scope<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+) -> Result<Option<crate::text_summary::SourceFollowup<'a>>> {
+    let (Some(bundle), Some(result)) = (&state.bundle, &state.result) else {
+        return Ok(None);
+    };
+    if !crate::input::is_source_summary_question_version(&bundle.meaning.parser_version) {
+        return Ok(None);
+    }
+    let Some(query) = resumable_source_question(state, bundle, result) else {
+        return Ok(None);
+    };
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    store.with_verified_case_history(actor, case, |history| {
+        if identity(&bundle.request)? != result.id
+            || state.input_fingerprint.as_ref() != Some(&result.id)
+            || !history
+                .input_bundle(&result.input_id, result.input_version)?
+                .is_some_and(|(_, registered)| &registered == bundle)
+            || history
+                .input_result(&result.input_id, result.input_version)?
+                .as_ref()
+                != Some(result)
+        {
+            return Err(no_match_source_mismatch());
+        }
+        let source = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(no_match_source_mismatch)?;
+        verify_no_match_source(store, state, bundle, result, source, query, Some(history)).map(Some)
+    })
+}
+
+fn resumable_source_question<'a>(
+    state: &CaseRevision,
+    bundle: &'a InputBundle,
+    result: &ResultRecord,
+) -> Option<&'a str> {
+    match &bundle.meaning.intent {
+        Intent::AskPreviousSourceQuestion { query }
+            if state.lifecycle == Lifecycle::Suspend
+                && result.lifecycle == Lifecycle::Suspend
+                && bundle.request.budget.max_actions > 0
+                && bundle.request.budget.deadline_ms > 0
+                && result
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.starts_with("SOURCE_QUESTION_NO_MATCH: ")) =>
+        {
+            Some(query.as_str())
+        }
+        _ => None,
+    }
+}
+
+fn no_match_source_mismatch() -> Error {
+    failure(
+        "SOURCE_CONTEXT_INVALID",
+        "The retained source follow-up does not match its sealed result",
+    )
+}
+
+fn verify_no_match_source<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    source: &'a ResultRecord,
+    query: &str,
+    history: Option<&crate::store::VerifiedCaseHistory<'_>>,
+) -> Result<crate::text_summary::SourceFollowup<'a>> {
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    let mismatch = no_match_source_mismatch;
+    if state.goal_sha256.is_some()
+        || state.reason != result.reason
+        || result.guarantee != Guarantee::Unknown
+        || result.content_plan.is_some()
+        || result.render.is_some()
+        || !result.receipts.is_empty()
+        || !result.evidence.is_empty()
+        || !result.dependencies.is_empty()
+        || result.execution_graph_ref.is_some()
+    {
+        return Err(mismatch());
+    }
+    let context = crate::text_summary::source_followup_context_with_history(
+        store,
+        bundle,
+        &state.prior_results,
+        source,
+        history,
+    )?
+    .ok_or_else(mismatch)?;
+    let packets =
+        crate::text_summary::verified_source_question_packets(store, actor, case, context)?;
+    let same_stop = |error: Option<Error>| {
+        let Some(error) = error else { return false };
+        matches!(&error, Error::Contract { code, .. } if code == "SOURCE_QUESTION_NO_MATCH")
+            && result.reason.as_deref()
+                == Some(format!("SOURCE_QUESTION_NO_MATCH: {error}").as_str())
+    };
+    // Stopped questions have no adopted answer artifact. Require the exact
+    // diagnostic and the same derivation with the original request budget.
+    let prose_replay = crate::text_summary::replay_stopped_prose_source_question(
+        result.reason.as_deref().unwrap_or_default(),
+        &context.source.id,
+        query,
+        &packets,
+        bundle.request.budget.max_actions as usize,
+    );
+    let same_diagnostic = if let Some(replay) = prose_replay {
+        same_stop(replay.err())
+    } else {
+        same_stop(
+            crate::text_summary::answer_fetched_source_question_v2(
+                &context.source.id,
+                query,
+                &packets,
+            )
+            .err(),
+        ) || same_stop(
+            crate::text_summary::answer_fetched_source_question_v1(
+                &context.source.id,
+                query,
+                &packets,
+            )
+            .err(),
+        )
+    };
+    if !same_diagnostic {
+        return Err(mismatch());
+    }
+    Ok(context)
 }
 
 fn verify_source_summary_context(
