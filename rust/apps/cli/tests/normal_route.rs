@@ -11733,6 +11733,115 @@ fn chat_does_not_send_turns_after_an_unresolved_output_selection() {
 }
 
 #[test]
+fn chat_disables_network_after_an_invalid_network_command() {
+    use minidora_domain::{GoalContract, Lifecycle};
+
+    const ACTOR: &str = "owner";
+    const CASE: &str = "normal-route";
+    const GRANTED: [&str; 2] = ["example.com", "example.net"];
+    const DISABLED: &str = "通信設定を読み取れなかったため、通信をオフにしました。再開するには /net on を入力してください。";
+    const OFF: &str = "通信はオフです。";
+    const ON: &str = "通信許可先: example.com, example.net";
+
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let chat = |input: &[u8], grant: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_minidora-rust"));
+        command.args(["chat", "--db"]).arg(&scratch.0).args([
+            "--actor",
+            ACTOR,
+            "--case",
+            CASE,
+            "--max-input-bytes",
+            "64",
+        ]);
+        if grant {
+            for host in GRANTED {
+                command.args(["--allow-read-host", host]);
+            }
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stderr).unwrap()
+    };
+    // Exercise the authority actually handed to Core without contacting any
+    // network destination, even when this test is run against the old binary.
+    let assert_calculation_hosts = |expected: &[&str]| {
+        let state = store.load_case(ACTOR, CASE).unwrap().unwrap();
+        assert_eq!(state.lifecycle, Lifecycle::Commit);
+        let request = state.bundle.as_ref().unwrap().request.clone();
+        assert_eq!(request.text, "2+3");
+        let hosts: Vec<_> = request
+            .permissions
+            .read_hosts
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(hosts, expected);
+        let goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes(ACTOR, CASE, state.goal_sha256.as_deref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(goal.permissions, request.permissions);
+        let result = state.result.unwrap();
+        assert_eq!(result.calculation.unwrap().exact_value, "5");
+        assert!(result.evidence.is_empty() && result.receipts.is_empty());
+        assert!(store.actions(ACTOR, CASE).unwrap().is_empty());
+    };
+
+    let oversized = format!("/net off {}\n", "x".repeat(4200));
+    for invalid in [
+        b"/net of\n".as_slice(),
+        b"/net off example.org\n",
+        b"/net off \xff\n",
+        b"/net\xe3\x80\x80off \xff\n",
+        oversized.as_bytes(),
+    ] {
+        let mut input = b"/net\n".to_vec();
+        input.extend_from_slice(invalid);
+        input.extend_from_slice(b"/net\n2+3\n/exit\n");
+        let stderr = chat(&input, true);
+        assert_calculation_hosts(&[]);
+        assert_eq!(stderr.matches(ON).count(), 1, "{stderr}");
+        assert_eq!(stderr.matches(DISABLED).count(), 1, "{stderr}");
+        assert!(stderr.contains(OFF), "{stderr}");
+    }
+
+    let stderr = chat(b"/net off\n/net\n2+3\n/exit\n", true);
+    assert_calculation_hosts(&[]);
+    assert_eq!(stderr.matches(OFF).count(), 2, "{stderr}");
+    assert!(!stderr.contains(DISABLED), "{stderr}");
+
+    let stderr = chat(b"/net of\n/net on\n/net\n2+3\n/exit\n", true);
+    assert_calculation_hosts(&GRANTED);
+    assert_eq!(stderr.matches(ON).count(), 2, "{stderr}");
+
+    let input = format!(
+        "{}\n/network off\n/paste\n/net off\n/end\n/net\n2+3\n/exit\n",
+        "x".repeat(4200)
+    );
+    let stderr = chat(input.as_bytes(), true);
+    assert_calculation_hosts(&GRANTED);
+    assert!(stderr.contains("上限を超えた"), "{stderr}");
+    assert_eq!(stderr.matches(ON).count(), 1, "{stderr}");
+    assert!(!stderr.contains(DISABLED), "{stderr}");
+
+    let stderr = chat(b"/net on\n/net\n2+3\n/exit\n", false);
+    assert_calculation_hosts(&[]);
+    assert_eq!(stderr.matches(OFF).count(), 2, "{stderr}");
+    assert!(!stderr.contains("通信許可先:"), "{stderr}");
+}
+
+#[test]
 fn stdin_checks_byte_budget_before_decoding_and_before_opening_state() {
     let scratch = Scratch::new();
     let db = scratch.0.join("state");

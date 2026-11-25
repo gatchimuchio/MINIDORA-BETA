@@ -22,6 +22,7 @@ const HELP: &str = "\
 /status             エンジン、提供能力、会話の状態と採用された模型の版を表示\n\
 /paste              複数行を入力。単独の /end 行でまとめて送信\n\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
+                    指定を読み取れない場合は通信だけをオフにします\n\
 /output PATH        次の一発話の成果を指定先へ保存。起動時の --allow-write の範囲内\n\
 /output off         次の保存指定を解除\n\
                     選択に失敗した場合は、選び直すか解除するまで通常の発話を送信しません\n\
@@ -36,21 +37,36 @@ const UNRESOLVED_CONTEXT: &str =
     "参照先が未確定です。/context 結果ID で選び直すか、/context off で解除してください。";
 const UNRESOLVED_OUTPUT: &str = "保存先が未確定です。/output PATH で許可した保存先を選び直すか、/output off で解除してください。";
 
+enum SettingCommand {
+    Output,
+    Network,
+}
+
 enum Line {
     Input(Vec<u8>),
-    TooLong { output_command: bool },
+    TooLong(Option<SettingCommand>),
     End,
 }
 
-fn starts_output_command(bytes: &[u8]) -> bool {
-    let Some(argument) = bytes.strip_prefix(b"/output") else {
-        return false;
+fn leading_setting_command(bytes: &[u8]) -> Option<SettingCommand> {
+    let (command, argument) = if let Some(argument) = bytes.strip_prefix(b"/net") {
+        (SettingCommand::Network, argument)
+    } else {
+        (SettingCommand::Output, bytes.strip_prefix(b"/output")?)
     };
-    // Only the command separator matters. The path itself may be invalid UTF-8.
-    let prefix = std::str::from_utf8(argument).unwrap_or_else(|error| {
-        std::str::from_utf8(&argument[..error.valid_up_to()]).expect("valid UTF-8 prefix")
-    });
-    prefix.starts_with(char::is_whitespace)
+    // Classify the command boundary without requiring a decodable argument.
+    argument
+        .utf8_chunks()
+        .next()
+        .is_some_and(|prefix| prefix.valid().starts_with(char::is_whitespace))
+        .then_some(command)
+}
+
+fn disable_network_after_bad_setting(network_enabled: &mut bool) {
+    *network_enabled = false;
+    eprintln!(
+        "通信設定を読み取れなかったため、通信をオフにしました。再開するには /net on を入力してください。"
+    );
 }
 
 fn line_body(bytes: &[u8]) -> &[u8] {
@@ -73,9 +89,7 @@ fn read_line(reader: &mut impl BufRead, max_bytes: usize) -> io::Result<Line> {
         if !bytes.ends_with(b"\n") {
             reader.skip_until(b'\n')?;
         }
-        return Ok(Line::TooLong {
-            output_command: starts_output_command(&bytes),
-        });
+        return Ok(Line::TooLong(leading_setting_command(&bytes)));
     }
     Ok(Line::Input(bytes))
 }
@@ -86,14 +100,12 @@ fn read_paste(reader: &mut impl BufRead, max_bytes: usize) -> io::Result<Line> {
     loop {
         match read_line(reader, max_bytes.max(b"/end".len()))? {
             Line::End => return Ok(Line::End),
-            Line::TooLong { .. } => too_long = true,
+            Line::TooLong(_) => too_long = true,
             Line::Input(line) if line_body(&line) == b"/end" => {
                 // Preserve all internal line endings; the last ends the frame.
                 pasted.truncate(line_body(&pasted).len());
                 return Ok(if too_long || pasted.len() > max_bytes {
-                    Line::TooLong {
-                        output_command: false,
-                    }
+                    Line::TooLong(None)
                 } else {
                     Line::Input(pasted)
                 });
@@ -329,27 +341,33 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
             max_bytes.max(MAX_PATH_ARGUMENT_BYTES + b"/output ".len()),
         )
         .map_err(|error| error.to_string())?;
-        let mut bytes = match line {
+        let decoded = match line {
             Line::End => break,
-            Line::TooLong { output_command } => {
-                if output_command {
-                    options.output = None;
-                    output_unresolved = true;
-                }
-                eprintln!("入力が上限を超えたため送信しませんでした。");
-                continue;
+            Line::TooLong(command) => Err((command, "入力が上限を超えたため送信しませんでした。")),
+            Line::Input(mut bytes) => {
+                bytes.truncate(line_body(&bytes).len());
+                String::from_utf8(bytes).map_err(|error| {
+                    (
+                        leading_setting_command(error.as_bytes()),
+                        "UTF-8ではない入力を送信しませんでした。",
+                    )
+                })
             }
-            Line::Input(bytes) => bytes,
         };
-        bytes.truncate(line_body(&bytes).len());
-        let mut text = match String::from_utf8(bytes) {
+        let mut text = match decoded {
             Ok(text) => text,
-            Err(error) => {
-                if starts_output_command(error.as_bytes()) {
-                    options.output = None;
-                    output_unresolved = true;
+            Err((command, message)) => {
+                eprintln!("{message}");
+                match command {
+                    Some(SettingCommand::Output) => {
+                        options.output = None;
+                        output_unresolved = true;
+                    }
+                    Some(SettingCommand::Network) => {
+                        disable_network_after_bad_setting(&mut network_enabled);
+                    }
+                    None => {}
                 }
-                eprintln!("UTF-8ではない入力を送信しませんでした。");
                 continue;
             }
         };
@@ -487,6 +505,10 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                     }
                     continue;
                 }
+                ("/net", _) => {
+                    disable_network_after_bad_setting(&mut network_enabled);
+                    continue;
+                }
                 ("/output", "off") => {
                     options.output = None;
                     output_unresolved = false;
@@ -527,7 +549,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                             eprintln!("/end がないため送信しませんでした。");
                             break;
                         }
-                        Line::TooLong { .. } => {
+                        Line::TooLong(_) => {
                             eprintln!("入力が上限を超えたため送信しませんでした。");
                             continue;
                         }
