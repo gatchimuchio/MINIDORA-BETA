@@ -18,7 +18,7 @@ const HELP: &str = "\
 /history page N    以前の結果を1ページ20件ずつ表示\n\
 /context 結果ID     現在の会話の保存済み結果を次の一発話で参照\n\
 /context off        次の参照指定を解除\n\
-                    参照先を指定し直せないときは発話を送信しません\n\
+                    選択に失敗した場合は、選び直すか解除するまで通常の発話を送信しません\n\
 /status             エンジン、提供能力、会話の状態と採用された模型の版を表示\n\
 /paste              複数行を入力。単独の /end 行でまとめて送信\n\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
@@ -38,6 +38,7 @@ const UNRESOLVED_CONTEXT: &str =
 const UNRESOLVED_OUTPUT: &str = "保存先が未確定です。/output PATH で許可した保存先を選び直すか、/output off で解除してください。";
 
 enum SettingCommand {
+    Context,
     Output,
     Network,
 }
@@ -51,6 +52,8 @@ enum Line {
 fn leading_setting_command(bytes: &[u8]) -> Option<SettingCommand> {
     let (command, argument) = if let Some(argument) = bytes.strip_prefix(b"/net") {
         (SettingCommand::Network, argument)
+    } else if let Some(argument) = bytes.strip_prefix(b"/context") {
+        (SettingCommand::Context, argument)
     } else {
         (SettingCommand::Output, bytes.strip_prefix(b"/output")?)
     };
@@ -295,8 +298,8 @@ fn show_status(
 }
 
 fn is_cancellation(options: &Options, text: &str) -> bool {
-    // A cancellation does not require a new output action. Use the same
-    // interpretation as Core without registering an input or changing a case.
+    // Cancellation needs neither a selected result nor a new output action.
+    // Use Core's interpretation without registering an input or changing a case.
     let mut probe = RequestEnvelope::new(&options.case_id, "cancel-check", &options.actor, text);
     probe.budget = options.budget.clone();
     input::seal(&probe, None).is_ok_and(|bundle| matches!(bundle.meaning.intent, Intent::Cancel))
@@ -359,6 +362,10 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
             Err((command, message)) => {
                 eprintln!("{message}");
                 match command {
+                    Some(SettingCommand::Context) => {
+                        options.context_ref = None;
+                        context_unresolved = true;
+                    }
                     Some(SettingCommand::Output) => {
                         options.output = None;
                         output_unresolved = true;
@@ -575,13 +582,20 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
             eprintln!("入力が上限を超えたため送信しませんでした。");
             continue;
         }
-        if context_unresolved {
-            eprintln!("入力を送信していません。{UNRESOLVED_CONTEXT}");
-            continue;
-        }
-        if output_unresolved && !is_cancellation(&options, &text) {
-            eprintln!("入力を送信していません。{UNRESOLVED_OUTPUT}");
-            continue;
+        if context_unresolved || output_unresolved {
+            if !is_cancellation(&options, &text) {
+                let reason = if context_unresolved {
+                    UNRESOLVED_CONTEXT
+                } else {
+                    UNRESOLVED_OUTPUT
+                };
+                eprintln!("入力を送信していません。{reason}");
+                continue;
+            }
+            // Keep the unresolved state. The cancellation itself must not
+            // carry the previous turn's one-shot context or output selection.
+            options.context_ref = None;
+            options.output = None;
         }
         let read_hosts = if network_enabled {
             &options.read_hosts
