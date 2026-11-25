@@ -39,6 +39,8 @@ pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v165-generated-code-single-case";
 pub(crate) const EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v204-explained-code-single-case";
+pub(crate) const EXPLAINED_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v205-explained-code-verification-explanation";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -252,6 +254,7 @@ pub(crate) enum SourceContext {
     PreviousFilteredCsvConversionExplanation,
     DirectSourceExplanation,
     DirectCodeVerificationExplanation,
+    ExplainedCodeVerificationExplanation,
     ExplainedDirectSource,
     DirectBodyQuestion,
     WebAnswerExplanation,
@@ -685,6 +688,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::PreviousFilteredCsvConversionExplanation
         | SourceContext::DirectSourceExplanation
         | SourceContext::DirectCodeVerificationExplanation
+        | SourceContext::ExplainedCodeVerificationExplanation
         | SourceContext::ExplainedDirectSource
         | SourceContext::DirectBodyQuestion
         | SourceContext::WebAnswerExplanation
@@ -892,6 +896,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
+        }
+        Intent::ExplainPrevious
+            if matches!(
+                source_context,
+                Some(SourceContext::ExplainedCodeVerificationExplanation)
+            ) =>
+        {
+            EXPLAINED_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
         }
         // A derived conclusion keeps the existing proof follow-up contract.
         Intent::ExplainPrevious

@@ -632,6 +632,8 @@ pub(crate) struct CodeVerificationExplanation {
 
 pub(crate) struct ExplainedCodeVerification {
     source_dependencies: [String; 3],
+    source_range: std::ops::Range<usize>,
+    proof_bytes: usize,
     pub(crate) report: crate::code_capability::CodeCapabilityReport,
     pub(crate) units: Vec<String>,
 }
@@ -709,9 +711,9 @@ pub(crate) fn verify_explained_code(
             .input_bundle(&previous.input_id, previous.input_version)?
             .ok_or_else(invalid)
     })?;
-    if !matches!(source_bundle.meaning.intent, Intent::ExplainCode { .. }) {
+    let Intent::ExplainCode { source: span } = &source_bundle.meaning.intent else {
         return Err(missing());
-    }
+    };
     if identity(&source_bundle.request)? != previous.id
         || previous.guarantee != Guarantee::Computed
         || previous.calculation.is_some()
@@ -752,18 +754,134 @@ pub(crate) fn verify_explained_code(
     check_time()?;
     let report = crate::code_capability::verify_previous_source(source, document, deadline)?;
     let units = crate::code_capability::explained_code_verification_lines(&report)?;
-    if read_bytes
-        .len()
-        .saturating_add(canonical(&report)?.len())
-        .saturating_add(units.join("\n").len())
-        > request.budget.max_evidence_bytes
-    {
+    let proof_bytes = read_bytes.len().saturating_add(canonical(&report)?.len());
+    if proof_bytes.saturating_add(units.join("\n").len()) > request.budget.max_evidence_bytes {
         return Err(evidence_limit());
     }
     check_time()?;
     Ok(ExplainedCodeVerification {
         source_dependencies: [previous.id.clone(), bundle_ref, read_ref.clone()],
+        source_range: span.start..span.end,
+        proof_bytes,
         report,
+        units,
+    })
+}
+
+/// Explain only a registered v204 result, never a generated or direct case.
+pub(crate) fn explained_verification_explanation(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    followup: &InputBundle,
+    previous: &ResultRecord,
+    deadline: Option<Instant>,
+) -> Result<CodeVerificationExplanation> {
+    let invalid = || {
+        failure(
+            "EXPLAINED_CODE_VERIFICATION_CONTEXT_MISMATCH",
+            "前回の検算を封印入力・貼り付けた原文・保存済み試験結果に照合できません。",
+        )
+    };
+    let request = &followup.request;
+    if !matches!(followup.meaning.intent, Intent::ExplainPrevious)
+        || followup.meaning.parser_version
+            != crate::input::EXPLAINED_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
+        || request.actor_id != state.actor_id
+        || request.case_id != state.case_id
+        || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
+        || followup.context_sha256 != identity(&Some(previous))?
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.guarantee != Guarantee::Computed
+        || previous.calculation.is_some()
+        || !previous.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    if request.budget.max_actions < 3 + u32::from(request.output_path.is_some()) {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "検算の照合と説明に必要な行動予算が不足しています。",
+        ));
+    }
+    let source = store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
+        if history
+            .input_result(&previous.input_id, previous.input_version)?
+            .as_ref()
+            != Some(previous)
+        {
+            return Err(invalid());
+        }
+        history
+            .input_bundle(&previous.input_id, previous.input_version)?
+            .map(|(_, bundle)| bundle)
+            .ok_or_else(invalid)
+    })?;
+    if identity(&source.request)? != previous.id {
+        return Err(invalid());
+    }
+    let anchor = source
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .ok_or_else(invalid)?;
+    let verified = verify_explained_code(store, state, &source, anchor, deadline)?;
+    let bytes = canonical(&verified.report)?;
+    let report_ref = digest(&bytes);
+    let dependencies = verified.dependencies(report_ref.clone());
+    if previous.dependencies != dependencies
+        || store.get_bytes(&state.actor_id, &state.case_id, &report_ref)? != bytes
+    {
+        return Err(invalid());
+    }
+    recheck_code_output(
+        store,
+        state,
+        previous,
+        verified.units,
+        &report_ref,
+        "pasted-code verification",
+    )?;
+
+    let mut units = crate::code_capability::verification_explanation_lines_for_source(
+        &verified.report,
+        "貼り付けたコード",
+    )?;
+    units[1] = format!(
+        "貼り付けたコードの原文 byte[{}..{}) SHA-256: {}",
+        verified.source_range.start, verified.source_range.end, verified.report.source_sha256,
+    );
+    let roles = &source.meaning.source_roles;
+    let names = roles
+        .get("/VerifyPreviousCode/case/argument_names")
+        .ok_or_else(invalid)?;
+    let values = roles
+        .get("/VerifyPreviousCode/case/argument_values")
+        .ok_or_else(invalid)?;
+    let assignments = names
+        .iter()
+        .zip(values)
+        .map(|(name, value)| format!("{}={}", name.text, value.text))
+        .collect::<Vec<_>>()
+        .join("、");
+    units.insert(2, format!("元の検算で指定した引数: {assignments}"));
+    units.insert(3, format!("検算レポートSHA-256: {report_ref}"));
+    if verified.proof_bytes.saturating_add(units.join("\n").len())
+        > request.budget.max_evidence_bytes
+    {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "検算の根拠と説明が要求の証拠予算を超えています。",
+        ));
+    }
+    let mut explanation_dependencies = vec![previous.id.clone()];
+    explanation_dependencies.extend(dependencies);
+    Ok(CodeVerificationExplanation {
+        dependencies: explanation_dependencies,
         units,
     })
 }

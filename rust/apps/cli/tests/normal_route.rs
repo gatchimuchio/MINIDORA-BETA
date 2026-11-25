@@ -21833,6 +21833,140 @@ fn pasted_code_explanation_feeds_a_finite_verification_of_the_same_source() {
 }
 
 #[test]
+fn pasted_code_verification_followup_explains_the_verified_source_and_case() {
+    use minidora_domain::{Guarantee, Intent, Lifecycle};
+
+    const HEADER: &str = "コードを説明して:\r\n";
+    const SOURCE: &str = "def square(x):\r\n    return x * x";
+    const VERIFY: &str = "このコードで、x=3 の結果が9になるか確認して";
+    const EXPLAIN: &str = "詳しく説明して";
+    const PARSER: &str = "declarative-ja-v205-explained-code-verification-explanation";
+
+    let scratch = Scratch::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args(["--actor", "owner", "--case", "normal-route"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            format!("/paste\n{HEADER}{SOURCE}\n/end\n{VERIFY}\n{EXPLAIN}\n/exit\n").as_bytes(),
+        )
+        .unwrap();
+    let transcript = child.wait_with_output().unwrap();
+    assert!(transcript.status.success(), "{transcript:?}");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let state = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let bundle = state.bundle.as_ref().unwrap();
+    assert_eq!(bundle.meaning.parser_version, PARSER);
+    assert!(matches!(bundle.meaning.intent, Intent::ExplainPrevious));
+    let explained = state.result.as_ref().unwrap();
+    assert_eq!(explained.lifecycle, Lifecycle::Commit);
+    assert_eq!(explained.guarantee, Guarantee::Computed);
+    let [
+        verification_id,
+        explanation_id,
+        input_ref,
+        read_ref,
+        verify_ref,
+    ] = explained.dependencies.as_slice()
+    else {
+        panic!("the explanation must link the saved verification and original input and reports");
+    };
+    assert_eq!(
+        bundle.meaning.context_result_ref.as_ref(),
+        Some(verification_id)
+    );
+    let verification = &state.prior_results[verification_id];
+    assert_eq!(verification.lifecycle, Lifecycle::Commit);
+    assert_eq!(
+        &explained.dependencies[1..],
+        verification.dependencies.as_slice()
+    );
+    assert_eq!(
+        state.prior_results[explanation_id].dependencies.as_slice(),
+        std::slice::from_ref(read_ref)
+    );
+
+    let raw_bundle = std::fs::read(scratch.0.join("blobs").join(input_ref)).unwrap();
+    assert_eq!(&minidora_domain::digest(&raw_bundle), input_ref);
+    let original: minidora_domain::InputBundle = serde_json::from_slice(&raw_bundle).unwrap();
+    let Intent::ExplainCode { source } = original.meaning.intent else {
+        panic!("expected the originally sealed code explanation");
+    };
+    assert_eq!(
+        original.request.text.get(source.start..source.end),
+        Some(SOURCE)
+    );
+    assert_eq!(
+        (source.start, source.end),
+        (HEADER.len(), HEADER.len() + SOURCE.len())
+    );
+    let range = format!("byte[{}..{})", source.start, source.end);
+    let source_sha256 = minidora_domain::digest(SOURCE.as_bytes());
+    let verify_bytes = store
+        .get_bytes("owner", "normal-route", verify_ref)
+        .unwrap();
+    let report: Value = serde_json::from_slice(&verify_bytes).unwrap();
+    assert_eq!(report["source_sha256"], source_sha256);
+    let cases_sha256 = report["verification"]["cases_sha256"].as_str().unwrap();
+    let assert_details = |text: &str, expectation: &str, outcome: &str| {
+        assert!(
+            text.contains(&range) && text.contains(&source_sha256),
+            "{text}"
+        );
+        assert!(
+            text.contains("実際値 9") && text.contains(expectation) && text.contains(outcome),
+            "{text}"
+        );
+    };
+    assert_details(&explained.text, "期待値 9", "一致");
+    assert!(explained.text.contains(cases_sha256));
+    assert!(explained.text.contains("元の検算で指定した引数: x=3"));
+    assert!(String::from_utf8_lossy(&transcript.stdout).contains(&explained.text));
+
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    record(&run(&["2+3"]));
+    let from_history = record(&run(&["--context", verification_id.as_str(), EXPLAIN]));
+    assert_eq!(
+        from_history["dependencies"],
+        serde_json::json!(explained.dependencies)
+    );
+    assert_eq!(from_history["text"], explained.text);
+
+    let mismatch = record(&run(&[
+        "--context",
+        explanation_id.as_str(),
+        "このコードで、x=3 の結果が8になるか確認して",
+    ]));
+    let details = record(&run(&[EXPLAIN]));
+    let mut expected = vec![mismatch["id"].clone()];
+    expected.extend_from_slice(mismatch["dependencies"].as_array().unwrap());
+    assert_eq!(details["dependencies"], serde_json::json!(expected));
+    assert_details(details["text"].as_str().unwrap(), "期待値 8", "不一致");
+    for (flag, value, reason) in [
+        ("--max-actions", "2", "ACTION_BUDGET_EXHAUSTED:"),
+        ("--max-evidence-bytes", "1", "RESOURCE_LIMIT:"),
+    ] {
+        let limited = stopped(
+            &run(&["--context", verification_id.as_str(), flag, value, EXPLAIN]),
+            2,
+            "SUSPEND",
+        );
+        assert!(limited["reason"].as_str().unwrap().starts_with(reason));
+        assert!(limited["render"].is_null());
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage() {
     let material = "ねこ\n地元で開催\n雨天中止";
     let title_end = "ねこ".len();

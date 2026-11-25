@@ -6560,7 +6560,12 @@ fn inspect(
     }
     let direct_verification_explanation = bundle.meaning.parser_version
         == crate::input::DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION;
-    if verification_explanation_predicate.is_some() || direct_verification_explanation {
+    let explained_verification_explanation = bundle.meaning.parser_version
+        == crate::input::EXPLAINED_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION;
+    if verification_explanation_predicate.is_some()
+        || direct_verification_explanation
+        || explained_verification_explanation
+    {
         const CODE: &str = "RECOVERY_CODE_VERIFICATION_EXPLANATION_CHANGED";
         let invalid = || {
             failure(
@@ -6583,6 +6588,15 @@ fn inspect(
             crate::code_generation::direct_verification_explanation(
                 store, state, bundle, prior, deadline,
             )?
+        } else if explained_verification_explanation {
+            if bundle.request.context_ref.is_none()
+                && store.input_start_predecessor(state)?.as_ref() != Some(prior)
+            {
+                return Err(invalid());
+            }
+            crate::code_generation::explained_verification_explanation(
+                store, state, bundle, prior, deadline,
+            )?
         } else {
             crate::code_generation::previous_verification_explanation(
                 store, state, bundle, prior, deadline,
@@ -6595,6 +6609,10 @@ fn inspect(
             || result.text != explanation.units.join("\n")
             || result.calculation.is_some()
             || !result.evidence.is_empty()
+            || explained_verification_explanation
+                && (plan.guarantee != result.guarantee
+                    || plan.text != result.text
+                    || !plan.dependencies.starts_with(&explanation.dependencies))
         {
             return Err(invalid());
         }
@@ -11844,6 +11862,88 @@ mod tests {
         assert_eq!(
             graph[5]["sequence-final"]["sequence-larger"],
             result.dependencies[1]
+        );
+    }
+
+    #[test]
+    fn pasted_verification_explanation_reconciles_the_same_verified_file() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let source = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "pasted-python",
+                    "alice",
+                    "コードを説明して:\r\ndef square(x):\r\n    return x * x",
+                ),
+            )
+            .unwrap();
+        assert_eq!(source.lifecycle, Lifecycle::Commit, "{source:?}");
+        let verified = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "verify-pasted",
+                    "alice",
+                    "このコードで、x=3 の結果が8になるか確認して",
+                ),
+            )
+            .unwrap();
+        assert_eq!(verified.lifecycle, Lifecycle::Commit, "{verified:?}");
+        let mut request =
+            RequestEnvelope::new("case", "explain-pasted-check", "alice", "詳しく説明して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let explanation = engine.execute("alice", request).unwrap();
+        assert_eq!(explanation.lifecycle, Lifecycle::Commit, "{explanation:?}");
+        assert_eq!(explanation.dependencies[0], verified.id);
+        assert_eq!(explanation.dependencies[1..], verified.dependencies);
+        assert!(explanation.text.contains("実際値 9 と期待値 8"));
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, explanation.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let saved = store.load_case("alice", "case").unwrap().unwrap();
+        let mut without_source = saved.clone();
+        assert!(without_source.prior_results.remove(&source.id).is_some());
+        let actions = store.actions("alice", "case").unwrap();
+        assert!(
+            inspect(
+                &store,
+                "alice",
+                &without_source,
+                saved.result.as_ref().unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, explanation.dependencies);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one delivery receipt: {:?}", recovered.receipts);
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
         );
     }
 

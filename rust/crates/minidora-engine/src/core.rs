@@ -6000,6 +6000,13 @@ impl Engine {
                         Intent::VerifyCode { .. } if context.guarantee == Guarantee::Computed => {
                             Some(input::SourceContext::DirectCodeVerificationExplanation)
                         }
+                        Intent::VerifyPreviousCode { .. }
+                            if source.meaning.parser_version
+                                == input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION
+                                && context.guarantee == Guarantee::Computed =>
+                        {
+                            Some(input::SourceContext::ExplainedCodeVerificationExplanation)
+                        }
                         Intent::TextReplace { .. }
                             if context.guarantee == Guarantee::Computed
                                 && context.evidence.is_empty() =>
@@ -6924,6 +6931,17 @@ impl Engine {
                 == input::DIRECT_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
             {
                 crate::code_generation::direct_verification_explanation(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    prior,
+                    deadline,
+                )
+                .map(Some)
+            } else if bundle.meaning.parser_version
+                == input::EXPLAINED_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION
+            {
+                crate::code_generation::explained_verification_explanation(
                     &self.store,
                     &state,
                     &bundle,
