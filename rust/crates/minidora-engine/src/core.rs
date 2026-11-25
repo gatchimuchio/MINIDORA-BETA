@@ -5824,14 +5824,15 @@ impl Engine {
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
                 && let Some(prior) = previous
-                && previous_named_correction_context(&self.store, actor, &request.case_id, prior)?
-                    .is_some()
+                && let Some(source) =
+                    previous_natural_correction_input(&self.store, actor, &request.case_id, prior)?
             {
-                return input::seal_with_source_context(
-                    &request,
-                    previous,
-                    Some(input::SourceContext::NamedCorrectionRelationQuery),
-                );
+                let context = if matches!(source.meaning.intent, Intent::CorrectPremise { .. }) {
+                    input::SourceContext::NamedCorrectionRelationQuery
+                } else {
+                    input::SourceContext::ContextualCorrectionRelationQuery
+                };
+                return input::seal_with_source_context(&request, previous, Some(context));
             }
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
@@ -13794,9 +13795,35 @@ pub(crate) fn resolve_previous_relation_for_bundle(
     }
     let actor = &request.actor_id;
     let case = &request.case_id;
-    if parser_version == input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION {
-        let correction =
-            previous_named_correction_context(store, actor, case, previous)?.ok_or_else(invalid)?;
+    if matches!(
+        parser_version.as_str(),
+        input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
+            | input::CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION
+    ) {
+        let source =
+            previous_natural_correction_input(store, actor, case, previous)?.ok_or_else(invalid)?;
+        let (superseded, replacement) = match (parser_version.as_str(), &source.meaning.intent) {
+            (
+                input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION,
+                Intent::CorrectPremise {
+                    superseded,
+                    replacement,
+                },
+            ) => (superseded.clone(), replacement.clone()),
+            (
+                input::CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION,
+                Intent::CorrectPreviousPremise { .. },
+            ) => previous_contextual_correction_target(
+                store,
+                &source,
+                prior_results,
+                previous,
+                memory,
+                remaining_actions,
+            )?,
+            _ => return Err(invalid()),
+        };
+        let correction = previous_correction_context(&source, previous, superseded, replacement)?;
         if explicit_scope
             .as_ref()
             .is_some_and(|scope| scope != &correction.replacement.scope)
@@ -13916,7 +13943,7 @@ fn registered_relation_context_matches(
     )
 }
 
-struct PreviousNamedCorrectionContext {
+struct PreviousCorrectionContext {
     negative: Proposition,
     negative_id: String,
     replacement: Proposition,
@@ -13924,12 +13951,12 @@ struct PreviousNamedCorrectionContext {
     source_evidence: SealedSourceEvidence,
 }
 
-fn previous_named_correction_context(
+fn previous_natural_correction_input(
     store: &Store,
     actor: &str,
     case: &str,
     prior: &ResultRecord,
-) -> Result<Option<PreviousNamedCorrectionContext>> {
+) -> Result<Option<InputBundle>> {
     if prior.lifecycle != Lifecycle::Commit || prior.guarantee != Guarantee::UserPremise {
         return Ok(None);
     }
@@ -13938,31 +13965,36 @@ fn previous_named_correction_context(
     else {
         return Ok(None);
     };
-    let Intent::CorrectPremise {
-        superseded,
-        replacement,
-    } = &bundle.meaning.intent
-    else {
-        return Ok(None);
-    };
-    // Only the named natural-language correction with one subject and scope.
     // The typed API may explicitly move a premise to a different scope.
-    if bundle.meaning.parser_version != input::PARSER_VERSION {
-        return Ok(None);
-    }
-    let invalid = || {
-        failure(
-            "PRIOR_INPUT_RESULT_MISMATCH",
-            "参照した訂正と封印された入力・記憶の事実IDを照合できません。",
-        )
-    };
-    let source_evidence = input::assertion_source_evidence(&bundle)?.ok_or_else(invalid)?;
+    Ok((bundle.meaning.parser_version == input::PARSER_VERSION
+        && matches!(
+            bundle.meaning.intent,
+            Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
+        ))
+    .then_some(bundle))
+}
+
+fn correction_context_mismatch() -> Error {
+    failure(
+        "PRIOR_INPUT_RESULT_MISMATCH",
+        "参照した訂正と封印された入力・記憶の事実IDを照合できません。",
+    )
+}
+
+fn previous_correction_context(
+    bundle: &InputBundle,
+    prior: &ResultRecord,
+    superseded: Proposition,
+    replacement: Proposition,
+) -> Result<PreviousCorrectionContext> {
+    let source_evidence =
+        input::assertion_source_evidence(bundle)?.ok_or_else(correction_context_mismatch)?;
     let negative = Proposition {
         negative: true,
-        ..superseded.clone()
+        ..superseded
     };
     let negative_id = relations::user_premise_id(&negative, &prior.id)?;
-    let replacement_id = relations::user_premise_id(replacement, &prior.id)?;
+    let replacement_id = relations::user_premise_id(&replacement, &prior.id)?;
     // apply_premise_correction appends exactly these two fact IDs, after the
     // invalidated premises, with the replacement last.
     if source_evidence.input_fingerprint != prior.id
@@ -13971,15 +14003,97 @@ fn previous_named_correction_context(
             [_, .., neg, pos] if neg == &negative_id && pos == &replacement_id
         )
     {
-        return Err(invalid());
+        return Err(correction_context_mismatch());
     }
-    Ok(Some(PreviousNamedCorrectionContext {
+    Ok(PreviousCorrectionContext {
         negative,
         negative_id,
-        replacement: replacement.clone(),
+        replacement,
         replacement_id,
         source_evidence,
-    }))
+    })
+}
+
+fn previous_contextual_correction_target(
+    store: &Store,
+    correction: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    prior: &ResultRecord,
+    memory: &MemoryState,
+    remaining_actions: &mut u32,
+) -> Result<(Proposition, Proposition)> {
+    let Intent::CorrectPreviousPremise {
+        predicate,
+        superseded_object,
+        replacement_object,
+        scope,
+    } = &correction.meaning.intent
+    else {
+        return Err(correction_context_mismatch());
+    };
+    let anchor = correction
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| prior_results.get(id))
+        .filter(|anchor| anchor.lifecycle == Lifecycle::Commit && anchor.id != prior.id)
+        .ok_or_else(correction_context_mismatch)?;
+    if !registered_relation_context_matches(correction, prior_results, anchor)?
+        || store
+            .get_input_result(
+                &correction.request.actor_id,
+                &correction.request.case_id,
+                &anchor.input_id,
+                anchor.input_version,
+            )?
+            .as_ref()
+            != Some(anchor)
+    {
+        return Err(correction_context_mismatch());
+    }
+    let [invalidated @ .., _, _] = prior.dependencies.as_slice() else {
+        return Err(correction_context_mismatch());
+    };
+    let invalidated: BTreeSet<_> = invalidated.iter().map(String::as_str).collect();
+    let anchor_dependencies: BTreeSet<_> = anchor.dependencies.iter().map(String::as_str).collect();
+    let mut superseded = None;
+    // The original subject is not written in the correction. Use only direct
+    // premises in both its authenticated anchor and its recorded invalidations.
+    for fact in &memory.facts {
+        if fact.valid
+            || fact.guarantee != Guarantee::UserPremise
+            || !fact.dependencies.is_empty()
+            || fact.source_input.is_empty()
+            || fact.proposition.negative
+            || fact.proposition.predicate != *predicate
+            || fact.proposition.object != *superseded_object
+            || scope
+                .as_ref()
+                .is_some_and(|scope| fact.proposition.scope != *scope)
+            || !invalidated.contains(fact.id.as_str())
+            || !anchor_dependencies.contains(fact.id.as_str())
+        {
+            continue;
+        }
+        *remaining_actions = remaining_actions.checked_sub(1).ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "contextual correction anchor exceeds the sealed action budget",
+            )
+        })?;
+        if relations::user_premise_id(&fact.proposition, &fact.source_input)? != fact.id
+            || superseded.is_some_and(|old| old != &fact.proposition)
+        {
+            return Err(correction_context_mismatch());
+        }
+        superseded = Some(&fact.proposition);
+    }
+    let superseded = superseded.ok_or_else(correction_context_mismatch)?;
+    let replacement = Proposition {
+        object: replacement_object.clone(),
+        ..superseded.clone()
+    };
+    Ok((superseded.clone(), replacement))
 }
 
 fn previous_named_derived_relation_source(

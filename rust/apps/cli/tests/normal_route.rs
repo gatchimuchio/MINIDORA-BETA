@@ -10840,6 +10840,71 @@ fn pronoun_questions_reuse_active_premise_correction_across_processes() {
 }
 
 #[test]
+fn pronoun_questions_reuse_active_contextual_correction_across_processes() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| execute_in_case(&scratch.0, "owner", "contextual-correction", args);
+    let original = record(&run(&["[scope=物語]ミナは鳥です"]));
+    let anchor = record(&run(&["[scope=物語]ミナは鳥ですか"]));
+    assert_eq!(anchor["dependencies"], original["dependencies"]);
+    let correction = record(&run(&["それは鳥ではなく魚です"]));
+    assert_eq!(correction["guarantee"], "USER_PREMISE");
+    let correction_id = correction["id"].as_str().unwrap();
+    let replacement_id = correction["dependencies"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+
+    let implicit_request = [
+        "--input",
+        "ask-after-contextual-correction",
+        "それは魚ですか",
+    ];
+    let implicit = record(&run(&implicit_request));
+    assert_eq!(implicit["guarantee"], "USER_PREMISE");
+    assert!(
+        implicit["text"]
+            .as_str()
+            .unwrap()
+            .contains("ミナは魚である（範囲: 物語）")
+    );
+    assert!(
+        implicit["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(replacement_id)
+    );
+
+    let explicit_request = ["--context", correction_id, "それは魚ですか"];
+    let explicit = record(&run(&explicit_request));
+    assert_eq!(explicit["text"], implicit["text"]);
+    assert_eq!(explicit["dependencies"], implicit["dependencies"]);
+
+    let wrong_scope = stopped(
+        &run(&["--context", correction_id, "[scope=実験]それは魚ですか"]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrong_scope["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING_RELATION_CONTEXT:")
+    );
+
+    record(&run(&["[scope=物語]訂正: ミナは魚ではなく猫です"]));
+    let expired = stopped(&run(&explicit_request), 2, "SUSPEND");
+    assert!(
+        expired["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONTEXT_PROOF_CHANGED:")
+    );
+    assert_eq!(expired["guarantee"], "UNKNOWN");
+    assert_eq!(record(&run(&implicit_request)), implicit);
+}
+
+#[test]
 fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context() {
     let scratch = Scratch::new();
     let rule = record(&execute(

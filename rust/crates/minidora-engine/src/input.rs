@@ -20,6 +20,8 @@ pub(crate) const DERIVED_RELATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v191-derived-relation-followup";
 pub(crate) const NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v195-named-correction-relation-query";
+pub(crate) const CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
+    "declarative-ja-v198-contextual-correction-relation-query";
 pub(crate) const PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v193-previous-document-text-replacement";
 pub(crate) const PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION: &str =
@@ -243,6 +245,7 @@ pub(crate) enum SourceContext {
     PartialWebCandidate,
     ContextualAssertionRelationQuery,
     NamedCorrectionRelationQuery,
+    ContextualCorrectionRelationQuery,
     NamedDerivedRelationQuery,
     DerivedRelationFollowup,
     Summary,
@@ -253,6 +256,7 @@ pub(crate) fn is_registered_previous_relation_query(parser_version: &str) -> boo
         parser_version,
         CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION
             | NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
+            | CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION
             | NAMED_DERIVED_RELATION_QUERY_PARSER_VERSION
             | DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
     )
@@ -654,6 +658,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::PartialWebCandidate
         | SourceContext::ContextualAssertionRelationQuery
         | SourceContext::NamedCorrectionRelationQuery
+        | SourceContext::ContextualCorrectionRelationQuery
         | SourceContext::NamedDerivedRelationQuery
         | SourceContext::DerivedRelationFollowup => None,
     });
@@ -714,6 +719,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
+        }
+        Intent::AskPreviousRelation { .. }
+            if matches!(
+                source_context,
+                Some(SourceContext::ContextualCorrectionRelationQuery)
+            ) =>
+        {
+            CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION
         }
         Intent::AskPreviousRelation { .. }
             if matches!(
