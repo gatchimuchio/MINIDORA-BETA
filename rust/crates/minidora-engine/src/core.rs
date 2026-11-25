@@ -1747,6 +1747,11 @@ pub(crate) fn goal_predicates(
         {
             predicates.push(MULTI_CONDITION_PREMISE_PREDICATE.into());
         }
+        Intent::AssertPreviousRelation { .. }
+            if meaning.parser_version == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION =>
+        {
+            predicates.push(CORRECTION_ASSERTION_PREDICATE.into());
+        }
         intent @ (Intent::InspectFactSource { .. }
         | Intent::InspectConditionSource { .. }
         | Intent::InspectConditionSourceByDefinition { .. }
@@ -1873,6 +1878,7 @@ fn verify_report_goal_content(
                 | GUARDED_CONJUNCTIVE_RULE_PREDICATE
                 | MULTI_CONDITION_RULE_PREDICATE
                 | MULTI_CONDITION_PREMISE_PREDICATE
+                | CORRECTION_ASSERTION_PREDICATE
                 | WEB_ANSWER_PREDICATE
                 | CODE_EXPLANATION_PREDICATE
                 | RETURN_FUNCTION_PREDICATE
@@ -5835,6 +5841,18 @@ impl Engine {
                     input::SourceContext::ContextualCorrectionRelationQuery
                 };
                 return input::seal_with_source_context(&request, previous, Some(context));
+            }
+            if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::AssertPreviousRelation { .. })
+                && let Some(prior) = previous
+                && previous_natural_correction_input(&self.store, actor, &request.case_id, prior)?
+                    .is_some()
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::CorrectionRelationAssertion),
+                );
             }
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
@@ -10189,6 +10207,16 @@ impl Engine {
                 proposition,
                 explicit_scope,
             } => {
+                let after_correction = bundle.meaning.parser_version
+                    == input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION;
+                if after_correction
+                    && let Some((code, message)) = relation_registration_stop(
+                        &goal,
+                        "前提の登録・表示と必要なファイル確認の予算が不足しています。",
+                    )
+                {
+                    return self.stop(&mut state, Lifecycle::Suspend, code, message);
+                }
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
                 else {
                     return self.stop(
@@ -10210,27 +10238,51 @@ impl Engine {
                     Some(memory) => memory,
                     None => self.store.load_memory(actor)?,
                 };
-                let previous_assertion = match previous_contextual_assertion_fact(
-                    &self.store,
-                    actor,
-                    &request.case_id,
-                    &state.prior_results,
-                    prior,
-                    &memory,
-                ) {
-                    Ok(assertion) => assertion,
-                    Err(Error::Contract { code, message })
-                        if matches!(
-                            code.as_str(),
-                            "CONTEXT_PROOF_CHANGED" | "PRIOR_INPUT_RESULT_MISMATCH"
-                        ) =>
-                    {
-                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                let resolved = if after_correction {
+                    match verified_correction_assertion_proposition(
+                        &self.store,
+                        &bundle,
+                        &state.prior_results,
+                        prior,
+                        &memory,
+                    ) {
+                        Ok(proposition) => proposition,
+                        Err(Error::Contract { code, message }) => {
+                            let (lifecycle, code) = match code.as_str() {
+                                "RELATION_BUDGET" => (Lifecycle::Suspend, "RESOURCE_LIMIT"),
+                                "CONDITION_FALSE" => (Lifecycle::Reject, code.as_str()),
+                                _ => (Lifecycle::Suspend, code.as_str()),
+                            };
+                            return self.stop(&mut state, lifecycle, code, &message);
+                        }
+                        Err(error) => return Err(error),
                     }
-                    Err(error) => return Err(error),
-                };
-                let (anchor, expected_proof_dependencies, adopted_conclusion, assertion_fact_id) =
-                    if let Some(previous_assertion) = previous_assertion {
+                } else {
+                    let previous_assertion = match previous_contextual_assertion_fact(
+                        &self.store,
+                        actor,
+                        &request.case_id,
+                        &state.prior_results,
+                        prior,
+                        &memory,
+                    ) {
+                        Ok(assertion) => assertion,
+                        Err(Error::Contract { code, message })
+                            if matches!(
+                                code.as_str(),
+                                "CONTEXT_PROOF_CHANGED" | "PRIOR_INPUT_RESULT_MISMATCH"
+                            ) =>
+                        {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let (
+                        anchor,
+                        expected_proof_dependencies,
+                        adopted_conclusion,
+                        assertion_fact_id,
+                    ) = if let Some(previous_assertion) = previous_assertion {
                         let PreviousContextualAssertion {
                             fact,
                             has_contextual_assertion_parent,
@@ -10270,65 +10322,93 @@ impl Engine {
                             } => (proposition, proof_dependencies, true, None),
                         }
                     };
-                let answer = relations::query(&memory, &anchor, request.budget.max_actions)?;
-                retain_relation_answer_dependencies(&mut result, &answer);
-                state.result = Some(result.clone());
-                if let Some((lifecycle, code, message)) = condition_block(&answer) {
-                    return self.stop(&mut state, lifecycle, code, &message);
-                }
-                let proof_dependencies = relations::answer_dependencies(&answer);
-                let answer_guarantee = relations::answer_guarantee(&answer);
-                let relation_still_has_a_result =
-                    relation_explanation_target(&anchor, &answer).is_some();
-                let proof_lineage_matches = if let Some(fact_id) = assertion_fact_id {
-                    answer.status == "SUPPORTED"
-                        && proof_dependencies == [fact_id]
-                        && answer_guarantee == Guarantee::UserPremise
-                } else {
-                    proof_dependencies == expected_proof_dependencies
-                        && proof_dependencies == prior.dependencies
-                        && answer_guarantee == prior.guarantee
-                        && (!adopted_conclusion || answer.status == "SUPPORTED")
-                };
-                if !relation_still_has_a_result || !proof_lineage_matches {
-                    return self.stop(
+                    let answer = relations::query(&memory, &anchor, request.budget.max_actions)?;
+                    retain_relation_answer_dependencies(&mut result, &answer);
+                    state.result = Some(result.clone());
+                    if let Some((lifecycle, code, message)) = condition_block(&answer) {
+                        return self.stop(&mut state, lifecycle, code, &message);
+                    }
+                    let proof_dependencies = relations::answer_dependencies(&answer);
+                    let answer_guarantee = relations::answer_guarantee(&answer);
+                    let relation_still_has_a_result =
+                        relation_explanation_target(&anchor, &answer).is_some();
+                    let proof_lineage_matches = if let Some(fact_id) = assertion_fact_id {
+                        answer.status == "SUPPORTED"
+                            && proof_dependencies == [fact_id]
+                            && answer_guarantee == Guarantee::UserPremise
+                    } else {
+                        proof_dependencies == expected_proof_dependencies
+                            && proof_dependencies == prior.dependencies
+                            && answer_guarantee == prior.guarantee
+                            && (!adopted_conclusion || answer.status == "SUPPORTED")
+                    };
+                    if !relation_still_has_a_result || !proof_lineage_matches {
+                        return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "CONTEXT_PROOF_CHANGED",
                         "直前の関係結果を現在有効な根拠で再確認できません。新しい関係結果を確認してください。",
                     );
-                }
-                let resolved = Proposition {
-                    subject: anchor.subject.clone(),
-                    scope: explicit_scope
-                        .clone()
-                        .unwrap_or_else(|| anchor.scope.clone()),
-                    ..proposition.clone()
+                    }
+                    Proposition {
+                        subject: anchor.subject.clone(),
+                        scope: explicit_scope
+                            .clone()
+                            .unwrap_or_else(|| anchor.scope.clone()),
+                        ..proposition.clone()
+                    }
                 };
                 let source_evidence = input::assertion_source_evidence(&bundle)?;
+                if after_correction && source_evidence.is_none() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "ASSERTION_SOURCE_EVIDENCE_UNAVAILABLE",
+                        "前提追加の原文範囲を確認できません。",
+                    );
+                }
+                let base_revision = memory.revision;
                 let fact = relations::assert_fact_with_source_evidence(
                     &mut memory,
                     resolved.clone(),
                     &fingerprint,
                     source_evidence,
                 )?;
+                units = contextual_assertion_units(&prior.id, &fact);
+                if after_correction {
+                    if base_revision.checked_add(1) != Some(memory.revision) || !fact.valid {
+                        return Err(correction_context_mismatch());
+                    }
+                    if units.join("\n").len() > goal.budget.max_evidence_bytes {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "RESOURCE_LIMIT",
+                            "前提の登録結果が要求の証拠予算を超えています。",
+                        );
+                    }
+                    if started.elapsed() >= Duration::from_millis(goal.budget.deadline_ms) {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "DEADLINE",
+                            "前提の保存前に元Goalの締切へ達しました。",
+                        );
+                    }
+                }
                 self.store.save_memory(actor, &memory)?;
-                units.push(format!(
-                    "直前結果 {} の関係根拠を再確認し、主語「{}」とscope「{}」を復元しました。",
-                    prior.id, resolved.subject, resolved.scope
-                ));
-                units.push(format!(
-                    "前提を保存しました: {}。",
-                    describe(&fact.proposition)
-                ));
-                units.push(format!("前提ID: {}", fact.id));
-                units.push(
-                    "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。"
-                        .into(),
-                );
                 result.dependencies.push(prior.id.clone());
                 result.dependencies.push(fact.id);
                 result.guarantee = Guarantee::UserPremise;
+                if after_correction {
+                    result.actor_memory_revision = Some(memory.revision);
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: CORRECTION_ASSERTION_PREDICATE,
+                        guarantee: Guarantee::UserPremise,
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                }
             }
             intent @ (Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. }) => {
                 let predicate = guarded_rule_predicate(&bundle.meaning);
@@ -13906,65 +13986,17 @@ pub(crate) fn resolve_previous_relation_for_bundle(
         input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
             | input::CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION
     ) {
-        let source =
-            previous_natural_correction_input(store, actor, case, previous)?.ok_or_else(invalid)?;
-        let (superseded, replacement) = match (parser_version.as_str(), &source.meaning.intent) {
-            (
-                input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION,
-                Intent::CorrectPremise {
-                    superseded,
-                    replacement,
-                },
-            ) => (superseded.clone(), replacement.clone()),
-            (
-                input::CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION,
-                Intent::CorrectPreviousPremise { .. },
-            ) => previous_contextual_correction_target(
-                store,
-                &source,
-                prior_results,
-                previous,
-                memory,
-                remaining_actions,
-            )?,
-            _ => return Err(invalid()),
-        };
-        let correction = previous_correction_context(&source, previous, superseded, replacement)?;
-        if explicit_scope
-            .as_ref()
-            .is_some_and(|scope| scope != &correction.replacement.scope)
-        {
+        let Some(correction) = active_previous_correction(
+            store,
+            bundle,
+            prior_results,
+            previous,
+            memory,
+            remaining_actions,
+        )?
+        else {
             return Ok(PreviousRelationResolution::Missing);
-        }
-        *remaining_actions = remaining_actions.checked_sub(2).ok_or_else(|| {
-            failure(
-                "RELATION_BUDGET",
-                "correction context verification exceeds the sealed action budget",
-            )
-        })?;
-        let (mut negative_matches, mut replacement_matches) = (0, 0);
-        for fact in &memory.facts {
-            if fact.valid
-                && fact.source_input == previous.id
-                && fact.guarantee == Guarantee::UserPremise
-                && fact.dependencies.is_empty()
-                && fact.source_evidence.as_ref() == Some(&correction.source_evidence)
-            {
-                if fact.id == correction.negative_id && fact.proposition == correction.negative {
-                    negative_matches += 1;
-                } else if fact.id == correction.replacement_id
-                    && fact.proposition == correction.replacement
-                {
-                    replacement_matches += 1;
-                }
-            }
-        }
-        if (negative_matches, replacement_matches) != (1, 1) {
-            return Err(failure(
-                "CONTEXT_PROOF_CHANGED",
-                "参照した訂正の否定と置き換えを、現在有効な提示前提として照合できません。",
-            ));
-        }
+        };
         return Ok(PreviousRelationResolution::Resolved(Proposition {
             subject: correction.replacement.subject,
             scope: correction.replacement.scope,
@@ -14200,6 +14232,176 @@ fn previous_contextual_correction_target(
         ..superseded.clone()
     };
     Ok((superseded.clone(), replacement))
+}
+
+fn active_previous_correction(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+    remaining_actions: &mut u32,
+) -> Result<Option<PreviousCorrectionContext>> {
+    let invalid = correction_context_mismatch;
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    let parser_version = &bundle.meaning.parser_version;
+    let explicit_scope = match &bundle.meaning.intent {
+        Intent::AskPreviousRelation { explicit_scope, .. }
+        | Intent::AssertPreviousRelation { explicit_scope, .. } => explicit_scope,
+        _ => return Err(invalid()),
+    };
+    let source =
+        previous_natural_correction_input(store, actor, case, previous)?.ok_or_else(invalid)?;
+    let (superseded, replacement) = match (parser_version.as_str(), &source.meaning.intent) {
+        (
+            input::NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION
+            | input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION,
+            Intent::CorrectPremise {
+                superseded,
+                replacement,
+            },
+        ) => (superseded.clone(), replacement.clone()),
+        (
+            input::CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION
+            | input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION,
+            Intent::CorrectPreviousPremise { .. },
+        ) => previous_contextual_correction_target(
+            store,
+            &source,
+            prior_results,
+            previous,
+            memory,
+            remaining_actions,
+        )?,
+        _ => return Err(invalid()),
+    };
+    let correction = previous_correction_context(&source, previous, superseded, replacement)?;
+    if explicit_scope
+        .as_ref()
+        .is_some_and(|scope| scope != &correction.replacement.scope)
+    {
+        return Ok(None);
+    }
+    *remaining_actions = remaining_actions.checked_sub(2).ok_or_else(|| {
+        failure(
+            "RELATION_BUDGET",
+            "correction context verification exceeds the sealed action budget",
+        )
+    })?;
+    let (mut negative_matches, mut replacement_matches) = (0, 0);
+    for fact in &memory.facts {
+        if fact.valid
+            && fact.source_input == previous.id
+            && fact.guarantee == Guarantee::UserPremise
+            && fact.dependencies.is_empty()
+            && fact.source_evidence.as_ref() == Some(&correction.source_evidence)
+        {
+            if fact.id == correction.negative_id && fact.proposition == correction.negative {
+                negative_matches += 1;
+            } else if fact.id == correction.replacement_id
+                && fact.proposition == correction.replacement
+            {
+                replacement_matches += 1;
+            }
+        }
+    }
+    if (negative_matches, replacement_matches) != (1, 1) {
+        return Err(failure(
+            "CONTEXT_PROOF_CHANGED",
+            "参照した訂正の否定と置き換えを、現在有効な提示前提として照合できません。",
+        ));
+    }
+    Ok(Some(correction))
+}
+
+pub(crate) fn verified_correction_assertion_proposition(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+) -> Result<Proposition> {
+    let Intent::AssertPreviousRelation { proposition, .. } = &bundle.meaning.intent else {
+        return Err(correction_context_mismatch());
+    };
+    let request = &bundle.request;
+    if bundle.meaning.parser_version != input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+        || !registered_relation_context_matches(bundle, prior_results, previous)?
+        || store
+            .get_input_result(
+                &request.actor_id,
+                &request.case_id,
+                &previous.input_id,
+                previous.input_version,
+            )?
+            .as_ref()
+            != Some(previous)
+    {
+        return Err(correction_context_mismatch());
+    }
+    let output_actions = 3 + u32::from(request.output_path.is_some());
+    let mut remaining = request
+        .budget
+        .max_actions
+        .checked_sub(output_actions)
+        .ok_or_else(|| {
+            failure(
+                "RELATION_BUDGET",
+                "the assertion has no action budget for correction context",
+            )
+        })?;
+    let correction = active_previous_correction(
+        store,
+        bundle,
+        prior_results,
+        previous,
+        memory,
+        &mut remaining,
+    )?
+    .ok_or_else(|| {
+        failure(
+            "MISSING_RELATION_CONTEXT",
+            "指定した範囲は参照した訂正の範囲と一致しません。",
+        )
+    })?;
+    let answer = relations::query(memory, &correction.replacement, remaining)?;
+    if let Some((_, code, message)) = condition_block(&answer) {
+        return Err(failure(code, message));
+    }
+    if answer.status != "SUPPORTED"
+        || relations::answer_guarantee(&answer) != Guarantee::UserPremise
+    {
+        return Err(failure(
+            "CONTEXT_PROOF_CHANGED",
+            "参照した訂正の置き換えを、現在有効な提示前提として確認できません。",
+        ));
+    }
+    Ok(Proposition {
+        subject: correction.replacement.subject,
+        scope: correction.replacement.scope,
+        ..proposition.clone()
+    })
+}
+
+pub(crate) fn verify_correction_assertion_context_active(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    previous: &ResultRecord,
+    memory: &MemoryState,
+) -> Result<()> {
+    let mut remaining = bundle.request.budget.max_actions;
+    active_previous_correction(
+        store,
+        bundle,
+        prior_results,
+        previous,
+        memory,
+        &mut remaining,
+    )?
+    .ok_or_else(correction_context_mismatch)?;
+    Ok(())
 }
 
 fn previous_named_derived_relation_source(
@@ -18864,6 +19066,18 @@ pub(crate) fn premise_registration_units(fact: &Fact) -> Vec<String> {
         format!("前提ID: {}", fact.id),
         "保証範囲: 使用者が提示した前提。現実世界の真偽を検証したものではありません。".into(),
     ]
+}
+
+pub(crate) const CORRECTION_ASSERTION_PREDICATE: &str = "CORRECTION_CONTEXT_PREMISE_V1";
+
+pub(crate) fn contextual_assertion_units(prior_id: &str, fact: &Fact) -> Vec<String> {
+    let proposition = &fact.proposition;
+    let mut units = vec![format!(
+        "直前結果 {prior_id} の関係根拠を再確認し、主語「{}」とscope「{}」を復元しました。",
+        proposition.subject, proposition.scope
+    )];
+    units.extend(premise_registration_units(fact));
+    units
 }
 
 pub(crate) fn rule_registration_units(rule: &RelationRule) -> Vec<String> {

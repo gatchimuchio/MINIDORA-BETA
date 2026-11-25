@@ -173,6 +173,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
                         | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
+                        | crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
                 ) || crate::input::uses_derived_source_context(&bundle.meaning.parser_version)
             })
         {
@@ -2851,6 +2852,88 @@ fn verify_multi_condition_premise(
     Ok(())
 }
 
+fn verify_correction_assertion(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    const CODE: &str = "RECOVERY_CORRECTION_ASSERTION_MISMATCH";
+    let invalid = || {
+        failure(
+            CODE,
+            "the saved assertion differs from its correction context",
+        )
+    };
+    verify_registered_input(store, bundle, CODE)?;
+    let actor = &bundle.request.actor_id;
+    let prior = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .ok_or_else(invalid)?;
+    if bundle.request.context_ref.is_none()
+        && store.input_start_predecessor(state)?.as_ref() != Some(prior)
+    {
+        return Err(invalid());
+    }
+    let revision = result.actor_memory_revision.ok_or_else(invalid)?;
+    // The new fact itself may contradict the correction's replacement. Replay
+    // the admission proof before it was registered, not in the adopted state.
+    let before = store
+        .load_memory_revision(actor, revision.checked_sub(1).ok_or_else(invalid)?)?
+        .ok_or_else(invalid)?;
+    let proposition = crate::core::verified_correction_assertion_proposition(
+        store,
+        bundle,
+        &state.prior_results,
+        prior,
+        &before,
+    )?;
+    let evidence = crate::input::assertion_source_evidence(bundle)?.ok_or_else(invalid)?;
+    let mut expected_memory = before;
+    let fact = crate::relations::assert_fact_with_source_evidence(
+        &mut expected_memory,
+        proposition,
+        &result.id,
+        Some(evidence),
+    )?;
+    let adopted = store
+        .load_memory_revision(actor, revision)?
+        .ok_or_else(invalid)?;
+    let units = crate::core::contextual_assertion_units(&prior.id, &fact);
+    if expected_memory != adopted
+        || expected_memory.revision != revision
+        || !fact.valid
+        || result.dependencies != [prior.id.clone(), fact.id.clone()]
+        || result.guarantee != Guarantee::UserPremise
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.required_units != units
+        || result.text != units.join("\n")
+        || result.text.len() > bundle.request.budget.max_evidence_bytes
+    {
+        return Err(invalid());
+    }
+    let current = crate::core::record_source_memory_at_head(store, actor)?;
+    crate::core::verify_correction_assertion_context_active(
+        store,
+        bundle,
+        &state.prior_results,
+        prior,
+        &current,
+    )?;
+    if !current.facts.contains(&fact) {
+        return Err(failure(
+            CODE,
+            "the saved assertion is no longer an active premise",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_guarded_rule_registration(
     store: &Store,
     bundle: &InputBundle,
@@ -5225,6 +5308,16 @@ fn inspect(
     let requires_record_source = source_contract.is_some();
     let requires_multi_condition_relation =
         bundle.meaning.parser_version == crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION;
+    let requires_correction_assertion =
+        bundle.meaning.parser_version == crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION;
+    if requires_correction_assertion
+        && !matches!(goal.intent, Intent::AssertPreviousRelation { .. })
+    {
+        return Err(failure(
+            "RECOVERY_CORRECTION_ASSERTION_MISMATCH",
+            "the correction assertion does not have its sealed intent",
+        ));
+    }
     if requires_multi_condition_relation {
         const CODE: &str = "RECOVERY_MULTI_CONDITION_RELATION_MISMATCH";
         verify_registered_input(store, bundle, CODE)?;
@@ -5350,6 +5443,7 @@ fn inspect(
             || requires_record_source
             || requires_guarded_rule
             || requires_multi_condition_relation
+            || requires_correction_assertion
             || requires_sequence_edit
             || requires_typed_sequence_report
             || requires_generated_why
@@ -5759,6 +5853,9 @@ fn inspect(
     }
     if requires_multi_condition_relation && let Intent::Assert { proposition } = &goal.intent {
         verify_multi_condition_premise(store, bundle, result, plan, proposition)?;
+    }
+    if requires_correction_assertion {
+        verify_correction_assertion(store, state, bundle, result, plan)?;
     }
     if let Some(hypothesis) = crate::core::previous_group_mean_hypothesis(store, state)? {
         if result.guarantee != Guarantee::Hypothesis
@@ -9035,6 +9132,83 @@ mod tests {
             "統計 [0.1,0.2,0.3]",
             "statistics-explanation.txt",
         )
+    }
+
+    #[test]
+    fn correction_assertion_recovery_verifies_the_pre_addition_anchor_without_rewriting() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let execute = |engine: &mut Engine, id, text| {
+            let result = engine
+                .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            result
+        };
+        execute(&mut engine, "initial", "ミナは鳥です");
+        execute(&mut engine, "correction", "訂正: ミナは鳥ではなく魚です");
+        let mut request = RequestEnvelope::new("case", "new-negative", "alice", "それは魚ではない");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let committed = engine.execute("alice", request).unwrap();
+        assert_eq!(committed.lifecycle, Lifecycle::Commit, "{committed:?}");
+        let state = engine.latest("alice", "case").unwrap().unwrap();
+        let bundle = state.bundle.as_ref().unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+        );
+        let plan = committed.content_plan.as_ref().unwrap();
+        let store = Store::open(&fixture.state).unwrap();
+        let file = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        verify_correction_assertion(&store, &state, bundle, &committed, plan).unwrap();
+        assert_eq!(engine.reconcile("alice", "case").unwrap(), committed);
+        assert_eq!(fs::read(&fixture.target).unwrap(), file);
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+        let memory = store.load_memory("alice").unwrap();
+        drop(engine);
+        drop(store);
+        // Re-use the existing test-only journal prefix for an already written file.
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, committed.dependencies);
+        assert_eq!(recovered.receipts[0].action_id, token);
+        let graph: serde_json::Value = serde_json::from_slice(
+            &store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_deref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(graph[5]["file"]["render"].is_string());
+        assert_eq!(fs::read(&fixture.target).unwrap(), file);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(store.load_memory("alice").unwrap(), memory);
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        execute(
+            &mut engine,
+            "new-correction",
+            "訂正: ミナは魚ではなく猫です",
+        );
+        let error =
+            verify_correction_assertion(&store, &state, bundle, &committed, plan).unwrap_err();
+        assert!(matches!(error, Error::Contract { code, .. } if code == "CONTEXT_PROOF_CHANGED"));
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
     }
 
     #[test]

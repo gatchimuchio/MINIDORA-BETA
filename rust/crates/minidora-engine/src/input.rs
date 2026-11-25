@@ -22,6 +22,8 @@ pub(crate) const NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v195-named-correction-relation-query";
 pub(crate) const CONTEXTUAL_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v198-contextual-correction-relation-query";
+pub(crate) const CORRECTION_RELATION_ASSERTION_PARSER_VERSION: &str =
+    "declarative-ja-v201-correction-relation-assertion";
 pub(crate) const PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v193-previous-document-text-replacement";
 pub(crate) const PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION: &str =
@@ -252,6 +254,7 @@ pub(crate) enum SourceContext {
     ContextualAssertionRelationQuery,
     NamedCorrectionRelationQuery,
     ContextualCorrectionRelationQuery,
+    CorrectionRelationAssertion,
     NamedDerivedRelationQuery,
     DerivedRelationFollowup,
     Summary,
@@ -675,6 +678,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::ContextualAssertionRelationQuery
         | SourceContext::NamedCorrectionRelationQuery
         | SourceContext::ContextualCorrectionRelationQuery
+        | SourceContext::CorrectionRelationAssertion
         | SourceContext::NamedDerivedRelationQuery
         | SourceContext::DerivedRelationFollowup => None,
     });
@@ -756,6 +760,14 @@ pub(crate) fn seal_with_source_context(
             if matches!(source_context, Some(SourceContext::DerivedRelationFollowup)) =>
         {
             DERIVED_RELATION_FOLLOWUP_PARSER_VERSION
+        }
+        Intent::AssertPreviousRelation { .. }
+            if matches!(
+                source_context,
+                Some(SourceContext::CorrectionRelationAssertion)
+            ) =>
+        {
+            CORRECTION_RELATION_ASSERTION_PARSER_VERSION
         }
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             guarded_relation_rule_parser(&intent).unwrap_or(PARSER_VERSION)

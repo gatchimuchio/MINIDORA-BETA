@@ -10905,6 +10905,97 @@ fn pronoun_questions_reuse_active_contextual_correction_across_processes() {
 }
 
 #[test]
+fn pronoun_assertions_use_only_an_active_correction_and_consistent_scope() {
+    let scratch = Scratch::new();
+    for (actor, correction, context_is_pronoun) in [
+        ("named", "[scope=物語]訂正: ミナは鳥ではなく魚です", false),
+        ("contextual", "それは鳥ではなく魚です", true),
+    ] {
+        let run = |args: &[&str]| execute_in_case(&scratch.0, actor, actor, args);
+        record(&run(&["[scope=物語]ミナは鳥です"]));
+        if context_is_pronoun {
+            record(&run(&["[scope=物語]ミナは鳥ですか"]));
+        }
+        let correction = record(&run(&[correction]));
+        let correction_id = correction["id"].as_str().unwrap();
+        let input = ["--input", "addition", "それは生物です"];
+        let added = record(&run(&input));
+        assert_eq!(added["guarantee"], "USER_PREMISE");
+        let [reference, fact_ref] = added["dependencies"].as_array().unwrap().as_slice() else {
+            panic!("the assertion must retain its exact correction and the new premise");
+        };
+        assert_eq!(reference, correction_id);
+        let explanation = record(&run(&["詳しく説明して"]));
+        assert!(
+            explanation["text"]
+                .as_str()
+                .unwrap()
+                .contains(correction_id)
+        );
+        let found = record(&run(&["[scope=物語]ミナは生物ですか"]));
+        assert_eq!(&found["dependencies"], &serde_json::json!([fact_ref]));
+
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let memory = store.load_memory(actor).unwrap();
+        let fact = memory
+            .facts
+            .iter()
+            .find(|f| f.id == fact_ref.as_str().unwrap())
+            .unwrap();
+        assert_eq!(fact.proposition.subject, "ミナ");
+        assert_eq!(fact.proposition.scope, "物語");
+        assert_eq!(fact.source_evidence.as_ref().unwrap().source_roles
+            ["/AssertPreviousRelation/proposition/subject"][0].text, "それ");
+        let output = scratch.0.join(format!("{actor}-unwritten.txt"));
+        let path = output.to_str().unwrap();
+        for (extra, expected) in [
+            (
+                vec!["[scope=実験]それは生物です"],
+                "MISSING_RELATION_CONTEXT:",
+            ),
+            (
+                vec!["--max-actions", "3", "それは動物です"],
+                "RESOURCE_LIMIT:",
+            ),
+            (
+                vec!["--output", path, "それは動物です"],
+                "WRITE_PERMISSION_MISSING:",
+            ),
+        ] {
+            let mut args = vec!["--context", correction_id];
+            args.extend(extra);
+            let refused = stopped(&run(&args), 2, "SUSPEND");
+            assert!(
+                refused["reason"].as_str().unwrap().starts_with(expected),
+                "{refused}"
+            );
+            assert_eq!(store.load_memory(actor).unwrap(), memory);
+        }
+        assert!(!output.exists());
+        assert!(store.actions(actor, actor).unwrap().is_empty());
+        record(&run(&["[scope=物語]訂正: ミナは魚ではなく猫です"]));
+        let before = store.load_memory(actor).unwrap();
+        let expired = stopped(
+            &run(&["--context", correction_id, "それは動物です"]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            expired["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("CONTEXT_PROOF_CHANGED:")
+        );
+        assert_eq!(store.load_memory(actor).unwrap(), before);
+        assert_eq!(record(&run(&input)), added);
+        assert_eq!(
+            record(&run(&["[scope=物語]ミナは生物ですか"]))["dependencies"],
+            found["dependencies"]
+        );
+    }
+}
+
+#[test]
 fn singular_pronoun_relation_questions_use_only_unique_same_case_proof_context() {
     let scratch = Scratch::new();
     let rule = record(&execute(
