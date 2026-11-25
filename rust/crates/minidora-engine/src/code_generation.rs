@@ -20,6 +20,7 @@ const RETURN_FUNCTION_VERSION: &str = "structured-python-return-function-v1-ucd1
 const VERIFICATION_CONTEXT_MISMATCH: &str = "CODE_VERIFICATION_CONTEXT_MISMATCH";
 pub(crate) const VERIFICATION_EXPLANATION_PREDICATE: &str =
     "PREVIOUS_CODE_VERIFICATION_EXPLANATION_V1";
+pub(crate) const EXPLAINED_CODE_VERIFICATION_PREDICATE: &str = "EXPLAINED_CODE_VERIFICATION_V1";
 const PREAMBLE: &str = "# Python 3.12; execution and input/output tests: NOT_RUN.\n";
 const BUILTINS: &[&str] = &[
     "sum", "len", "range", "abs", "min", "max", "sorted", "list", "all", "any",
@@ -629,6 +630,144 @@ pub(crate) struct CodeVerificationExplanation {
     pub(crate) units: Vec<String>,
 }
 
+pub(crate) struct ExplainedCodeVerification {
+    source_dependencies: [String; 3],
+    pub(crate) report: crate::code_capability::CodeCapabilityReport,
+    pub(crate) units: Vec<String>,
+}
+
+impl ExplainedCodeVerification {
+    pub(crate) fn dependencies(&self, report_ref: String) -> Vec<String> {
+        let mut dependencies = self.source_dependencies.to_vec();
+        dependencies.push(report_ref);
+        dependencies
+    }
+}
+
+/// Bind the selected explanation to the exact pasted source before evaluating
+/// the separately sealed finite case. Recovery uses the same checks.
+pub(crate) fn verify_explained_code(
+    store: &crate::store::Store,
+    state: &CaseRevision,
+    followup: &InputBundle,
+    previous: &ResultRecord,
+    deadline: Option<Instant>,
+) -> Result<ExplainedCodeVerification> {
+    let invalid = || {
+        failure(
+            "EXPLAINED_CODE_CONTEXT_MISMATCH",
+            "前回説明したコードを封印入力と保存した解析結果に照合できません。",
+        )
+    };
+    let missing = || {
+        failure(
+            "MISSING_EXPLAINED_CODE_CONTEXT",
+            "同じ会話で確定した貼り付けコードの説明を選んでください。",
+        )
+    };
+    let check_time = || {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(failure(
+                "DEADLINE",
+                "説明したコードの照合中に締切へ達しました。",
+            ));
+        }
+        Ok(())
+    };
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    let request = &followup.request;
+    let Intent::VerifyPreviousCode { document } = &followup.meaning.intent else {
+        return Err(invalid());
+    };
+    if followup.meaning.parser_version != crate::input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION
+        || &request.actor_id != actor
+        || &request.case_id != case
+        || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
+        || followup.context_sha256 != identity(&Some(previous))?
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+    {
+        return Err(invalid());
+    }
+    crate::input::verify_previous_code_case_input(followup)?;
+    if previous.lifecycle != Lifecycle::Commit {
+        return Err(missing());
+    }
+    check_time()?;
+    let (bundle_ref, source_bundle) = store.with_verified_case_history(actor, case, |history| {
+        if history
+            .input_result(&previous.input_id, previous.input_version)?
+            .as_ref()
+            != Some(previous)
+        {
+            return Err(invalid());
+        }
+        history
+            .input_bundle(&previous.input_id, previous.input_version)?
+            .ok_or_else(invalid)
+    })?;
+    if !matches!(source_bundle.meaning.intent, Intent::ExplainCode { .. }) {
+        return Err(missing());
+    }
+    if identity(&source_bundle.request)? != previous.id
+        || previous.guarantee != Guarantee::Computed
+        || previous.calculation.is_some()
+        || !previous.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    let [read_ref] = previous.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let source = crate::input::verified_code_explanation_source(&source_bundle)?;
+    check_time()?;
+    let (read_report, read_units) = crate::code_capability::explain_source(source)?;
+    let read_bytes = canonical(&read_report)?;
+    let evidence_limit = || {
+        failure(
+            "RESOURCE_LIMIT",
+            "コードの解析・検算の記録が証拠予算を超えました。",
+        )
+    };
+    if read_bytes.len() > request.budget.max_evidence_bytes {
+        return Err(evidence_limit());
+    }
+    if read_report.source != source
+        || digest(&read_bytes) != *read_ref
+        || store.get_bytes(actor, case, read_ref)? != read_bytes
+    {
+        return Err(invalid());
+    }
+    recheck_code_output(
+        store,
+        state,
+        previous,
+        read_units,
+        read_ref,
+        "pasted-code explanation",
+    )?;
+    check_time()?;
+    let report = crate::code_capability::verify_previous_source(source, document, deadline)?;
+    let units = crate::code_capability::explained_code_verification_lines(&report)?;
+    if read_bytes
+        .len()
+        .saturating_add(canonical(&report)?.len())
+        .saturating_add(units.join("\n").len())
+        > request.budget.max_evidence_bytes
+    {
+        return Err(evidence_limit());
+    }
+    check_time()?;
+    Ok(ExplainedCodeVerification {
+        source_dependencies: [previous.id.clone(), bundle_ref, read_ref.clone()],
+        report,
+        units,
+    })
+}
+
 pub(crate) fn previous_verification_explanation(
     store: &crate::store::Store,
     state: &CaseRevision,
@@ -1074,6 +1213,12 @@ fn retained_code_context_from_input<'a>(
                 }
                 _ => return Ok(None),
             }
+        }
+        Intent::VerifyPreviousCode { .. }
+            if bundle.meaning.parser_version
+                == crate::input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION =>
+        {
+            return Ok(None);
         }
         Intent::VerifyPreviousCode { document } => {
             let (anchor, generation, source_ref, report_ref) = verification_dependencies(result)?;

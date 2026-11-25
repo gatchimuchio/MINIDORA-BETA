@@ -21668,6 +21668,171 @@ fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() 
 }
 
 #[test]
+fn pasted_code_explanation_feeds_a_finite_verification_of_the_same_source() {
+    use minidora_domain::{InputBundle, Intent, Lifecycle};
+
+    const SOURCE: &str = "def square(x):\r\n    return x * x";
+    const MATCH: &str = "このコードで、x=3 の結果が9になるか確認して";
+    const MISMATCH: &str = "このコードで、x=3 の結果が8になるか確認して";
+
+    let scratch = Scratch::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args(["--actor", "owner", "--case", "normal-route"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            format!("/paste\nコードを説明して:\r\n{SOURCE}\n/end\n{MATCH}\n/exit\n").as_bytes(),
+        )
+        .unwrap();
+    let transcript = child.wait_with_output().unwrap();
+    assert!(transcript.status.success(), "{transcript:?}");
+    let text = String::from_utf8(transcript.stdout).unwrap();
+    assert!(
+        text.contains("前回説明した関数") && text.contains("square") && text.contains("有限"),
+        "{text}"
+    );
+    assert!(
+        text.contains("実際値=9") && text.contains("期待値=9"),
+        "{text}"
+    );
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let state = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let bundle = state.bundle.as_ref().unwrap();
+    assert_eq!(bundle.request.text, MATCH);
+    assert!(matches!(
+        bundle.meaning.intent,
+        Intent::VerifyPreviousCode { .. }
+    ));
+    assert_eq!(
+        bundle.meaning.parser_version,
+        "declarative-ja-v204-explained-code-single-case"
+    );
+    let adopted = state.result.as_ref().unwrap();
+    assert_eq!(adopted.lifecycle, Lifecycle::Commit);
+    let [explanation_id, input_ref, read_ref, verify_ref] = adopted.dependencies.as_slice() else {
+        panic!("the result must link the exact explanation, original input and both reports");
+    };
+    assert_eq!(
+        bundle.meaning.context_result_ref.as_ref(),
+        Some(explanation_id)
+    );
+    let explanation = &state.prior_results[explanation_id];
+    assert_eq!(explanation.lifecycle, Lifecycle::Commit);
+    assert_eq!(
+        explanation.dependencies.as_slice(),
+        std::slice::from_ref(read_ref)
+    );
+    let input_bytes = std::fs::read(scratch.0.join("blobs").join(input_ref)).unwrap();
+    assert_eq!(&minidora_domain::digest(&input_bytes), input_ref);
+    let original: InputBundle = serde_json::from_slice(&input_bytes).unwrap();
+    assert_eq!(
+        &minidora_domain::identity(&original.request).unwrap(),
+        explanation_id
+    );
+    assert_eq!(
+        original.request.text,
+        format!("コードを説明して:\r\n{SOURCE}")
+    );
+    let artifact = |reference: &str| -> Value {
+        let bytes = store.get_bytes("owner", "normal-route", reference).unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), reference);
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    let read = artifact(read_ref);
+    let source_sha256 = minidora_domain::digest(SOURCE.as_bytes());
+    assert_eq!(read["operation"], "READ");
+    assert_eq!(read["source"], SOURCE);
+    assert_eq!(read["source_sha256"], source_sha256);
+    let assert_verification = |reference: &str, expected, matched| {
+        let report = artifact(reference);
+        assert_eq!(report["operation"], "VERIFY");
+        assert_eq!(report["source"], SOURCE);
+        assert_eq!(report["source_sha256"], source_sha256);
+        assert_eq!(report["verification"]["case_count"], 1);
+        assert_eq!(report["verification"]["all_matched"], matched);
+        let case = &report["verification"]["cases"][0];
+        assert_eq!(case["evaluation_status"], "COMPUTED");
+        assert_eq!(case["matched"], matched);
+        assert_eq!(case["actual_json"], "9");
+        assert_eq!(case["expected_json"], expected);
+        assert!(case["steps"].as_u64().is_some_and(|steps| steps > 0));
+        assert!(
+            report["assurance"]
+                .as_str()
+                .unwrap()
+                .contains("ホストPython、exec、eval")
+        );
+    };
+    assert_verification(verify_ref, "9", true);
+
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    record(&run(&["2+3"]));
+    let no_explanation = stopped(&run(&[MATCH]), 2, "SUSPEND");
+    assert!(
+        no_explanation["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING_EXPLAINED_CODE_CONTEXT:"),
+        "{no_explanation}"
+    );
+    assert_eq!(no_explanation["dependencies"], serde_json::json!([]));
+    assert!(no_explanation["content_plan"].is_null());
+    let different = record(&run(&["--context", explanation_id.as_str(), MISMATCH]));
+    assert!(different["text"].as_str().unwrap().contains("不一致"));
+    assert_eq!(different["dependencies"][0], explanation_id.as_str());
+    assert_eq!(different["dependencies"][1], input_ref.as_str());
+    assert_eq!(different["dependencies"][2], read_ref.as_str());
+    assert_verification(different["dependencies"][3].as_str().unwrap(), "8", false);
+    assert_ne!(different["dependencies"][3], verify_ref.as_str());
+    let limited = stopped(
+        &run(&[
+            "--context",
+            explanation_id.as_str(),
+            "--max-evidence-bytes",
+            "1",
+            MATCH,
+        ]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert!(limited["render"].is_null());
+
+    let foreign = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "different",
+            &["--context", explanation_id.as_str(), MATCH],
+        ),
+        4,
+        "FAIL",
+    );
+    assert!(
+        foreign["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH")
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn explicit_text_composition_normal_route_preserves_materials_and_artifact_lineage() {
     let material = "ねこ\n地元で開催\n雨天中止";
     let title_end = "ねこ".len();

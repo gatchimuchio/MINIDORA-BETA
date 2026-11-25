@@ -37,6 +37,8 @@ pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
 const RETURN_FUNCTION_PARSER_VERSION: &str = "declarative-ja-v160-python-return-function";
 pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v165-generated-code-single-case";
+pub(crate) const EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION: &str =
+    "declarative-ja-v204-explained-code-single-case";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -713,9 +715,11 @@ pub(crate) fn seal_with_source_context(
         Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
         Intent::GenerateReturnFunction { .. } => RETURN_FUNCTION_PARSER_VERSION,
         Intent::VerifyPreviousCode { .. }
-            if source_roles.contains_key(PREVIOUS_CODE_CASE_EXPECTED_ROLE) =>
+            if source_roles.contains_key(PREVIOUS_CODE_CASE_EXPECTED_ROLE)
+                && let Some((_, version)) =
+                    previous_code_case_body(terminal_trim(&request.text)) =>
         {
-            PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
+            version
         }
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
@@ -4780,15 +4784,22 @@ struct PreviousCodeCaseSource {
     roles: BTreeMap<String, Vec<SourceSpan>>,
 }
 
-fn previous_code_case_body(statement: &str) -> Option<&str> {
+fn previous_code_case_body(statement: &str) -> Option<(&str, &'static str)> {
     statement
         .strip_prefix("前に作ったコードで")
         .or_else(|| statement.strip_prefix("直前に作ったコードで"))
+        .map(|body| (body, PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION))
+        .or_else(|| {
+            statement
+                .strip_prefix("このコードで")
+                .map(|body| (body, EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION))
+        })
 }
 
 fn previous_code_case_source(text: &str) -> Result<Option<PreviousCodeCaseSource>> {
     let statement = terminal_trim(text);
-    let Some(body) = previous_code_case_body(statement).filter(|_| !text.contains(['\r', '\n']))
+    let Some((body, _)) =
+        previous_code_case_body(statement).filter(|_| !text.contains(['\r', '\n']))
     else {
         return Ok(None);
     };
@@ -4876,9 +4887,10 @@ fn previous_code_case_source_mismatch() -> Error {
 }
 
 pub(crate) fn verify_previous_code_case_input(bundle: &InputBundle) -> Result<()> {
-    if bundle.meaning.parser_version == PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
-        && bundle.meaning.source_kind == "USER_REQUEST"
+    if bundle.meaning.source_kind == "USER_REQUEST"
         && let Intent::VerifyPreviousCode { document } = &bundle.meaning.intent
+        && let Some((_, version)) = previous_code_case_body(terminal_trim(&bundle.request.text))
+        && bundle.meaning.parser_version == version
         && let Some(source) = previous_code_case_source(&bundle.request.text)?
         && source.document == *document
         && source.roles == bundle.meaning.source_roles

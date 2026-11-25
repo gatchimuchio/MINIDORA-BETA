@@ -6839,6 +6839,51 @@ fn inspect(
             ));
         }
     }
+    if bundle.meaning.parser_version == crate::input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_EXPLAINED_CODE_VERIFICATION_CHANGED";
+        let invalid = || {
+            failure(
+                CODE,
+                "the retained finite verification does not match the explained source and sealed case",
+            )
+        };
+        if !matches!(goal.intent, Intent::VerifyPreviousCode { .. })
+            || bundle.meaning.intent != goal.intent
+        {
+            return Err(invalid());
+        }
+        verify_registered_input(store, bundle, CODE)?;
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if bundle.request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+        {
+            return Err(invalid());
+        }
+        let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
+        let verified = crate::code_generation::verify_explained_code(
+            store, state, bundle, previous, deadline,
+        )?;
+        let reference = verified_artifact(store, actor, case, &verified.report)?;
+        let dependencies = verified.dependencies(reference);
+        let expected_text = verified.units.join("\n");
+        if result.guarantee != Guarantee::Computed
+            || plan.guarantee != result.guarantee
+            || result.dependencies != dependencies
+            || !plan.dependencies.starts_with(&dependencies)
+            || plan.required_units != verified.units
+            || plan.text != expected_text
+            || result.text != expected_text
+            || result.calculation.is_some()
+            || !result.evidence.is_empty()
+        {
+            return Err(invalid());
+        }
+    }
     if requires_generated_comparison {
         crate::core::verify_generated_model_artifacts(store, actor, case, plan)?;
     } else if generated_compute_ref.is_none() {
@@ -11799,6 +11844,65 @@ mod tests {
         assert_eq!(
             graph[5]["sequence-final"]["sequence-larger"],
             result.dependencies[1]
+        );
+    }
+
+    #[test]
+    fn explained_code_verification_reconciles_original_file_without_rewriting() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let explained = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "explain-python",
+                    "alice",
+                    "コードを説明して:\r\ndef square(x):\r\n    return x * x",
+                ),
+            )
+            .unwrap();
+        assert_eq!(explained.lifecycle, Lifecycle::Commit, "{explained:?}");
+        let mut request = RequestEnvelope::new(
+            "case",
+            "verify-explained",
+            "alice",
+            "このコードで、x=3 の結果が9になるか確認して",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let verified = engine.execute("alice", request).unwrap();
+        assert_eq!(verified.lifecycle, Lifecycle::Commit, "{verified:?}");
+        assert_eq!(verified.dependencies[0], explained.id);
+        assert_eq!(verified.dependencies[2], explained.dependencies[0]);
+        assert!(verified.text.contains("実際値=9; 期待値=9"));
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, verified.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, verified.dependencies);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one delivery receipt: {:?}", recovered.receipts);
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
         );
     }
 

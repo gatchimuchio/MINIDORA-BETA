@@ -1743,6 +1743,11 @@ pub(crate) fn goal_predicates(
         Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
         Intent::ExplainCode { .. } => predicates.push(CODE_EXPLANATION_PREDICATE.into()),
         Intent::GenerateReturnFunction { .. } => predicates.push(RETURN_FUNCTION_PREDICATE.into()),
+        Intent::VerifyPreviousCode { .. }
+            if meaning.parser_version == input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION =>
+        {
+            predicates.push(crate::code_generation::EXPLAINED_CODE_VERIFICATION_PREDICATE.into());
+        }
         Intent::CompareRelationInventories { .. } if input::uses_generated_comparison(meaning) => {
             predicates.push(RELATION_COMPARISON_PREDICATE.into());
         }
@@ -1906,6 +1911,7 @@ fn verify_report_goal_content(
                 | WEB_ANSWER_PREDICATE
                 | CODE_EXPLANATION_PREDICATE
                 | RETURN_FUNCTION_PREDICATE
+                | crate::code_generation::EXPLAINED_CODE_VERIFICATION_PREDICATE
                 | PREVIOUS_ASSERTION_EXPLANATION_PREDICATE
                 | crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE
         ) || record_source_contract(&goal.intent)
@@ -11776,6 +11782,47 @@ impl Engine {
                         units: units.clone(),
                     });
                 }
+            }
+            Intent::VerifyPreviousCode { .. }
+                if bundle.meaning.parser_version
+                    == input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION =>
+            {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_EXPLAINED_CODE_CONTEXT",
+                        "同じ会話で確定した貼り付けコードの説明を選んでください。",
+                    );
+                };
+                let deadline =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
+                let verified = match crate::code_generation::verify_explained_code(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    prior,
+                    deadline,
+                ) {
+                    Ok(verified) => verified,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let reference =
+                    self.store
+                        .put_artifact(actor, &request.case_id, &verified.report)?;
+                result.dependencies = verified.dependencies(reference);
+                result.guarantee = Guarantee::Computed;
+                units = verified.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::code_generation::EXPLAINED_CODE_VERIFICATION_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::VerifyPreviousCode { document } => {
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)

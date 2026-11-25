@@ -2525,6 +2525,19 @@ pub(crate) fn verify_previous_source(
 pub(crate) fn previous_code_verification_lines(
     report: &CodeCapabilityReport,
 ) -> Result<Vec<String>> {
+    prior_code_verification_lines(report, "前回生成した")
+}
+
+pub(crate) fn explained_code_verification_lines(
+    report: &CodeCapabilityReport,
+) -> Result<Vec<String>> {
+    prior_code_verification_lines(report, "前回説明した")
+}
+
+fn prior_code_verification_lines(
+    report: &CodeCapabilityReport,
+    origin: &str,
+) -> Result<Vec<String>> {
     if report.operation != "VERIFY" || report.verification.is_none() {
         return Err(failure(
             "CODE_VERIFICATION_REPORT_INVALID",
@@ -2534,7 +2547,7 @@ pub(crate) fn previous_code_verification_lines(
     let verification = report.verification.as_ref().expect("verified above");
     let mut lines = vec![
         format!(
-            "前回生成した関数「{}」を、保存済みソース {} に対して有限ケースで評価しました。",
+            "{origin}関数「{}」を、保存済みソース {} に対して有限ケースで評価しました。",
             report.function_name, report.source_sha256
         ),
         report.summary.clone(),
