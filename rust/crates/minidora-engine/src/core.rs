@@ -6416,38 +6416,63 @@ impl Engine {
             } else {
                 None
             };
-        let previous_document_explanation =
-            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
-                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => {
-                        match crate::document::previous_document_explanation(
-                            &self.store,
-                            &state,
-                            prior,
-                            &request.budget,
-                            &bundle.meaning.parser_version,
-                            started,
-                        ) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                let code = match &error {
-                                    Error::Contract { code, .. } => code.as_str(),
-                                    _ => "CSV_TABLE_CONTEXT_INVALID",
-                                };
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Suspend,
-                                    code,
-                                    &error.to_string(),
-                                );
-                            }
+        // The verified case head can route an immediate source-question
+        // explanation without probing unrelated document and code producers.
+        // The source proof must still match the registered prior input.
+        let scoped_question_explanation_input = if has_compute_budget
+            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+            && previous.is_some_and(|prior| {
+                prior.lifecycle == Lifecycle::Commit && prior.guarantee == Guarantee::Hypothesis
+            }) {
+            latest
+                .as_ref()
+                .filter(|case| {
+                    case.lifecycle == Lifecycle::Commit && case.result.as_ref() == previous
+                })
+                .and_then(|case| case.bundle.as_ref())
+                .filter(|prior| {
+                    input::is_source_summary_question_version(&prior.meaning.parser_version)
+                        && matches!(
+                            prior.meaning.intent,
+                            Intent::AskPreviousSourceQuestion { .. }
+                        )
+                })
+        } else {
+            None
+        };
+        let previous_document_explanation = if scoped_question_explanation_input.is_none()
+            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+        {
+            match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                Some(prior) => {
+                    match crate::document::previous_document_explanation(
+                        &self.store,
+                        &state,
+                        prior,
+                        &request.budget,
+                        &bundle.meaning.parser_version,
+                        started,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "CSV_TABLE_CONTEXT_INVALID",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
                         }
                     }
-                    None => None,
                 }
-            } else {
-                None
-            };
+                None => None,
+            }
+        } else {
+            None
+        };
         let previous_json_group_mean_answer =
             if matches!(bundle.meaning.intent, Intent::AskPreviousGroupMean) {
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
@@ -6792,8 +6817,9 @@ impl Engine {
         } else {
             None
         };
-        let mut prior_explanation_input = None;
+        let mut prior_explanation_input = scoped_question_explanation_input.cloned();
         let verification_explanation = if has_compute_budget
+            && scoped_question_explanation_input.is_none()
             && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
             && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
         {
@@ -8670,6 +8696,7 @@ impl Engine {
                     &bundle,
                     &state.prior_results,
                     prior,
+                    scoped_question_explanation_input,
                 ) {
                     Ok(value) => value,
                     Err(error) => {

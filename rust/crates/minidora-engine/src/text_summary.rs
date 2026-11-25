@@ -2107,6 +2107,7 @@ pub(crate) fn previous_summary_explanation(
     bundle: &InputBundle,
     prior_results: &BTreeMap<String, ResultRecord>,
     prior: &ResultRecord,
+    expected_prior_input: Option<&InputBundle>,
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     if !matches!(bundle.meaning.intent, Intent::ExplainPrevious)
         || prior.guarantee != Guarantee::Hypothesis
@@ -2117,10 +2118,19 @@ pub(crate) fn previous_summary_explanation(
     let mut case_opened = false;
     let result = store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
         case_opened = true;
-        previous_summary_explanation_in_history(store, history, bundle, prior_results, prior)
+        previous_summary_explanation_in_history(
+            store,
+            history,
+            bundle,
+            prior_results,
+            prior,
+            expected_prior_input,
+        )
     });
     match result {
-        Err(Error::Contract { code, .. }) if !case_opened && code == "CASE_NOT_FOUND" => {
+        Err(Error::Contract { code, .. })
+            if expected_prior_input.is_none() && !case_opened && code == "CASE_NOT_FOUND" =>
+        {
             missing_previous_summary_input(prior)
         }
         other => other,
@@ -2155,12 +2165,21 @@ fn previous_summary_explanation_in_history(
     bundle: &InputBundle,
     prior_results: &BTreeMap<String, ResultRecord>,
     prior: &ResultRecord,
+    expected_prior_input: Option<&InputBundle>,
 ) -> Result<Option<PreviousResultSummaryExplanation>> {
     let request = &bundle.request;
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let Some((_, summary_bundle)) = history.input_bundle(&prior.input_id, prior.input_version)?
-    else {
+    let registered = history.input_bundle(&prior.input_id, prior.input_version)?;
+    if expected_prior_input
+        .is_some_and(|expected| registered.as_ref().map(|(_, input)| input) != Some(expected))
+    {
+        return Err(failure(
+            "MISSING_RESULT_SUMMARY_CONTEXT",
+            "the case head's source question differs from its registered sealed input",
+        ));
+    }
+    let Some((_, summary_bundle)) = registered else {
         return missing_previous_summary_input(prior);
     };
     let is_source_summary = matches!(

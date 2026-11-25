@@ -4388,6 +4388,7 @@ fn source_followup_anchor_at<'a>(
             bundle,
             &state.prior_results,
             source,
+            None,
         )?
         else {
             return Ok(None);
@@ -5608,6 +5609,7 @@ fn inspect(
                     bundle,
                     &state.prior_results,
                     prior,
+                    None,
                 )
             })
             .transpose()?
