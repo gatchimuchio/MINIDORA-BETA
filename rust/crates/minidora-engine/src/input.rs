@@ -150,6 +150,9 @@ pub(crate) const IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
     "declarative-ja-en-v151-implicit-source-summary-line";
 pub(crate) const EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION: &str =
     "declarative-ja-en-v152-explicit-source-summary-line";
+
+pub(crate) const EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION: &str =
+    "declarative-ja-v199-explicit-source-summary-question";
 pub(crate) const EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION: &str =
     "declarative-ja-en-v153-explicit-source-summary-packet-line";
 pub(crate) const IMPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION: &str =
@@ -273,7 +276,9 @@ pub(crate) fn uses_adopted_summary_packet_context(version: &str) -> bool {
 pub(crate) fn uses_summary_source_context(version: &str) -> bool {
     matches!(
         version,
-        IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION | EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+        IMPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
+            | EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
     ) || uses_adopted_summary_packet_context(version)
 }
 
@@ -951,6 +956,12 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::SummarizePreviousSourceLines { .. } if implicit_source_line_parser.is_some() => {
             implicit_source_line_parser.expect("implicit source line summary parser")
+        }
+        Intent::AskPreviousSourceQuestion { .. }
+            if explicit_source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::Summary)) =>
+        {
+            EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
         }
         Intent::AskPreviousSourceQuestion { .. }
         | Intent::SummarizePreviousSource

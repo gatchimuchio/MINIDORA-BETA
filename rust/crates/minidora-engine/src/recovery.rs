@@ -4562,6 +4562,7 @@ fn verify_implicit_source_predecessor(
             version.as_str(),
             crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
                 | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
         )
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;

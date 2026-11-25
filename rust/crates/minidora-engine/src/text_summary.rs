@@ -2568,6 +2568,7 @@ struct SourceContextStep<'a> {
     derivation_input: InputBundle,
     web_body_question: bool,
     reuse_sole_summary_packet: bool,
+    retain_summary_anchor: bool,
     requested_summary_packet: Option<String>,
 }
 
@@ -2709,7 +2710,8 @@ fn derived_source_followup<'a>(
                     "the selected direct body question differs from the retained proof"
                 }
                 crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
-                | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION => {
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION => {
                     "the explicitly referenced source summary differs from the retained proof"
                 }
                 _ => {
@@ -2750,6 +2752,16 @@ fn derived_source_followup<'a>(
             && !matches!(
                 input.meaning.intent,
                 Intent::SummarizePreviousSourcePacketLines { .. }
+            )
+        {
+            return Err(invalid());
+        }
+        let retain_summary_anchor =
+            parser_version == crate::input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION;
+        if retain_summary_anchor
+            && !matches!(
+                input.meaning.intent,
+                Intent::AskPreviousSourceQuestion { .. }
             )
         {
             return Err(invalid());
@@ -2818,6 +2830,7 @@ fn derived_source_followup<'a>(
                 derivation_input: target_input,
                 web_body_question: follows_web_question,
                 reuse_sole_summary_packet: true,
+                retain_summary_anchor,
                 requested_summary_packet,
             });
             continue;
@@ -2850,6 +2863,7 @@ fn derived_source_followup<'a>(
             reuse_sole_summary_packet: crate::input::is_explanation_line_summary_version(
                 parser_version,
             ),
+            retain_summary_anchor: false,
             requested_summary_packet: None,
         });
     };
@@ -2911,6 +2925,9 @@ fn derived_source_followup<'a>(
                 Some(scope),
             )?
             .ok_or_else(invalid)?;
+            if step.retain_summary_anchor && !history.contains_committed_result(step.context)? {
+                return Err(invalid());
+            }
             crate::document::revalidate_previous_document_render(
                 store,
                 &bundle.request.actor_id,
@@ -2926,7 +2943,9 @@ fn derived_source_followup<'a>(
                 proof.sole_packet_index().ok_or_else(|| {
                     failure(
                         "AMBIGUOUS_SOURCE_CONTEXT",
-                        if bundle.meaning.parser_version
+                        if step.retain_summary_anchor {
+                            "指定した資料要約に複数の出典があり、本文質問の対象を一つに決められません。"
+                        } else if bundle.meaning.parser_version
                             == crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                         {
                             "指定した資料要約に複数の出典があり、行数要約の対象を一つに決められません。"
@@ -2937,6 +2956,11 @@ fn derived_source_followup<'a>(
                 })?
             };
             scope.selected_body_index = Some(index);
+            if step.retain_summary_anchor {
+                // A subsequent source turn must not fall back to all packets
+                // from the underlying retrieval, even after a no-match stop.
+                scope.base_context = step.context;
+            }
             scope.context = step.context;
             continue;
         };

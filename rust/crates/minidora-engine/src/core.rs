@@ -6002,6 +6002,14 @@ impl Engine {
                             {
                                 Some(input::SourceContext::DirectBodyQuestion)
                             }
+                            Guarantee::Hypothesis
+                                if matches!(
+                                    bundle.meaning.intent,
+                                    Intent::AskPreviousSourceQuestion { .. }
+                                ) && input::is_source_summary_intent(&source.meaning.intent) =>
+                            {
+                                Some(input::SourceContext::Summary)
+                            }
                             Guarantee::Hypothesis => {
                                 crate::text_summary::legacy_body_question_source(
                                     &self.store,

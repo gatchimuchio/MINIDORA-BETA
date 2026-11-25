@@ -13491,6 +13491,103 @@ fn source_packet_line_summary_selects_only_a_packet_adopted_by_a_historical_summ
 }
 
 #[test]
+fn explicit_source_summary_question_uses_only_its_adopted_body() {
+    let scratch = Scratch::new();
+    let wiki = "https://ja.wikipedia.org/wiki/Fuji?action=raw";
+    let other = "https://example.test/park";
+    let wiki_raw = "[[国立公園]]は火山を含みます。";
+    let wiki_body = format!("{wiki_raw}\n遊歩道が整備されています。\n");
+    let (source_id, refs, _) = seed_fetched_source_case_with_mode(
+        &scratch.0,
+        "owner",
+        [
+            (wiki, wiki_body.as_str(), 1),
+            (
+                other,
+                "国立公園の案内所は冬季閉鎖です。貸出品は双眼鏡です。",
+                2,
+            ),
+        ],
+        "LIVE",
+    );
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let broad = record(&run(&["前回の資料を要約して"]));
+    let broad_text = broad["text"].as_str().unwrap();
+    assert!(broad_text.contains(wiki) && broad_text.contains(other));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let packet = sequence_artifact(&store, &Value::String(refs[0].clone()));
+    let packet_id = packet["id"].as_str().unwrap();
+    let selected = record(&run(&[
+        "--context",
+        &source_id,
+        &format!("出典packet: {packet_id} を2行で要約して"),
+    ]));
+    assert_eq!(selected["text"].as_str().unwrap().lines().count(), 2);
+    assert!(!selected["text"].as_str().unwrap().contains(other));
+    record(&run(&["19+23"]));
+
+    let summary_id = selected["id"].as_str().unwrap();
+    let question = "資料では「国立公園」について何と述べていますか";
+    let answer = record(&run(&["--context", summary_id, question]));
+    assert_eq!(answer["guarantee"], "HYPOTHESIS");
+    assert_eq!(answer["evidence"], serde_json::json!([]));
+    let dependencies = answer["dependencies"].as_array().unwrap();
+    assert!(dependencies.contains(&Value::String(refs[0].clone())));
+    assert!(!dependencies.contains(&Value::String(refs[1].clone())));
+    assert_eq!(dependencies[0], summary_id);
+    let report = sequence_artifact(&store, dependencies.last().unwrap());
+    assert_eq!(report["source_result_id"], source_id);
+    assert_eq!(report["source_packet_count"], 1);
+    let [candidate] = report["candidates"].as_array().unwrap().as_slice() else {
+        panic!("expected one matching sentence from the adopted body: {report}");
+    };
+    assert_eq!(candidate["source_packet_ref"], refs[0]);
+    assert_eq!(candidate["source_final_uri"], wiki);
+    assert_eq!(candidate["source_start"], 0);
+    assert_eq!(candidate["source_end"], wiki_raw.len());
+    assert_eq!(
+        candidate["source_span_sha256"],
+        minidora_domain::digest(wiki_raw.as_bytes())
+    );
+    assert_eq!(candidate["text"], "国立公園は火山を含みます。");
+
+    let target = scratch.0.join("out-of-scope-question.txt");
+    let target = target.to_str().unwrap();
+    let out_of_scope = "資料では「双眼鏡」について何と述べていますか";
+    for (context, text, code) in [
+        (
+            Some(summary_id),
+            out_of_scope,
+            Some("SOURCE_QUESTION_NO_MATCH:"),
+        ),
+        // An implicit retry must not widen the previous restricted question.
+        (None, out_of_scope, None),
+        (
+            Some(broad["id"].as_str().unwrap()),
+            question,
+            Some("AMBIGUOUS_SOURCE_CONTEXT:"),
+        ),
+    ] {
+        let mut args = Vec::new();
+        if let Some(context) = context {
+            args.extend(["--context", context]);
+        }
+        args.extend(["--output", target, "--allow-write", target, text]);
+        let result = stopped(&run(&args), 2, "SUSPEND");
+        if let Some(code) = code {
+            assert!(
+                result["reason"].as_str().unwrap().starts_with(code),
+                "{result}"
+            );
+        }
+        assert_eq!(result["dependencies"], serde_json::json!([]));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!Path::new(target).exists());
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_packet_line_summary_limits_implicit_selection_to_the_latest_summary() {
     let scratch = Scratch::new();
     let actor = "owner";
