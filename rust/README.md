@@ -6,6 +6,26 @@ The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, re
 
 **Current BUILD authority (2026-11-24):** [MINIDORA STANDARD BETA BUILD-v5 requirements, design, implementation schedule and work order](audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md) together with [root AGENTS.md](../AGENTS.md). The BUILD integrates local Japanese conversation, durable state, specialist operations and permissioned Web retrieval under the same non-neural Rust Core. The `50f6514` record below describes the earlier scoped BUILD-v4 observation.
 
+## Linux v5 実行版と引渡し
+
+この記録はLinux x86_64で確認したローカル利用の範囲です。凍結Pythonβとは別の実行物です。
+
+| 固定対象 | 識別情報 |
+|---|---|
+| 実行ソース | `cc2f98025c3b2563ad8df84da562d3cf5e4bef49` |
+| パッケージ・API・保存schema | `0.7.0-alpha.11`、`minidora-native/v1`、`minidora-rust/0.7.0-alpha.11` |
+| 実行物 | `/workspace/.minidora-cloud/build-v5-p30-v202.01BGVX/minidora-rust`、SHA-256 `3c3ef223b2469f23d28e6f41e4d32db144f710bc9600fb1a30f69c67d3169eee` |
+| 構築 | Rust/Cargo `1.99.1`、固定 `Cargo.lock`、`./start-minidora.sh` が使う `dev` プロファイル。SQLite同梱、TLSはシステムのOpenSSL 3。 |
+| ローカル版固定記録 | `/workspace/.minidora-cloud/build-v5-p30-v202.01BGVX/handoff-linux.json`。依存と起動のハッシュ、採用模型の版、利用経路の証拠、対象外の範囲を記録。 |
+
+同じソースを使うには新規クローンで `git switch --detach cc2f98025c3b2563ad8df84da562d3cf5e4bef49` を実行し、下記の起動手順に進む。作業環境の固定実行物は `minidora-rust chat --db <状態保存先の絶対パス>` で直接起動できる。提供能力は `minidora-rust capabilities --json`、Rustからの読み出しと実行は[標準API](#標準api)を参照。
+
+GitHubの新規クローンから起動し、一つの会話で前提の訂正と二つの追加、算術・CSV・コード有限評価、実Web検索から出典の保存まで確認した。19件中18件が確定し、通信をオフにしたWeb要求だけが許可不足で保留した。許可後はURL指定なしで高尾山の記事を検索し、HTTP 200で取得した本文を使って `599/1000 km` を回答した。再起動後も元の出典・作用IDを照合し、再取得や再書込なしで参照できた。
+
+同じ会話のコピーから外部Rustプログラムで以前の算術結果を読み、明示参照の追問を確定した。その結果と模型版を、再起動したNative APIと固定CLIが同じ内容で読み出せた。別に保存されていた未確定作用は、元ファイルの実バイトと一致したケースだけを同じ作用IDで確定した。根拠が失効したケースでは元Goalを確定せず、取り消した別コピーで作用だけを照合しても会話は取り消しのままだった。
+
+既定ではWebに通信せず、自律検索の確認対象は明示的に許可した日本語Wikipediaです。コードの評価は対応する有限式の範囲で、ホストのPythonは実行しません。保存は許可したローカルパスに限ります。Windows実機、独立QA、外部配布はこの記録の対象外です。
+
 ## STANDARD BETA v5 の起動
 
 Rustを `rustup` で導入し、`cargo` を使えるようにする。初回ビルドは `rust-toolchain.toml` と `Cargo.lock` を使う。Linuxは対応するCコンパイラ、`pkg-config`、OpenSSL開発ヘッダーを用意する。WindowsのMSVC環境ではC++ビルドツールとWindows SDKを用意する。

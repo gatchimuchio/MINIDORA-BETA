@@ -12,6 +12,7 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 
 | If you want to… | Read |
 |---|---|
+| Start the **current Rust STANDARD BETA** or use its Native API | [Linux build and Japanese startup guide](rust/README.md#linux-v5-実行版と引渡し) and [Native API](rust/README.md#標準api) |
 | Explore the **R2 logical successor design, rejected R1 audit and remaining source/evidence gates** | [Whole-system redesign register](docs/redesign/README.md) |
 | Follow the **current Japanese-base MINIDORA STANDARD BETA BUILD plan** | [2026-11-24 BUILD-v5 requirements, design, implementation schedule and Codex order](rust/audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md), [root AGENTS](AGENTS.md) and [dated implementation history](rust/audit/IMPLEMENTATION_STATUS.md) |
 | Understand the engine without reading Japanese | [English onboarding guide](docs/ENGLISH_ONBOARDING.md) |
