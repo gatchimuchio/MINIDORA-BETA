@@ -8,6 +8,28 @@ The frozen Python `minidora-notnn==0.6.0b1`, its public Japanese identifiers, re
 
 ## Linux v5 実行版と引渡し
 
+### `9bca02d` のLinux実行記録（2026-11-25 JST）
+
+以下はDebian 13（x86_64）で動かした同一ソース・実行物の記録です。Windows実機や全体QAの判定ではなく、公開配布も行っていません。
+
+| 確認した対象 | 識別情報 |
+|---|---|
+| 実行ソース | `9bca02db45869c665a6971fe3159a174f24c6908` |
+| API・保存形式 | パッケージ `0.7.0-alpha.11`、API `minidora-native/v1`、schema `minidora-rust/0.7.0-alpha.11`。模型版は採用された結果ごとの `ContentPlan` に記録。 |
+| 固定実行物 | `/workspace/.minidora-cloud/build-v5-p90-linux-current.FwAUqd/minidora-rust`、52,258,504バイト、SHA-256 `d2c6a4c5a7e08d7e5c796af5e989661b395c0499de1a3ec8b8d41be25c544a4e` |
+| 構築・起動 | Rust/Cargo `1.99.1`、固定 `Cargo.lock`・`rust-toolchain.toml`。既設の依存キャッシュを使い、GitHubからの新規クローンで `./start-minidora.sh` を実行。SQLiteは同梱、OpenSSL 3とglibcは実行環境のものを使用。 |
+| 照合記録 | `/workspace/.minidora-cloud/build-v5-p90-linux-current.FwAUqd/handoff-linux.json` に依存・起動ファイルのハッシュと検証記録を保持。 |
+
+同じ実行ソースを使うには、通常のクローンから `git switch --detach 9bca02db45869c665a6971fe3159a174f24c6908` を実行し、下記の手順で起動します。作業環境の固定実行物は `minidora-rust chat --db <状態保存先の絶対パス>` で直接起動できます。提供機能は `minidora-rust capabilities --json`、Rustからの呼び出しは[標準API](#標準api)を参照してください。
+
+新規クローンの一つの会話で、前提の訂正と根拠説明、訂正を使った推論、長さ換算、CSVのグループ平均比較、貼り付けたコードの検算と根拠説明を続けて確認しました。通信をオフにしたWeb依頼は取得せず保留し、許可後はURLを指定せず検索一覧と高尾山の記事本文を取得しました。本文の599 mを `599/1000 km` に換算して許可先に保存し、終了・再起動後は同じ作用IDと保存ファイルを再書き込みせず照合しました。オフラインのまま保存済み出典を説明し、前の訂正を使った推論にも戻れました。
+
+既存の作用履歴を隔離したコピーでも、書き込み済みの保存だけを同じ作用IDで確認し、再送しませんでした。根拠が失効した結果は保留のまま、取り消した会話は残った作用を照合しても取消のままでした。
+
+同じ会話の状態をコピーし、別のRustプログラムから標準Native APIで保存済みの訂正とCSV統計を読み出して追問しました。回答本文・依存・描画ハッシュは通常対話と一致し、新しい結果もCLIで同じ内容を読み出せました。元の会話データは変更していません。
+
+### `cc2f980` の旧引き渡し記録
+
 この節は `cc2f980` 時点の固定記録です。以降の修正を使うには、`main` で下記の起動手順に進んでください。この記録の対象はLinux x86_64で確認したローカル利用で、凍結Pythonβとは別の実行物です。
 
 | 固定対象 | 識別情報 |
@@ -29,6 +51,8 @@ GitHubの新規クローンから起動し、一つの会話で前提の訂正�
 ## STANDARD BETA v5 の起動
 
 Rustを `rustup` で導入し、`cargo` を使えるようにする。初回ビルドは `rust-toolchain.toml` と `Cargo.lock` を使う。Linuxは対応するCコンパイラ、`pkg-config`、OpenSSL開発ヘッダーを用意する。WindowsのMSVC環境ではC++ビルドツールとWindows SDKを用意する。
+
+初回にRustツールチェーンやCargoの依存を取得するための通信は、ミニドラのWeb通信許可とは別です。Linuxで指定のツールチェーンを導入済みで依存がキャッシュにそろっていれば、`CARGO_NET_OFFLINE=true ./start-minidora.sh` でCargoに通信させずに起動できます。固定実行物を直接起動する場合はCargoは不要ですが、実行時ライブラリは必要です。
 
 ```sh
 git clone https://github.com/gatchimuchio/MINIDORA-BETA.git
