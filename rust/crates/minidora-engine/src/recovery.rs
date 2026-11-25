@@ -4299,6 +4299,15 @@ pub(crate) fn source_followup_anchor<'a>(
     state: &'a CaseRevision,
     allow_explanation: bool,
 ) -> Result<Option<&'a ResultRecord>> {
+    source_followup_anchor_at(store, state, allow_explanation, true)
+}
+
+fn source_followup_anchor_at<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    allow_explanation: bool,
+    verify_summary_predecessor: bool,
+) -> Result<Option<&'a ResultRecord>> {
     let (Some(bundle), Some(result)) = (&state.bundle, &state.result) else {
         return Ok(None);
     };
@@ -4464,7 +4473,24 @@ pub(crate) fn source_followup_anchor<'a>(
     }
 
     let anchor_id = if matches!(goal.intent, Intent::AskPreviousSourceQuestion { .. }) {
-        verify_source_question_context(store, actor, case, state, result, plan, &goal)?
+        let proof = if !verify_summary_predecessor
+            && bundle.meaning.parser_version
+                == crate::input::IMPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
+        {
+            // The parent revision is already the verified predecessor. Replay
+            // its retained question without recursively following every turn.
+            crate::text_summary::verify_retained_source_question(
+                store,
+                bundle,
+                &state.prior_results,
+                result,
+                plan,
+                None,
+            )?
+        } else {
+            verify_source_question_context(store, actor, case, state, result, plan, &goal)?
+        };
+        proof
             .map(|proof| proof.source_context_ref)
             .ok_or_else(mismatch)?
     } else {
@@ -4566,6 +4592,40 @@ fn verify_implicit_source_predecessor(
         )
     {
         verify_registered_input(store, bundle, "RECOVERY_SOURCE_CONTEXT_MISMATCH")?;
+    }
+    if version == crate::input::IMPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION {
+        const CODE: &str = "RECOVERY_SOURCE_CONTEXT_MISMATCH";
+        let invalid = || {
+            failure(
+                CODE,
+                "the sealed source summary differs from the preceding result's summary scope",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let preceding = store
+            .input_start_predecessor_revision(state)?
+            .filter(|prior| prior.case_id == state.case_id && prior.actor_id == state.actor_id)
+            .ok_or_else(invalid)?;
+        let context = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        let direct_summary = preceding.lifecycle == Lifecycle::Commit
+            && preceding
+                .bundle
+                .as_ref()
+                .is_some_and(|prior| crate::input::is_source_summary_intent(&prior.meaning.intent));
+        let expected = if direct_summary {
+            preceding.result.as_ref()
+        } else {
+            source_followup_anchor_at(store, &preceding, true, false)?
+        };
+        if bundle.request.context_ref.is_some() || expected != Some(context) {
+            return Err(invalid());
+        }
+        return Ok(());
     }
     if version == crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION {
         const CODE: &str = "RECOVERY_SOURCE_CONTEXT_MISMATCH";

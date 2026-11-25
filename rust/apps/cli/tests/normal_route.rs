@@ -13588,6 +13588,93 @@ fn explicit_source_summary_question_uses_only_its_adopted_body() {
 }
 
 #[test]
+fn implicit_source_summary_question_keeps_the_adopted_body_across_turns() {
+    let scratch = Scratch::new();
+    let wiki = "https://ja.wikipedia.org/wiki/Fuji?action=raw";
+    let selected_uri = "https://example.test/park";
+    let (source_id, refs, _) = seed_fetched_source_case_with_mode(
+        &scratch.0,
+        "owner",
+        [
+            (
+                wiki,
+                "[[国立公園]]には展望台があります。望遠鏡が利用できます。",
+                1,
+            ),
+            (
+                selected_uri,
+                "国立公園の案内所は冬季閉鎖です。休憩所には暖炉があります。",
+                2,
+            ),
+        ],
+        "LIVE",
+    );
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let selected_ref = Value::String(refs[1].clone());
+    let excluded_ref = Value::String(refs[0].clone());
+    let packet = sequence_artifact(&store, &selected_ref);
+    let packet_id = packet["id"].as_str().unwrap();
+    let summary = record(&run(&[&format!("出典packet: {packet_id} を2行で要約して")]));
+    assert_eq!(summary["text"].as_str().unwrap().lines().count(), 2);
+
+    let assert_answer = |result: &Value, expected: &str| {
+        assert_eq!(result["guarantee"], "HYPOTHESIS");
+        assert_eq!(result["evidence"], serde_json::json!([]));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        let dependencies = result["dependencies"].as_array().unwrap();
+        assert!(dependencies.contains(&selected_ref));
+        assert!(!dependencies.contains(&excluded_ref));
+        let report = sequence_artifact(&store, dependencies.last().unwrap());
+        assert_eq!(report["source_result_id"], source_id);
+        assert_eq!(report["source_packet_count"], 1);
+        let [matched] = report["candidates"].as_array().unwrap().as_slice() else {
+            panic!("expected a single match in the adopted body: {report}");
+        };
+        assert_eq!(matched["source_final_uri"], selected_uri);
+        assert_eq!(matched["text"], expected);
+    };
+    let park_question = "資料では「国立公園」について何と述べていますか";
+    let park_answer = "国立公園の案内所は冬季閉鎖です。";
+    let heat_question = "資料では「暖炉」について何と述べていますか";
+    let heat_answer = "休憩所には暖炉があります。";
+    let first = record(&run(&[park_question]));
+    assert_answer(&first, park_answer);
+    assert_eq!(first["dependencies"][0], summary["id"]);
+    assert_answer(&record(&run(&[heat_question])), heat_answer);
+
+    let target = scratch.0.join("other-body-answer.txt");
+    let path = target.to_str().unwrap();
+    let missing = stopped(
+        &run(&[
+            "--output",
+            path,
+            "--allow-write",
+            path,
+            "資料では「望遠鏡」について何と述べていますか",
+        ]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("SOURCE_QUESTION_NO_MATCH:")
+    );
+    assert_eq!(missing["receipts"], serde_json::json!([]));
+    assert!(!target.exists());
+    assert_answer(&record(&run(&[park_question])), park_answer);
+
+    let explanation = record(&run(&["詳しく説明して"]));
+    let dependencies = explanation["dependencies"].as_array().unwrap();
+    assert!(dependencies.contains(&selected_ref));
+    assert!(!dependencies.contains(&excluded_ref));
+    assert_answer(&record(&run(&[heat_question])), heat_answer);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn source_packet_line_summary_limits_implicit_selection_to_the_latest_summary() {
     let scratch = Scratch::new();
     let actor = "owner";

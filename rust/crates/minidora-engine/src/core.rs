@@ -6117,6 +6117,32 @@ impl Engine {
             };
             if let Some(context) = context {
                 previous = Some(context);
+                if has_compute_budget
+                    && matches!(
+                        bundle.meaning.intent,
+                        Intent::AskPreviousSourceQuestion { .. }
+                    )
+                    && context.lifecycle == Lifecycle::Commit
+                    && context.guarantee == Guarantee::Hypothesis
+                    && context.evidence.is_empty()
+                    && self
+                        .store
+                        .get_input_bundle(
+                            actor,
+                            &request.case_id,
+                            &context.input_id,
+                            context.input_version,
+                        )?
+                        .is_some_and(|(_, source)| {
+                            input::is_source_summary_intent(&source.meaning.intent)
+                        })
+                {
+                    return input::seal_with_source_context(
+                        &request,
+                        previous,
+                        Some(input::SourceContext::Summary),
+                    );
+                }
                 return input::seal(&request, previous);
             }
             Ok(bundle)

@@ -1831,6 +1831,16 @@ impl Store {
         &self,
         state: &CaseRevision,
     ) -> Result<Option<ResultRecord>> {
+        Ok(self
+            .input_start_predecessor_revision(state)?
+            .and_then(|case| case.result))
+    }
+
+    /// The case revision immediately before the current input was received.
+    pub(crate) fn input_start_predecessor_revision(
+        &self,
+        state: &CaseRevision,
+    ) -> Result<Option<CaseRevision>> {
         let refs: Option<(String, Option<String>)> = sql(self
             .connection
             .query_row(
@@ -1853,8 +1863,7 @@ impl Store {
         {
             return Ok(None);
         }
-        let previous: CaseRevision = self.read_blob(&prior_ref)?;
-        Ok(previous.result)
+        Ok(Some(self.read_blob(&prior_ref)?))
     }
 
     /// Locate the original input key for a fingerprint owned by this actor.

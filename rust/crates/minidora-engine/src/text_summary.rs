@@ -2711,7 +2711,8 @@ fn derived_source_followup<'a>(
                 }
                 crate::input::EXPLICIT_SOURCE_SUMMARY_LINE_PARSER_VERSION
                 | crate::input::EXPLICIT_SOURCE_SUMMARY_PACKET_LINE_PARSER_VERSION
-                | crate::input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION => {
+                | crate::input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION
+                | crate::input::IMPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION => {
                     "the explicitly referenced source summary differs from the retained proof"
                 }
                 _ => {
@@ -2757,7 +2758,7 @@ fn derived_source_followup<'a>(
             return Err(invalid());
         }
         let retain_summary_anchor =
-            parser_version == crate::input::EXPLICIT_SOURCE_SUMMARY_QUESTION_PARSER_VERSION;
+            crate::input::is_source_summary_question_version(parser_version);
         if retain_summary_anchor
             && !matches!(
                 input.meaning.intent,
