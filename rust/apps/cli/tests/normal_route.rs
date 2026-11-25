@@ -20027,6 +20027,87 @@ fn cancelled_effect_reconciliation_preserves_case_cancel_with_no_new_goal() {
     assert_eq!(revision["result"], cancelled);
 }
 
+#[test]
+fn cancelled_effect_reconciliation_reports_the_original_file_failure_reason() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("existing.txt");
+    let target_str = target.to_str().unwrap();
+    let original = b"previous recipient file\n";
+    std::fs::write(&target, original).unwrap();
+    let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+    let failed = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--output", target_str, "--allow-write", target_str, "12*11"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    let [receipt] = failed["receipts"].as_array().unwrap().as_slice() else {
+        panic!("expected the original failed delivery receipt: {failed}");
+    };
+    assert_eq!(receipt["phase"], "FAILED");
+    assert_eq!(receipt["target"], target_str);
+    let reason = receipt["reason"].as_str().unwrap();
+    assert_eq!(
+        reason,
+        "EXISTING_FILE_CONFLICT: An existing different artifact will not be overwritten"
+    );
+    let action_id = receipt["action_id"].as_str().unwrap();
+
+    let cancelled = stopped(&execute(&scratch.0, "owner", &["キャンセル"]), 5, "CANCEL");
+    assert_eq!(cancelled["receipts"], failed["receipts"]);
+    let before = inspect_normal_case(&scratch.0, "owner");
+    let reconcile_effects = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args([
+                "reconcile-effects",
+                "--db",
+                scratch.0.to_str().unwrap(),
+                "--case",
+                "normal-route",
+                "--actor",
+                "owner",
+            ])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let json_before = reconcile_effects(&["--json"]);
+    let ledger = record(&json_before);
+    let [action] = ledger.as_array().unwrap().as_slice() else {
+        panic!("expected one persisted file action: {ledger}");
+    };
+    assert_eq!(action["phase"], "FAILED");
+    assert_eq!(action["receipt"], *receipt);
+    assert!(json_before.stderr.is_empty());
+
+    let human = reconcile_effects(&[]);
+    assert_eq!(human.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(human.stdout).unwrap(),
+        format!(
+            "action={action_id} phase=FAILED target={target_str}\ncase remains CANCEL; no write or resend was performed\n"
+        )
+    );
+    assert_eq!(
+        String::from_utf8(human.stderr).unwrap(),
+        format!("action={action_id} reason={reason:?}\n")
+    );
+
+    let json_after = reconcile_effects(&["--json"]);
+    assert_eq!(json_after.status.code(), Some(0));
+    assert_eq!(json_after.stdout, json_before.stdout);
+    assert!(json_after.stderr.is_empty());
+    assert_eq!(inspect_normal_case(&scratch.0, "owner"), before);
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
 fn code_ref(name: &str) -> Value {
     serde_json::json!({"種別":"参照","名前":name})
 }

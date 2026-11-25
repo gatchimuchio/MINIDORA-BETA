@@ -73,7 +73,8 @@ It accepts no new goal, permissions or target, and performs no write or resend.
 Reconcile-effects inspects pending operations only for a cancelled case. It
 updates the saved action ledger from the original local file and preserves
 case CANCEL. Exit 2 means an effect still requires reconciliation; exit 0 means
-all recorded effects are confirmed, failed or cancelled.
+all recorded effects are confirmed, failed or cancelled. Plain output reports
+saved receipt reasons on stderr. With --json the reasons remain in the records.
 
 Serve binds only a loopback IP and requires MINIDORA_API_TOKEN (at least 32 bytes).
 GET / serves a small same-origin browser workspace; GET /health reports the
@@ -512,6 +513,8 @@ fn print_actions(actions: &[ActionRecord], json: bool) -> Result<(), String> {
         serde_json::to_writer(&mut output, actions).map_err(|error| error.to_string())?;
         writeln!(output).map_err(|error| error.to_string())?;
     } else {
+        let stderr = io::stderr();
+        let mut diagnostics = stderr.lock();
         for action in actions {
             let phase = serde_json::to_string(&action.phase).map_err(|error| error.to_string())?;
             writeln!(
@@ -522,6 +525,14 @@ fn print_actions(actions: &[ActionRecord], json: bool) -> Result<(), String> {
                 action.target
             )
             .map_err(|error| error.to_string())?;
+            if let Some(reason) = action
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.reason.as_deref())
+            {
+                // A diagnostic does not change the reconciliation status.
+                let _ = writeln!(diagnostics, "action={} reason={reason:?}", action.action_id);
+            }
         }
         writeln!(
             output,

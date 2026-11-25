@@ -504,6 +504,12 @@ Linux x86_64で固定ツールチェーン・依存によるオフラインBUILD
 
 Linux x86_64で固定ツールチェーン・依存によるオフラインBUILDを実行。固定実行物 `/workspace/.minidora-cloud/build-v5-p30-v198.afJY23/minidora-rust` のSHA-256は `168c58d3e52cdafbe88e3c9a148a2ea9636593f3bbba4c68ca0d7e965f9ab7a4`。追加通信やファイル出力の許可は与えていない。Windows実機は未実施。
 
+### v5 取消済み作用の理由を通常CLIに表示
+
+別内容があるファイルへの許可付き保存が失敗した会話を取り消した。旧版では `reconcile-effects` の標準出力に作用ID・状態・対象が出る一方、受領の `EXISTING_FILE_CONFLICT` はJSONと対話版にしか出なかった。新版の通常CLIでは、保存された理由を作用ID付きで標準エラーへ出す。標準出力・JSON・終了コードは従来どおりで、終了コード0は作用が終端にあることを示し、新たに保存できたことは示さない。
+
+Linuxの通常CLIで失敗理由と保存済み確定理由を確認した。理由のない作用や空の一覧に理由を補わず、照合済みケース・作用記録と検査対象ファイルは不変だった。固定実行物 `/workspace/.minidora-cloud/build-v5-p70-effect-reason-final.S55ahI/minidora-rust` のSHA-256は `cd7107d957a8e9158128af0e01e7244c375b2ec18f94aae319d7bccec97dcea4`。公開API、保存schema、作用の照合処理は変更せず、Windows実機は未実施。
+
 ## 過去のBUILD-v4限定固定記録（2026-11-24）
 
 以下は`50f6514`で記録した限定的なLinuxビルド、算術・Native/CLI、保存・許可付きローカルファイル出力の観測であり、通常日本語チャット、多ターン記憶、自律Web候補→実本文取得、専門Portの対話統合、clone後の簡易起動が一体成立したという観測ではない。v5の完成判定には使用できない。
@@ -1000,6 +1006,8 @@ For a case already cancelled with an unresolved issued effect, the separate comm
 ```
 
 Replace `CANCELLED_CASE_ID` with that actual saved case identity. This command observes the cancelled case's original local-file actions and updates their ledger/receipts only; it **preserves case `CANCEL` and never commits or restarts the cancelled goal**. Its exit 0 means recorded effects are confirmed, failed or cancelled; exit 2 means an effect remains unresolved. Neither status is a new user-goal success. A cancellation request such as `停止` stops future work and retains previously observed or unknown effects; it does not make an issued effect disappear. No generic remote exactly-once guarantee follows from this local observation path.
+
+Without `--json`, the action list remains on standard output. Any saved receipt reason appears on standard error beside its action ID. With `--json`, read the reason from `receipt.reason` in the action record.
 
 ## Direct HTTPS source bodies and exact JSON selection
 
