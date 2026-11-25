@@ -16,6 +16,7 @@ const HELP: &str = "\
 /history page N    以前の結果を1ページ20件ずつ表示\n\
 /context 結果ID     現在の会話の保存済み結果を次の一発話で参照\n\
 /context off        次の参照指定を解除\n\
+                    参照先を指定し直せないときは発話を送信しません\n\
 /status             エンジン、提供能力、会話の状態と採用された模型の版を表示\n\
 /paste              複数行を入力。単独の /end 行でまとめて送信\n\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
@@ -28,6 +29,8 @@ const HELP: &str = "\
 const MAX_CASE_ID_BYTES: usize = 256;
 const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
 const HISTORY_PAGE_SIZE: usize = 20;
+const UNRESOLVED_CONTEXT: &str =
+    "参照先が未確定です。/context 結果ID で選び直すか、/context off で解除してください。";
 
 enum Line {
     Input(Vec<u8>),
@@ -207,7 +210,7 @@ fn show_history(engine: &Engine, options: &Options, selection: &str) -> Result<(
     Ok(())
 }
 
-fn show_status(engine: &Engine, options: &Options) -> Result<(), String> {
+fn show_status(engine: &Engine, options: &Options, context_unresolved: bool) -> Result<(), String> {
     let status = engine
         .case_status(&options.actor, &options.case_id)
         .map_err(|error| error.to_string())?;
@@ -244,7 +247,9 @@ fn show_status(engine: &Engine, options: &Options) -> Result<(), String> {
     } else {
         eprintln!("この会話には保存済みの結果がありません。");
     }
-    if let Some(result_id) = &options.context_ref {
+    if context_unresolved {
+        eprintln!("{UNRESOLVED_CONTEXT}");
+    } else if let Some(result_id) = &options.context_ref {
         eprintln!("次の発話の参照先: {result_id}");
     }
     Ok(())
@@ -264,6 +269,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
     let mut reader = stdin.lock();
     let offline = BTreeSet::new();
     let mut network_enabled = !options.read_hosts.is_empty();
+    let mut context_unresolved = false;
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?;
@@ -328,6 +334,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                         Ok(_) => {
                             if options.case_id != id {
                                 options.context_ref = None;
+                                context_unresolved = false;
                             }
                             options.case_id = id.to_owned();
                             options.output = None;
@@ -345,24 +352,27 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                 }
                 ("/context", "off") => {
                     options.context_ref = None;
+                    context_unresolved = false;
                     eprintln!("次の発話の参照指定を解除しました。");
                     continue;
                 }
-                ("/context", id)
+                ("/context", id) => {
+                    options.context_ref = None;
+                    context_unresolved = true;
                     if id.len() != 64
                         || !id
                             .bytes()
-                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
-                {
-                    eprintln!(
-                        "/context の後に /history に表示された結果IDか off を入力してください。"
-                    );
-                    continue;
-                }
-                ("/context", id) => {
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                    {
+                        eprintln!(
+                            "/context の後に /history に表示された結果IDか off を入力してください。"
+                        );
+                        continue;
+                    }
                     match engine.latest(&options.actor, &options.case_id) {
                         Ok(Some(case)) if saved_result(&case, id).is_some() => {
                             options.context_ref = Some(id.into());
+                            context_unresolved = false;
                             eprintln!("次の発話の参照先: {id}");
                         }
                         Ok(_) => eprintln!("この会話に該当する結果IDがありません。"),
@@ -371,7 +381,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                     continue;
                 }
                 ("/status", "") => {
-                    if let Err(error) = show_status(engine, &options) {
+                    if let Err(error) = show_status(engine, &options, context_unresolved) {
                         eprintln!("状態を読み込めませんでした。{error}");
                     }
                     continue;
@@ -486,6 +496,10 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
         }
         if text.len() > max_bytes {
             eprintln!("入力が上限を超えたため送信しませんでした。");
+            continue;
+        }
+        if context_unresolved {
+            eprintln!("入力を送信していません。{UNRESOLVED_CONTEXT}");
             continue;
         }
         let read_hosts = if network_enabled {

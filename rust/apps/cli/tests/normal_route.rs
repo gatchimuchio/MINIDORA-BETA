@@ -11256,6 +11256,82 @@ fn input_limit_failure_retains_original_identity_and_durable_terminal_result() {
 }
 
 #[test]
+fn chat_does_not_send_turns_after_an_unresolved_context_selection() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("unintended-explanation.txt");
+    let old = record(&execute(&scratch.0, "owner", &["2+3"]));
+    let latest = record(&execute(&scratch.0, "owner", &["7*6"]));
+    let old_id = old["id"].as_str().unwrap();
+    let latest_id = latest["id"].as_str().unwrap();
+    let missing = "0".repeat(64);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let before = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let chat = |input: String| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args([
+                "--actor",
+                "owner",
+                "--case",
+                "normal-route",
+                "--allow-write",
+            ])
+            .arg(&target)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+
+    let (text, stderr) = chat(format!(
+        "/output {}\n/context {old_id}\n/context {missing}\n/status\n詳しく説明して\n/context malformed\n/paste\n詳しく説明して\n/end\n/exit\n",
+        target.display(),
+    ));
+    assert!(text.is_empty(), "{text}");
+    assert!(stderr.contains("この会話に該当する結果IDがありません。"));
+    assert!(stderr.contains("参照先が未確定です。"));
+    assert_eq!(stderr.matches("入力を送信していません。").count(), 2);
+    assert_eq!(stderr.matches("次の発話の参照先:").count(), 1);
+    assert_eq!(
+        store.load_case("owner", "normal-route").unwrap(),
+        Some(before)
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    assert!(!target.exists());
+
+    let (text, _) = chat(format!(
+        "/context {missing}\n/context {old_id}\n詳しく説明して\n/exit\n",
+    ));
+    assert!(text.contains("2 + 3 = 5"), "{text}");
+    let after = store.load_case("owner", "normal-route").unwrap().unwrap();
+    assert_eq!(
+        after.bundle.unwrap().request.context_ref.as_deref(),
+        Some(old_id)
+    );
+
+    let (text, _) = chat(format!(
+        "/context {latest_id}\n/context malformed\n/context off\n7*8\n/exit\n",
+    ));
+    assert!(text.contains("56"), "{text}");
+    let after = store.load_case("owner", "normal-route").unwrap().unwrap();
+    assert!(after.bundle.unwrap().request.context_ref.is_none());
+}
+
+#[test]
 fn stdin_checks_byte_budget_before_decoding_and_before_opening_state() {
     let scratch = Scratch::new();
     let db = scratch.0.join("state");
