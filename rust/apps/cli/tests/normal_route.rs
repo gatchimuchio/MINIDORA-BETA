@@ -11901,6 +11901,135 @@ fn chat_disables_network_after_an_invalid_network_command() {
 }
 
 #[test]
+fn chat_does_not_use_the_old_case_after_a_failed_case_selection() {
+    use minidora_domain::Lifecycle;
+
+    const ACTOR: &str = "owner";
+    const A: &str = "case-a";
+    const B: &str = "case-b";
+    const FOREIGN: &str = "foreign-case";
+    const UNRESOLVED: &str =
+        "会話先が未確定です。/case ID または /new ID で会話を選び直してください。";
+    const NOT_SENT: &str = "入力を送信していません。";
+
+    let scratch = Scratch::new();
+    let target = scratch.0.join("unintended-case-output.txt");
+    record(&execute_in_case(&scratch.0, ACTOR, A, &["ミナは鳥です"]));
+    let old = record(&execute_in_case(&scratch.0, ACTOR, A, &["2+3"]));
+    let other = record(&execute_in_case(&scratch.0, ACTOR, B, &["7*6"]));
+    record(&execute_in_case(
+        &scratch.0,
+        "other-actor",
+        FOREIGN,
+        &["11*9"],
+    ));
+    let old_id = old["id"].as_str().unwrap();
+    let other_id = other["id"].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let old_before = store.load_case(ACTOR, A).unwrap();
+    let other_before = store.load_case(ACTOR, B).unwrap();
+    let foreign_before = store.load_case("other-actor", FOREIGN).unwrap();
+    let memory_before = store.load_memory(ACTOR).unwrap();
+    let chat = |input: &[u8]| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args([
+                "--actor",
+                ACTOR,
+                "--case",
+                A,
+                "--max-input-bytes",
+                "64",
+                "--allow-read-host",
+                "example.com",
+                "--allow-write",
+            ])
+            .arg(&target)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+
+    let reserve = format!("/context {old_id}\n/output {}\n", target.display());
+    let before_send = format!(
+        "/status\n/history\n/reconcile\n/reconcile-effects\n/context {other_id}\n/output {}\n/net off\n中止\nミナは魚です\n/paste\n/case {B}\n2+3\n/end\n/exit\n",
+        target.display(),
+    );
+    let long_id = format!("/case {}\n", "x".repeat(257));
+    let long_frame = format!("/new {}\n", "x".repeat(4200));
+    for failure in [
+        b"/new case-b\n".as_slice(),
+        b"/case\n",
+        long_id.as_bytes(),
+        b"/case \xff\n",
+        long_frame.as_bytes(),
+        b"/case foreign-case\n",
+    ] {
+        let mut input = reserve.as_bytes().to_vec();
+        input.extend_from_slice(failure);
+        input.extend_from_slice(before_send.as_bytes());
+        let (text, stderr) = chat(&input);
+        assert!(text.is_empty(), "{text}");
+        assert!(stderr.contains("最後に選択した会話:"), "{stderr}");
+        assert!(stderr.contains(UNRESOLVED), "{stderr}");
+        assert!(stderr.matches(NOT_SENT).count() >= 3, "{stderr}");
+        assert!(stderr.contains("通信はオフです。"), "{stderr}");
+        for stale in [
+            "最新結果",
+            "照合後の結果ID",
+            "作用を照合できませんでした。",
+            "この会話に該当する結果IDがありません。",
+        ] {
+            assert!(!stderr.contains(stale), "{stderr}");
+        }
+        assert_eq!(stderr.matches("次の発話の参照先:").count(), 1, "{stderr}");
+        assert_eq!(stderr.matches("次の発話の保存先:").count(), 1, "{stderr}");
+        assert_eq!(store.load_case(ACTOR, A).unwrap(), old_before);
+        assert_eq!(store.load_case(ACTOR, B).unwrap(), other_before);
+        assert_eq!(
+            store.load_case("other-actor", FOREIGN).unwrap(),
+            foreign_before
+        );
+        assert_eq!(store.load_memory(ACTOR).unwrap(), memory_before);
+        assert!(store.actions(ACTOR, A).unwrap().is_empty());
+        assert!(store.actions(ACTOR, B).unwrap().is_empty());
+        assert!(store.actions("other-actor", FOREIGN).unwrap().is_empty());
+        assert!(!target.exists());
+    }
+
+    for (select, expected_case) in [
+        ("/case case-a", A),
+        ("/case case-b", B),
+        ("/new new-case", "new-case"),
+        ("/case unused-case", "unused-case"),
+    ] {
+        let input = format!("{reserve}/new {B}\n/net off\n{select}\n2+3\n/exit\n");
+        let (_, stderr) = chat(input.as_bytes());
+        assert!(!stderr.contains(NOT_SENT), "{stderr}");
+        let selected = store.load_case(ACTOR, expected_case).unwrap().unwrap();
+        assert_eq!(selected.lifecycle, Lifecycle::Commit);
+        let request = selected.bundle.unwrap().request;
+        assert_eq!(request.case_id, expected_case);
+        assert_eq!(request.text, "2+3");
+        assert!(request.context_ref.is_none() && request.output_path.is_none());
+        assert!(request.permissions.write_paths.contains(&target));
+        assert!(request.permissions.read_hosts.is_empty());
+        assert!(store.actions(ACTOR, expected_case).unwrap().is_empty());
+        assert!(!target.exists());
+    }
+}
+
+#[test]
 fn stdin_checks_byte_budget_before_decoding_and_before_opening_state() {
     let scratch = Scratch::new();
     let db = scratch.0.join("state");

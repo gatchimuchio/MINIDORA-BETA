@@ -14,6 +14,7 @@ const HELP: &str = "\
 /exit               対話を終了\n\
 /case ID            同じ利用者の会話を選択\n\
 /new ID             未使用の会話IDを選択\n\
+                    選択に失敗した場合は、会話を選び直すまで発話を送信しません\n\
 /history [結果ID]   現在の会話の最新結果と履歴、または指定結果を表示\n\
 /history page N    以前の結果を1ページ20件ずつ表示\n\
 /context 結果ID     現在の会話の保存済み結果を次の一発話で参照\n\
@@ -33,11 +34,14 @@ const HELP: &str = "\
 const MAX_CASE_ID_BYTES: usize = 256;
 const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
 const HISTORY_PAGE_SIZE: usize = 20;
+const UNRESOLVED_CASE: &str =
+    "会話先が未確定です。/case ID または /new ID で会話を選び直してください。";
 const UNRESOLVED_CONTEXT: &str =
     "参照先が未確定です。/context 結果ID で選び直すか、/context off で解除してください。";
 const UNRESOLVED_OUTPUT: &str = "保存先が未確定です。/output PATH で許可した保存先を選び直すか、/output off で解除してください。";
 
 enum SettingCommand {
+    Case,
     Context,
     Output,
     Network,
@@ -54,6 +58,11 @@ fn leading_setting_command(bytes: &[u8]) -> Option<SettingCommand> {
         (SettingCommand::Network, argument)
     } else if let Some(argument) = bytes.strip_prefix(b"/context") {
         (SettingCommand::Context, argument)
+    } else if let Some(argument) = bytes
+        .strip_prefix(b"/case")
+        .or_else(|| bytes.strip_prefix(b"/new"))
+    {
+        (SettingCommand::Case, argument)
     } else {
         (SettingCommand::Output, bytes.strip_prefix(b"/output")?)
     };
@@ -305,6 +314,24 @@ fn is_cancellation(options: &Options, text: &str) -> bool {
     input::seal(&probe, None).is_ok_and(|bundle| matches!(bundle.meaning.intent, Intent::Cancel))
 }
 
+fn check_case_selection(engine: &Engine, actor: &str, id: &str, new: bool) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("会話IDを指定してください。".into());
+    }
+    if id.len() > MAX_CASE_ID_BYTES {
+        return Err(format!(
+            "会話IDは{MAX_CASE_ID_BYTES}バイト以内で指定してください。"
+        ));
+    }
+    match engine.latest(actor, id) {
+        Ok(Some(_)) if new => {
+            Err("使用済みの会話IDです。再開するには /case を使ってください。".into())
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(format!("会話を選択できませんでした。{error}")),
+    }
+}
+
 pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, String> {
     if options.case_id.len() > MAX_CASE_ID_BYTES {
         return Err(format!(
@@ -319,6 +346,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
     let mut reader = stdin.lock();
     let offline = BTreeSet::new();
     let mut network_enabled = !options.read_hosts.is_empty();
+    let mut case_unresolved = false;
     let mut context_unresolved = false;
     let mut output_unresolved = false;
     let started = SystemTime::now()
@@ -362,6 +390,13 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
             Err((command, message)) => {
                 eprintln!("{message}");
                 match command {
+                    Some(SettingCommand::Case) => {
+                        case_unresolved = true;
+                        eprintln!("{UNRESOLVED_CASE}");
+                    }
+                    Some(SettingCommand::Context | SettingCommand::Output) if case_unresolved => {
+                        eprintln!("{UNRESOLVED_CASE}");
+                    }
                     Some(SettingCommand::Context) => {
                         options.context_ref = None;
                         context_unresolved = true;
@@ -384,36 +419,42 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                 .map_or((text.as_str(), ""), |(command, argument)| {
                     (command, argument.trim())
                 });
+            if case_unresolved
+                && matches!(
+                    command,
+                    "/history" | "/context" | "/output" | "/reconcile" | "/reconcile-effects"
+                )
+            {
+                eprintln!("{UNRESOLVED_CASE}");
+                continue;
+            }
             match (command, argument) {
                 ("/exit", "") => break,
                 ("/help", "") => {
                     eprintln!("{HELP}");
                     continue;
                 }
-                ("/case" | "/new", "") => {
-                    eprintln!("会話IDを指定してください。");
-                    continue;
-                }
-                ("/case" | "/new", id) if id.len() > MAX_CASE_ID_BYTES => {
-                    eprintln!("会話IDは{MAX_CASE_ID_BYTES}バイト以内で指定してください。");
-                    continue;
-                }
                 ("/case" | "/new", id) => {
-                    match engine.latest(&options.actor, id) {
-                        Ok(Some(_)) if command == "/new" => {
-                            eprintln!("使用済みの会話IDです。再開するには /case を使ってください。")
-                        }
-                        Ok(_) => {
-                            if options.case_id != id {
+                    match check_case_selection(engine, &options.actor, id, command == "/new") {
+                        Ok(()) => {
+                            // Reselecting the former case never revives staged
+                            // targets, but it does not fix earlier setting errors.
+                            if case_unresolved || options.case_id != id {
                                 options.context_ref = None;
+                            }
+                            if options.case_id != id {
                                 context_unresolved = false;
                                 output_unresolved = false;
                             }
                             options.case_id = id.to_owned();
                             options.output = None;
+                            case_unresolved = false;
                             eprintln!("会話: {}", options.case_id);
                         }
-                        Err(error) => eprintln!("会話を選択できませんでした。{error}"),
+                        Err(error) => {
+                            case_unresolved = true;
+                            eprintln!("{error}\n{UNRESOLVED_CASE}");
+                        }
                     }
                     continue;
                 }
@@ -454,6 +495,13 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                     continue;
                 }
                 ("/status", "") => {
+                    if case_unresolved {
+                        eprintln!(
+                            "最後に選択した会話: {:?}\n{UNRESOLVED_CASE}",
+                            options.case_id
+                        );
+                        continue;
+                    }
                     if let Err(error) =
                         show_status(engine, &options, context_unresolved, output_unresolved)
                     {
@@ -580,6 +628,10 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
         }
         if text.len() > max_bytes {
             eprintln!("入力が上限を超えたため送信しませんでした。");
+            continue;
+        }
+        if case_unresolved {
+            eprintln!("入力を送信していません。{UNRESOLVED_CASE}");
             continue;
         }
         if context_unresolved || output_unresolved {
