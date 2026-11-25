@@ -4633,12 +4633,12 @@ fn verify_registered_input(store: &Store, bundle: &InputBundle, code: &str) -> R
     Ok(())
 }
 
-fn verify_text_summary_candidate(
+pub(crate) fn verify_text_summary_candidate(
     store: &Store,
     bundle: &InputBundle,
     result: &ResultRecord,
     plan: &ContentPlan,
-) -> Result<String> {
+) -> Result<(String, crate::text_summary::ExtractiveSummaryCandidates)> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
     if meaning.source_kind != "USER_REQUEST"
@@ -4676,7 +4676,7 @@ fn verify_text_summary_candidate(
             "the canonical summary report or adopted candidate does not match the sealed input",
         ));
     }
-    Ok(reference)
+    Ok((reference, report))
 }
 
 fn verify_legacy_text_summary_explanation(
@@ -4735,7 +4735,8 @@ fn verify_legacy_text_summary_explanation(
             "the legacy explanation does not match the sealed prior candidate",
         ));
     }
-    let report_ref = verify_text_summary_candidate(store, &prior_bundle, previous, prior_plan)?;
+    let (report_ref, _) =
+        verify_text_summary_candidate(store, &prior_bundle, previous, prior_plan)?;
     crate::document::revalidate_previous_document_render(
         store,
         actor,
@@ -4872,9 +4873,7 @@ fn verify_previous_text_edit_context(
             "the referenced previous output is not the same committed result",
         ));
     }
-    if bundle.meaning.parser_version
-        == crate::input::PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
-    {
+    if crate::input::is_previous_document_text_replacement_version(&bundle.meaning.parser_version) {
         verify_registered_input(store, bundle, "RECOVERY_PREVIOUS_TEXT_MISMATCH")?;
     }
     let (source_content_ref, source_render_ref, artifact) =

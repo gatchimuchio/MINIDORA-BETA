@@ -12265,6 +12265,104 @@ fn previous_document_edit_uses_the_body_of_a_retained_wrapped_answer() {
 }
 
 #[test]
+fn previous_document_edit_uses_only_the_adopted_pasted_summary_body() {
+    let scratch = Scratch::new();
+    let summary = record(&execute(
+        &scratch.0,
+        "owner",
+        &["次の文章を要約して:\r\n図書館は火曜に開きます。\r\n返却ポストは休館日も使えます。"],
+    ));
+    let context = summary["id"].as_str().unwrap();
+    let whole_answer = summary["text"].as_str().unwrap();
+    assert_eq!(summary["guarantee"], "HYPOTHESIS");
+    assert_eq!(whole_answer.matches("網羅").count(), 1);
+    let adopted_body = "- 図書館は火曜に開きます。\n- 返却ポストは休館日も使えます。";
+    assert!(whole_answer.ends_with(adopted_body));
+
+    let target = scratch.0.join("summary-notice-only.txt");
+    let target_str = target.to_str().unwrap();
+    let rejected = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--output",
+                target_str,
+                "--allow-write",
+                target_str,
+                "前回の文章の「網羅」を「一致」に置き換えて",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        rejected["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("PREVIOUS_TEXT_NOT_FOUND:")
+    );
+    assert!(rejected["receipts"].as_array().unwrap().is_empty());
+    assert!(!target.exists());
+
+    let body = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--context",
+            context,
+            "前回の文章の「火曜」を「木曜」に置き換えて",
+        ],
+    ));
+    assert_eq!(body["text"], adopted_body.replacen("火曜", "木曜", 1));
+    assert_eq!(body["dependencies"][0], summary["id"]);
+    let edited_again = record(&execute(
+        &scratch.0,
+        "owner",
+        &["前回の文章の「木曜」を「金曜」に置き換えて"],
+    ));
+    assert_eq!(
+        edited_again["text"],
+        adopted_body.replacen("火曜", "金曜", 1)
+    );
+    assert_eq!(edited_again["dependencies"][0], body["id"]);
+
+    let full = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--context",
+            context,
+            "前回の回答の「網羅」を「一致」に置き換えて",
+        ],
+    ));
+    let expected_full = whole_answer.replacen("網羅", "一致", 1);
+    assert!(
+        full["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(expected_full.as_str())
+    );
+    let wrapped = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["前回の文章の「一致」を「完全性」に置き換えて"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrapped["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("PREVIOUS_DOCUMENT_BODY_UNVERIFIABLE:")
+    );
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn natural_previous_answer_edit_suspends_for_missing_or_nonunique_literals() {
     let missing = Scratch::new();
     let no_prior = stopped(

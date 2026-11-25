@@ -22,6 +22,8 @@ pub(crate) const NAMED_CORRECTION_RELATION_QUERY_PARSER_VERSION: &str =
     "declarative-ja-v195-named-correction-relation-query";
 pub(crate) const PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v193-previous-document-text-replacement";
+pub(crate) const PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION: &str =
+    "declarative-ja-v197-pasted-summary-body-replacement";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
@@ -659,7 +661,7 @@ pub(crate) fn seal_with_source_context(
         Intent::ReplacePreviousText { .. }
             if is_previous_document_text_replacement(&request.text) =>
         {
-            PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
+            PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION
         }
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
@@ -4066,6 +4068,14 @@ fn previous_group_mean_question_intent(text: &str) -> Result<Option<Intent>> {
         }
     }
     Ok(None)
+}
+
+pub(crate) fn is_previous_document_text_replacement_version(version: &str) -> bool {
+    matches!(
+        version,
+        PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
+            | PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION
+    )
 }
 
 pub(crate) fn is_previous_document_text_replacement(text: &str) -> bool {

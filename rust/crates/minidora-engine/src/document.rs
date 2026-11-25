@@ -6577,15 +6577,16 @@ pub(crate) fn previous_text_replacement_for_bundle(
     old: &str,
     new: &str,
 ) -> Result<(String, String, PreviousTextEditArtifact)> {
-    if bundle.meaning.parser_version
-        != crate::input::PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
-    {
+    let version = &bundle.meaning.parser_version;
+    if !crate::input::is_previous_document_text_replacement_version(version) {
         return previous_text_replacement(previous, old, new);
     }
+    let pasted_summary_body =
+        version == crate::input::PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION;
     let invalid = || {
         failure(
             "PREVIOUS_DOCUMENT_BODY_UNVERIFIABLE",
-            "前回の文章の本文を保存済みの編集結果から照合できません。",
+            "前回の文章の本文を保存済みの結果から照合できません。",
         )
     };
     let request = &bundle.request;
@@ -6605,6 +6606,29 @@ pub(crate) fn previous_text_replacement_for_bundle(
         return Err(invalid());
     }
     match &source.meaning.intent {
+        Intent::SummarizePastedText { .. } if pasted_summary_body => {
+            let plan = previous.content_plan.as_ref().ok_or_else(invalid)?;
+            let (report_ref, report) =
+                crate::recovery::verify_text_summary_candidate(store, &source, previous, plan)?;
+            revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                previous,
+                Some(&report_ref),
+                "PREVIOUS_OUTPUT_INTEGRITY",
+                "pasted text summary",
+            )?;
+            // The canonical, re-derived pasted summary has one fixed notice.
+            // Keep the exact displayed bullets, including their line breaks.
+            let body = report
+                .text
+                .strip_prefix(EXTRACTIVE_SUMMARY_LABEL)
+                .and_then(|text| text.strip_prefix('\n'))
+                .filter(|text| !text.is_empty())
+                .ok_or_else(invalid)?;
+            replace_retained_text(previous, old, new, Some(body))
+        }
         Intent::TextReplace { .. } => {
             let (_, _, _, report) = verify_pasted_text_replacement_report(
                 store,
@@ -6651,14 +6675,57 @@ pub(crate) fn previous_text_replacement_for_bundle(
                 "PREVIOUS_OUTPUT_INTEGRITY",
                 "edited document",
             )?;
+            // Old editions could pass a complete pasted-summary response off
+            // as document text, including after additional document edits.
+            // A fresh document edit must not inherit that older classification.
+            if pasted_summary_body
+                && source.meaning.parser_version
+                    != crate::input::PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION
+                && store.with_verified_case_history(actor, case, |history| {
+                    let mut reference = parent_id;
+                    for _ in 0..request.budget.max_actions {
+                        let ancestor = prior_results
+                            .get(reference)
+                            .filter(|result| result.lifecycle == Lifecycle::Commit)
+                            .ok_or_else(invalid)?;
+                        let (_, ancestor_input) = history
+                            .input_bundle(&ancestor.input_id, ancestor.input_version)?
+                            .ok_or_else(invalid)?;
+                        if identity(&ancestor_input.request)? != *reference {
+                            return Err(invalid());
+                        }
+                        match &ancestor_input.meaning.intent {
+                            Intent::SummarizePastedText { .. } => return Ok(true),
+                            Intent::ReplacePreviousText { .. }
+                                if ancestor_input.meaning.parser_version
+                                    != crate::input::PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION =>
+                            {
+                                reference = ancestor
+                                    .dependencies
+                                    .first()
+                                    .filter(|id| {
+                                        ancestor_input.meaning.context_result_ref.as_ref() == Some(*id)
+                                    })
+                                    .ok_or_else(invalid)?;
+                            }
+                            _ => return Ok(false),
+                        }
+                    }
+                    Err(failure(
+                        "RESOURCE_LIMIT",
+                        "過去の文章編集の由来を今回の処理予算内で照合できません。",
+                    ))
+                })?
+            {
+                return Err(invalid());
+            }
             match report.operation.as_str() {
                 PREVIOUS_DOCUMENT_EDIT
-                    if source.meaning.parser_version
-                        == crate::input::PREVIOUS_DOCUMENT_TEXT_REPLACEMENT_PARSER_VERSION
-                        && crate::input::is_previous_document_text_replacement(
-                            &source.request.text,
-                        )
-                        && previous.text == report.edit.text
+                    if crate::input::is_previous_document_text_replacement_version(
+                        &source.meaning.parser_version,
+                    ) && crate::input::is_previous_document_text_replacement(
+                        &source.request.text,
+                    ) && previous.text == report.edit.text
                         && report.source_text_sha256 == report.edit.source_sha256
                         && replace_unique_exact(
                             &report.edit.source_document,
