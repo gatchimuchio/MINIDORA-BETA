@@ -19130,6 +19130,181 @@ fn table_row_csv_filter_retains_predicates_and_feeds_actual_output_to_json_sort(
 }
 
 #[test]
+fn filtered_csv_statistics_reuses_only_selected_original_cells() {
+    const CSV: &str = "status,value\r\nopen,\"-1\"\r\nclosed,未集計\r\nopen,3";
+    const QUESTION: &str = "前回の絞り込んだ表の列「value」の統計量を計算して";
+    const PARSER: &str = "declarative-ja-v210-previous-filtered-csv-statistics";
+
+    let scratch = Scratch::new();
+    let chat = |input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args(["--actor", "owner", "--case", "normal-route"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let filter = |value| format!("CSVの列「status」が値「{value}」の行を選択して:\r\n{CSV}");
+    let original_input = filter("open");
+    let text = chat(&format!(
+        "/paste\n{original_input}\r\n/end\n{QUESTION}\n/exit\n"
+    ));
+    assert!(
+        text.contains("平均: 1") && text.contains("件数: 2"),
+        "{text}"
+    );
+
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let result = &state["result"];
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    assert_eq!(state["bundle"]["request"]["text"], QUESTION);
+    assert!(state["bundle"]["request"]["context_ref"].is_null());
+    let meaning = &state["bundle"]["meaning"];
+    assert_eq!(meaning["parser_version"], PARSER);
+    assert_eq!(
+        meaning["intent"]["kind"],
+        "PREVIOUS_FILTERED_CSV_STATISTICS"
+    );
+    let column = QUESTION.find("value").unwrap();
+    assert_eq!(
+        meaning["intent"]["column"],
+        serde_json::json!({
+            "start": column, "end": column + "value".len(), "text": "value"
+        })
+    );
+
+    let [prior, sealed, filter_ref, statistics_ref] =
+        result["dependencies"].as_array().unwrap().as_slice()
+    else {
+        panic!(
+            "expected the selection, its original input, filter artifact and statistics artifact"
+        );
+    };
+    assert_eq!(meaning["context_result_ref"], *prior);
+    let prior_id = prior.as_str().unwrap();
+    let original = &state["prior_results"][prior_id];
+    assert_eq!(original["lifecycle"], "COMMIT");
+    assert_eq!(original["dependencies"], serde_json::json!([filter_ref]));
+    let sealed = sealed.as_str().unwrap();
+    let bytes = std::fs::read(scratch.0.join("blobs").join(sealed)).unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), sealed);
+    let source: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(source["request"]["text"], original_input);
+    assert_eq!(source["meaning"]["intent"]["document"], CSV);
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let saved_filter = sequence_artifact(&store, filter_ref);
+    assert_eq!(saved_filter["operation"], "CSV_FILTER");
+    assert_eq!(saved_filter["source_document"], CSV);
+    assert_eq!(saved_filter["text"], original["text"]);
+    let report = sequence_artifact(&store, statistics_ref);
+    assert_eq!(report["operation"], "CSV_FILTERED_STATISTICS");
+    assert_eq!(report["source_document"], CSV);
+    assert_eq!(
+        report["source_sha256"],
+        minidora_domain::digest(CSV.as_bytes())
+    );
+    let exact: Value = serde_json::from_str(report["text"].as_str().unwrap()).unwrap();
+    assert_eq!(exact["statistics"]["mean"], "1");
+    assert_eq!(exact["statistics"]["count"], 2);
+    assert_eq!(
+        exact["statistics"]["normalized_values"],
+        serde_json::json!(["-1", "3"])
+    );
+    let observations: Vec<_> = report["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|span| span["kind"] == "CSV_NUMERIC_OBSERVATION")
+        .collect();
+    assert_eq!(observations.len(), 2);
+    for (span, (row, raw, value)) in observations
+        .into_iter()
+        .zip([(1, "\"-1\"", "-1"), (3, "3", "3")])
+    {
+        let start = CSV.find(raw).unwrap();
+        assert_eq!(span["row"], row);
+        assert_eq!(span["column"], 1);
+        assert_eq!(span["source_start"], start);
+        assert_eq!(span["source_end"], start + raw.len());
+        assert_eq!(span["source_text"], raw);
+        assert_eq!(span["decoded_value"], value);
+    }
+
+    let text = chat(&format!("2+3\n/context {prior_id}\n{QUESTION}\n/exit\n"));
+    assert!(
+        text.contains("2+3 = 5") && text.contains("平均: 1"),
+        "{text}"
+    );
+    let historical = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(historical["bundle"]["request"]["context_ref"], *prior);
+    assert_eq!(historical["result"]["text"], result["text"]);
+    assert_eq!(historical["result"]["dependencies"], result["dependencies"]);
+    assert_eq!(historical["prior_results"][prior_id], *original);
+    assert_eq!(sequence_artifact(&store, filter_ref), saved_filter);
+
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let arithmetic = historical["prior_results"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|result| result["calculation"]["exact_value"] == "5")
+        .unwrap();
+    let arithmetic_id = arithmetic["id"].as_str().unwrap();
+    let wrong = stopped(&run(&["--context", arithmetic_id, QUESTION]), 2, "SUSPEND");
+    assert!(
+        wrong["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING_FILTERED_CSV_CONTEXT:")
+    );
+    let foreign = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "different-case",
+            &["--context", prior_id, QUESTION],
+        ),
+        4,
+        "FAIL",
+    );
+    assert!(
+        foreign["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH")
+    );
+    let empty_filter = record(&run(&[&filter("missing")]));
+    assert_eq!(empty_filter["lifecycle"], "COMMIT");
+    let empty = stopped(&run(&[QUESTION]), 2, "SUSPEND");
+    assert!(
+        empty["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CSV_FILTERED_STATISTICS_EMPTY:")
+    );
+    for rejected in [wrong, foreign, empty] {
+        assert!(rejected["dependencies"].as_array().unwrap().is_empty());
+        assert!(rejected["content_plan"].is_null());
+        assert!(rejected["receipts"].as_array().unwrap().is_empty());
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn table_row_csv_sort_is_stable_in_both_string_directions() {
     for descending in [false, true] {
         for (actor, format) in [

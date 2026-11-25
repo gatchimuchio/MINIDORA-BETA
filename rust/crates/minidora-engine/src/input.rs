@@ -49,6 +49,8 @@ pub(crate) const PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION: &str =
     "declarative-ja-v208-previous-web-length-conversion";
 pub(crate) const PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION: &str =
     "declarative-ja-v209-previous-finite-event-probability";
+pub(crate) const PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION: &str =
+    "declarative-ja-v210-previous-filtered-csv-statistics";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -742,6 +744,9 @@ pub(crate) fn seal_with_source_context(
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
         Intent::PreviousFiniteEventProbability { .. } => {
             PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION
+        }
+        Intent::PreviousFilteredCsvStatistics { .. } => {
+            PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION
         }
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
@@ -2379,6 +2384,20 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    if let Intent::PreviousFilteredCsvStatistics { column } = intent {
+        let span = previous_filtered_csv_statistics_column(text)?
+            .filter(|span| span == column)
+            .ok_or_else(|| {
+                failure(
+                    "FILTERED_CSV_STATISTICS_COLUMN_SPAN",
+                    "the selected column differs from the original request",
+                )
+            })?;
+        return Ok(BTreeMap::from([(
+            PREVIOUS_FILTERED_CSV_COLUMN_ROLE.into(),
+            vec![span],
+        )]));
+    }
     if let Intent::PreviousFiniteEventProbability { event_value } = intent {
         let span = previous_finite_event_value(text)?
             .filter(|span| span == event_value)
@@ -5365,6 +5384,9 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(event_value) = previous_finite_event_value(text)? {
         return Ok(Intent::PreviousFiniteEventProbability { event_value });
     }
+    if let Some(column) = previous_filtered_csv_statistics_column(text)? {
+        return Ok(Intent::PreviousFilteredCsvStatistics { column });
+    }
     if let Some(capture) = regex(
         r"^(?:前回|前)の計算結果を[ \t　]*(mm|cm|m|km|ミリメートル|センチメートル|メートル|キロメートル)[ \t　]*に換算して(?:ください)?$",
     )?
@@ -6105,6 +6127,47 @@ fn natural_finite_expectation_intent(text: &str) -> Result<Option<Intent>> {
 }
 
 const PREVIOUS_FINITE_EVENT_VALUE_ROLE: &str = "/PreviousFiniteEventProbability/event_value";
+
+const PREVIOUS_FILTERED_CSV_COLUMN_ROLE: &str = "/PreviousFilteredCsvStatistics/column";
+
+fn previous_filtered_csv_statistics_column(text: &str) -> Result<Option<SourceSpan>> {
+    let statement = terminal_trim(text);
+    if !statement.starts_with("前回の絞り込んだ表の列") || text.contains(['\r', '\n']) {
+        return Ok(None);
+    }
+    let Some(column) = regex(
+        r"\A前回の絞り込んだ表の列「(?P<column>[^「」\p{Cc}]+)」の統計量を計算して(?:ください)?\z",
+    )?
+    .captures(statement)
+    .and_then(|parts| parts.name("column")) else {
+        return Ok(None);
+    };
+    let offset = text.len() - text.trim_start().len();
+    captured_source_span(text, offset, column)
+        .map(Some)
+        .ok_or_else(|| {
+            failure(
+                "FILTERED_CSV_STATISTICS_COLUMN_SPAN",
+                "the selected column is outside the original request",
+            )
+        })
+}
+
+pub(crate) fn verified_previous_filtered_csv_statistics(bundle: &InputBundle) -> Result<bool> {
+    let Intent::PreviousFilteredCsvStatistics { column } = &bundle.meaning.intent else {
+        return Ok(false);
+    };
+    Ok(
+        bundle.meaning.parser_version == PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION
+            && previous_filtered_csv_statistics_column(&bundle.request.text)?.as_ref()
+                == Some(column)
+            && bundle.meaning.source_roles
+                == BTreeMap::from([(
+                    PREVIOUS_FILTERED_CSV_COLUMN_ROLE.into(),
+                    vec![column.clone()],
+                )]),
+    )
+}
 
 fn previous_finite_event_value(text: &str) -> Result<Option<SourceSpan>> {
     let statement = terminal_trim(text);
@@ -9703,6 +9766,39 @@ mod structured_document_tests {
                 interpret(malformed).unwrap(),
                 Intent::Unknown { .. }
             ));
+        }
+    }
+
+    #[test]
+    fn previous_filtered_csv_statistics_seals_the_exact_column_span() {
+        let text = "　前回の絞り込んだ表の列「値 と 単位」の統計量を計算してください。　";
+        let request = RequestEnvelope::new("c", "filtered-statistics", "alice", text);
+        let bundle = seal(&request, None).unwrap();
+        assert!(verified_previous_filtered_csv_statistics(&bundle).unwrap());
+        let Intent::PreviousFilteredCsvStatistics { column } = &bundle.meaning.intent else {
+            panic!("wrong intent: {:?}", bundle.meaning.intent);
+        };
+        assert_eq!(&text[column.start..column.end], "値 と 単位");
+        assert_eq!(column.text, "値 と 単位");
+        let mut changed = bundle.clone();
+        let Intent::PreviousFilteredCsvStatistics { column } = &mut changed.meaning.intent else {
+            unreachable!();
+        };
+        column.text = "別の列".into();
+        assert!(!verified_previous_filtered_csv_statistics(&changed).unwrap());
+        for malformed in [
+            "前回の絞り込んだ表の列「」の統計量を計算して",
+            "前回の絞り込んだ表の列「値」と「単位」の統計量を計算して",
+            "前回の絞り込んだ表の列「値」の統計量を計算して、結果を送信して",
+            "前回の絞り込んだ表の列「値」の統計量を計算して\n結果を送信して",
+        ] {
+            assert!(
+                !matches!(
+                    interpret(malformed).unwrap(),
+                    Intent::PreviousFilteredCsvStatistics { .. }
+                ),
+                "{malformed}"
+            );
         }
     }
 

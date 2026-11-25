@@ -5222,6 +5222,16 @@ fn inspect(
         == crate::input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION;
     let requires_previous_finite_event = bundle.meaning.parser_version
         == crate::input::PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION;
+    let requires_filtered_csv_statistics = bundle.meaning.parser_version
+        == crate::input::PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION;
+    if requires_filtered_csv_statistics
+        != matches!(goal.intent, Intent::PreviousFilteredCsvStatistics { .. })
+    {
+        return Err(failure(
+            "RECOVERY_FILTERED_CSV_STATISTICS_MISMATCH",
+            "the saved CSV statistics no longer match their sealed input version",
+        ));
+    }
     if requires_previous_finite_event
         != matches!(goal.intent, Intent::PreviousFiniteEventProbability { .. })
     {
@@ -5456,6 +5466,7 @@ fn inspect(
             || requires_verified_length_conversion
             || requires_web_length_conversion
             || requires_previous_finite_event
+            || requires_filtered_csv_statistics
             || requires_condition_evaluation
             || requires_record_source
             || requires_guarded_rule
@@ -5572,6 +5583,50 @@ fn inspect(
             "actual retained rendering unavailable",
         )
     })?;
+    if requires_filtered_csv_statistics {
+        const CODE: &str = "RECOVERY_FILTERED_CSV_STATISTICS_MISMATCH";
+        let invalid = || {
+            failure(
+                CODE,
+                "the retained CSV selection, exact statistics or rendered source changed",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let prior = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(prior)
+        {
+            return Err(invalid());
+        }
+        let statistics = crate::document::previous_filtered_csv_statistics(
+            store,
+            bundle,
+            prior,
+            Instant::now(),
+        )?;
+        let [_, _, _, report_ref] = statistics.dependencies.as_slice() else {
+            return Err(invalid());
+        };
+        if result.guarantee != Guarantee::Computed
+            || result.calculation.is_some()
+            || result.actor_memory_revision.is_some()
+            || !result.evidence.is_empty()
+            || result.dependencies != statistics.dependencies
+            || plan.guarantee != result.guarantee
+            || !plan.dependencies.starts_with(&statistics.dependencies)
+            || plan.required_units != statistics.units
+            || plan.text != statistics.units.join("\n")
+            || result.text != plan.text
+            || store.get_bytes(actor, case, report_ref)? != statistics.report_bytes
+        {
+            return Err(invalid());
+        }
+    }
     if requires_previous_finite_event {
         const CODE: &str = "RECOVERY_FINITE_EVENT_MISMATCH";
         let invalid = || {
@@ -9377,6 +9432,74 @@ mod tests {
             "統計 [0.1,0.2,0.3]",
             "statistics-explanation.txt",
         )
+    }
+
+    #[test]
+    fn filtered_csv_statistics_recovery_uses_the_exact_selected_cells_without_resend() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let filter = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "original-csv-filter",
+                    "alice",
+                    "CSVの列「status」が値「open」の行を選択して:\r\nstatus,value\r\nopen,\"-1\"\r\nclosed,未集計\r\nopen,3",
+                ),
+            )
+            .unwrap();
+        assert_eq!(filter.lifecycle, Lifecycle::Commit, "{filter:?}");
+        let mut request = RequestEnvelope::new(
+            "case",
+            "filtered-csv-statistics",
+            "alice",
+            "前回の絞り込んだ表の列「value」の統計量を計算して",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit, "{answer:?}");
+        assert!(answer.text.contains("件数: 2") && answer.text.contains("平均: 1"));
+        assert_eq!(answer.dependencies.len(), 4);
+        assert_eq!(answer.dependencies[0], filter.id);
+        assert_eq!(answer.dependencies[2], filter.dependencies[0]);
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, answer.text.as_bytes());
+        let mtime = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let saved = store.load_case("alice", "case").unwrap().unwrap();
+        let mut missing = saved.clone();
+        assert!(missing.prior_results.remove(&filter.id).is_some());
+        let actions = store.actions("alice", "case").unwrap();
+        assert!(inspect(&store, "alice", &missing, saved.result.as_ref().unwrap()).is_err());
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+
+        let reopened = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(reopened.lifecycle, Lifecycle::Commit, "{reopened:?}");
+        assert_eq!(reopened.dependencies, answer.dependencies);
+        let [receipt] = reopened.receipts.as_slice() else {
+            panic!("one original receipt required");
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            mtime
+        );
     }
 
     #[test]

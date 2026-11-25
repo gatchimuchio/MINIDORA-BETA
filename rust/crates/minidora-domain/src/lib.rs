@@ -463,6 +463,9 @@ pub enum Intent {
         document: String,
         column: String,
     },
+    PreviousFilteredCsvStatistics {
+        column: SourceSpan,
+    },
     TextReplace {
         document: String,
         old: String,

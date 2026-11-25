@@ -5014,9 +5014,6 @@ fn csv_statistics_input(input: CsvInput<'_>, column: &str) -> Result<DocumentRes
         .iter()
         .position(|cell| cell.value == column)
         .ok_or_else(|| failure("CSV_COLUMN", "named column does not exist"))?;
-    let mut values = Vec::with_capacity(table.rows.len());
-    let mut units = Vec::with_capacity(table.rows.len());
-    let mut quantity_count = 0;
     let mut spans = vec![source_span(
         document,
         &header[index],
@@ -5025,24 +5022,45 @@ fn csv_statistics_input(input: CsvInput<'_>, column: &str) -> Result<DocumentRes
         index,
         None,
     )];
-    for (row_index, row) in table.rows.iter().enumerate() {
-        let cell = &row[index];
-        if let Some((number, unit)) = crate::language::decimal_quantity_parts(&cell.value) {
-            quantity_count += 1;
-            values.push(number.to_string());
-            units.push(unit.to_string());
-        } else {
-            values.push(cell.value.clone());
-            units.push(String::new());
-        }
-        spans.push(source_span(
+    spans.extend(table.rows.iter().enumerate().map(|(row_index, row)| {
+        source_span(
             document,
-            cell,
+            &row[index],
             "CSV_NUMERIC_OBSERVATION",
             Some(row_index + 1),
             index,
             None,
-        ));
+        )
+    }));
+    csv_statistics_from_spans(document, column, index, spans, "CSV_STATISTICS")
+        .map(|(report, _)| report)
+}
+
+fn csv_statistics_from_spans(
+    document: &str,
+    column: &str,
+    index: usize,
+    spans: Vec<DocumentSpan>,
+    operation: &str,
+) -> Result<(DocumentResult, crate::math::Statistics)> {
+    let mut values = Vec::with_capacity(spans.len().saturating_sub(1));
+    let mut units = Vec::with_capacity(values.capacity());
+    let mut quantity_count = 0;
+    for span in spans.iter().skip(1) {
+        let value = span.decoded_value.as_deref().ok_or_else(|| {
+            failure(
+                "CSV_STATISTICS_SOURCE_CELL",
+                "a selected numeric cell has no decoded value",
+            )
+        })?;
+        if let Some((number, unit)) = crate::language::decimal_quantity_parts(value) {
+            quantity_count += 1;
+            values.push(number.to_string());
+            units.push(unit.to_string());
+        } else {
+            values.push(value.into());
+            units.push(String::new());
+        }
     }
     let statistics = match quantity_count {
         0 => crate::math::summarize(&values, None)?,
@@ -5086,7 +5104,218 @@ fn csv_statistics_input(input: CsvInput<'_>, column: &str) -> Result<DocumentRes
             .into(),
         ),
     ]);
-    result(document, text, "CSV_STATISTICS", parameters, spans)
+    Ok((
+        result(document, text, operation, parameters, spans)?,
+        statistics,
+    ))
+}
+
+pub(crate) struct FilteredCsvStatistics {
+    pub(crate) report_bytes: Vec<u8>,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) units: Vec<String>,
+}
+
+/// Reproduce a registered filter result, then use only the original source
+/// cells that it emitted. No CSV export or re-encoding is involved.
+pub(crate) fn previous_filtered_csv_statistics(
+    store: &crate::store::Store,
+    bundle: &InputBundle,
+    prior: &ResultRecord,
+    started: Instant,
+) -> Result<FilteredCsvStatistics> {
+    const CODE: &str = "FILTERED_CSV_STATISTICS_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "絞り込んだCSVを元の入力・抽出記録・表示結果と照合できません。",
+        )
+    };
+    let limit = || {
+        failure(
+            "RESOURCE_LIMIT",
+            "元CSVと集計結果が要求の証拠予算を超えています。",
+        )
+    };
+    let request = &bundle.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let check_deadline = || {
+        if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "CSVの抽出記録と集計の照合中に締切へ達しました。",
+            ));
+        }
+        Ok(())
+    };
+    let Intent::PreviousFilteredCsvStatistics { column } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    if !crate::input::verified_previous_filtered_csv_statistics(bundle)?
+        || prior.lifecycle != Lifecycle::Commit
+        || bundle.meaning.context_result_ref.as_ref() != Some(&prior.id)
+        || bundle.context_sha256 != identity(&Some(prior))?
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &prior.id)
+    {
+        return Err(invalid());
+    }
+    if request.budget.max_actions < 6 + u32::from(request.output_path.is_some()) {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "元CSVの抽出条件の照合と集計に必要な行動予算が不足しています。",
+        ));
+    }
+    check_deadline()?;
+    let (bundle_ref, original) = store.with_verified_case_history(actor, case, |history| {
+        if history
+            .input_result(&prior.input_id, prior.input_version)?
+            .as_ref()
+            != Some(prior)
+        {
+            return Err(invalid());
+        }
+        history
+            .input_bundle(&prior.input_id, prior.input_version)?
+            .ok_or_else(invalid)
+    })?;
+    let Intent::CsvFilter {
+        document,
+        column: filter_column,
+        equals,
+    } = &original.meaning.intent
+    else {
+        return Err(failure(
+            "MISSING_FILTERED_CSV_CONTEXT",
+            "同じ会話で確定したCSVの行選択結果を指定してください。",
+        ));
+    };
+    let [filter_ref] = prior.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    if original.request.actor_id != *actor
+        || original.request.case_id != *case
+        || identity(&original.request)? != prior.id
+        || prior.guarantee != Guarantee::Computed
+        || prior.calculation.is_some()
+        || !prior.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    let stored = store.get_bytes(actor, case, filter_ref)?;
+    let source_bytes = document.len().saturating_add(stored.len());
+    if source_bytes > request.budget.max_evidence_bytes {
+        return Err(limit());
+    }
+    let filter = CsvInput::conversation(document).filter(filter_column, equals)?;
+    if prior.text != filter.text
+        || canonical(&filter)? != stored
+        || prior
+            .content_plan
+            .as_ref()
+            .is_none_or(|plan| plan.required_units != [filter.text.as_str()])
+    {
+        return Err(invalid());
+    }
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        prior,
+        Some(filter_ref),
+        CODE,
+        "CSV filter",
+    )?;
+    check_deadline()?;
+
+    let mut header = filter
+        .spans
+        .iter()
+        .find(|span| {
+            span.kind == "CSV_FILTER_HEADER"
+                && span.decoded_value.as_deref() == Some(column.text.as_str())
+        })
+        .cloned()
+        .ok_or_else(|| failure("CSV_COLUMN", "絞り込んだ表に指定された列がありません。"))?;
+    let index = header.column.ok_or_else(invalid)?;
+    header.kind = "CSV_HEADER".into();
+    header.output_start = None;
+    header.output_end = None;
+    let mut spans = vec![header];
+    for mut span in filter
+        .spans
+        .into_iter()
+        .filter(|span| span.kind == "CSV_FILTER_CELL" && span.column == Some(index))
+    {
+        // Output offsets referred to the filter's rendered JSON, not the new
+        // report. Retain original cell bytes and the original row ordinal.
+        span.kind = "CSV_NUMERIC_OBSERVATION".into();
+        span.output_start = None;
+        span.output_end = None;
+        spans.push(span);
+    }
+    if spans.len() == 1 {
+        return Err(failure(
+            "CSV_FILTERED_STATISTICS_EMPTY",
+            "絞り込み結果に集計できる行がありません。",
+        ));
+    }
+    let (report, stats) = csv_statistics_from_spans(
+        document,
+        &column.text,
+        index,
+        spans,
+        "CSV_FILTERED_STATISTICS",
+    )?;
+    let suffix = |unit: Option<&str>| unit.map_or_else(String::new, |unit| format!(" {unit}"));
+    let unit = suffix(stats.unit.as_deref());
+    let variance_unit = suffix(stats.variance_unit.as_deref());
+    let mut units = vec![
+        format!("前回絞り込んだ行の列 {:?} の統計量です。", column.text),
+        format!("抽出条件: 列 {filter_column:?} が {equals:?}"),
+        format!("件数: {}", stats.count),
+        format!("平均: {}{unit}", stats.mean),
+        format!("合計: {}{unit} / 中央値: {}{unit}", stats.sum, stats.median),
+        format!("最小値: {}{unit} / 最大値: {}{unit}", stats.min, stats.max),
+        format!("母分散: {}{variance_unit}", stats.population_variance),
+        stats.sample_variance.as_deref().map_or_else(
+            || "標本分散: 算出対象外（1件）".into(),
+            |value| format!("標本分散: {value}{variance_unit}"),
+        ),
+        format!("元CSV SHA-256: {}", report.source_sha256),
+    ];
+    for span in report.spans.iter().skip(1).take(8) {
+        units.push(format!(
+            "元CSVのデータ行{} byte[{}..{})",
+            span.row.ok_or_else(invalid)?,
+            span.source_start,
+            span.source_end
+        ));
+    }
+    if stats.count > 8 {
+        units.push(format!(
+            "残り{}件のセル範囲は集計記録に保持しました。",
+            stats.count - 8
+        ));
+    }
+    let report_bytes = canonical(&report)?;
+    if source_bytes
+        .saturating_add(report_bytes.len())
+        .saturating_add(units.join("\n").len())
+        > request.budget.max_evidence_bytes
+    {
+        return Err(limit());
+    }
+    check_deadline()?;
+    let report_ref = digest(&report_bytes);
+    Ok(FilteredCsvStatistics {
+        report_bytes,
+        dependencies: vec![prior.id.clone(), bundle_ref, filter_ref.clone(), report_ref],
+        units,
+    })
 }
 
 pub fn csv_select_index(document: &str, index: usize, has_header: bool) -> Result<DocumentResult> {

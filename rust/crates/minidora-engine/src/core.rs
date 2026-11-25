@@ -1583,6 +1583,8 @@ const PREVIOUS_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_LENGTH_CONVER
 const PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_WEB_LENGTH_CONVERSION_V1";
 const PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE: &str =
     "EXACT_PREVIOUS_FINITE_EVENT_PROBABILITY_V1";
+const PREVIOUS_FILTERED_CSV_STATISTICS_PREDICATE: &str =
+    "EXACT_PREVIOUS_FILTERED_CSV_STATISTICS_V1";
 pub(crate) const SEQUENCE_CORRECTION_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1";
 pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2";
@@ -1779,6 +1781,11 @@ pub(crate) fn goal_predicates(
         {
             predicates.push(PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE.into());
         }
+        Intent::PreviousFilteredCsvStatistics { .. }
+            if meaning.parser_version == input::PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION =>
+        {
+            predicates.push(PREVIOUS_FILTERED_CSV_STATISTICS_PREDICATE.into());
+        }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             if let Some(predicate) = guarded_rule_predicate(meaning) {
@@ -1912,6 +1919,7 @@ fn verify_report_goal_content(
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
                 | PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE
                 | PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE
+                | PREVIOUS_FILTERED_CSV_STATISTICS_PREDICATE
                 | SEQUENCE_EXPLANATION_PREDICATE
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
@@ -8176,6 +8184,40 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
+            }
+            Intent::PreviousFilteredCsvStatistics { .. } => {
+                let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_FILTERED_CSV_CONTEXT",
+                        "同じ会話で確定したCSVの行選択結果を指定してください。",
+                    );
+                };
+                let statistics = match crate::document::previous_filtered_csv_statistics(
+                    &self.store,
+                    &bundle,
+                    prior,
+                    started,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                self.store
+                    .put_bytes(actor, &request.case_id, &statistics.report_bytes)?;
+                result.dependencies = statistics.dependencies;
+                result.guarantee = Guarantee::Computed;
+                units = statistics.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: PREVIOUS_FILTERED_CSV_STATISTICS_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::TextReplace {
                 document,
