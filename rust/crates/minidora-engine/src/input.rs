@@ -212,6 +212,9 @@ pub(crate) const IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
 pub(crate) const EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v164-explicit-web-body-question-followup";
 
+pub(crate) const EXPLICIT_WEB_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION: &str =
+    "declarative-ja-v196-explicit-web-body-question-packet-line-summary";
+
 pub(crate) const RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v166-resumed-web-answer-explanation-followup";
 
@@ -284,10 +287,23 @@ pub(crate) fn uses_direct_body_question_context(version: &str) -> bool {
 }
 
 pub(crate) fn uses_web_body_question_context(version: &str) -> bool {
+    version == IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        || uses_explicit_web_body_question_context(version)
+}
+
+pub(crate) fn uses_explicit_web_body_question_context(version: &str) -> bool {
     matches!(
         version,
-        IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
-            | EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+            | EXPLICIT_WEB_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
+    )
+}
+
+pub(crate) fn is_body_question_packet_line_summary_version(version: &str) -> bool {
+    matches!(
+        version,
+        EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
+            | EXPLICIT_WEB_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
     )
 }
 
@@ -296,7 +312,11 @@ pub(crate) fn is_web_body_question_input(bundle: &InputBundle) -> bool {
         bundle.meaning.intent,
         Intent::AskPreviousSourceQuestion { .. }
     ) && (uses_web_answer_explanation_context(&bundle.meaning.parser_version)
-        || uses_web_body_question_context(&bundle.meaning.parser_version))
+        || matches!(
+            bundle.meaning.parser_version.as_str(),
+            IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                | EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        ))
 }
 
 pub(crate) fn is_direct_body_question_input(bundle: &InputBundle) -> bool {
@@ -876,6 +896,12 @@ pub(crate) fn seal_with_source_context(
             } else {
                 IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
             }
+        }
+        Intent::SummarizePreviousSourcePacketLines { .. }
+            if explicit_source_explanation_candidate
+                && matches!(source_context, Some(SourceContext::WebBodyQuestion)) =>
+        {
+            EXPLICIT_WEB_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
         }
         Intent::SummarizePreviousSourcePacketLines { .. }
             if explicit_source_explanation_candidate
@@ -9085,6 +9111,71 @@ mod tests {
             let bundle = seal(&RequestEnvelope::new("c", "i", "actor", text), None).unwrap();
             assert_eq!(bundle.meaning.parser_version, SOURCE_SUMMARY_PARSER_VERSION);
         }
+    }
+
+    #[test]
+    fn packet_line_summary_seals_only_explicit_body_question_context() {
+        let previous = ResultRecord {
+            id: "a".repeat(64),
+            input_id: "question".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: String::new(),
+            reason: None,
+            guarantee: Guarantee::Hypothesis,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: Vec::new(),
+            actor_memory_revision: None,
+            execution_graph_ref: None,
+        };
+        let packet_id = "b".repeat(64);
+        let mut request = RequestEnvelope::new(
+            "c",
+            "i",
+            "actor",
+            &format!("出典packet: {packet_id} を2行で要約して"),
+        );
+        request.context_ref = Some(previous.id.clone());
+        for (context, version) in [
+            (
+                Some(SourceContext::WebBodyQuestion),
+                EXPLICIT_WEB_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION,
+            ),
+            (
+                Some(SourceContext::DirectBodyQuestion),
+                EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION,
+            ),
+            (
+                None,
+                EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION,
+            ),
+        ] {
+            let bundle = seal_with_source_context(&request, Some(&previous), context).unwrap();
+            assert_eq!(bundle.meaning.parser_version, version);
+            assert_eq!(bundle.meaning.context_result_ref, request.context_ref);
+            assert_eq!(
+                bundle.meaning.intent,
+                Intent::SummarizePreviousSourcePacketLines {
+                    packet_id: packet_id.clone(),
+                    limit: SummaryLineLimit::Exact(2),
+                }
+            );
+        }
+        request.context_ref = None;
+        let implicit = seal_with_source_context(
+            &request,
+            Some(&previous),
+            Some(SourceContext::WebBodyQuestion),
+        )
+        .unwrap();
+        assert_eq!(
+            implicit.meaning.parser_version,
+            SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
+        );
     }
 
     #[test]

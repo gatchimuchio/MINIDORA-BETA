@@ -2657,7 +2657,7 @@ fn verify_legacy_body_question_source(
     };
     let web = matches!(original.meaning.intent, Intent::AskWeb { .. });
     let compatible = if web {
-        followup_version == crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+        crate::input::uses_explicit_web_body_question_context(followup_version)
     } else {
         crate::input::uses_direct_body_question_context(followup_version)
     };
@@ -2700,7 +2700,8 @@ fn derived_source_followup<'a>(
                 crate::input::IMPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION => {
                     "the preceding Web body question differs from the retained proof"
                 }
-                crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION => {
+                crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                | crate::input::EXPLICIT_WEB_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION => {
                     "the selected Web body question differs from the retained proof"
                 }
                 crate::input::EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
@@ -2745,8 +2746,7 @@ fn derived_source_followup<'a>(
             break direct_source_followup(store, input, prior_results, target, Some(history))?
                 .ok_or_else(invalid)?;
         }
-        if parser_version
-            == crate::input::EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
+        if crate::input::is_body_question_packet_line_summary_version(parser_version)
             && !matches!(
                 input.meaning.intent,
                 Intent::SummarizePreviousSourcePacketLines { .. }
@@ -2777,8 +2777,7 @@ fn derived_source_followup<'a>(
         {
             let valid_target = if follows_web_question {
                 crate::input::is_web_body_question_input(&target_input)
-                    || (parser_version
-                        == crate::input::EXPLICIT_WEB_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
+                    || (crate::input::uses_explicit_web_body_question_context(parser_version)
                         && verify_legacy_body_question_source(
                             store,
                             history,
@@ -3335,8 +3334,8 @@ fn verify_retained_source_summary_with_history<'a>(
                 version,
                 crate::input::SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
                     | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
-                    | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
-            ) || crate::input::uses_adopted_summary_packet_context(version)
+            ) || crate::input::is_body_question_packet_line_summary_version(version)
+                || crate::input::uses_adopted_summary_packet_context(version)
         }
         Some(crate::input::SOURCE_LINE_SUMMARY_PARSER_VERSION) => {
             crate::input::is_explanation_line_summary_version(version)
@@ -4303,8 +4302,8 @@ fn source_summary_packet_positions(
             | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
             | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
             | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_FOLLOWUP_PARSER_VERSION
-            | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
-    ) {
+    ) && !crate::input::is_body_question_packet_line_summary_version(parser_version)
+    {
         return Ok((0..packets.len()).collect());
     }
     for (_, packet, reference) in packets {
@@ -4314,7 +4313,8 @@ fn source_summary_packet_positions(
         parser_version,
         crate::input::SCOPED_SOURCE_PACKET_LINE_SUMMARY_PARSER_VERSION
             | crate::input::EXPLICIT_EXPLANATION_PACKET_LINE_SUMMARY_PARSER_VERSION
-            | crate::input::EXPLICIT_DIRECT_BODY_QUESTION_PACKET_LINE_SUMMARY_PARSER_VERSION
+    ) || crate::input::is_body_question_packet_line_summary_version(
+        parser_version,
     ) || crate::input::uses_adopted_summary_packet_context(parser_version)
     {
         let mut uris = packets.iter().filter_map(|(_, packet, _)| {
