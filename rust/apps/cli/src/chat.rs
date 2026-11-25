@@ -1,6 +1,8 @@
 use super::{Options, execute_request};
-use minidora_domain::{CaseRevision, DeliveryReceipt, EffectPhase, ResultRecord};
-use minidora_engine::Engine;
+use minidora_domain::{
+    CaseRevision, DeliveryReceipt, EffectPhase, Intent, RequestEnvelope, ResultRecord,
+};
+use minidora_engine::{Engine, input};
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -22,6 +24,7 @@ const HELP: &str = "\
 /net [on|off]       通信設定を確認・変更。起動時の --allow-read-host の範囲内\n\
 /output PATH        次の一発話の成果を指定先へ保存。起動時の --allow-write の範囲内\n\
 /output off         次の保存指定を解除\n\
+                    選択に失敗した場合は、選び直すか解除するまで通常の発話を送信しません\n\
 /reconcile          現在の会話の保存を照合。確定済みなら受領記録を表示\n\
 /reconcile-effects  取り消した会話に残る作用を照合\n\
 未確定の会話を取り消すには「中止」と入力してください。\n\
@@ -31,11 +34,23 @@ const MAX_PATH_ARGUMENT_BYTES: usize = 4_096;
 const HISTORY_PAGE_SIZE: usize = 20;
 const UNRESOLVED_CONTEXT: &str =
     "参照先が未確定です。/context 結果ID で選び直すか、/context off で解除してください。";
+const UNRESOLVED_OUTPUT: &str = "保存先が未確定です。/output PATH で許可した保存先を選び直すか、/output off で解除してください。";
 
 enum Line {
     Input(Vec<u8>),
-    TooLong,
+    TooLong { output_command: bool },
     End,
+}
+
+fn starts_output_command(bytes: &[u8]) -> bool {
+    let Some(argument) = bytes.strip_prefix(b"/output") else {
+        return false;
+    };
+    // Only the command separator matters. The path itself may be invalid UTF-8.
+    let prefix = std::str::from_utf8(argument).unwrap_or_else(|error| {
+        std::str::from_utf8(&argument[..error.valid_up_to()]).expect("valid UTF-8 prefix")
+    });
+    prefix.starts_with(char::is_whitespace)
 }
 
 fn line_body(bytes: &[u8]) -> &[u8] {
@@ -58,7 +73,9 @@ fn read_line(reader: &mut impl BufRead, max_bytes: usize) -> io::Result<Line> {
         if !bytes.ends_with(b"\n") {
             reader.skip_until(b'\n')?;
         }
-        return Ok(Line::TooLong);
+        return Ok(Line::TooLong {
+            output_command: starts_output_command(&bytes),
+        });
     }
     Ok(Line::Input(bytes))
 }
@@ -69,12 +86,14 @@ fn read_paste(reader: &mut impl BufRead, max_bytes: usize) -> io::Result<Line> {
     loop {
         match read_line(reader, max_bytes.max(b"/end".len()))? {
             Line::End => return Ok(Line::End),
-            Line::TooLong => too_long = true,
+            Line::TooLong { .. } => too_long = true,
             Line::Input(line) if line_body(&line) == b"/end" => {
                 // Preserve all internal line endings; the last ends the frame.
                 pasted.truncate(line_body(&pasted).len());
                 return Ok(if too_long || pasted.len() > max_bytes {
-                    Line::TooLong
+                    Line::TooLong {
+                        output_command: false,
+                    }
                 } else {
                     Line::Input(pasted)
                 });
@@ -210,7 +229,12 @@ fn show_history(engine: &Engine, options: &Options, selection: &str) -> Result<(
     Ok(())
 }
 
-fn show_status(engine: &Engine, options: &Options, context_unresolved: bool) -> Result<(), String> {
+fn show_status(
+    engine: &Engine,
+    options: &Options,
+    context_unresolved: bool,
+    output_unresolved: bool,
+) -> Result<(), String> {
     let status = engine
         .case_status(&options.actor, &options.case_id)
         .map_err(|error| error.to_string())?;
@@ -252,7 +276,18 @@ fn show_status(engine: &Engine, options: &Options, context_unresolved: bool) -> 
     } else if let Some(result_id) = &options.context_ref {
         eprintln!("次の発話の参照先: {result_id}");
     }
+    if output_unresolved {
+        eprintln!("{UNRESOLVED_OUTPUT}");
+    }
     Ok(())
+}
+
+fn is_cancellation(options: &Options, text: &str) -> bool {
+    // A cancellation does not require a new output action. Use the same
+    // interpretation as Core without registering an input or changing a case.
+    let mut probe = RequestEnvelope::new(&options.case_id, "cancel-check", &options.actor, text);
+    probe.budget = options.budget.clone();
+    input::seal(&probe, None).is_ok_and(|bundle| matches!(bundle.meaning.intent, Intent::Cancel))
 }
 
 pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, String> {
@@ -270,6 +305,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
     let offline = BTreeSet::new();
     let mut network_enabled = !options.read_hosts.is_empty();
     let mut context_unresolved = false;
+    let mut output_unresolved = false;
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?;
@@ -295,16 +331,27 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
         .map_err(|error| error.to_string())?;
         let mut bytes = match line {
             Line::End => break,
-            Line::TooLong => {
+            Line::TooLong { output_command } => {
+                if output_command {
+                    options.output = None;
+                    output_unresolved = true;
+                }
                 eprintln!("入力が上限を超えたため送信しませんでした。");
                 continue;
             }
             Line::Input(bytes) => bytes,
         };
         bytes.truncate(line_body(&bytes).len());
-        let Ok(mut text) = String::from_utf8(bytes) else {
-            eprintln!("UTF-8ではない入力を送信しませんでした。");
-            continue;
+        let mut text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                if starts_output_command(error.as_bytes()) {
+                    options.output = None;
+                    output_unresolved = true;
+                }
+                eprintln!("UTF-8ではない入力を送信しませんでした。");
+                continue;
+            }
         };
         if text.starts_with('/') {
             let (command, argument) = text
@@ -335,6 +382,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                             if options.case_id != id {
                                 options.context_ref = None;
                                 context_unresolved = false;
+                                output_unresolved = false;
                             }
                             options.case_id = id.to_owned();
                             options.output = None;
@@ -381,7 +429,9 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                     continue;
                 }
                 ("/status", "") => {
-                    if let Err(error) = show_status(engine, &options, context_unresolved) {
+                    if let Err(error) =
+                        show_status(engine, &options, context_unresolved, output_unresolved)
+                    {
                         eprintln!("状態を読み込めませんでした。{error}");
                     }
                     continue;
@@ -439,11 +489,14 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                 }
                 ("/output", "off") => {
                     options.output = None;
+                    output_unresolved = false;
                     eprintln!("次の発話の保存指定を解除しました。");
                     continue;
                 }
                 ("/output", "") => {
-                    if let Some(path) = &options.output {
+                    if output_unresolved {
+                        eprintln!("{UNRESOLVED_OUTPUT}");
+                    } else if let Some(path) = &options.output {
                         eprintln!("次の発話の保存先: {}", path.display());
                     } else {
                         eprintln!("保存先を指定するには /output PATH と入力してください。");
@@ -455,8 +508,10 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                     if options.write_paths.contains(&path) {
                         eprintln!("次の発話の保存先: {}", path.display());
                         options.output = Some(path);
+                        output_unresolved = false;
                     } else {
                         options.output = None;
+                        output_unresolved = true;
                         eprintln!(
                             "WRITE_PERMISSION_MISSING: 起動時に許可した保存先を指定してください。"
                         );
@@ -472,7 +527,7 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                             eprintln!("/end がないため送信しませんでした。");
                             break;
                         }
-                        Line::TooLong => {
+                        Line::TooLong { .. } => {
                             eprintln!("入力が上限を超えたため送信しませんでした。");
                             continue;
                         }
@@ -500,6 +555,10 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
         }
         if context_unresolved {
             eprintln!("入力を送信していません。{UNRESOLVED_CONTEXT}");
+            continue;
+        }
+        if output_unresolved && !is_cancellation(&options, &text) {
+            eprintln!("入力を送信していません。{UNRESOLVED_OUTPUT}");
             continue;
         }
         let read_hosts = if network_enabled {

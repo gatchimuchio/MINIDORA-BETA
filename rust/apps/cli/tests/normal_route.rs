@@ -11578,6 +11578,161 @@ fn chat_does_not_send_turns_after_an_unresolved_context_selection() {
 }
 
 #[test]
+fn chat_does_not_send_turns_after_an_unresolved_output_selection() {
+    use minidora_domain::{EffectPhase, Lifecycle};
+
+    const ACTOR: &str = "owner";
+    const CASE: &str = "normal-route";
+    const UNRESOLVED: &str = "保存先が未確定です。/output PATH で許可した保存先を選び直すか、/output off で解除してください。";
+    const NOT_SENT: &str = "入力を送信していません。";
+
+    let scratch = Scratch::new();
+    let original_target = scratch.0.join("original.txt");
+    let denied_target = scratch.0.join("denied.txt");
+    let selected_target = scratch.0.join("selected.txt");
+    std::fs::write(&denied_target, b"existing file\n").unwrap();
+    record(&execute(&scratch.0, ACTOR, &["ミナは鳥です"]));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let case_before = store.load_case(ACTOR, CASE).unwrap();
+    let memory_before = store.load_memory(ACTOR).unwrap();
+    let assert_no_output = || {
+        assert!(!original_target.exists());
+        assert!(!selected_target.exists());
+        assert_eq!(std::fs::read(&denied_target).unwrap(), b"existing file\n");
+        assert!(store.actions(ACTOR, CASE).unwrap().is_empty());
+        assert_eq!(store.load_memory(ACTOR).unwrap(), memory_before);
+    };
+    let chat = |input: &[u8]| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args([
+                "--actor",
+                ACTOR,
+                "--case",
+                CASE,
+                "--max-input-bytes",
+                "64",
+                "--allow-write",
+            ])
+            .arg(&original_target)
+            .arg("--allow-write")
+            .arg(&selected_target)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+
+    let original = format!("/output {}\n", original_target.display());
+    let denied = format!("/output {}\n", denied_target.display());
+    let oversized = format!("/output {}\n", "x".repeat(4200));
+    for (change, diagnostic) in [
+        (denied.as_bytes(), "WRITE_PERMISSION_MISSING"),
+        (oversized.as_bytes(), "上限"),
+        (b"/output \xff\n".as_slice(), "UTF-8"),
+    ] {
+        let mut input = original.as_bytes().to_vec();
+        input.extend_from_slice(change);
+        input.extend_from_slice(
+            "/output\n/status\nミナは魚です\n/case normal-route\n/paste\nミナは生物です\n/end\n/exit\n"
+                .as_bytes(),
+        );
+        let (text, stderr) = chat(&input);
+        assert!(text.is_empty(), "{text}");
+        assert!(stderr.contains(diagnostic), "{stderr}");
+        assert!(stderr.contains(UNRESOLVED), "{stderr}");
+        assert_eq!(stderr.matches(NOT_SENT).count(), 2, "{stderr}");
+        assert_eq!(store.load_case(ACTOR, CASE).unwrap(), case_before);
+        assert_no_output();
+    }
+
+    let input = format!("{original}{denied}中止\nミナは魚です\n/exit\n");
+    let (_, stderr) = chat(input.as_bytes());
+    assert_eq!(stderr.matches(NOT_SENT).count(), 1, "{stderr}");
+    let cancelled = store.load_case(ACTOR, CASE).unwrap().unwrap();
+    assert_eq!(cancelled.lifecycle, Lifecycle::Cancel);
+    let request = cancelled.bundle.unwrap().request;
+    assert_eq!(request.text, "中止");
+    assert!(request.output_path.is_none());
+    assert_no_output();
+
+    let input = format!("{original}{denied}/output off\n2+3\n/exit\n");
+    let (text, stderr) = chat(input.as_bytes());
+    assert!(text.contains('5'), "{text}");
+    assert!(!stderr.contains(NOT_SENT), "{stderr}");
+    let display = store.load_case(ACTOR, CASE).unwrap().unwrap();
+    assert_eq!(display.lifecycle, Lifecycle::Commit);
+    assert!(
+        display
+            .bundle
+            .as_ref()
+            .unwrap()
+            .request
+            .output_path
+            .is_none()
+    );
+    assert_no_output();
+
+    let input = format!("{original}{denied}/new other-output-case\n7*6\n/exit\n");
+    let (_, stderr) = chat(input.as_bytes());
+    assert!(!stderr.contains(NOT_SENT), "{stderr}");
+    assert_eq!(store.load_case(ACTOR, CASE).unwrap(), Some(display));
+    let other = store
+        .load_case(ACTOR, "other-output-case")
+        .unwrap()
+        .unwrap();
+    assert_eq!(other.lifecycle, Lifecycle::Commit);
+    assert!(other.bundle.unwrap().request.output_path.is_none());
+    assert!(
+        store
+            .actions(ACTOR, "other-output-case")
+            .unwrap()
+            .is_empty()
+    );
+    assert_no_output();
+
+    let input = format!(
+        "{original}{denied}/output {}\n{}\n/paste\n/output {}\n/end\n7*8\n/exit\n",
+        selected_target.display(),
+        "x".repeat(4200),
+        "x".repeat(80),
+    );
+    let (_, stderr) = chat(input.as_bytes());
+    assert_eq!(stderr.matches("上限を超えた").count(), 2, "{stderr}");
+    assert!(!stderr.contains(NOT_SENT), "{stderr}");
+    let saved = store.load_case(ACTOR, CASE).unwrap().unwrap();
+    assert_eq!(saved.lifecycle, Lifecycle::Commit);
+    let request = saved.bundle.unwrap().request;
+    assert_eq!(request.text, "7*8");
+    assert_eq!(request.output_path.as_ref(), Some(&selected_target));
+    let result = saved.result.unwrap();
+    let bytes = std::fs::read(&selected_target).unwrap();
+    assert_eq!(bytes, result.text.as_bytes());
+    let [receipt] = result.receipts.as_slice() else {
+        panic!("expected one file receipt, got {:?}", result.receipts);
+    };
+    assert_eq!(receipt.phase, EffectPhase::Confirmed);
+    assert_eq!(receipt.target, selected_target.to_str().unwrap());
+    assert_eq!(receipt.content_sha256, minidora_domain::digest(&bytes));
+    assert_eq!(receipt.observed_bytes, Some(bytes.len() as u64));
+    let actions = store.actions(ACTOR, CASE).unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].receipt.as_ref(), Some(receipt));
+    assert!(!original_target.exists());
+    assert_eq!(std::fs::read(&denied_target).unwrap(), b"existing file\n");
+    assert_eq!(store.load_memory(ACTOR).unwrap(), memory_before);
+}
+
+#[test]
 fn stdin_checks_byte_budget_before_decoding_and_before_opening_state() {
     let scratch = Scratch::new();
     let db = scratch.0.join("state");
