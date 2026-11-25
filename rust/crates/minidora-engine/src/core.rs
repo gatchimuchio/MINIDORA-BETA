@@ -7234,6 +7234,23 @@ impl Engine {
                 &format!("{ACTION_BUDGET_RESIDUALS} {:?}", graph.residuals()),
             );
         }
+        // These intents mutate shared actor memory. Refuse a known missing
+        // grant before executing them. Read-only results can still retain
+        // their computed content when the required file cannot be written.
+        if matches!(
+            goal.intent,
+            Intent::Assert { .. }
+                | Intent::AssertPreviousRelation { .. }
+                | Intent::CorrectPremise { .. }
+                | Intent::CorrectPreviousPremise { .. }
+                | Intent::AddRule { .. }
+                | Intent::AddConjunctiveRule { .. }
+                | Intent::DefineCondition { .. }
+                | Intent::Invalidate { .. }
+        ) && let Some((code, message)) = required_file_permission_stop(&goal)
+        {
+            return self.stop(&mut state, Lifecycle::Suspend, code, message);
+        }
         // Each explanation probe below consumes the same authenticated prior
         // input. Read it once, without rescanning the journal for each probe.
         let prior_context_input = if matches!(goal.intent, Intent::ExplainPrevious)
@@ -12695,13 +12712,8 @@ impl Engine {
                     "ファイル作用を実行する予算がありません。",
                 );
             }
-            if !goal.permissions.write_paths.contains(path) {
-                return self.stop(
-                    &mut state,
-                    Lifecycle::Suspend,
-                    "WRITE_PERMISSION_MISSING",
-                    "指定ファイルへの書込権限がありません。",
-                );
+            if let Some((code, message)) = required_file_permission_stop(&goal) {
+                return self.stop(&mut state, Lifecycle::Suspend, code, message);
             }
             let action_id = identity(&(
                 &request.case_id,
@@ -19148,22 +19160,24 @@ fn describe_without_condition_refs(proposition: &Proposition) -> String {
     describe(&without_condition_refs)
 }
 
+fn required_file_permission_stop(goal: &GoalContract) -> Option<(&'static str, &'static str)> {
+    goal.output_path
+        .as_ref()
+        .is_some_and(|path| !goal.permissions.write_paths.contains(path))
+        .then_some((
+            "WRITE_PERMISSION_MISSING",
+            "指定ファイルへの書込権限がありません。",
+        ))
+}
+
 fn relation_registration_stop(
     goal: &GoalContract,
     budget_message: &'static str,
 ) -> Option<(&'static str, &'static str)> {
-    if goal
-        .output_path
-        .as_ref()
-        .is_some_and(|path| !goal.permissions.write_paths.contains(path))
-    {
-        return Some((
-            "WRITE_PERMISSION_MISSING",
-            "指定ファイルへの書込権限がありません。",
-        ));
-    }
-    (goal.budget.max_actions < 3 + u32::from(goal.output_path.is_some()))
-        .then_some(("ACTION_BUDGET_EXHAUSTED", budget_message))
+    required_file_permission_stop(goal).or_else(|| {
+        (goal.budget.max_actions < 3 + u32::from(goal.output_path.is_some()))
+            .then_some(("ACTION_BUDGET_EXHAUSTED", budget_message))
+    })
 }
 
 pub(crate) fn premise_registration_units(fact: &Fact) -> Vec<String> {

@@ -1071,6 +1071,10 @@ minidora_report=/workspace/.minidora-cloud/rust-result.txt
 
 `--output` requests a file; **only** `--allow-write` grants that exact target. Core records the action identity and authorization before the physical writer runs, then checks actual bytes and its receipt before goal `COMMIT`. Parent directories must already exist and be trusted. Different existing bytes are not overwritten; a matching existing artifact can be verified. Symlinks, traversal and unconfirmed write/durability outcomes have explicit failure/unknown paths. The portable path checks are not an OS sandbox against hostile concurrent ancestor replacement.
 
+元Goalで必須とした保存先に正確な書き込み許可がなければ、前提の登録・訂正、規則・条件の登録、記録の失効は、記憶を変更する前に `SUSPEND`（`WRITE_PERMISSION_MISSING`）になります。ファイルには書き込まず、新しい作用も記録しません。記憶を変えない計算などでは、保存が保留でも計算・描画の部分結果を保持できます。
+
+保存済みの旧保留や記憶は巻き戻しません。同じ入力を同じID・版で再送しても再実行せず、作用のない許可不足に対する `reconcile` も保存済みの保留結果を返します。
+
 ## Inspect and reconcile existing effects
 
 ### Explicit legacy Rust store migration

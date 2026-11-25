@@ -3156,6 +3156,113 @@ fn requested_file_needs_separate_exact_permission_and_real_receipt() {
 }
 
 #[test]
+fn denied_required_file_leaves_premise_registration_and_correction_untouched() {
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let target = scratch.0.join("premise.txt");
+    let other = scratch.0.join("other.txt");
+    let path = target.to_str().unwrap();
+    let premise = "ミナは鳥です";
+    let correction = "訂正: ミナは鳥ではなく魚です";
+    let bird_query = "ミナは鳥ですか";
+    let fish_query = "ミナは魚ですか";
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let query = |text: &str| execute_in_case(&scratch.0, "owner", "queries", &[text]);
+    let verify_denial = |args: &[&str], expected_grants: Value| {
+        let before = store.load_memory("owner").unwrap();
+        let denied = stopped(&run(args), 2, "SUSPEND");
+        assert!(
+            denied["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("WRITE_PERMISSION_MISSING:")
+        );
+        assert_eq!(denied["guarantee"], "UNKNOWN");
+        assert_eq!(denied["dependencies"], serde_json::json!([]));
+        assert!(denied["render"].is_null());
+        assert_eq!(denied["receipts"], serde_json::json!([]));
+        let saved = inspect_normal_case(&scratch.0, "owner");
+        let goal = sequence_artifact(&store, &saved["goal_sha256"]);
+        assert_eq!(goal["output_path"], path);
+        assert_eq!(goal["permissions"]["write_paths"], expected_grants);
+        assert_eq!(saved["bundle"]["request"]["text"], *args.last().unwrap());
+        assert_eq!(saved["result"], denied);
+        assert_eq!(stopped(&run(args), 2, "SUSPEND"), denied);
+        let reconciled = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args([
+                "reconcile",
+                "--db",
+                scratch.0.to_str().unwrap(),
+                "--actor",
+                "owner",
+                "--case",
+                "normal-route",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(stopped(&reconciled, 2, "SUSPEND"), denied);
+        assert_eq!(inspect_normal_case(&scratch.0, "owner"), saved);
+        assert_eq!(store.load_memory("owner").unwrap(), before);
+        assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+        assert!(!target.exists() && !other.exists());
+    };
+    let verify_missing = |text| {
+        let result = stopped(&query(text), 2, "SUSPEND");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("MISSING_PREMISES:")
+        );
+    };
+
+    verify_denial(
+        &["--input", "denied-premise", "--output", path, premise],
+        serde_json::json!([]),
+    );
+    verify_missing(bird_query);
+    let original = record(&run(&["--input", "granted-premise", premise]));
+    assert_eq!(original["lifecycle"], "COMMIT");
+    verify_denial(
+        &[
+            "--input",
+            "denied-correction",
+            "--output",
+            path,
+            "--allow-write",
+            other.to_str().unwrap(),
+            correction,
+        ],
+        serde_json::json!([other]),
+    );
+    assert_eq!(
+        record(&query(bird_query))["dependencies"],
+        original["dependencies"]
+    );
+    verify_missing(fish_query);
+
+    let corrected = record(&run(&[
+        "--input",
+        "permitted-correction",
+        "--output",
+        path,
+        "--allow-write",
+        path,
+        correction,
+    ]));
+    assert_eq!(corrected["lifecycle"], "COMMIT");
+    let actual = std::fs::read(&target).unwrap();
+    assert_eq!(actual, corrected["text"].as_str().unwrap().as_bytes());
+    let receipt = &corrected["receipts"][0];
+    assert_eq!(receipt["phase"], "CONFIRMED");
+    assert_eq!(receipt["target"], path);
+    assert_eq!(receipt["observed_bytes"], actual.len());
+    assert_eq!(receipt["content_sha256"], minidora_domain::digest(&actual));
+    assert_eq!(record(&query(fish_query))["lifecycle"], "COMMIT");
+}
+
+#[test]
 fn unsupported_input_is_suspension_and_not_an_empty_success() {
     let scratch = Scratch::new();
     let output = execute(&scratch.0, "owner", &["未定義の機能を実行してください"]);
