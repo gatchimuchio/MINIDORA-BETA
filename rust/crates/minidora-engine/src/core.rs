@@ -1222,6 +1222,42 @@ fn append_sequence_history_row(
     Ok(())
 }
 
+fn recheck_calculation_sequence_origin(
+    store: &Store,
+    base: &InputBundle,
+    original: &ResultRecord,
+    graph: &mut Scheduler,
+    budget: &ResourceBudget,
+    started: Instant,
+    remaining_bytes: &mut usize,
+) -> Result<CalculationSequenceResult> {
+    let Intent::CalculateSequence { steps } = &base.meaning.intent else {
+        return Err(invalid_sequence_proof());
+    };
+    let mut dependencies = Vec::new();
+    let observed = run_calculation_sequence(
+        steps,
+        |_| &base.request.text,
+        graph,
+        budget,
+        started,
+        &mut dependencies,
+        |expected| {
+            debit_sequence_evidence(remaining_bytes, expected)?;
+            read_sequence_artifact(store, &base.request, expected)
+        },
+    )?;
+    let plan = original
+        .content_plan
+        .as_ref()
+        .ok_or_else(invalid_sequence_proof)?;
+    if original.dependencies != dependencies || original.text != plan.text {
+        return Err(invalid_sequence_proof());
+    }
+    observed.verify_content(original, plan)?;
+    Ok(observed)
+}
+
 fn replay_calculation_sequence<'a>(
     store: &Store,
     context: &'a PreviousCalculationSequence<'_>,
@@ -1237,27 +1273,15 @@ fn replay_calculation_sequence<'a>(
     let mut prior_graph = (context.edits != 0)
         .then(|| sequence_proof_graph(steps, budget))
         .transpose()?;
-    let mut dependencies = Vec::new();
-    let observed = run_calculation_sequence(
-        steps,
-        |_| &base.request.text,
+    let observed = recheck_calculation_sequence_origin(
+        store,
+        base,
+        original,
         prior_graph.as_mut().unwrap_or(&mut *graph),
         budget,
         started,
-        &mut dependencies,
-        |expected| {
-            debit_sequence_evidence(&mut remaining_bytes, expected)?;
-            read_sequence_artifact(store, &base.request, expected)
-        },
+        &mut remaining_bytes,
     )?;
-    let plan = original
-        .content_plan
-        .as_ref()
-        .ok_or_else(invalid_sequence_proof)?;
-    if original.dependencies != dependencies || original.text != plan.text {
-        return Err(invalid_sequence_proof());
-    }
-    observed.verify_content(original, plan)?;
     let units = sequence_explanation_units(&observed, budget)?;
     let history_until = if show_history {
         Some(context.followups.len())
@@ -1971,6 +1995,11 @@ pub(crate) fn calculation_from_context(
     prior_results: &BTreeMap<String, ResultRecord>,
     started: Instant,
 ) -> Result<Calculation> {
+    enum Origin<'a> {
+        Scalar(Calculation),
+        Sequence(Box<InputBundle>, &'a ResultRecord),
+    }
+
     let correcting = matches!(bundle.meaning.intent, Intent::CorrectCalculation { .. });
     let invalid = || {
         if correcting {
@@ -2040,12 +2069,12 @@ pub(crate) fn calculation_from_context(
         .max_actions
         .checked_sub(3 + u32::from(request.output_path.is_some()))
         .ok_or_else(insufficient)? as usize;
-    let calculation =
+    let (origin, links) =
         store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
             let mut current = previous;
             let mut visited = BTreeSet::new();
             let mut links = Vec::new();
-            let mut value = loop {
+            let origin = loop {
                 check_deadline()?;
                 let (_, input) = history
                     .input_bundle(&current.input_id, current.input_version)?
@@ -2065,7 +2094,13 @@ pub(crate) fn calculation_from_context(
                         if current.calculation.as_ref() != Some(&value) {
                             return Err(invalid());
                         }
-                        break value;
+                        break Origin::Scalar(value);
+                    }
+                    Intent::CalculateSequence { steps } if !correcting => {
+                        if steps.len() > context_actions.saturating_sub(links.len()) {
+                            return Err(insufficient());
+                        }
+                        break Origin::Sequence(Box::new(input), current);
                     }
                     Intent::CalculateSequence { .. }
                     | Intent::CorrectCalculationSequenceStep { .. }
@@ -2101,17 +2136,39 @@ pub(crate) fn calculation_from_context(
                 links.push((current, input.meaning.intent, &parent.id));
                 current = parent;
             };
-            for (result, intent, parent_id) in links.into_iter().rev() {
-                check_deadline()?;
-                value = apply(value, &intent)?;
-                if result.calculation.as_ref() != Some(&value)
-                    || result.dependencies.as_slice() != std::slice::from_ref(parent_id)
-                {
-                    return Err(invalid());
-                }
-            }
-            Ok(value)
+            Ok((origin, links))
         })?;
+    let mut calculation = match origin {
+        Origin::Scalar(value) => value,
+        Origin::Sequence(input, original) => {
+            let Intent::CalculateSequence { steps } = &input.meaning.intent else {
+                return Err(invalid());
+            };
+            // Artifact reads use the Store after the verified history snapshot
+            // closes. The original result and input were bound inside it.
+            let mut graph = sequence_proof_graph(steps, &request.budget)?;
+            let mut remaining_bytes = request.budget.max_evidence_bytes;
+            recheck_calculation_sequence_origin(
+                store,
+                &input,
+                original,
+                &mut graph,
+                &request.budget,
+                started,
+                &mut remaining_bytes,
+            )?
+            .calculation
+        }
+    };
+    for (result, intent, parent_id) in links.into_iter().rev() {
+        check_deadline()?;
+        calculation = apply(calculation, &intent)?;
+        if result.calculation.as_ref() != Some(&calculation)
+            || result.dependencies.as_slice() != std::slice::from_ref(parent_id)
+        {
+            return Err(invalid());
+        }
+    }
     check_deadline()?;
     let result = apply(calculation, &bundle.meaning.intent)?;
     check_deadline()?;

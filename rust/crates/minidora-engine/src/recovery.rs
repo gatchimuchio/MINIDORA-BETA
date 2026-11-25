@@ -11801,6 +11801,68 @@ mod tests {
     }
 
     #[test]
+    fn calculation_sequence_length_conversion_reconciles_original_file() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let original = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "sequence-length",
+                    "alice",
+                    "計算手順を実行して:\nbase: 1 km + 250 m\nfinal: @{base} + 250 m",
+                ),
+            )
+            .unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit);
+        let mut request = RequestEnvelope::new(
+            "case",
+            "convert-length",
+            "alice",
+            "前回の計算結果をキロメートルに換算して",
+        );
+        request.budget.max_actions = 6;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let converted = engine.execute("alice", request).unwrap();
+        assert_eq!(converted.lifecycle, Lifecycle::Commit, "{converted:?}");
+        assert_eq!(
+            converted.calculation.as_ref().unwrap().exact_value,
+            "3/2 km"
+        );
+        assert_eq!(converted.dependencies, [original.id]);
+        let bytes = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.calculation, converted.calculation);
+        assert_eq!(recovered.dependencies, converted.dependencies);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one delivery receipt: {:?}", recovered.receipts);
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
     fn previous_calculation_sequence_explanation_reconciles_exact_steps_and_file() {
         assert_sequence_explanation_file_recovery(false);
     }

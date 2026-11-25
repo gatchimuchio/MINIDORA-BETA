@@ -557,6 +557,135 @@ fn calculation_sequence_route_units_consume_whole_exact_operands() {
     }
 }
 
+#[test]
+fn calculation_sequence_final_length_can_be_converted_in_the_next_turn() {
+    use minidora_domain::Lifecycle;
+
+    const SEQUENCE: &str = "計算手順を実行して:\nbase: 1 km + 250 m\nfinal: @{base} + 250 m";
+    const TO_KM: &str = "前回の計算結果をキロメートルに換算して";
+    const TO_M: &str = "前回の計算結果をメートルに換算して";
+
+    let scratch = Scratch::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args([
+            "--actor",
+            "owner",
+            "--case",
+            "normal-route",
+            "--max-actions",
+            "5",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("/paste\n{SEQUENCE}\n/end\n{TO_KM}\n/exit\n").as_bytes())
+        .unwrap();
+    let transcript = child.wait_with_output().unwrap();
+    assert!(transcript.status.success(), "{transcript:?}");
+    let text = String::from_utf8(transcript.stdout).unwrap();
+    assert!(text.contains("final: 1250 m + 250 m = 1500 m"), "{text}");
+    assert!(text.contains("3/2 km"), "{text}");
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let state = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let conversion = state.result.as_ref().unwrap();
+    assert_eq!(conversion.lifecycle, Lifecycle::Commit);
+    assert_eq!(
+        conversion.calculation.as_ref().unwrap().exact_value,
+        "3/2 km"
+    );
+    let [source_id] = conversion.dependencies.as_slice() else {
+        panic!("the conversion must retain the actual preceding result");
+    };
+    let source = &state.prior_results[source_id];
+    assert_eq!(source.lifecycle, Lifecycle::Commit);
+    assert_eq!(source.calculation.as_ref().unwrap().exact_value, "1500 m");
+    assert_eq!(source.dependencies.len(), 3);
+    assert!(conversion.receipts.is_empty());
+
+    let target = scratch.0.join("sequence-length.txt");
+    let path = target.to_str().unwrap();
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    for (budget, file) in [("4", false), ("5", true)] {
+        let mut args = vec!["--context", source_id.as_str(), "--max-actions", budget];
+        if file {
+            args.extend(["--allow-write", path, "--output", path]);
+        }
+        args.push(TO_KM);
+        let limited = stopped(&run(&args), 2, "SUSPEND");
+        assert!(
+            limited["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("ACTION_BUDGET_EXHAUSTED:"),
+            "{limited}"
+        );
+        assert!(limited["render"].is_null());
+        assert_eq!(limited["receipts"], serde_json::json!([]));
+        assert!(!target.exists());
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
+    let saved = record(&run(&[
+        "--context",
+        source_id.as_str(),
+        "--max-actions",
+        "6",
+        "--allow-write",
+        path,
+        "--output",
+        path,
+        TO_KM,
+    ]));
+    assert_eq!(saved["dependencies"], serde_json::json!([source_id]));
+    assert_eq!(saved["calculation"]["exact_value"], "3/2 km");
+    let bytes = std::fs::read(&target).unwrap();
+    assert_eq!(bytes, saved["text"].as_str().unwrap().as_bytes());
+    assert_eq!(saved["receipts"][0]["phase"], "CONFIRMED");
+    assert_eq!(
+        saved["receipts"][0]["content_sha256"],
+        minidora_domain::digest(&bytes)
+    );
+
+    let next = record(&run(&[TO_M]));
+    assert_eq!(next["dependencies"], serde_json::json!([saved["id"]]));
+    assert_eq!(next["calculation"]["exact_value"], "1500 m");
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 1);
+
+    let other_case =
+        |args: &[&str]| execute_in_case(&scratch.0, "owner", "dimensionless-route", args);
+    let foreign = stopped(
+        &other_case(&["--context", source_id.as_str(), TO_KM]),
+        4,
+        "FAIL",
+    );
+    assert!(
+        foreign["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH")
+    );
+    record(&other_case(&[
+        "計算手順を実行して:\nbase: 2+3\nfinal: @{base}*2",
+    ]));
+    let dimensionless = stopped(&other_case(&[TO_KM]), 2, "SUSPEND");
+    assert!(
+        dimensionless["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("LENGTH_UNIT_REQUIRED:"),
+        "{dimensionless}"
+    );
+}
+
 fn sequence_stored_step_ids(directory: &Path) -> Vec<String> {
     let store = minidora_engine::store::Store::open(directory).unwrap();
     let mut ids = Vec::new();
