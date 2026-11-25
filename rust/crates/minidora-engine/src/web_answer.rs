@@ -82,7 +82,7 @@ pub(crate) struct WebAnswer {
     source_uri: String,
     observed_at_unix_ms: u64,
     raw_body_sha256: String,
-    passage: Passage,
+    pub(crate) passage: Passage,
     #[serde(skip_serializing_if = "Option::is_none")]
     elevation: Option<ElevationConversion>,
 }
@@ -102,6 +102,12 @@ struct ElevationConversion {
 }
 
 impl WebAnswer {
+    pub(crate) fn elevation_calculation(&self) -> Option<&Calculation> {
+        self.elevation
+            .as_ref()
+            .map(|elevation| &elevation.calculation)
+    }
+
     pub(crate) fn units(&self) -> Vec<String> {
         let mut units = vec![
             format!(
@@ -1053,5 +1059,83 @@ mod tests {
         assert_eq!(stated_elevation_metres(&passage.text), Some("3775.56"));
         assert_eq!(&article[passage.source_start..passage.source_end], stated);
         assert_eq!(passage.source_span_sha256, digest(stated.as_bytes()));
+    }
+
+    #[test]
+    fn verified_elevation_exposes_the_legacy_quotient_without_making_prose_a_quantity() {
+        let provider = SearchProvider::Wikipedia;
+        let mut permissions = Permissions::default();
+        permissions.read_hosts.insert(provider.host().into());
+        for (title, raw, expression, quotient, cm) in [
+            (
+                "高尾山",
+                "'''高尾山'''（たかおさん）は、[[東京都]][[八王子市]]にある[[高さ#標高|標高]]599[[メートル]]（m）の[[山]]。",
+                "599/1000",
+                "599/1000",
+                "59900 cm",
+            ),
+            (
+                "富士山",
+                "'''富士山'''は日本の山である。\n標高は3775.56 mです。\n",
+                "3775.56/1000",
+                "94389/25000",
+                "377556 cm",
+            ),
+        ] {
+            let candidate = SearchCandidate {
+                id: digest(title.as_bytes()),
+                rank: 1,
+                title: title.into(),
+                uri: format!("https://{}/wiki/{title}", provider.host()),
+                provider,
+                provider_id: provider.provider_id().into(),
+                source_key: title.into(),
+                search_packet_id: "f".repeat(64),
+            };
+            let uri = search::candidate_body_uri(&candidate).unwrap();
+            let mut packet = EvidencePacket {
+                id: String::new(),
+                mode: "LIVE".into(),
+                packet_kind: "FETCHED_BODY".into(),
+                request_uri: uri.clone(),
+                final_uri: uri.clone(),
+                redirect_chain: vec![uri.clone()],
+                observed_at_unix_ms: 1,
+                provider_id: "https-direct-url-v1".into(),
+                http_status: 200,
+                raw_body: raw.as_bytes().into(),
+                raw_sha256: digest(raw.as_bytes()),
+                extracted_text: Some(raw.into()),
+                parser_version: "strict-utf8-identity-v1".into(),
+                independence_group: uri,
+                failure: None,
+                retry_after: None,
+            };
+            packet.id = ports::fetch_packet_identity(&packet).unwrap();
+
+            let ordinary = answer(title, false, &candidate, &packet, &permissions).unwrap();
+            assert!(ordinary.elevation_calculation().is_none());
+            assert!(
+                serde_json::to_value(ordinary)
+                    .unwrap()
+                    .get("elevation")
+                    .is_none()
+            );
+
+            let elevation = answer(title, true, &candidate, &packet, &permissions).unwrap();
+            let calculation = elevation.elevation_calculation().unwrap();
+            assert_eq!(calculation.expression, expression);
+            assert_eq!(calculation.exact_value, quotient);
+            assert_eq!(
+                serde_json::to_value(&elevation).unwrap()["elevation"]["calculation"],
+                serde_json::to_value(calculation).unwrap()
+            );
+            assert!(language::convert_exact_length(calculation, "cm").is_err());
+
+            let mut length = calculation.clone();
+            length.exact_value.push_str(" km");
+            let converted = language::convert_exact_length(&length, "cm").unwrap();
+            assert_eq!(converted.exact_value, cm);
+        }
     }
 }

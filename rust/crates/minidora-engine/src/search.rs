@@ -12,13 +12,14 @@ use crate::{
     web_answer,
 };
 use minidora_domain::{
-    CaseRevision, ContentPlan, EvidencePacket, GoalContract, Guarantee, InputBundle, Intent,
-    Lifecycle, Permissions, ResourceBudget, Result, ResultRecord, canonical, digest, failure,
-    identity,
+    Calculation, CaseRevision, ContentPlan, EvidencePacket, GoalContract, Guarantee, InputBundle,
+    Intent, Lifecycle, Permissions, ResourceBudget, Result, ResultRecord, canonical, digest,
+    failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 use url::{Host, Url};
 
 const SEARCH_ROWS: usize = 5;
@@ -1157,6 +1158,133 @@ pub(crate) fn verify_committed_web_answer<'a>(
         "Web answer",
     )?;
     Ok(proof)
+}
+
+pub(crate) fn is_web_elevation_query(bundle: &InputBundle) -> bool {
+    bundle.meaning.parser_version == WEB_QUESTION_PARSER_VERSION
+        && matches!(
+            bundle.meaning.intent,
+            Intent::AskWeb {
+                elevation_in_kilometres: true,
+                ..
+            }
+        )
+}
+
+pub(crate) struct WebLengthConversion {
+    pub(crate) calculation: Calculation,
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+}
+
+/// Reuse the typed quotient from an exact saved Web answer. Verification
+/// here reads stored packets only and never requests a fresh observation.
+pub(crate) fn previous_web_length_conversion(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    started: Instant,
+) -> Result<WebLengthConversion> {
+    let invalid = || {
+        failure(
+            "WEB_LENGTH_CONVERSION_CONTEXT_INVALID",
+            "同じ会話の確定済み標高回答と採用した本文を照合できません。",
+        )
+    };
+    let limit = || {
+        failure(
+            "RESOURCE_LIMIT",
+            "保存済みの出典と換算結果が要求の証拠予算を超えています。",
+        )
+    };
+    let check_deadline = || {
+        if started.elapsed() >= Duration::from_millis(bundle.request.budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "標高の出典と換算結果の照合中に締切へ達しました。",
+            ));
+        }
+        Ok(())
+    };
+    let Intent::ConvertPreviousLength { unit } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    let request = &bundle.request;
+    if bundle.meaning.parser_version != crate::input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION
+        || previous.guarantee != Guarantee::SourceReport
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+    {
+        return Err(invalid());
+    }
+    validate_search_predecessor(bundle, previous, "WEB_LENGTH_CONVERSION_CONTEXT_INVALID")?;
+    if request.budget.max_actions < 6 + u32::from(request.output_path.is_some()) {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "検索一覧・本文・採用結果の照合と換算に必要な行動予算が不足しています。",
+        ));
+    }
+    let [listing, body] = previous.evidence.as_slice() else {
+        return Err(invalid());
+    };
+    let source_bytes = listing.raw_body.len().saturating_add(body.raw_body.len());
+    if source_bytes > request.budget.max_evidence_bytes {
+        return Err(limit());
+    }
+    check_deadline()?;
+    let (input_ref, proof) =
+        store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
+            let (input_ref, original) = history
+                .input_bundle(&previous.input_id, previous.input_version)?
+                .ok_or_else(invalid)?;
+            if !is_web_elevation_query(&original)
+                || original.request.actor_id != request.actor_id
+                || original.request.case_id != request.case_id
+            {
+                return Err(invalid());
+            }
+            let proof = verify_committed_web_answer(store, history, previous, &original)?;
+            Ok((input_ref, proof))
+        })?;
+    let mut origin = proof
+        .answer
+        .elevation_calculation()
+        .ok_or_else(invalid)?
+        .clone();
+    // The preserved Web artifact stores a unitless m / 1000 quotient. Its
+    // sealed objective and replay above establish that the quotient is km.
+    origin.exact_value.push_str(" km");
+    let calculation = crate::language::convert_exact_length(&origin, unit)?;
+    let passage = &proof.answer.passage;
+    let units = vec![
+        crate::core::exact_calculation_unit(&calculation),
+        format!(
+            "前回採用した標高の出典: {}（取得時刻: Unix ms {}）",
+            body.final_uri, body.observed_at_unix_ms
+        ),
+        format!(
+            "採用本文 byte[{}..{}) SHA-256: {}",
+            passage.source_start, passage.source_end, passage.source_span_sha256
+        ),
+        "保存した本文の記述を換算しました。再取得や現時点の真偽の確認はしていません。".into(),
+    ];
+    if source_bytes
+        .saturating_add(canonical(&proof.answer)?.len())
+        .saturating_add(units.join("\n").len())
+        > request.budget.max_evidence_bytes
+    {
+        return Err(limit());
+    }
+    check_deadline()?;
+    let mut dependencies = vec![previous.id.clone(), input_ref];
+    dependencies.extend(proof.refs.into_iter().map(str::to_owned));
+    Ok(WebLengthConversion {
+        calculation,
+        units,
+        dependencies,
+    })
 }
 
 fn explain_web_answer(

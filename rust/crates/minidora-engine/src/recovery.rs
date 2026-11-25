@@ -5218,7 +5218,9 @@ fn inspect(
         bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
     let requires_verified_length_conversion =
         bundle.meaning.parser_version == crate::input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION;
-    if requires_verified_length_conversion
+    let requires_web_length_conversion = bundle.meaning.parser_version
+        == crate::input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION;
+    if (requires_verified_length_conversion || requires_web_length_conversion)
         != matches!(goal.intent, Intent::ConvertPreviousLength { .. })
     {
         return Err(failure(
@@ -5442,6 +5444,7 @@ fn inspect(
             || requires_generated_calculation
             || requires_verified_correction
             || requires_verified_length_conversion
+            || requires_web_length_conversion
             || requires_condition_evaluation
             || requires_record_source
             || requires_guarded_rule
@@ -5558,6 +5561,42 @@ fn inspect(
             "actual retained rendering unavailable",
         )
     })?;
+    if requires_web_length_conversion {
+        const CODE: &str = "RECOVERY_WEB_LENGTH_CONVERSION_MISMATCH";
+        let invalid = || {
+            failure(
+                CODE,
+                "the retained Web altitude, exact conversion or rendered source changed",
+            )
+        };
+        verify_registered_input(store, bundle, CODE)?;
+        let previous = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .ok_or_else(invalid)?;
+        if request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+        {
+            return Err(invalid());
+        }
+        let conversion =
+            search::previous_web_length_conversion(store, bundle, previous, Instant::now())?;
+        if result.calculation.as_ref() != Some(&conversion.calculation)
+            || result.guarantee != Guarantee::Computed
+            || result.actor_memory_revision.is_some()
+            || result.dependencies != conversion.dependencies
+            || !result.evidence.is_empty()
+            || plan.guarantee != result.guarantee
+            || !plan.dependencies.starts_with(&conversion.dependencies)
+            || plan.required_units != conversion.units
+            || plan.text != conversion.units.join("\n")
+            || result.text != plan.text
+        {
+            return Err(invalid());
+        }
+    }
     if requires_verified_correction || requires_verified_length_conversion {
         let started = Instant::now();
         let code = if requires_verified_correction {

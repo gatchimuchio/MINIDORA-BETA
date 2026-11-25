@@ -1580,6 +1580,7 @@ pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
 pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_CORRECTION_V1";
 const PREVIOUS_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_LENGTH_CONVERSION_V1";
+const PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_WEB_LENGTH_CONVERSION_V1";
 pub(crate) const SEQUENCE_CORRECTION_PREDICATE: &str = "EXACT_CALCULATION_SEQUENCE_CORRECTION_V1";
 pub(crate) const REPEATED_SEQUENCE_CORRECTION_PREDICATE: &str =
     "EXACT_CALCULATION_SEQUENCE_CORRECTION_V2";
@@ -1765,6 +1766,11 @@ pub(crate) fn goal_predicates(
         {
             predicates.push(PREVIOUS_LENGTH_CONVERSION_PREDICATE.into());
         }
+        Intent::ConvertPreviousLength { .. }
+            if meaning.parser_version == input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION =>
+        {
+            predicates.push(PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE.into());
+        }
         Intent::CalculateSequence { .. } => predicates.push("EXACT_CALCULATION_SEQUENCE_V1".into()),
         Intent::AddRule { .. } | Intent::AddConjunctiveRule { .. } => {
             if let Some(predicate) = guarded_rule_predicate(meaning) {
@@ -1896,6 +1902,7 @@ fn verify_report_goal_content(
                 | GENERATED_CALCULATION_PREDICATE
                 | CALCULATION_CORRECTION_PREDICATE
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
+                | PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE
                 | SEQUENCE_EXPLANATION_PREDICATE
                 | CHAINED_SEQUENCE_EXPLANATION_PREDICATE
                 | REVISED_SEQUENCE_EXPLANATION_PREDICATE
@@ -5961,6 +5968,28 @@ impl Engine {
                 );
             }
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::ConvertPreviousLength { .. })
+                && let Some(prior) = previous.filter(|result| {
+                    result.lifecycle == Lifecycle::Commit
+                        && result.guarantee == Guarantee::SourceReport
+                })
+                && self
+                    .store
+                    .get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &prior.input_id,
+                        prior.input_version,
+                    )?
+                    .is_some_and(|(_, source)| search::is_web_elevation_query(&source))
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::PreviousWebLength),
+                );
+            }
+            if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousGroupMean)
                 && let Some(prior) = previous.filter(|result| {
                     result.lifecycle == Lifecycle::Commit && result.guarantee == Guarantee::Computed
@@ -7629,6 +7658,41 @@ impl Engine {
                 result.calculation = Some(observed.calculation.clone());
                 result.guarantee = Guarantee::Computed;
                 sequence_result = Some(observed);
+            }
+            Intent::ConvertPreviousLength { .. }
+                if bundle.meaning.parser_version
+                    == input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION =>
+            {
+                let Some(prior) = previous else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "WEB_LENGTH_CONVERSION_CONTEXT_INVALID",
+                        "同じ会話に確定した標高回答がありません。",
+                    );
+                };
+                let conversion = match search::previous_web_length_conversion(
+                    &self.store,
+                    &bundle,
+                    prior,
+                    started,
+                ) {
+                    Ok(value) => value,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                result.calculation = Some(conversion.calculation);
+                result.dependencies = conversion.dependencies;
+                result.guarantee = Guarantee::Computed;
+                units = conversion.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::CorrectCalculation { .. } | Intent::ConvertPreviousLength { .. } => {
                 let correcting = matches!(goal.intent, Intent::CorrectCalculation { .. });

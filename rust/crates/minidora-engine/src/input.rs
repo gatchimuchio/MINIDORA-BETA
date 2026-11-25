@@ -45,6 +45,8 @@ pub(crate) const PREVIOUS_CSV_GROUP_MEAN_PARSER_VERSION: &str =
     "declarative-ja-v206-previous-csv-group-mean";
 pub(crate) const PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v207-previous-correction-explanation";
+pub(crate) const PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION: &str =
+    "declarative-ja-v208-previous-web-length-conversion";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -261,6 +263,7 @@ pub(crate) enum SourceContext {
     ExplainedCodeVerificationExplanation,
     PreviousCsvGroupMean,
     PreviousCorrectionExplanation,
+    PreviousWebLength,
     ExplainedDirectSource,
     DirectBodyQuestion,
     WebAnswerExplanation,
@@ -661,7 +664,10 @@ pub(crate) fn seal_with_source_context(
     }
     if matches!(intent, Intent::ConvertPreviousLength { .. })
         && previous.is_none_or(|result| {
-            result.lifecycle != Lifecycle::Commit || result.calculation.is_none()
+            result.lifecycle != Lifecycle::Commit
+                || result.calculation.is_none()
+                    && !(matches!(source_context, Some(SourceContext::PreviousWebLength))
+                        && result.guarantee == Guarantee::SourceReport)
         })
     {
         unresolved.push("同じ会話に換算できる確定済み計算結果がありません。".into());
@@ -697,6 +703,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::ExplainedCodeVerificationExplanation
         | SourceContext::PreviousCsvGroupMean
         | SourceContext::PreviousCorrectionExplanation
+        | SourceContext::PreviousWebLength
         | SourceContext::ExplainedDirectSource
         | SourceContext::DirectBodyQuestion
         | SourceContext::WebAnswerExplanation
@@ -754,6 +761,11 @@ pub(crate) fn seal_with_source_context(
             NATURAL_FINITE_EXPECTATION_PARSER_VERSION
         }
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
+        Intent::ConvertPreviousLength { .. }
+            if matches!(source_context, Some(SourceContext::PreviousWebLength)) =>
+        {
+            PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION
+        }
         Intent::ConvertPreviousLength { .. } => PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION,
         Intent::CorrectCalculationSequenceStep { .. }
         | Intent::AppendCalculationSequenceStep { .. }
@@ -9622,6 +9634,67 @@ mod structured_document_tests {
                 Intent::Unknown { .. }
             ));
         }
+    }
+
+    #[test]
+    fn previous_web_length_uses_the_resolved_context_without_changing_legacy_seals() {
+        let previous = ResultRecord {
+            id: "a".repeat(64),
+            input_id: "elevation".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: String::new(),
+            reason: None,
+            guarantee: Guarantee::SourceReport,
+            calculation: None,
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: Vec::new(),
+            actor_memory_revision: None,
+            execution_graph_ref: None,
+        };
+        let request = RequestEnvelope::new(
+            "case",
+            "input",
+            "actor",
+            "前回の計算結果をセンチメートルに換算して",
+        );
+        let legacy = seal(&request, Some(&previous)).unwrap();
+        assert_eq!(
+            legacy.meaning.parser_version,
+            PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION
+        );
+        assert!(!legacy.meaning.unresolved.is_empty());
+        let resolve = |prior| {
+            seal_with_source_context(
+                &request,
+                Some(prior),
+                Some(SourceContext::PreviousWebLength),
+            )
+            .unwrap()
+        };
+        let sealed = resolve(&previous);
+        assert_eq!(
+            sealed.meaning.parser_version,
+            PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION
+        );
+        assert_eq!(
+            sealed.meaning.intent,
+            Intent::ConvertPreviousLength { unit: "cm".into() }
+        );
+        assert_eq!(
+            sealed.meaning.context_result_ref.as_deref(),
+            Some(previous.id.as_str())
+        );
+        assert_eq!(sealed.context_sha256, identity(&Some(&previous)).unwrap());
+        assert!(sealed.meaning.unresolved.is_empty());
+        let suspended = ResultRecord {
+            lifecycle: Lifecycle::Suspend,
+            ..previous.clone()
+        };
+        assert!(!resolve(&suspended).meaning.unresolved.is_empty());
     }
 
     #[test]
