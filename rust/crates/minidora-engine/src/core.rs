@@ -5955,6 +5955,29 @@ impl Engine {
                 );
             }
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::AskPreviousGroupMean)
+                && let Some(prior) = previous.filter(|result| {
+                    result.lifecycle == Lifecycle::Commit && result.guarantee == Guarantee::Computed
+                })
+                && self
+                    .store
+                    .get_input_bundle(
+                        actor,
+                        &request.case_id,
+                        &prior.input_id,
+                        prior.input_version,
+                    )?
+                    .is_some_and(|(_, source)| {
+                        matches!(source.meaning.intent, Intent::CsvGroupStatistics { .. })
+                    })
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::PreviousCsvGroupMean),
+                );
+            }
+            if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::ConvertPreviousJsonTableToCsv)
                 && let Some(prior) = previous.filter(|result| {
                     result.lifecycle == Lifecycle::Commit && result.guarantee == Guarantee::Computed
@@ -6576,19 +6599,26 @@ impl Engine {
         } else {
             None
         };
-        let previous_json_group_mean_answer =
+        let csv_group_mean =
+            bundle.meaning.parser_version == input::PREVIOUS_CSV_GROUP_MEAN_PARSER_VERSION;
+        let [group_mean_source, group_mean_report, group_mean_answer] =
+            crate::document::group_mean_graph_ids(csv_group_mean);
+        let previous_group_mean_answer =
             if matches!(bundle.meaning.intent, Intent::AskPreviousGroupMean) {
+                let deadline =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
                 match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => match crate::document::previous_json_table_highest_group_mean(
+                    Some(prior) => match crate::document::previous_group_mean(
                         &self.store,
-                        actor,
-                        &request.case_id,
+                        &bundle,
                         prior,
+                        deadline,
                     ) {
                         Ok(value) => value,
                         Err(error) => {
                             let code = match &error {
                                 Error::Contract { code, .. } => code.as_str(),
+                                _ if csv_group_mean => "CSV_GROUP_MEAN_UNSUPPORTED",
                                 _ => "JSON_GROUP_MEAN_UNSUPPORTED",
                             };
                             return self.stop(
@@ -7094,10 +7124,10 @@ impl Engine {
             });
             compute_requires.push(report_id);
         }
-        if previous_json_group_mean_answer.is_some() {
-            let source_id = "previous-json-group-statistics-source".to_string();
-            let report_id = "previous-json-group-statistics-report".to_string();
-            let answer_id = "previous-json-group-mean-answer".to_string();
+        if previous_group_mean_answer.is_some() {
+            let source_id = group_mean_source.to_string();
+            let report_id = group_mean_report.to_string();
+            let answer_id = group_mean_answer.to_string();
             nodes.push(GoalNode {
                 id: source_id.clone(),
                 kind: GoalNodeKind::Evidence,
@@ -9738,8 +9768,7 @@ impl Engine {
                         "前回の採用済み結果がありません。先にグループ別統計を計算してください。",
                     );
                 };
-                let Some((source_ref, report_ref, answer)) = &previous_json_group_mean_answer
-                else {
+                let Some((source_ref, report_ref, answer)) = &previous_group_mean_answer else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
@@ -9759,26 +9788,16 @@ impl Engine {
                 let answer_ref = self
                     .store
                     .put_bytes(actor, &request.case_id, &answer_bytes)?;
+                graph.observe(group_mean_source, source_ref, &BTreeMap::new())?;
                 graph.observe(
-                    "previous-json-group-statistics-source",
-                    source_ref,
-                    &BTreeMap::new(),
-                )?;
-                graph.observe(
-                    "previous-json-group-statistics-report",
+                    group_mean_report,
                     report_ref,
-                    &BTreeMap::from([(
-                        "previous-json-group-statistics-source".into(),
-                        source_ref.clone(),
-                    )]),
+                    &BTreeMap::from([(group_mean_source.into(), source_ref.clone())]),
                 )?;
                 graph.observe(
-                    "previous-json-group-mean-answer",
+                    group_mean_answer,
                     &answer_ref,
-                    &BTreeMap::from([(
-                        "previous-json-group-statistics-report".into(),
-                        report_ref.clone(),
-                    )]),
+                    &BTreeMap::from([(group_mean_report.into(), report_ref.clone())]),
                 )?;
                 result.dependencies.extend([
                     prior.id.clone(),
@@ -9786,7 +9805,10 @@ impl Engine {
                     report_ref.clone(),
                     answer_ref,
                 ]);
-                units.extend(crate::document::json_group_mean_answer_lines(answer));
+                units.extend(crate::document::group_mean_answer_lines(
+                    answer,
+                    csv_group_mean,
+                ));
                 result.guarantee = Guarantee::Computed;
             }
             Intent::RetainPreviousGroupMeanHypothesis
@@ -15179,7 +15201,7 @@ struct RetainedGroupMeanHypothesis<'a> {
     source_result_id: &'a str,
     statistics_sha256: &'a str,
     scope: &'static str,
-    sample: &'a crate::document::JsonGroupMeanAnswer,
+    sample: &'a crate::document::GroupMeanAnswer,
     candidate_group: &'a str,
     counterexample_criterion: &'static str,
     counterexample_refs: &'a [String],
@@ -15425,7 +15447,7 @@ struct GroupMeanHypothesisAssessment<'a> {
     hypothesis_result_id: &'a str,
     hypothesis_sha256: &'a str,
     candidate_group: &'a str,
-    sample: &'a crate::document::JsonGroupMeanAnswer,
+    sample: &'a crate::document::GroupMeanAnswer,
     statistics_sha256: &'a str,
     counterexample_refs: &'a [String],
 }

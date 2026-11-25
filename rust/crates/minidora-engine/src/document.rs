@@ -4142,14 +4142,14 @@ fn table_span(document: &str, span: &crate::ports::JsonComparisonSpan) -> Result
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct JsonGroupMeanComparison {
+pub(crate) struct GroupMeanComparison {
     pub group: String,
     pub mean: String,
     pub highest: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct JsonGroupMeanWinner {
+pub(crate) struct GroupMeanWinner {
     pub group: String,
     pub mean: String,
     pub source_row_count: usize,
@@ -4159,14 +4159,217 @@ pub(crate) struct JsonGroupMeanWinner {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct JsonGroupMeanAnswer {
+pub(crate) struct GroupMeanAnswer {
     pub source_sha256: String,
     pub group_by: String,
     pub value_column: String,
     pub comparison_unit: Option<String>,
-    pub comparisons: Vec<JsonGroupMeanComparison>,
-    pub winners: Vec<JsonGroupMeanWinner>,
+    pub comparisons: Vec<GroupMeanComparison>,
+    pub winners: Vec<GroupMeanWinner>,
     pub guarantee: String,
+}
+
+pub(crate) fn group_mean_graph_ids(csv: bool) -> [&'static str; 3] {
+    if csv {
+        [
+            "previous-csv-group-statistics-input",
+            "previous-csv-group-statistics-report",
+            "previous-csv-group-mean-answer",
+        ]
+    } else {
+        [
+            "previous-json-group-statistics-source",
+            "previous-json-group-statistics-report",
+            "previous-json-group-mean-answer",
+        ]
+    }
+}
+
+pub(crate) fn previous_group_mean(
+    store: &crate::store::Store,
+    followup: &InputBundle,
+    previous: &ResultRecord,
+    deadline: Option<Instant>,
+) -> Result<Option<(String, String, GroupMeanAnswer)>> {
+    let request = &followup.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    if followup.meaning.parser_version != crate::input::PREVIOUS_CSV_GROUP_MEAN_PARSER_VERSION {
+        return previous_json_table_highest_group_mean(store, actor, case, previous);
+    }
+    const INVALID: &str = "CSV_GROUP_MEAN_CONTEXT_INVALID";
+    let invalid = || failure(INVALID, "CSVの元入力・集計記録・表示結果を照合できません。");
+    let evidence_limit = || {
+        failure(
+            "RESOURCE_LIMIT",
+            "CSVグループ平均の比較根拠が要求の証拠予算を超えました。",
+        )
+    };
+    let check_time = || {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(failure(
+                "DEADLINE",
+                "CSVグループ統計の照合中に締切へ達しました。",
+            ));
+        }
+        Ok(())
+    };
+    if !matches!(followup.meaning.intent, Intent::AskPreviousGroupMean)
+        || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
+        || followup.context_sha256 != identity(&Some(previous))?
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != &previous.id)
+        || previous.lifecycle != Lifecycle::Commit
+        || previous.guarantee != Guarantee::Computed
+        || previous.calculation.is_some()
+        || !previous.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    let [report_ref] = previous.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    check_time()?;
+    let (source_ref, source) = store.with_verified_case_history(actor, case, |history| {
+        if history
+            .input_result(&previous.input_id, previous.input_version)?
+            .as_ref()
+            != Some(previous)
+        {
+            return Err(invalid());
+        }
+        history
+            .input_bundle(&previous.input_id, previous.input_version)?
+            .ok_or_else(invalid)
+    })?;
+    if identity(&source.request)? != previous.id {
+        return Err(invalid());
+    }
+    let Intent::CsvGroupStatistics {
+        document,
+        group_column,
+        value_column,
+    } = &source.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    let report_bytes = store.get_bytes(actor, case, report_ref)?;
+    let proof_bytes = document.len().saturating_add(report_bytes.len());
+    if proof_bytes > request.budget.max_evidence_bytes {
+        return Err(evidence_limit());
+    }
+    check_time()?;
+    let report = CsvInput::conversation(document).group_statistics(group_column, value_column)?;
+    if previous.text != report.text || canonical(&report)? != report_bytes {
+        return Err(invalid());
+    }
+    revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        previous,
+        Some(report_ref),
+        INVALID,
+        "CSV group statistics",
+    )?;
+    let answer = csv_highest_group_mean(&report, group_column, value_column)?;
+    if proof_bytes.saturating_add(canonical(&answer)?.len()) > request.budget.max_evidence_bytes {
+        return Err(evidence_limit());
+    }
+    check_time()?;
+    Ok(Some((source_ref, report_ref.clone(), answer)))
+}
+
+#[derive(Serialize, Deserialize)]
+struct CsvGroupStatisticsGroup {
+    value: String,
+    source_record_numbers: Vec<usize>,
+    statistics: crate::math::Statistics,
+}
+
+fn csv_highest_group_mean(
+    report: &DocumentResult,
+    group_column: &str,
+    value_column: &str,
+) -> Result<GroupMeanAnswer> {
+    #[derive(Deserialize)]
+    struct Groups {
+        groups: Vec<CsvGroupStatisticsGroup>,
+    }
+    let groups: Groups = serde_json::from_str(&report.text)?;
+    let rows: Vec<_> = groups
+        .groups
+        .iter()
+        .map(|group| (group.value.as_str(), &group.statistics))
+        .collect();
+    let (comparison_unit, comparisons, winner_indices) = compare_group_means(&rows, true)?;
+    let invalid = || {
+        failure(
+            "CSV_GROUP_MEAN_CONTEXT_INVALID",
+            "CSVの元セルの位置を照合できません。",
+        )
+    };
+    let mut spans = BTreeMap::new();
+    for span in &report.spans {
+        let column = match span.kind.as_str() {
+            "CSV_GROUP_MEMBER" => 0,
+            "CSV_GROUP_STATISTIC_VALUE" => 1,
+            _ => continue,
+        };
+        let raw = report
+            .source_document
+            .get(span.source_start..span.source_end)
+            .filter(|raw| *raw == span.source_text)
+            .ok_or_else(invalid)?;
+        if spans
+            .insert(
+                (span.row.ok_or_else(invalid)?, column),
+                crate::ports::JsonComparisonSpan {
+                    source_start: span.source_start,
+                    source_end: span.source_end,
+                    source_sha256: digest(raw.as_bytes()),
+                },
+            )
+            .is_some()
+        {
+            return Err(invalid());
+        }
+    }
+    let mut winners = Vec::with_capacity(winner_indices.len());
+    for index in winner_indices {
+        let group = &groups.groups[index];
+        let mut winner = GroupMeanWinner {
+            group: group.value.clone(),
+            mean: group.statistics.mean.clone(),
+            source_row_count: group.source_record_numbers.len(),
+            sampled_source_row_indices: Vec::new(),
+            sampled_group_source_spans: Vec::new(),
+            sampled_value_source_spans: Vec::new(),
+        };
+        for &record in group.source_record_numbers.iter().take(8) {
+            winner
+                .sampled_source_row_indices
+                .push(record.checked_sub(1).ok_or_else(invalid)?);
+            winner
+                .sampled_group_source_spans
+                .push(spans.remove(&(record, 0)).ok_or_else(invalid)?);
+            winner
+                .sampled_value_source_spans
+                .push(spans.remove(&(record, 1)).ok_or_else(invalid)?);
+        }
+        winners.push(winner);
+    }
+    Ok(GroupMeanAnswer {
+        source_sha256: report.source_sha256.clone(),
+        group_by: group_column.into(),
+        value_column: value_column.into(),
+        comparison_unit,
+        comparisons,
+        winners,
+        guarantee: "貼り付けたCSVの行から計算した平均の比較に限ります。母集団の傾向や外部の事実は確認していません".into(),
+    })
 }
 
 /// Revalidate a previous grouped-statistics result, then answer the bounded
@@ -4177,7 +4380,7 @@ pub(crate) fn previous_json_table_highest_group_mean(
     actor: &str,
     case: &str,
     previous: &ResultRecord,
-) -> Result<Option<(String, String, JsonGroupMeanAnswer)>> {
+) -> Result<Option<(String, String, GroupMeanAnswer)>> {
     let Some((source_ref, report_ref, _)) =
         previous_json_table_group_statistics_explanation(store, actor, case, previous)?
     else {
@@ -4199,47 +4402,19 @@ pub(crate) fn previous_json_table_highest_group_mean(
 
 pub(crate) fn json_table_highest_group_mean(
     report: &crate::ports::JsonTableGroupStatisticsReport,
-) -> Result<JsonGroupMeanAnswer> {
-    let first = report.groups.first().ok_or_else(|| {
-        failure(
-            "JSON_GROUP_MEAN_CONTEXT_INVALID",
-            "the validated grouped-statistics report has no groups",
-        )
-    })?;
-    let comparison_unit = first.statistics.unit.clone();
-    if report
+) -> Result<GroupMeanAnswer> {
+    let groups: Vec<_> = report
         .groups
         .iter()
-        .any(|group| group.statistics.unit != comparison_unit)
-    {
-        return Err(failure(
-            "JSON_GROUP_MEAN_UNIT_MISMATCH",
-            "group means use different or mixed units; no cross-group conversion was applied",
-        ));
-    }
-    let means: Vec<_> = report
-        .groups
-        .iter()
-        .map(|group| group.statistics.mean.clone())
+        .map(|group| (group.value.as_str(), &group.statistics))
         .collect();
-    let winner_indices = crate::math::maximum_exact_indices(&means)?;
-    let winner_set: BTreeSet<_> = winner_indices.iter().copied().collect();
-    let comparisons = report
-        .groups
-        .iter()
-        .enumerate()
-        .map(|(index, group)| JsonGroupMeanComparison {
-            group: group.value.clone(),
-            mean: group.statistics.mean.clone(),
-            highest: winner_set.contains(&index),
-        })
-        .collect();
+    let (comparison_unit, comparisons, winner_indices) = compare_group_means(&groups, false)?;
     let winners = winner_indices
         .iter()
         .map(|index| {
             let group = &report.groups[*index];
             let sample_count = group.source_row_indices.len().min(8);
-            JsonGroupMeanWinner {
+            GroupMeanWinner {
                 group: group.value.clone(),
                 mean: group.statistics.mean.clone(),
                 source_row_count: group.source_row_indices.len(),
@@ -4264,7 +4439,7 @@ pub(crate) fn json_table_highest_group_mean(
             }
         })
         .collect();
-    Ok(JsonGroupMeanAnswer {
+    Ok(GroupMeanAnswer {
         source_sha256: report.source_sha256.clone(),
         group_by: report.group_by.clone(),
         value_column: report.value_column.clone(),
@@ -4275,13 +4450,63 @@ pub(crate) fn json_table_highest_group_mean(
     })
 }
 
-pub(crate) fn json_group_mean_answer_lines(answer: &JsonGroupMeanAnswer) -> Vec<String> {
+fn compare_group_means(
+    groups: &[(&str, &crate::math::Statistics)],
+    csv: bool,
+) -> Result<(Option<String>, Vec<GroupMeanComparison>, Vec<usize>)> {
+    let (_, first) = groups.first().ok_or_else(|| {
+        failure(
+            if csv {
+                "CSV_GROUP_MEAN_CONTEXT_INVALID"
+            } else {
+                "JSON_GROUP_MEAN_CONTEXT_INVALID"
+            },
+            "the validated grouped-statistics report has no groups",
+        )
+    })?;
+    let comparison_unit = first.unit.clone();
+    if groups
+        .iter()
+        .any(|(_, statistics)| statistics.unit != comparison_unit)
+    {
+        return Err(failure(
+            if csv {
+                "CSV_GROUP_MEAN_UNIT_MISMATCH"
+            } else {
+                "JSON_GROUP_MEAN_UNIT_MISMATCH"
+            },
+            "group means use different or mixed units; no cross-group conversion was applied",
+        ));
+    }
+    let means: Vec<_> = groups
+        .iter()
+        .map(|(_, statistics)| statistics.mean.clone())
+        .collect();
+    let winners = crate::math::maximum_exact_indices(&means)?;
+    let comparisons = groups
+        .iter()
+        .enumerate()
+        .map(|(index, (group, statistics))| GroupMeanComparison {
+            group: (*group).into(),
+            mean: statistics.mean.clone(),
+            highest: winners.binary_search(&index).is_ok(),
+        })
+        .collect();
+    Ok((comparison_unit, comparisons, winners))
+}
+
+pub(crate) fn group_mean_answer_lines(answer: &GroupMeanAnswer, csv: bool) -> Vec<String> {
     let unit = answer
         .comparison_unit
         .as_deref()
         .map_or_else(String::new, |unit| format!(" {unit}"));
     let mut lines = vec![
-        "前回のJSON表グループ統計を再検証し、全グループの平均を正確に比較しました。".into(),
+        if csv {
+            "前回のCSVグループ統計を再検証し、全グループの平均を正確に比較しました。"
+        } else {
+            "前回のJSON表グループ統計を再検証し、全グループの平均を正確に比較しました。"
+        }
+        .into(),
         format!(
             "集計対象: {}列ごとの{}列の平均。元資料 SHA-256: {}",
             answer.group_by, answer.value_column, answer.source_sha256
@@ -4341,8 +4566,13 @@ pub(crate) fn json_group_mean_answer_lines(answer: &JsonGroupMeanAnswer) -> Vec<
         }
         if winner.source_row_count > winner.sampled_source_row_indices.len() {
             lines.push(format!(
-                "  残り{}行の元セル範囲は回答artifactと元資料に保持されています。",
-                winner.source_row_count - winner.sampled_source_row_indices.len()
+                "  残り{}行の元セル範囲は{}に保持されています。",
+                winner.source_row_count - winner.sampled_source_row_indices.len(),
+                if csv {
+                    "元のCSV統計記録"
+                } else {
+                    "回答artifactと元資料"
+                },
             ));
         }
     }
@@ -5221,17 +5451,11 @@ fn csv_group_statistics_input(
     }
 
     #[derive(Serialize)]
-    struct GroupReport {
-        value: String,
-        source_record_numbers: Vec<usize>,
-        statistics: crate::math::Statistics,
-    }
-    #[derive(Serialize)]
     struct Report<'a> {
         source_sha256: String,
         group_column: &'a str,
         value_column: &'a str,
-        groups: &'a [GroupReport],
+        groups: &'a [CsvGroupStatisticsGroup],
         source_spans: &'a [DocumentSpan],
         guarantee: &'static str,
     }
@@ -5301,7 +5525,7 @@ fn csv_group_statistics_input(
         } else {
             crate::math::summarize(&values, None)?
         };
-        reports.push(GroupReport {
+        reports.push(CsvGroupStatisticsGroup {
             value: group_value.clone(),
             source_record_numbers,
             statistics,

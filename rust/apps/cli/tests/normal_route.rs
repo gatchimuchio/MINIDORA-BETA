@@ -12766,6 +12766,138 @@ fn natural_group_mean_question_consumes_the_actual_prior_json_statistics() {
 }
 
 #[test]
+fn natural_group_mean_question_consumes_the_actual_prior_csv_statistics() {
+    const QUESTION: &str = "どのグループの平均値が一番高いですか";
+    const CSV: &str =
+        "班,値\r\n\"青,北\",1000 m\r\n赤,1.25 km\r\n\"青,北\",0.5 km\r\n赤,1750 m\r\n";
+    const PARSER: &str = "declarative-ja-v206-previous-csv-group-mean";
+
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let request = format!("CSVの「班」ごとに「値」の統計量を計算して:\n{CSV}");
+    let original = record(&run(&["--input", "csv-group-statistics", &request]));
+    let original_id = original["id"].as_str().unwrap();
+    let original_artifact = normal_document_artifact(
+        &scratch.0,
+        "owner",
+        &original,
+        &request,
+        CSV,
+        "CSV_GROUP_STATISTICS",
+    );
+    let answer = record(&run(&["--input", "csv-highest-group", QUESTION]));
+    assert_eq!(answer["lifecycle"], "COMMIT");
+    assert_eq!(answer["guarantee"], "COMPUTED");
+    assert_eq!(answer["content_plan"]["text"], answer["text"]);
+    let answer_text = answer["text"].as_str().unwrap();
+    let source_sha256 = original_artifact["source_sha256"].as_str().unwrap();
+    assert!(answer_text.starts_with("前回のCSVグループ統計を再検証し"));
+    assert!(answer_text.contains("平均が最も高いグループ: \"赤\"（平均=1500 m）"));
+    assert!(answer_text.contains(source_sha256), "{answer_text}");
+    let stored = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(stored["bundle"]["meaning"]["parser_version"], PARSER);
+    assert_eq!(
+        stored["bundle"]["meaning"]["context_result_ref"],
+        original_id
+    );
+    assert_eq!(
+        stored["bundle"]["meaning"]["intent"]["kind"],
+        "ASK_PREVIOUS_GROUP_MEAN"
+    );
+    assert_eq!(stored["result"], answer);
+
+    let [prior_id, input_ref, report_ref, answer_ref] =
+        answer["dependencies"].as_array().unwrap().as_slice()
+    else {
+        panic!("the answer must retain the CSV result, sealed input, report and comparison");
+    };
+    assert_eq!(prior_id.as_str(), Some(original_id));
+    assert_eq!(report_ref, &original["dependencies"][0]);
+    let input_ref = input_ref.as_str().unwrap();
+    let input_bytes = std::fs::read(scratch.0.join("blobs").join(input_ref)).unwrap();
+    assert_eq!(minidora_domain::digest(&input_bytes), input_ref);
+    let original_bundle: Value = serde_json::from_slice(&input_bytes).unwrap();
+    assert_eq!(original_bundle["request"]["text"], request);
+    assert_eq!(original_bundle["meaning"]["intent"]["document"], CSV);
+
+    let answer_ref = answer_ref.as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bytes = store
+        .get_bytes("owner", "normal-route", answer_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), answer_ref);
+    let report: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(report["source_sha256"], source_sha256);
+    assert_eq!(report["comparison_unit"], "m");
+    assert_eq!(report["winners"].as_array().unwrap().len(), 1);
+    assert_eq!(report["winners"][0]["group"], "赤");
+    assert_eq!(report["winners"][0]["mean"], "1500");
+    assert_eq!(report["comparisons"][0]["group"], "青,北");
+    assert_eq!(report["comparisons"][0]["mean"], "750");
+    let samples = report["winners"][0]["sampled_value_source_spans"]
+        .as_array()
+        .unwrap();
+    assert_eq!(samples.len(), 2);
+    for (span, token) in samples.iter().zip(["1.25 km", "1750 m"]) {
+        let start = CSV.find(token).unwrap();
+        assert_eq!(span["source_start"], start);
+        assert_eq!(span["source_end"], start + token.len());
+        assert_eq!(
+            span["source_sha256"],
+            minidora_domain::digest(token.as_bytes())
+        );
+    }
+
+    record(&run(&["--input", "intervening-arithmetic", "2+3"]));
+    let historical = record(&run(&["--context", original_id, QUESTION]));
+    assert_eq!(historical["text"], answer["text"]);
+    assert_eq!(historical["dependencies"], answer["dependencies"]);
+
+    let grouped = |id, source| {
+        let request = format!("CSVの「班」ごとに「値」の統計量を計算して:\n{source}");
+        let result = record(&run(&["--input", id, &request]));
+        assert_eq!(result["lifecycle"], "COMMIT");
+    };
+    grouped("tied-statistics", "班,値\r\n青,0.2\r\n赤,0.5\r\n青,0.8\r\n");
+    let tied = record(&run(&["--input", "tied-question", QUESTION]));
+    assert_eq!(tied["lifecycle"], "COMMIT");
+    let tied_text = tied["text"].as_str().unwrap();
+    for expected in ["同率で2件", "\"青\"（平均=1/2）", "\"赤\"（平均=1/2）"] {
+        assert!(tied_text.contains(expected), "{tied_text}");
+    }
+
+    grouped("mixed-statistics", "班,値\r\n青,1 m\r\n赤,1 s\r\n");
+    let mixed = stopped(&run(&["--input", "mixed-question", QUESTION]), 2, "SUSPEND");
+    assert!(
+        mixed["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CSV_GROUP_MEAN_UNIT_MISMATCH:")
+    );
+    assert!(mixed["dependencies"].as_array().unwrap().is_empty());
+    assert!(mixed["render"].is_null());
+    let limited = stopped(
+        &run(&[
+            "--context",
+            original_id,
+            "--max-evidence-bytes",
+            "1",
+            QUESTION,
+        ]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert!(limited["render"].is_null());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn natural_group_mean_question_preserves_ties_and_refuses_mixed_units() {
     let tied = Scratch::new();
     let tied_document = r#"{"columns":["score","team"],"rows":[["0.2","north"],["0.8","north"],["0.5","south"],["0.1","east"]]}"#;

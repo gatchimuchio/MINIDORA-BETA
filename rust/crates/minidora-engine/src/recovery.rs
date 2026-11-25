@@ -382,7 +382,7 @@ struct PreviousTextEditExpectation {
     edit_ref: String,
 }
 
-type JsonGroupMeanRecovery = (String, String, String, String, Vec<u8>, Vec<String>);
+type GroupMeanRecovery = (String, String, String, String, Vec<u8>, Vec<String>);
 
 fn verify_saved_previous_relation_query_context(
     store: &Store,
@@ -5941,24 +5941,37 @@ fn inspect(
         } else {
             None
         };
-    let previous_json_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
+    let csv_group_mean =
+        bundle.meaning.parser_version == crate::input::PREVIOUS_CSV_GROUP_MEAN_PARSER_VERSION;
+    let [group_mean_source, group_mean_report, group_mean_answer] =
+        crate::document::group_mean_graph_ids(csv_group_mean);
+    let group_mean_recovery_code = if csv_group_mean {
+        "RECOVERY_CSV_GROUP_MEAN_CHANGED"
+    } else {
+        "RECOVERY_JSON_GROUP_MEAN_CHANGED"
+    };
+    let previous_group_mean_answer = if matches!(goal.intent, Intent::AskPreviousGroupMean) {
         bundle
             .meaning
             .context_result_ref
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .filter(|previous| previous.lifecycle == Lifecycle::Commit)
-            .map(|previous| -> Result<Option<JsonGroupMeanRecovery>> {
+            .map(|previous| -> Result<Option<GroupMeanRecovery>> {
+                if csv_group_mean && bundle.request.context_ref.is_none()
+                    && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+                {
+                    return Err(failure(group_mean_recovery_code, "the original CSV grouped-statistics result is not the recorded predecessor"));
+                }
+                let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
                 let Some((source_ref, report_ref, answer)) =
-                    crate::document::previous_json_table_highest_group_mean(
-                        store, actor, case, previous,
-                    )?
+                    crate::document::previous_group_mean(store, bundle, previous, deadline)?
                 else {
                     return Ok(None);
                 };
                 let answer_bytes = canonical(&answer)?;
                 let answer_ref = digest(&answer_bytes);
-                let expected_units = crate::document::json_group_mean_answer_lines(&answer);
+                let expected_units = crate::document::group_mean_answer_lines(&answer, csv_group_mean);
                 Ok(Some((
                     previous.id.clone(),
                     source_ref,
@@ -5973,6 +5986,12 @@ fn inspect(
     } else {
         None
     };
+    if csv_group_mean && previous_group_mean_answer.is_none() {
+        return Err(failure(
+            group_mean_recovery_code,
+            "the original CSV grouped-statistics result is not retained",
+        ));
+    }
     let previous_math_report_explanation = if matches!(goal.intent, Intent::ExplainPrevious) {
         bundle
             .meaning
@@ -6733,11 +6752,11 @@ fn inspect(
         }
     }
     if let Some((previous_id, source_ref, report_ref, answer_ref, answer_bytes, expected_units)) =
-        &previous_json_group_mean_answer
+        &previous_group_mean_answer
     {
         let previous = state.prior_results.get(previous_id).ok_or_else(|| {
             failure(
-                "RECOVERY_JSON_GROUP_MEAN_CHANGED",
+                group_mean_recovery_code,
                 "the queried grouped-statistics result is no longer retained",
             )
         })?;
@@ -6752,9 +6771,14 @@ fn inspect(
             || plan.required_units != *expected_units
             || result.guarantee != Guarantee::Computed
             || store.get_bytes(actor, case, answer_ref)? != *answer_bytes
+            || csv_group_mean
+                && (result.text != expected_units.join("\n")
+                    || plan.guarantee != result.guarantee
+                    || plan.text != result.text
+                    || !plan.dependencies.starts_with(&expected_dependencies))
         {
             return Err(failure(
-                "RECOVERY_JSON_GROUP_MEAN_CHANGED",
+                group_mean_recovery_code,
                 "the revalidated source, grouped means or highest-group answer changed",
             ));
         }
@@ -7259,10 +7283,10 @@ fn inspect(
         });
         sources.push(report_id);
     }
-    if previous_json_group_mean_answer.is_some() {
-        let source_id = "previous-json-group-statistics-source".to_string();
-        let report_id = "previous-json-group-statistics-report".to_string();
-        let answer_id = "previous-json-group-mean-answer".to_string();
+    if previous_group_mean_answer.is_some() {
+        let source_id = group_mean_source.to_string();
+        let report_id = group_mean_report.to_string();
+        let answer_id = group_mean_answer.to_string();
         expected_nodes.push(GoalNode {
             id: source_id.clone(),
             kind: GoalNodeKind::Evidence,
@@ -7605,10 +7629,10 @@ fn inspect(
             explanation.report_ref.clone(),
         );
     }
-    if let Some((_, source_ref, report_ref, answer_ref, _, _)) = &previous_json_group_mean_answer {
-        let source_id = "previous-json-group-statistics-source".to_string();
-        let report_id = "previous-json-group-statistics-report".to_string();
-        let answer_id = "previous-json-group-mean-answer".to_string();
+    if let Some((_, source_ref, report_ref, answer_ref, _, _)) = &previous_group_mean_answer {
+        let source_id = group_mean_source.to_string();
+        let report_id = group_mean_report.to_string();
+        let answer_id = group_mean_answer.to_string();
         graph.observe(&source_id, source_ref, &BTreeMap::new())?;
         graph.observe(
             &report_id,
@@ -11862,6 +11886,82 @@ mod tests {
         assert_eq!(
             graph[5]["sequence-final"]["sequence-larger"],
             result.dependencies[1]
+        );
+    }
+
+    #[test]
+    fn csv_group_mean_reconciles_the_original_comparison_without_rewriting() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let grouped = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "csv-statistics",
+                    "alice",
+                    "CSVの「班」ごとに「値」の統計量を計算して:\n班,値\n青,1\n赤,5\n青,3\n",
+                ),
+            )
+            .unwrap();
+        assert_eq!(grouped.lifecycle, Lifecycle::Commit, "{grouped:?}");
+        let mut request = RequestEnvelope::new(
+            "case",
+            "csv-maximum",
+            "alice",
+            "どのグループの平均値が一番高いですか",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit, "{answer:?}");
+        assert!(answer.text.contains("\"赤\"（平均=5）"), "{answer:?}");
+        assert_eq!(answer.dependencies[0], grouped.id);
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, answer.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let saved = store.load_case("alice", "case").unwrap().unwrap();
+        let mut without_source = saved.clone();
+        assert!(without_source.prior_results.remove(&grouped.id).is_some());
+        let actions = store.actions("alice", "case").unwrap();
+        assert!(
+            inspect(
+                &store,
+                "alice",
+                &without_source,
+                saved.result.as_ref().unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, answer.dependencies);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!(
+                "expected a single original receipt: {:?}",
+                recovered.receipts
+            );
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
         );
     }
 
