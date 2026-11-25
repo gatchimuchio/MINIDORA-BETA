@@ -43,6 +43,8 @@ pub(crate) const EXPLAINED_CODE_VERIFICATION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v205-explained-code-verification-explanation";
 pub(crate) const PREVIOUS_CSV_GROUP_MEAN_PARSER_VERSION: &str =
     "declarative-ja-v206-previous-csv-group-mean";
+pub(crate) const PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v207-previous-correction-explanation";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -258,6 +260,7 @@ pub(crate) enum SourceContext {
     DirectCodeVerificationExplanation,
     ExplainedCodeVerificationExplanation,
     PreviousCsvGroupMean,
+    PreviousCorrectionExplanation,
     ExplainedDirectSource,
     DirectBodyQuestion,
     WebAnswerExplanation,
@@ -693,6 +696,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::DirectCodeVerificationExplanation
         | SourceContext::ExplainedCodeVerificationExplanation
         | SourceContext::PreviousCsvGroupMean
+        | SourceContext::PreviousCorrectionExplanation
         | SourceContext::ExplainedDirectSource
         | SourceContext::DirectBodyQuestion
         | SourceContext::WebAnswerExplanation
@@ -708,6 +712,14 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::DerivedRelationFollowup => None,
     });
     let parser_version = match &intent {
+        Intent::ExplainPrevious
+            if matches!(
+                source_context,
+                Some(SourceContext::PreviousCorrectionExplanation)
+            ) =>
+        {
+            PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION
+        }
         Intent::AskPreviousGroupMean
             if matches!(source_context, Some(SourceContext::PreviousCsvGroupMean)) =>
         {

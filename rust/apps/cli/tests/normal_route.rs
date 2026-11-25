@@ -11076,6 +11076,173 @@ fn pronoun_questions_reuse_active_premise_correction_across_processes() {
 }
 
 #[test]
+fn correction_explanation_uses_saved_original_negation_and_replacement() {
+    use minidora_domain::{Guarantee, Intent};
+
+    const PREMISE: &str = "[scope=物語]ミナは鳥です";
+    const CORRECTION: &str = "[scope=物語]訂正: ミナは鳥ではなく魚です";
+    const EXPLAIN: &str = "詳しく説明して";
+    const PARSER: &str = "declarative-ja-v207-previous-correction-explanation";
+
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    let original = record(&run(&["--input", "premise", PREMISE]));
+    let correction = record(&run(&["--input", "correction", CORRECTION]));
+    assert_eq!(original["lifecycle"], "COMMIT");
+    assert_eq!(correction["lifecycle"], "COMMIT");
+    let correction_id = correction["id"].as_str().unwrap();
+    let [superseded, negative, replacement] =
+        correction["dependencies"].as_array().unwrap().as_slice()
+    else {
+        panic!("the correction must retain the original and both new facts");
+    };
+    assert_eq!(original["dependencies"], serde_json::json!([superseded]));
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let already_corrected = store.load_memory("owner").unwrap();
+    for (identity, object, is_negative, is_valid, source) in [
+        (superseded, "鳥", false, false, &original["id"]),
+        (negative, "鳥", true, true, &correction["id"]),
+        (replacement, "魚", false, true, &correction["id"]),
+    ] {
+        let fact = already_corrected
+            .facts
+            .iter()
+            .find(|fact| Some(fact.id.as_str()) == identity.as_str())
+            .unwrap();
+        let proposition = serde_json::to_value(&fact.proposition).unwrap();
+        assert_why_proposition(&proposition, "ミナ", object, "物語", is_negative);
+        assert_eq!(fact.guarantee, Guarantee::UserPremise);
+        assert_eq!(fact.valid, is_valid);
+        assert_eq!(Some(fact.source_input.as_str()), source.as_str());
+    }
+
+    // Each invocation opens the store from a different process. The original
+    // CLI that wrote the correction is no longer running.
+    let question = ["--input", "explain-correction", EXPLAIN];
+    let explained = record(&run(&question));
+    assert_eq!(explained["lifecycle"], "COMMIT");
+    assert_eq!(explained["guarantee"], "USER_PREMISE");
+    assert_ne!(explained["text"], correction["text"]);
+    assert_eq!(
+        explained["actor_memory_revision"],
+        already_corrected.revision
+    );
+    let explanation = explained["text"].as_str().unwrap();
+    let correction_sha256 = minidora_domain::digest(CORRECTION.as_bytes());
+    for expected in [
+        "前回の訂正を、封印された原文と保存済みの記憶から照合しました。".to_owned(),
+        "以前の前提: ミナは鳥である（範囲: 物語、失効）。".to_owned(),
+        "訂正で記録した否定: ミナは鳥ではない（範囲: 物語、有効）。".to_owned(),
+        "置き換え後の提示前提: ミナは魚である（範囲: 物語、有効）。".to_owned(),
+        format!("訂正原文 SHA-256: {correction_sha256}"),
+        format!("記憶版 {} で照合した状態です。", already_corrected.revision),
+    ] {
+        assert!(
+            explanation.contains(&expected),
+            "missing {expected:?}: {explanation}"
+        );
+    }
+    let [prior_id, bundle_ref, old, neg, new] =
+        explained["dependencies"].as_array().unwrap().as_slice()
+    else {
+        panic!("the explanation must retain the correction, sealed source and all affected facts");
+    };
+    assert_eq!(prior_id.as_str(), Some(correction_id));
+    assert_eq!((old, neg, new), (superseded, negative, replacement));
+    for fact in [old, neg, new] {
+        assert!(explanation.contains(fact.as_str().unwrap()));
+    }
+    let bundle_ref = bundle_ref.as_str().unwrap();
+    let bytes = std::fs::read(scratch.0.join("blobs").join(bundle_ref)).unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), bundle_ref);
+    let sealed_correction: minidora_domain::InputBundle = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(sealed_correction.request.actor_id, "owner");
+    assert_eq!(sealed_correction.request.case_id, "normal-route");
+    assert_eq!(sealed_correction.request.text, CORRECTION);
+    assert_eq!(sealed_correction.raw_sha256, correction_sha256);
+    assert!(matches!(
+        sealed_correction.meaning.intent,
+        Intent::CorrectPremise { .. }
+    ));
+    let stored = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let request = stored.bundle.as_ref().unwrap();
+    assert_eq!(request.meaning.parser_version, PARSER);
+    assert!(matches!(request.meaning.intent, Intent::ExplainPrevious));
+    assert_eq!(
+        request.meaning.context_result_ref.as_deref(),
+        Some(correction_id)
+    );
+    assert_eq!(request.request.text, EXPLAIN);
+    assert_eq!(
+        stored.prior_results[correction_id].text,
+        correction["text"].as_str().unwrap()
+    );
+    assert_eq!(store.load_memory("owner").unwrap(), already_corrected);
+
+    record(&run(&["--input", "intervening-arithmetic", "2+3"]));
+    let historical = record(&run(&["--context", correction_id, EXPLAIN]));
+    assert_eq!(historical["text"], explained["text"]);
+    assert_eq!(historical["dependencies"], explained["dependencies"]);
+    assert_eq!(record(&run(&question)), explained);
+    for (actor, case) in [("owner", "other-case"), ("visitor", "visitor-case")] {
+        let denied = stopped(
+            &execute_in_case(
+                &scratch.0,
+                actor,
+                case,
+                &["--context", correction_id, EXPLAIN],
+            ),
+            4,
+            "FAIL",
+        );
+        assert!(
+            denied["reason"]
+                .as_str()
+                .unwrap()
+                .contains("CONTEXT_MISMATCH")
+        );
+        assert!(denied["dependencies"].as_array().unwrap().is_empty());
+    }
+    assert_eq!(store.load_memory("owner").unwrap(), already_corrected);
+    assert!(store.load_memory("visitor").unwrap().facts.is_empty());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
+    for (option, expected) in [
+        ("--max-actions", "RELATION_BUDGET:"),
+        ("--max-evidence-bytes", "RESOURCE_LIMIT:"),
+    ] {
+        let limit = if option == "--max-actions" { "3" } else { "1" };
+        let limited = stopped(
+            &run(&["--context", correction_id, option, limit, EXPLAIN]),
+            2,
+            "SUSPEND",
+        );
+        assert!(
+            limited["reason"].as_str().unwrap().starts_with(expected),
+            "{limited:#?}"
+        );
+        assert!(limited["render"].is_null());
+    }
+    assert_eq!(store.load_memory("owner").unwrap(), already_corrected);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
+    record(&run(&["[scope=物語]訂正: ミナは魚ではなく猫です"]));
+    let corrected_again = store.load_memory("owner").unwrap();
+    let expired = record(&run(&["--context", correction_id, EXPLAIN]));
+    assert_eq!(expired["lifecycle"], "COMMIT");
+    assert_eq!(expired["actor_memory_revision"], corrected_again.revision);
+    assert_eq!(expired["dependencies"], explained["dependencies"]);
+    assert!(
+        expired["text"]
+            .as_str()
+            .unwrap()
+            .contains("置き換え後の提示前提: ミナは魚である（範囲: 物語、失効）。")
+    );
+    assert_eq!(store.load_memory("owner").unwrap(), corrected_again);
+}
+
+#[test]
 fn pronoun_questions_reuse_active_contextual_correction_across_processes() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| execute_in_case(&scratch.0, "owner", "contextual-correction", args);
@@ -11138,6 +11305,21 @@ fn pronoun_questions_reuse_active_contextual_correction_across_processes() {
     );
     assert_eq!(expired["guarantee"], "UNKNOWN");
     assert_eq!(record(&run(&implicit_request)), implicit);
+    let historical = record(&run(&["--context", correction_id, "詳しく説明して"]));
+    assert_eq!(historical["lifecycle"], "COMMIT");
+    let dependencies = historical["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.first(), Some(&correction["id"]));
+    assert_eq!(dependencies.last(), Some(&anchor["id"]));
+    assert_eq!(
+        &dependencies[2..5],
+        correction["dependencies"].as_array().unwrap()
+    );
+    let text = historical["text"].as_str().unwrap();
+    assert!(text.contains("置き換え後の提示前提: ミナは魚である（範囲: 物語、失効）。"));
+    assert!(text.contains(&format!(
+        "主語を参照した結果ID: {}",
+        anchor["id"].as_str().unwrap()
+    )));
 }
 
 #[test]

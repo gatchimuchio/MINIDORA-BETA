@@ -5428,6 +5428,8 @@ fn inspect(
             predicate == crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE
         }))
     .then_some(crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE);
+    let requires_correction_explanation = bundle.meaning.parser_version
+        == crate::input::PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION;
     if goal.required_predicates
         != goal_predicates(
             &bundle.meaning,
@@ -5456,6 +5458,7 @@ fn inspect(
             )
             || explains_sequence
             || assertion_predicate.is_some()
+            || requires_correction_explanation
             || verification_explanation_predicate.is_some()
             || goal.required_predicates != legacy_predicates)
     {
@@ -5870,7 +5873,10 @@ fn inspect(
         }
         hypothesis.verify_artifacts(store, actor, case)?;
     }
-    let original_relation = if assertion_predicate.is_some() {
+    let original_relation = if requires_correction_explanation {
+        verify_previous_correction_explanation(store, state, bundle, result, plan)?;
+        None
+    } else if assertion_predicate.is_some() {
         verify_previous_assertion_explanation(store, state, bundle, result, plan)?;
         None
     } else if requires_condition_evaluation || requires_record_source {
@@ -7904,6 +7910,65 @@ pub(crate) fn verify_web_answer<'a>(
     })
 }
 
+fn verify_previous_correction_explanation(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    const CODE: &str = "RECOVERY_CORRECTION_EXPLANATION_MISMATCH";
+    let invalid = || {
+        failure(
+            CODE,
+            "The retained correction, observed memory or explanation changed.",
+        )
+    };
+    let request = &bundle.request;
+    let prior = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .ok_or_else(invalid)?;
+    verify_registered_input(store, bundle, CODE)?;
+    if request.context_ref.is_none()
+        && store.input_start_predecessor(state)?.as_ref() != Some(prior)
+    {
+        return Err(invalid());
+    }
+    // Reproduce what the previously attempted file actually described, even
+    // if a later correction has since changed memory in a different case.
+    let revision = result.actor_memory_revision.ok_or_else(invalid)?;
+    let memory = store
+        .load_memory_revision(&request.actor_id, revision)?
+        .ok_or_else(invalid)?;
+    let expected = crate::core::previous_correction_explanation(
+        store,
+        state,
+        bundle,
+        prior,
+        &memory,
+        Instant::now(),
+    )?;
+    if result.id != identity(request)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.guarantee != Guarantee::UserPremise
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != expected.dependencies
+        || plan.guarantee != result.guarantee
+        || plan.required_units != expected.units
+        || !plan.dependencies.starts_with(&expected.dependencies)
+        || plan.text != expected.units.join("\n")
+        || result.text != plan.text
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 fn verify_previous_assertion_explanation(
     store: &Store,
     state: &CaseRevision,
@@ -9222,6 +9287,108 @@ mod tests {
             "統計 [0.1,0.2,0.3]",
             "statistics-explanation.txt",
         )
+    }
+
+    #[test]
+    fn correction_explanation_reconciles_its_observed_memory_without_rewriting() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let execute = |engine: &mut Engine, case, id, text| {
+            let result = engine
+                .execute("alice", RequestEnvelope::new(case, id, "alice", text))
+                .unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            result
+        };
+        execute(&mut engine, "case", "premise", "ミナは鳥です");
+        let correction = execute(
+            &mut engine,
+            "case",
+            "correction",
+            "訂正: ミナは鳥ではなく魚です",
+        );
+        let mut request =
+            RequestEnvelope::new("case", "explain-correction", "alice", "詳しく説明して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let answer = engine.execute("alice", request).unwrap();
+        assert_eq!(answer.lifecycle, Lifecycle::Commit, "{answer:?}");
+        assert_eq!(answer.actor_memory_revision, Some(2));
+        assert!(
+            answer
+                .text
+                .contains("置き換え後の提示前提: ミナは魚である（範囲: default、有効）。")
+        );
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, answer.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        execute(
+            &mut engine,
+            "later-case",
+            "later-correction",
+            "訂正: ミナは魚ではなく猫です",
+        );
+        drop(engine);
+        let store = Store::open(&fixture.state).unwrap();
+        let memory = store.load_memory("alice").unwrap();
+        assert_eq!(memory.revision, 3);
+        assert!(
+            memory
+                .facts
+                .iter()
+                .any(|fact| fact.id == *correction.dependencies.last().unwrap() && !fact.valid)
+        );
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        let mut without_source = state.clone();
+        assert!(
+            without_source
+                .prior_results
+                .remove(&correction.id)
+                .is_some()
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert!(
+            inspect(
+                &store,
+                "alice",
+                &without_source,
+                state.result.as_ref().unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.text, answer.text);
+        assert_eq!(recovered.actor_memory_revision, Some(2));
+        assert_eq!(recovered.dependencies, answer.dependencies);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!(
+                "expected a single original receipt: {:?}",
+                recovered.receipts
+            );
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(store.load_memory("alice").unwrap(), memory);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]

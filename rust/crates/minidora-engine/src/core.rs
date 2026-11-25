@@ -1836,6 +1836,11 @@ pub(crate) fn goal_predicates(
             };
             predicates.push(predicate.into());
         }
+        Intent::ExplainPrevious
+            if meaning.parser_version == input::PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION =>
+        {
+            predicates.push(PREVIOUS_CORRECTION_EXPLANATION_PREDICATE.into());
+        }
         Intent::ExplainPrevious => {
             predicates.extend(context_predicate.map(str::to_owned));
         }
@@ -1913,6 +1918,7 @@ fn verify_report_goal_content(
                 | RETURN_FUNCTION_PREDICATE
                 | crate::code_generation::EXPLAINED_CODE_VERIFICATION_PREDICATE
                 | PREVIOUS_ASSERTION_EXPLANATION_PREDICATE
+                | PREVIOUS_CORRECTION_EXPLANATION_PREDICATE
                 | crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE
         ) || record_source_contract(&goal.intent)
             .is_some_and(|(_, required)| required == predicate.as_str())
@@ -6008,7 +6014,7 @@ impl Engine {
                     result.lifecycle == Lifecycle::Commit
                         && matches!(
                             result.guarantee,
-                            Guarantee::Computed | Guarantee::SourceReport
+                            Guarantee::Computed | Guarantee::SourceReport | Guarantee::UserPremise
                         )
                 })
                 && let Some(source_context) = self
@@ -6020,6 +6026,12 @@ impl Engine {
                         context.input_version,
                     )?
                     .and_then(|(_, source)| match source.meaning.intent {
+                        Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
+                            if is_natural_correction(&source)
+                                && context.guarantee == Guarantee::UserPremise =>
+                        {
+                            Some(input::SourceContext::PreviousCorrectionExplanation)
+                        }
                         Intent::VerifyCode { .. } if context.guarantee == Guarantee::Computed => {
                             Some(input::SourceContext::DirectCodeVerificationExplanation)
                         }
@@ -8788,6 +8800,44 @@ impl Engine {
                     "SEQUENCE_STEP_EXPLANATION_CONTEXT_REQUIRED",
                     "手順を詳説するには、同じケースの確定済み連続計算が必要です。",
                 );
+            }
+            Intent::ExplainPrevious
+                if bundle.meaning.parser_version
+                    == input::PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION =>
+            {
+                let Some(prior) = previous else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "PRIOR_INPUT_RESULT_MISMATCH",
+                        "同じ会話の確定した訂正結果を確認できません。",
+                    );
+                };
+                let memory = record_source_memory_at_head(&self.store, actor)?;
+                let explanation = match previous_correction_explanation(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    prior,
+                    &memory,
+                    started,
+                ) {
+                    Ok(explanation) => explanation,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                result.actor_memory_revision = Some(memory.revision);
+                result.dependencies = explanation.dependencies;
+                result.guarantee = Guarantee::UserPremise;
+                units = explanation.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: PREVIOUS_CORRECTION_EXPLANATION_PREDICATE,
+                    guarantee: Guarantee::UserPremise,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::ExplainPrevious
                 if bundle.meaning.parser_version
@@ -14333,6 +14383,215 @@ fn previous_correction_context(
         replacement,
         replacement_id,
         source_evidence,
+    })
+}
+
+pub(crate) const PREVIOUS_CORRECTION_EXPLANATION_PREDICATE: &str =
+    "PREVIOUS_CORRECTION_EXPLANATION_V1";
+
+/// Explain a registered correction from one observed memory version. Inactive
+/// facts remain evidence for this historical explanation, never for inference.
+pub(crate) fn previous_correction_explanation(
+    store: &Store,
+    state: &CaseRevision,
+    followup: &InputBundle,
+    prior: &ResultRecord,
+    memory: &MemoryState,
+    started: Instant,
+) -> Result<PreviousAssertionExplanation> {
+    let invalid = correction_context_mismatch;
+    let request = &followup.request;
+    let actor = &request.actor_id;
+    let case = &request.case_id;
+    let check_time = || {
+        if started.elapsed() >= Duration::from_millis(request.budget.deadline_ms) {
+            return Err(failure(
+                "DEADLINE",
+                "訂正の根拠の照合中に締切へ達しました。",
+            ));
+        }
+        Ok(())
+    };
+    if actor != &state.actor_id
+        || case != &state.case_id
+        || !matches!(followup.meaning.intent, Intent::ExplainPrevious)
+        || followup.meaning.parser_version != input::PREVIOUS_CORRECTION_EXPLANATION_PARSER_VERSION
+        || !registered_relation_context_matches(followup, &state.prior_results, prior)?
+        || prior.lifecycle != Lifecycle::Commit
+        || prior.guarantee != Guarantee::UserPremise
+        || prior.calculation.is_some()
+        || !prior.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    check_time()?;
+    let [affected_ids @ .., _, _] = prior.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let budget_error = || {
+        failure(
+            "RELATION_BUDGET",
+            "訂正の記憶記録を照合する手数が不足しています。",
+        )
+    };
+    let proof_actions = u32::try_from(prior.dependencies.len()).map_err(|_| budget_error())?;
+    let mut remaining_actions = request
+        .budget
+        .max_actions
+        .checked_sub(3 + u32::from(request.output_path.is_some()))
+        .and_then(|remaining| remaining.checked_sub(proof_actions))
+        .ok_or_else(budget_error)?;
+    let (bundle_ref, source) = store.with_verified_case_history(actor, case, |history| {
+        if history
+            .input_result(&prior.input_id, prior.input_version)?
+            .as_ref()
+            != Some(prior)
+        {
+            return Err(invalid());
+        }
+        history
+            .input_bundle(&prior.input_id, prior.input_version)?
+            .ok_or_else(invalid)
+    })?;
+    if !is_natural_correction(&source) || identity(&source.request)? != prior.id {
+        return Err(invalid());
+    }
+    let mut anchor = None;
+    let (superseded, replacement) = match &source.meaning.intent {
+        Intent::CorrectPremise {
+            superseded,
+            replacement,
+        } => (superseded.clone(), replacement.clone()),
+        Intent::CorrectPreviousPremise { .. } => {
+            anchor = source.meaning.context_result_ref.as_ref();
+            previous_contextual_correction_target(
+                store,
+                &source,
+                &state.prior_results,
+                prior,
+                memory,
+                &mut remaining_actions,
+            )?
+        }
+        _ => return Err(invalid()),
+    };
+    let correction = previous_correction_context(&source, prior, superseded.clone(), replacement)?;
+    let premise = |id: &str, proposition: &Proposition| {
+        memory
+            .facts
+            .iter()
+            .find(|fact| {
+                fact.id == id
+                    && &fact.proposition == proposition
+                    && fact.source_input == prior.id
+                    && fact.guarantee == Guarantee::UserPremise
+                    && fact.dependencies.is_empty()
+                    && fact.source_evidence.as_ref() == Some(&correction.source_evidence)
+            })
+            .ok_or_else(invalid)
+    };
+    let negative = premise(&correction.negative_id, &correction.negative)?;
+    let replacement = premise(&correction.replacement_id, &correction.replacement)?;
+    let affected: BTreeSet<_> = affected_ids.iter().map(String::as_str).collect();
+    let mut projection = MemoryState::default();
+    projection.facts.extend(
+        memory
+            .facts
+            .iter()
+            .filter(|record| !record.valid && affected.contains(record.id.as_str()))
+            .cloned(),
+    );
+    projection.rules.extend(
+        memory
+            .rules
+            .iter()
+            .filter(|record| !record.valid && affected.contains(record.id.as_str()))
+            .cloned(),
+    );
+    projection.conditions.extend(
+        memory
+            .conditions
+            .iter()
+            .filter(|record| !record.valid && affected.contains(record.id.as_str()))
+            .cloned(),
+    );
+    // Restrict replay to the saved affected set. A later memory version is
+    // not evidence that additional records were affected by this correction.
+    let roots = projection
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.proposition == superseded
+                && fact.guarantee == Guarantee::UserPremise
+                && fact.dependencies.is_empty()
+                && !fact.source_input.is_empty()
+        })
+        .map(|fact| {
+            if relations::user_premise_id(&fact.proposition, &fact.source_input)? != fact.id {
+                return Err(invalid());
+            }
+            Ok(fact.id.clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if roots.is_empty()
+        || relations::invalidate_in_order(&mut projection, roots.iter().map(String::as_str))?
+            != affected_ids
+    {
+        return Err(invalid());
+    }
+    let status = |fact: &Fact| if fact.valid { "有効" } else { "失効" };
+    let mut units = vec![
+        "前回の訂正を、封印された原文と保存済みの記憶から照合しました。".into(),
+        format!("訂正入力: {:?}", source.request.text),
+        format!(
+            "訂正原文 SHA-256: {}",
+            correction.source_evidence.raw_sha256
+        ),
+        format!("記憶版 {} で照合した状態です。", memory.revision),
+        format!(
+            "以前の前提: {}（範囲: {}、失効）。",
+            describe(&superseded),
+            superseded.scope
+        ),
+        format!("以前の前提ID: {}", roots.join("、")),
+        format!(
+            "訂正で記録した否定: {}（範囲: {}、{}）。",
+            describe(&negative.proposition),
+            negative.proposition.scope,
+            status(negative)
+        ),
+        format!("否定前提ID: {}", negative.id),
+        format!(
+            "置き換え後の提示前提: {}（範囲: {}、{}）。",
+            describe(&replacement.proposition),
+            replacement.proposition.scope,
+            status(replacement)
+        ),
+        format!("置き換え前提ID: {}", replacement.id),
+        format!(
+            "訂正の失効対象として記録されたID: {}",
+            affected_ids.join("、")
+        ),
+    ];
+    let mut dependencies = vec![prior.id.clone(), bundle_ref];
+    dependencies.extend(prior.dependencies.iter().cloned());
+    if let Some(anchor) = anchor {
+        units.push(format!("主語を参照した結果ID: {anchor}"));
+        dependencies.push(anchor.clone());
+    }
+    units.push(
+        "これは提示前提と保存状態の説明で、現実世界の真偽を検証したものではありません。".into(),
+    );
+    if units.join("\n").len() > request.budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "訂正の根拠と説明が要求の証拠予算を超えています。",
+        ));
+    }
+    check_time()?;
+    Ok(PreviousAssertionExplanation {
+        dependencies,
+        units,
     })
 }
 
