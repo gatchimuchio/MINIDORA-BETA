@@ -220,6 +220,8 @@ Windowsの保存先には `C:\Users\利用者\Documents\結果.txt` のような
 
 Rustのconsumerは同じソースの `minidora-engine` と `minidora-domain` を使用する。`Engine::capabilities()` は `minidora-native/v1` のAPI版、保存schema、実装済みの提供能力と必要権限を返す。CLIでは `minidora-rust capabilities --json` から同じ情報を得られる。`Engine::execute(actor, RequestEnvelope)` で実行し、`ResultRecord` の `lifecycle`、`reason`、本文、出典、受領を利用する。`engine.case_status(actor, case)` は同じactorの最新結果と、採用済みの実モデル版を返す。
 
+能力一覧には、明示的なメタデータ検索の `search-wikipedia-metadata`（`ja.wikipedia.org`）、`search-crossref-metadata`（`api.crossref.org`）、`search-europepmc-metadata`（`www.ebi.ac.uk`）も含まれる。対話の `/status` でも各能力に必要なホストを確認できる。能力の表示は通信の許可や到達を保証せず、検索一覧だけでは本文を取得しない。明示URLの本文取得は別の機能で、URLと転送先それぞれのホストへの個別の許可が必要になる。
+
 日本語の `RequestEnvelope.locale` は `ja` と `ja-JP` を受け付け、指定された綴りを入力と採用結果に保持する。
 
 `minidora-rust inspect --input ID --version N --json` または `engine.input_result(actor, case, input, version)` で、指定した入力版の保存済み `ResultRecord` を読み出せる。CLIの版指定は省略時に `1`。結果未保存または該当版が存在しない場合はCLIが `null` を返し、Native APIでは `None` になる。`--input` を省略するとCLIは会話の最新保存版を返す。

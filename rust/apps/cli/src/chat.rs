@@ -2,7 +2,7 @@ use super::{Options, execute_request};
 use minidora_domain::{
     CaseRevision, DeliveryReceipt, EffectPhase, Intent, RequestEnvelope, ResultRecord,
 };
-use minidora_engine::{Engine, input};
+use minidora_engine::{CapabilityPermission, Engine, input};
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -274,6 +274,15 @@ fn show_status(
     );
     for capability in info.capabilities {
         eprintln!("{}: {}", capability.id, capability.scope);
+        match capability.permission {
+            Some(CapabilityPermission::ExactHttpsHost { host }) => {
+                eprintln!("  必要許可 HTTPSホスト {host}（完全一致）");
+            }
+            Some(CapabilityPermission::ExactLocalWritePath) => {
+                eprintln!("  必要許可 ローカル保存先のパス（完全一致）");
+            }
+            None => {}
+        }
     }
     if let (Some(revision), Some(lifecycle)) = (status.case_revision, status.case_lifecycle) {
         eprintln!(

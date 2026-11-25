@@ -21891,6 +21891,111 @@ fn exact_replace_count_failure_does_not_create_a_partial_file() {
 }
 
 #[test]
+fn metadata_search_capabilities_match_native_cli_and_read_only_chat_status() {
+    use minidora_engine::{CapabilityPermission, Engine};
+
+    let scratch = Scratch::new();
+    let executable = env!("CARGO_BIN_EXE_minidora-rust");
+    let native = Engine::capabilities();
+    let cli = record(
+        &Command::new(executable)
+            .args(["capabilities", "--json"])
+            .current_dir(&scratch.0)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(cli, serde_json::to_value(&native).unwrap());
+    assert!(!scratch.0.join(".minidora-rust-state").exists());
+
+    let ids: Vec<_> = native
+        .capabilities
+        .iter()
+        .map(|capability| capability.id)
+        .collect();
+    assert!(
+        ids.starts_with(&[
+            "japanese-dialogue",
+            "relation-memory",
+            "exact-mathematics",
+            "structured-documents",
+            "bounded-code",
+            "web-grounded-answer",
+            "local-file-delivery",
+            "search-wikipedia-metadata",
+            "search-crossref-metadata",
+            "search-europepmc-metadata",
+        ]),
+        "{ids:?}"
+    );
+
+    let mut chat = Command::new(executable)
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args(["--actor", "owner", "--case", "normal-route"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    chat.stdin
+        .take()
+        .unwrap()
+        .write_all(b"/status\n/net\n2+3\n/exit\n")
+        .unwrap();
+    let output = chat.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let status = String::from_utf8(output.stderr).unwrap();
+    let lines: Vec<_> = status.lines().collect();
+    for (provider, id, host) in [
+        ("wikipedia", "search-wikipedia-metadata", "ja.wikipedia.org"),
+        ("crossref", "search-crossref-metadata", "api.crossref.org"),
+        ("europepmc", "search-europepmc-metadata", "www.ebi.ac.uk"),
+    ] {
+        let descriptor = native
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == id)
+            .unwrap();
+        assert_eq!(
+            descriptor.permission,
+            Some(CapabilityPermission::ExactHttpsHost { host })
+        );
+        assert!(
+            descriptor.scope.contains(&format!("検索 {provider}:")),
+            "{descriptor:?}"
+        );
+        assert!(descriptor.scope.contains("メタデータ"), "{descriptor:?}");
+        let declaration = format!("{id}: {}", descriptor.scope);
+        let permission = format!("  必要許可 HTTPSホスト {host}（完全一致）");
+        assert!(
+            lines
+                .windows(2)
+                .any(|lines| lines == [declaration.as_str(), permission.as_str()]),
+            "{status}"
+        );
+    }
+
+    // A local turn exposes the actual permission set after displaying the
+    // capabilities, without sending a request to any listed host.
+    assert!(status.contains("通信はオフです。"), "{status}");
+    assert!(!status.contains("通信許可先:"), "{status}");
+    let state = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(state["lifecycle"], "COMMIT");
+    assert_eq!(state["bundle"]["request"]["text"], "2+3");
+    let permissions = serde_json::json!({"read_hosts": [], "write_paths": []});
+    assert_eq!(state["bundle"]["request"]["permissions"], permissions);
+    assert_eq!(state["result"]["calculation"]["exact_value"], "5");
+    assert!(state["result"]["evidence"].as_array().unwrap().is_empty());
+    assert!(state["result"]["receipts"].as_array().unwrap().is_empty());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(
+        sequence_artifact(&store, &state["goal_sha256"])["permissions"],
+        permissions
+    );
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn metadata_search_without_read_grant_is_a_typed_stop_without_an_answer() {
     let scratch = Scratch::new();
     for request in [

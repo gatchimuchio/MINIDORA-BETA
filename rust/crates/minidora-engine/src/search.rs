@@ -2499,6 +2499,51 @@ mod tests {
         );
     }
     #[test]
+    fn advertised_metadata_hosts_match_pre_network_admission() {
+        let capabilities = crate::Engine::capabilities();
+        for (name, id) in [
+            ("wikipedia", "search-wikipedia-metadata"),
+            ("crossref", "search-crossref-metadata"),
+            ("europepmc", "search-europepmc-metadata"),
+        ] {
+            let provider = SearchProvider::from_name(name).unwrap();
+            let capability = capabilities
+                .capabilities
+                .iter()
+                .find(|capability| capability.id == id)
+                .unwrap();
+            let Some(crate::CapabilityPermission::ExactHttpsHost { host }) = capability.permission
+            else {
+                panic!("no advertised HTTPS permission for {id}");
+            };
+            let budget = ResourceBudget::development();
+            let stop_before_network = || Err(failure("TEST_STOP_BEFORE_NETWORK", id));
+            let granted = Permissions {
+                read_hosts: [host.into()].into(),
+                ..Permissions::default()
+            };
+            for (permissions, expected) in [
+                (Permissions::default(), ports::READ_PERMISSION_REQUIRED),
+                (granted, "TEST_STOP_BEFORE_NETWORK"),
+            ] {
+                let mut retrieval = ports::RetrievalBudget::standalone(&budget).unwrap();
+                let outcome = search_with_budget(
+                    provider,
+                    "metadata question",
+                    &permissions,
+                    &budget,
+                    &mut retrieval,
+                    &stop_before_network,
+                );
+                assert!(
+                    matches!(outcome, Err(minidora_domain::Error::Contract { code, .. }) if code == expected),
+                    "{id} did not reach {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn query_encoding_cannot_inject_provider_parameters() {
         let uri = SearchProvider::Crossref
             .request_uri("a&rows=99 #not-an-effect")

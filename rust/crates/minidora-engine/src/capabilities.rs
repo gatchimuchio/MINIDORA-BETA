@@ -58,6 +58,7 @@ pub struct EngineResultStatus {
 impl Engine {
     /// Describe the engine without opening a store or issuing an effect.
     pub fn capabilities() -> EngineCapabilities {
+        const METADATA_SEARCH_LIMITS: &str = "候補のメタデータのみを返し、本文取得や事実確認は行いません。許可・予算・通信条件を満たさない場合は保留します。";
         EngineCapabilities {
             package: env!("CARGO_PKG_NAME"),
             version: env!("CARGO_PKG_VERSION"),
@@ -111,12 +112,37 @@ impl Engine {
                     permission: Some(CapabilityPermission::ExactLocalWritePath),
                     limits: "保存先は信頼できるローカル領域に限ります。異なる既存内容を上書きせず、不明な書込結果は確認します。",
                 },
+                EngineCapability {
+                    id: "search-wikipedia-metadata",
+                    scope: "「検索 wikipedia: 検索語」で、日本語Wikipediaの候補メタデータを検索します。",
+                    permission: Some(CapabilityPermission::ExactHttpsHost {
+                        host: SearchProvider::Wikipedia.host(),
+                    }),
+                    limits: METADATA_SEARCH_LIMITS,
+                },
+                EngineCapability {
+                    id: "search-crossref-metadata",
+                    scope: "「検索 crossref: 検索語」で、Crossrefの文献メタデータを検索します。",
+                    permission: Some(CapabilityPermission::ExactHttpsHost {
+                        host: SearchProvider::Crossref.host(),
+                    }),
+                    limits: METADATA_SEARCH_LIMITS,
+                },
+                EngineCapability {
+                    id: "search-europepmc-metadata",
+                    scope: "「検索 europepmc: 検索語」で、Europe PMCの文献メタデータを検索します。",
+                    permission: Some(CapabilityPermission::ExactHttpsHost {
+                        host: SearchProvider::EuropePmc.host(),
+                    }),
+                    limits: METADATA_SEARCH_LIMITS,
+                },
             ],
             known_limits: &[
                 "外部LLM、任意コード実行、任意のWebページ・PDF・画像の解釈は提供しません。",
                 "永続状態には対応するローカルSQLite環境が必要です。旧Rust状態の移行は明示した対応版に限られます。",
                 "対象OSとCPUはこのバイナリのビルド対象です。プラットフォームの保証は表しません。",
                 "非ニューラル模型の実版と成果物は採用された各結果のContentPlanに記録します。",
+                "能力の列挙は通信許可や到達の確認ではありません。対応するURLを直接読む場合は、指定URLと各リダイレクト先のHTTPSホストを個別に許可する必要があります。",
             ],
         }
     }
