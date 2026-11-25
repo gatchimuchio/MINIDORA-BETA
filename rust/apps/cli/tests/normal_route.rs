@@ -18734,6 +18734,167 @@ fn table_row_json_filter_and_sort_preserve_exact_values_and_source_ranges() {
 }
 
 #[test]
+fn filtered_json_table_exports_to_csv_from_the_actual_previous_result() {
+    use minidora_domain::{InputBundle, Lifecycle};
+
+    const TABLE: &str = "{\r\n  \"columns\":[\"状態\",\"id\",\"名前\"],\r\n  \"rows\":[[\"open\",\"001\",\"猫,甲\"],[\"closed\",\"010\",\"=1+1\"],[\"open\",\"000\",\"鳥\\\"羽\"]]\r\n}";
+    const CONVERT: &str = "前回のJSON表をCSVに変換して";
+    const EXPECTED: &str = "状態,id,名前\r\nopen,001,\"猫,甲\"\r\nopen,000,\"鳥\"\"羽\"\r\n";
+
+    let scratch = Scratch::new();
+    let filter = |equals| format!("JSON表の列「状態」が値「{equals}」の行を選択して:\r\n{TABLE}");
+    let source_text = filter("open");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args(["--actor", "owner", "--case", "normal-route"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("/paste\n{source_text}\n/end\n{CONVERT}\n/exit\n").as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains(EXPECTED), "{text}");
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let state = store.load_case("owner", "normal-route").unwrap().unwrap();
+    let converted = state.result.as_ref().unwrap();
+    assert_eq!(converted.lifecycle, Lifecycle::Commit);
+    assert_eq!(converted.text, EXPECTED);
+    let [source_id, bundle_ref, source_report_ref, report_ref] = converted.dependencies.as_slice()
+    else {
+        panic!("conversion must retain the source result, input, report and output report");
+    };
+    let meaning = &state.bundle.as_ref().unwrap().meaning;
+    assert_eq!(
+        meaning.parser_version,
+        "declarative-ja-v203-previous-filtered-json-to-csv"
+    );
+    assert_eq!(meaning.context_result_ref.as_ref(), Some(source_id));
+    let source = &state.prior_results[source_id];
+    assert_eq!(source.lifecycle, Lifecycle::Commit);
+    assert_eq!(
+        source.dependencies.as_slice(),
+        std::slice::from_ref(source_report_ref)
+    );
+    let artifact = |reference: &str| store.get_bytes("owner", "normal-route", reference).unwrap();
+    // Sealed inputs and document artifacts have separate Store bindings.
+    let sealed = std::fs::read(scratch.0.join("blobs").join(bundle_ref)).unwrap();
+    assert_eq!(minidora_domain::digest(&sealed), *bundle_ref);
+    let first: InputBundle = serde_json::from_slice(&sealed).unwrap();
+    assert_eq!(
+        minidora_domain::identity(&first.request).unwrap(),
+        *source_id
+    );
+    assert_eq!(first.request.text, source_text);
+    let source_report: Value = serde_json::from_slice(&artifact(source_report_ref)).unwrap();
+    assert_eq!(
+        source_report,
+        serde_json::from_str::<Value>(&source.text).unwrap()
+    );
+    assert_eq!(
+        source_report["source_row_indices"],
+        serde_json::json!([0, 2])
+    );
+    assert_eq!(
+        source_report["source_sha256"],
+        minidora_domain::digest(TABLE.as_bytes())
+    );
+    let report: Value = serde_json::from_slice(&artifact(report_ref)).unwrap();
+    assert_eq!(report["operation"], "JSON_TO_CSV");
+    let table: Value = serde_json::from_str(report["source_document"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        table,
+        serde_json::json!({"columns": source_report["columns"], "rows": source_report["rows"]})
+    );
+    assert_eq!(
+        report["output_sha256"],
+        minidora_domain::digest(EXPECTED.as_bytes())
+    );
+
+    let run = |args: &[&str]| execute(&scratch.0, "owner", args);
+    record(&run(&["2+3"]));
+    let explicit = record(&run(&["--context", source_id.as_str(), CONVERT]));
+    assert_eq!(explicit["text"], EXPECTED);
+    assert_eq!(
+        explicit["dependencies"],
+        serde_json::json!(converted.dependencies)
+    );
+    let limited = stopped(
+        &run(&[
+            "--context",
+            source_id.as_str(),
+            "--max-evidence-bytes",
+            "1",
+            CONVERT,
+        ]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("RESOURCE_LIMIT:")
+    );
+    assert!(limited["render"].is_null());
+    let distinct_case = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "unrelated",
+            &["--context", source_id.as_str(), CONVERT],
+        ),
+        4,
+        "FAIL",
+    );
+    assert!(
+        distinct_case["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH")
+    );
+
+    record(&run(&[&filter("missing")]));
+    assert_eq!(record(&run(&[CONVERT]))["text"], "状態,id,名前\r\n");
+    let non_string = stopped(&run(&[&source_text.replace("\"001\"", "1")]), 2, "SUSPEND");
+    assert!(
+        non_string["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("JSON_TABLE_COMPARE_CELL:")
+    );
+
+    record(&run(&[&filter("closed")]));
+    let target = scratch.0.join("formula-withheld.csv");
+    let path = target.to_str().unwrap();
+    let withheld = stopped(
+        &run(&["--output", path, "--allow-write", path, CONVERT]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        withheld["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("CSV_FORMULA_RISK:"),
+        "{withheld}"
+    );
+    assert!(withheld["render"].is_null());
+    assert_eq!(withheld["receipts"], serde_json::json!([]));
+    assert!(!target.exists());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn csv_row_explanation_filter_replays_exact_predicate_and_empty_selection() {
     let source = "id,状態,順位\r\n\"猫,甲\",\"open\"\"x\",2\r\n犬,\"Open\"\"x\",10\r\n鳥,\"open\"\"x \",2\r\n魚,\"open\"\"x\",10\r\n";
     for query in ["open\"x", "missing"] {
@@ -20631,8 +20792,23 @@ fn table_conversion_formula_strings_are_inert_json_and_withheld_on_csv_export() 
 
 #[test]
 fn table_conversion_schema_errors_and_missing_header_mode_stop_durably() {
+    // Conversation input accepts LF and CRLF, but not a bare CR separator.
+    let scratch = Scratch::new();
+    let lf = "csv-to-json header:\na,b\nx,y\n";
+    let result = record(&execute(&scratch.0, "owner", &[lf]));
+    assert_eq!(result["lifecycle"], "COMMIT");
+    let table: Value = serde_json::from_str(result["text"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        table,
+        serde_json::json!({"columns": ["a", "b"], "rows": [["x", "y"]]})
+    );
+    assert_eq!(
+        inspect_normal_case(&scratch.0, "owner")["bundle"]["request"]["text"],
+        lf
+    );
+
     for (header, document, code) in [
-        ("csv-to-json header:", "a,b\nx,y\n", "CSV_LINE_ENDING"),
+        ("csv-to-json header:", "a,b\rx,y\r", "CSV_LINE_ENDING"),
         ("csv-to-json header:", "a,b\r\nx", "CSV_SHAPE"),
         ("csv-to-json:", "a,b\r\nx,y\r\n", "CAPABILITY_UNAVAILABLE"),
         (

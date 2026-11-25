@@ -846,18 +846,21 @@ fn previous_json_table_conversion_explanation(
         "retained JSON-table to CSV conversion",
     )?;
 
+    let source_report = conversion
+        .source_document_report
+        .as_ref()
+        .ok_or_else(invalid)?;
     let mut lines = if conversion_parser_version
         == crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
     {
-        let column = conversion
-            .source_report
+        let column = source_report
             .parameters
             .get("column_name")
             .ok_or_else(invalid)?;
         let mut lines =
             vec!["元CSVで選択条件を再適用し、保存したJSON表と出力CSVを照合しました。".into()];
         lines.extend(csv_table_rows_lines(
-            &conversion.source_report,
+            source_report,
             column,
             &conversion.source_bundle_ref,
             &conversion.source_report_ref,
@@ -869,7 +872,7 @@ fn previous_json_table_conversion_explanation(
             "二つの一覧は、同じJSON Pointerと保存JSONの同じバイト範囲でつながります。".into(),
         ];
         lines.extend(table_conversion_lines(
-            &conversion.source_report,
+            source_report,
             &conversion.source_bundle_ref,
             &conversion.source_report_ref,
         )?);
@@ -6234,7 +6237,7 @@ pub(crate) struct PreviousJsonTableConversion {
     source_result_id: String,
     source_bundle_ref: String,
     source_report_ref: String,
-    source_report: DocumentResult,
+    source_document_report: Option<DocumentResult>,
     pub(crate) report: DocumentResult,
 }
 
@@ -6272,6 +6275,7 @@ pub(crate) fn previous_json_table_to_csv(
         parser_version,
         crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION
             | crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+            | crate::input::PREVIOUS_FILTERED_JSON_TO_CSV_PARSER_VERSION
     ) || followup.meaning.context_result_ref.as_ref() != Some(&previous.id)
         || followup.context_sha256 != identity(&Some(previous))?
         || request
@@ -6304,7 +6308,11 @@ pub(crate) fn previous_json_table_to_csv(
         }
         Ok(())
     };
-    let (source_report, source_label) = match (&source_bundle.meaning.intent, parser_version) {
+    enum SourceReport {
+        Document(DocumentResult),
+        FilteredJson(crate::ports::JsonTableFilterReport),
+    }
+    let (source, source_label) = match (&source_bundle.meaning.intent, parser_version) {
         (
             Intent::CsvToJson {
                 document,
@@ -6314,7 +6322,7 @@ pub(crate) fn previous_json_table_to_csv(
         ) => {
             verify_source_identity()?;
             (
-                CsvInput::conversation(document).to_json(*has_header)?,
+                SourceReport::Document(CsvInput::conversation(document).to_json(*has_header)?),
                 "CSV-to-JSON conversion",
             )
         }
@@ -6328,8 +6336,24 @@ pub(crate) fn previous_json_table_to_csv(
         ) => {
             verify_source_identity()?;
             (
-                CsvInput::conversation(document).filter(column, equals)?,
+                SourceReport::Document(CsvInput::conversation(document).filter(column, equals)?),
                 "CSV filter result",
+            )
+        }
+        (
+            Intent::JsonTableFilter {
+                document,
+                column,
+                equals,
+            },
+            crate::input::PREVIOUS_FILTERED_JSON_TO_CSV_PARSER_VERSION,
+        ) => {
+            verify_source_identity()?;
+            (
+                SourceReport::FilteredJson(crate::ports::json_table_filter(
+                    document, column, equals,
+                )?),
+                "JSON table filter result",
             )
         }
         (_, crate::input::PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION) => {
@@ -6340,10 +6364,24 @@ pub(crate) fn previous_json_table_to_csv(
         }
         _ => return Err(invalid()),
     };
-    let source_report_bytes = canonical(&source_report)?;
+    let (source_report_bytes, valid_text) = match &source {
+        SourceReport::Document(report) => (canonical(report)?, previous.text == report.text),
+        SourceReport::FilteredJson(report) => (
+            canonical(report)?,
+            previous.text == serde_json::to_string_pretty(report)?,
+        ),
+    };
+    let source_evidence_bytes = match &source {
+        SourceReport::Document(_) => 0,
+        SourceReport::FilteredJson(_) => source_report_bytes.len(),
+    };
+    let evidence_limit = || failure("RESOURCE_LIMIT", "CSV変換の記録が証拠予算を超えています。");
+    if source_evidence_bytes > request.budget.max_evidence_bytes {
+        return Err(evidence_limit());
+    }
     let source_report_ref = digest(&source_report_bytes);
     if previous.dependencies.as_slice() != [source_report_ref.as_str()]
-        || previous.text != source_report.text
+        || !valid_text
         || store
             .get_bytes_if_present(actor, case, &source_report_ref)?
             .as_deref()
@@ -6361,18 +6399,35 @@ pub(crate) fn previous_json_table_to_csv(
         source_label,
     )?;
 
-    let report = json_to_csv(&source_report.text)?;
-    if canonical(&report)?.len() > request.budget.max_evidence_bytes {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "CSV変換の記録が証拠予算を超えています。",
-        ));
+    let (report, source_document_report) = match source {
+        SourceReport::Document(report) => (json_to_csv(&report.text)?, Some(report)),
+        SourceReport::FilteredJson(report) => {
+            // The filter report is not the table input. Pass only its typed
+            // columns and selected rows to the existing exact CSV converter.
+            #[derive(serde::Serialize)]
+            struct SelectedTable<'a> {
+                columns: &'a [String],
+                rows: &'a [Vec<String>],
+            }
+            let table = serde_json::to_string(&SelectedTable {
+                columns: &report.columns,
+                rows: &report.rows,
+            })?;
+            (json_to_csv(&table)?, None)
+        }
+    };
+    if canonical(&report)?
+        .len()
+        .saturating_add(source_evidence_bytes)
+        > request.budget.max_evidence_bytes
+    {
+        return Err(evidence_limit());
     }
     Ok(PreviousJsonTableConversion {
         source_result_id: previous.id.clone(),
         source_bundle_ref,
         source_report_ref,
-        source_report,
+        source_document_report,
         report,
     })
 }

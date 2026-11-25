@@ -53,6 +53,8 @@ pub(crate) const PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION: &str =
     "declarative-ja-v188-previous-filtered-csv-to-csv";
 pub(crate) const PREVIOUS_FILTERED_CSV_CONVERSION_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v189-previous-filtered-csv-conversion-explanation";
+pub(crate) const PREVIOUS_FILTERED_JSON_TO_CSV_PARSER_VERSION: &str =
+    "declarative-ja-v203-previous-filtered-json-to-csv";
 pub(crate) const JSON_OBJECT_KEY_PATH_PARSER_VERSION: &str =
     "declarative-ja-v179-json-object-key-path";
 pub(crate) const PASTED_TEXT_REPLACEMENT_EXPLANATION_PARSER_VERSION: &str =
@@ -244,6 +246,7 @@ pub(crate) enum SourceContext {
     PastedTextReplacementExplanation,
     PreviousJsonTableConversionExplanation,
     PreviousFilteredCsvToCsv,
+    PreviousFilteredJsonToCsv,
     PreviousFilteredCsvConversionExplanation,
     DirectSourceExplanation,
     DirectCodeVerificationExplanation,
@@ -676,6 +679,7 @@ pub(crate) fn seal_with_source_context(
         SourceContext::PastedTextReplacementExplanation
         | SourceContext::PreviousJsonTableConversionExplanation
         | SourceContext::PreviousFilteredCsvToCsv
+        | SourceContext::PreviousFilteredJsonToCsv
         | SourceContext::PreviousFilteredCsvConversionExplanation
         | SourceContext::DirectSourceExplanation
         | SourceContext::DirectCodeVerificationExplanation
@@ -830,6 +834,14 @@ pub(crate) fn seal_with_source_context(
             ) =>
         {
             PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+        }
+        Intent::ConvertPreviousJsonTableToCsv
+            if matches!(
+                source_context,
+                Some(SourceContext::PreviousFilteredJsonToCsv)
+            ) =>
+        {
+            PREVIOUS_FILTERED_JSON_TO_CSV_PARSER_VERSION
         }
         Intent::ConvertPreviousJsonTableToCsv => PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION,
         Intent::JsonPointer { .. } if document_header(&request.text).starts_with("JSONの「") => {

@@ -5953,7 +5953,7 @@ impl Engine {
                 && let Some(prior) = previous.filter(|result| {
                     result.lifecycle == Lifecycle::Commit && result.guarantee == Guarantee::Computed
                 })
-                && self
+                && let Some(source_context) = self
                     .store
                     .get_input_bundle(
                         actor,
@@ -5961,15 +5961,17 @@ impl Engine {
                         &prior.input_id,
                         prior.input_version,
                     )?
-                    .is_some_and(|(_, source)| {
-                        matches!(source.meaning.intent, Intent::CsvFilter { .. })
+                    .and_then(|(_, source)| match source.meaning.intent {
+                        Intent::CsvFilter { .. } => {
+                            Some(input::SourceContext::PreviousFilteredCsvToCsv)
+                        }
+                        Intent::JsonTableFilter { .. } => {
+                            Some(input::SourceContext::PreviousFilteredJsonToCsv)
+                        }
+                        _ => None,
                     })
             {
-                return input::seal_with_source_context(
-                    &request,
-                    previous,
-                    Some(input::SourceContext::PreviousFilteredCsvToCsv),
-                );
+                return input::seal_with_source_context(&request, previous, Some(source_context));
             }
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::ExplainPrevious)

@@ -6410,9 +6410,11 @@ fn inspect(
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(|| failure(CODE, "the exact prior table result is missing"))?;
         verify_registered_input(store, bundle, CODE)?;
-        if bundle.meaning.parser_version
-            == crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
-            && bundle.request.context_ref.is_none()
+        if matches!(
+            bundle.meaning.parser_version.as_str(),
+            crate::input::PREVIOUS_FILTERED_CSV_TO_CSV_PARSER_VERSION
+                | crate::input::PREVIOUS_FILTERED_JSON_TO_CSV_PARSER_VERSION
+        ) && bundle.request.context_ref.is_none()
             && store.input_start_predecessor(state)?.as_ref() != Some(prior)
         {
             return Err(failure(
@@ -11797,6 +11799,63 @@ mod tests {
         assert_eq!(
             graph[5]["sequence-final"]["sequence-larger"],
             result.dependencies[1]
+        );
+    }
+
+    #[test]
+    fn filtered_json_table_csv_reconciles_original_file_without_rewriting() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let filtered = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "filter-json",
+                    "alice",
+                    concat!(
+                        "JSON表の列「status」が値「open」の行を選択して:\n",
+                        r#"{"columns":["id","status"],"rows":[["001","open"],["007","closed"],["000","open"]]}"#,
+                    ),
+                ),
+            )
+            .unwrap();
+        assert_eq!(filtered.lifecycle, Lifecycle::Commit, "{filtered:?}");
+        let mut request =
+            RequestEnvelope::new("case", "export-csv", "alice", "前回のJSON表をCSVに変換して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let converted = engine.execute("alice", request).unwrap();
+        assert_eq!(converted.lifecycle, Lifecycle::Commit, "{converted:?}");
+        assert_eq!(converted.dependencies[0], filtered.id);
+        assert_eq!(converted.dependencies[2], filtered.dependencies[0]);
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, b"id,status\r\n001,open\r\n000,open\r\n");
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, converted.dependencies);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one delivery receipt: {:?}", recovered.receipts);
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
         );
     }
 
