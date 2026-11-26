@@ -617,6 +617,12 @@ pub enum Intent {
         negative: bool,
         scope: String,
     },
+    AskRelationSubjects {
+        object: String,
+        predicate: String,
+        negative: bool,
+        scope: String,
+    },
     AskConjunction {
         propositions: Vec<Proposition>,
     },

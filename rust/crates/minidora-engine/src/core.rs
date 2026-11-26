@@ -2694,13 +2694,82 @@ pub(crate) enum RelationObjectsExplanationEvaluation {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct RelationObjectsReplay<'a> {
-    pub(crate) subject: &'a str,
-    pub(crate) predicate: &'a str,
-    pub(crate) negative: bool,
-    pub(crate) scope: &'a str,
-    pub(crate) max_actions: u32,
-    pub(crate) max_evidence_bytes: usize,
+enum RelationListBound<'a> {
+    Subject(&'a str),
+    Object(&'a str),
+}
+
+impl RelationListBound<'_> {
+    fn candidates(self, proposition: &Proposition) -> impl Iterator<Item = &str> {
+        // A rule may bind a conclusion subject from an antecedent's object.
+        let subject = match self {
+            Self::Subject(_) => None,
+            Self::Object(_) => Some(proposition.subject.as_str()),
+        };
+        subject
+            .into_iter()
+            .chain(std::iter::once(proposition.object.as_str()))
+            .filter(|value| !value.starts_with(['$', '?']))
+    }
+
+    fn with_candidate(self, candidate: String) -> (String, String) {
+        match self {
+            Self::Subject(subject) => (subject.into(), candidate),
+            Self::Object(object) => (candidate, object.into()),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RelationListQuery<'a> {
+    bound: RelationListBound<'a>,
+    predicate: &'a str,
+    negative: bool,
+    scope: &'a str,
+    max_actions: u32,
+    max_evidence_bytes: usize,
+}
+
+impl<'a> RelationListQuery<'a> {
+    pub(crate) fn from_intent(
+        intent: &'a Intent,
+        max_actions: u32,
+        max_evidence_bytes: usize,
+    ) -> Option<Self> {
+        let (bound, predicate, negative, scope) = match intent {
+            Intent::AskRelationObjects {
+                subject,
+                predicate,
+                negative,
+                scope,
+            } => (
+                RelationListBound::Subject(subject),
+                predicate,
+                *negative,
+                scope,
+            ),
+            Intent::AskRelationSubjects {
+                object,
+                predicate,
+                negative,
+                scope,
+            } => (
+                RelationListBound::Object(object),
+                predicate,
+                *negative,
+                scope,
+            ),
+            _ => return None,
+        };
+        Some(Self {
+            bound,
+            predicate,
+            negative,
+            scope,
+            max_actions,
+            max_evidence_bytes,
+        })
+    }
 }
 
 struct RelationClauseEvaluation {
@@ -2866,6 +2935,7 @@ fn full_snapshot_relation_evaluation(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn relation_objects_answer(
     memory: &MemoryState,
     subject: &str,
@@ -2875,6 +2945,35 @@ pub(crate) fn relation_objects_answer(
     max_actions: u32,
     max_evidence_bytes: usize,
 ) -> Result<RelationObjectsAnswer> {
+    relation_list_answer(
+        memory,
+        RelationListQuery {
+            bound: RelationListBound::Subject(subject),
+            predicate,
+            negative,
+            scope,
+            max_actions,
+            max_evidence_bytes,
+        },
+    )
+}
+
+pub(crate) fn relation_list_answer(
+    memory: &MemoryState,
+    query: RelationListQuery<'_>,
+) -> Result<RelationObjectsAnswer> {
+    let RelationListQuery {
+        bound,
+        predicate,
+        negative,
+        scope,
+        max_actions,
+        max_evidence_bytes,
+    } = query;
+    let anchor = match bound {
+        RelationListBound::Subject(subject) => subject,
+        RelationListBound::Object(object) => object,
+    };
     let scanned_records = memory
         .facts
         .len()
@@ -2899,11 +2998,8 @@ pub(crate) fn relation_objects_answer(
         if !fact.valid || matches!(fact.guarantee, Guarantee::Hypothesis | Guarantee::Unknown) {
             continue;
         }
-        if fact.proposition.scope == scope
-            && !fact.proposition.object.starts_with('$')
-            && !fact.proposition.object.starts_with('?')
-        {
-            candidates.insert(fact.proposition.object.clone());
+        if fact.proposition.scope == scope {
+            candidates.extend(bound.candidates(&fact.proposition).map(str::to_owned));
         }
     }
     for rule in memory.rules.iter().filter(|rule| rule.valid) {
@@ -2911,11 +3007,8 @@ pub(crate) fn relation_objects_answer(
             .chain(rule.additional_premises.iter())
             .chain(std::iter::once(&rule.conclusion))
         {
-            if proposition.scope == scope
-                && !proposition.object.starts_with('$')
-                && !proposition.object.starts_with('?')
-            {
-                candidates.insert(proposition.object.clone());
+            if proposition.scope == scope {
+                candidates.extend(bound.candidates(proposition).map(str::to_owned));
             }
         }
     }
@@ -2949,9 +3042,10 @@ pub(crate) fn relation_objects_answer(
     let mut supported = BTreeMap::new();
     let mut dependencies = BTreeSet::new();
     let mut any_derived = false;
-    for object in candidates {
+    for candidate in candidates {
+        let (subject, object) = bound.with_candidate(candidate);
         let proposition = Proposition {
-            subject: subject.into(),
+            subject,
             predicate: predicate.into(),
             object,
             negative,
@@ -2971,7 +3065,7 @@ pub(crate) fn relation_objects_answer(
                 return Err(failure(
                     "CONFLICTING_PREMISES",
                     format!(
-                        "範囲「{scope}」の「{subject}」について、「{predicate}」関係に肯定と否定の根拠があります。選択せず停止します。"
+                        "範囲「{scope}」の「{anchor}」について、「{predicate}」関係に肯定と否定の根拠があります。選択せず停止します。"
                     ),
                 ));
             }
@@ -2988,7 +3082,7 @@ pub(crate) fn relation_objects_answer(
         return Err(failure(
             "MISSING_PREMISES",
             format!(
-                "範囲「{scope}」で「{subject}」の「{predicate}」関係を支える有効な前提または導出がありません。"
+                "範囲「{scope}」で「{anchor}」の「{predicate}」関係を支える有効な前提または導出がありません。"
             ),
         ));
     }
@@ -3009,9 +3103,14 @@ pub(crate) fn relation_objects_answer(
         })
         .collect::<Vec<_>>()
         .join("；");
-    let text = format!(
-        "範囲「{scope}」の保存済み前提では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
-    );
+    let text = match bound {
+        RelationListBound::Subject(_) => format!(
+            "範囲「{scope}」の保存済み前提では、次の関係が支持されます: {descriptions}。保存済みの根拠にある対象のみを示し、対象全体の網羅性や現実世界の真偽は確認していません。"
+        ),
+        RelationListBound::Object(_) => format!(
+            "範囲「{scope}」で根拠のある主語と関係を示します。{descriptions}。保存済みの前提に基づく一覧です。"
+        ),
+    };
     if text.len() > max_evidence_bytes {
         return Err(failure(
             "RESOURCE_LIMIT",
@@ -3042,10 +3141,15 @@ pub(crate) fn relation_objects_answer(
 pub(crate) fn indexed_relation_objects_answer_from_store(
     store: &Store,
     actor: &str,
-    replay: RelationObjectsReplay<'_>,
+    replay: RelationListQuery<'_>,
 ) -> Result<Option<(MemoryState, Result<RelationObjectsAnswer>)>> {
+    // A wildcard subject cannot anchor subject-relative condition evidence.
+    // Use the same authenticated full snapshot as recovery for that direction.
+    let RelationListBound::Subject(subject) = replay.bound else {
+        return Ok(None);
+    };
     let candidate_shape = Proposition {
-        subject: replay.subject.into(),
+        subject: subject.into(),
         predicate: replay.predicate.into(),
         object: "$relation_object".into(),
         negative: replay.negative,
@@ -3070,14 +3174,12 @@ pub(crate) fn indexed_relation_objects_answer_from_store(
                         )
                     })
                     .and_then(|answer_budget| {
-                        relation_objects_answer(
+                        relation_list_answer(
                             &memory,
-                            replay.subject,
-                            replay.predicate,
-                            replay.negative,
-                            replay.scope,
-                            answer_budget,
-                            replay.max_evidence_bytes,
+                            RelationListQuery {
+                                max_actions: answer_budget,
+                                ..replay
+                            },
                         )
                     });
                 (memory, answer)
@@ -3108,17 +3210,9 @@ pub(crate) fn indexed_relation_objects_answer_from_store(
 pub(crate) fn relation_objects_explanation(
     memory: &MemoryState,
     previous: &ResultRecord,
-    replay: RelationObjectsReplay<'_>,
+    replay: RelationListQuery<'_>,
 ) -> Result<RelationObjectsExplanationEvaluation> {
-    let answer = relation_objects_answer(
-        memory,
-        replay.subject,
-        replay.predicate,
-        replay.negative,
-        replay.scope,
-        replay.max_actions,
-        replay.max_evidence_bytes,
-    );
+    let answer = relation_list_answer(memory, replay);
     relation_objects_explanation_with_answer(memory, previous, replay, answer)
 }
 
@@ -3129,7 +3223,7 @@ pub(crate) fn indexed_relation_objects_explanation_from_store(
     store: &Store,
     actor: &str,
     previous: &ResultRecord,
-    replay: RelationObjectsReplay<'_>,
+    replay: RelationListQuery<'_>,
 ) -> Result<Option<(u64, Result<RelationObjectsExplanationEvaluation>)>> {
     let Some((memory, answer)) = indexed_relation_objects_answer_from_store(store, actor, replay)?
     else {
@@ -3143,7 +3237,7 @@ pub(crate) fn indexed_relation_objects_explanation_from_store(
 fn relation_objects_explanation_with_answer(
     memory: &MemoryState,
     previous: &ResultRecord,
-    replay: RelationObjectsReplay<'_>,
+    replay: RelationListQuery<'_>,
     answer: Result<RelationObjectsAnswer>,
 ) -> Result<RelationObjectsExplanationEvaluation> {
     let answer = match answer {
@@ -5531,7 +5625,7 @@ impl Engine {
     fn indexed_relation_objects_answer(
         &self,
         actor: &str,
-        replay: RelationObjectsReplay<'_>,
+        replay: RelationListQuery<'_>,
     ) -> Result<Option<(MemoryState, Result<RelationObjectsAnswer>)>> {
         indexed_relation_objects_answer_from_store(&self.store, actor, replay)
     }
@@ -5539,7 +5633,7 @@ impl Engine {
     fn active_relation_objects_answer(
         &self,
         actor: &str,
-        replay: RelationObjectsReplay<'_>,
+        replay: RelationListQuery<'_>,
     ) -> Result<(MemoryState, Result<RelationObjectsAnswer>)> {
         if let Some(result) = self.indexed_relation_objects_answer(actor, replay)? {
             return Ok(result);
@@ -5548,23 +5642,16 @@ impl Engine {
         // Older stores may predate the derived index. Rebuild it from the
         // authenticated current snapshot once, then use the bounded query.
         let memory = self.store.load_memory(actor)?;
-        self.store
-            .rebuild_relation_index_if_current(actor, &memory)?;
-        if let Some(result) = self.indexed_relation_objects_answer(actor, replay)? {
-            return Ok(result);
+        if matches!(replay.bound, RelationListBound::Subject(_)) {
+            self.store
+                .rebuild_relation_index_if_current(actor, &memory)?;
+            if let Some(result) = self.indexed_relation_objects_answer(actor, replay)? {
+                return Ok(result);
+            }
         }
 
-        // A concurrent writer may have advanced the source while rebuilding;
-        // the immutable snapshot loaded above remains a safe fallback.
-        let answer = relation_objects_answer(
-            &memory,
-            replay.subject,
-            replay.predicate,
-            replay.negative,
-            replay.scope,
-            replay.max_actions,
-            replay.max_evidence_bytes,
-        );
+        // The immutable snapshot remains usable even if another writer advances memory.
+        let answer = relation_list_answer(&memory, replay);
         Ok((memory, answer))
     }
 
@@ -9099,20 +9186,11 @@ impl Engine {
                                         "前回の関係一覧入力と採用結果の同一性が一致しません。",
                                     );
                                 }
-                                match &prior_bundle.meaning.intent {
-                                    Intent::AskRelationObjects {
-                                        subject,
-                                        predicate,
-                                        negative,
-                                        scope,
-                                    } => Some((
-                                        subject.clone(),
-                                        predicate.clone(),
-                                        *negative,
-                                        scope.clone(),
-                                    )),
-                                    _ => None,
-                                }
+                                RelationListQuery::from_intent(
+                                    &prior_bundle.meaning.intent,
+                                    request.budget.max_actions,
+                                    request.budget.max_evidence_bytes,
+                                )
                             }
                             None => None,
                         }
@@ -9245,9 +9323,7 @@ impl Engine {
                     result.dependencies = vec![prior.id.clone()];
                     result.dependencies.extend(proof_dependencies);
                     result.guarantee = answer_guarantee;
-                } else if let Some((subject, predicate, negative, scope)) =
-                    prior_relation_objects.as_ref()
-                {
+                } else if let Some(query) = prior_relation_objects {
                     if bundle.meaning.context_result_ref.as_deref() != Some(prior.id.as_str()) {
                         return self.stop(
                             &mut state,
@@ -9258,18 +9334,7 @@ impl Engine {
                     }
                     let memory = self.store.load_memory(actor)?;
                     result.actor_memory_revision = Some(memory.revision);
-                    match relation_objects_explanation(
-                        &memory,
-                        prior,
-                        RelationObjectsReplay {
-                            subject,
-                            predicate,
-                            negative: *negative,
-                            scope,
-                            max_actions: request.budget.max_actions,
-                            max_evidence_bytes: request.budget.max_evidence_bytes,
-                        },
-                    )? {
+                    match relation_objects_explanation(&memory, prior, query)? {
                         RelationObjectsExplanationEvaluation::Complete(answer) => {
                             units.extend(answer.units);
                             result.dependencies.extend(answer.dependencies);
@@ -11443,23 +11508,14 @@ impl Engine {
                     ),
                 }
             }
-            Intent::AskRelationObjects {
-                subject,
-                predicate,
-                negative,
-                scope,
-            } => {
-                let (memory, answer) = match self.active_relation_objects_answer(
-                    actor,
-                    RelationObjectsReplay {
-                        subject,
-                        predicate,
-                        negative: *negative,
-                        scope,
-                        max_actions: request.budget.max_actions,
-                        max_evidence_bytes: request.budget.max_evidence_bytes,
-                    },
-                ) {
+            Intent::AskRelationObjects { .. } | Intent::AskRelationSubjects { .. } => {
+                let query = RelationListQuery::from_intent(
+                    &bundle.meaning.intent,
+                    request.budget.max_actions,
+                    request.budget.max_evidence_bytes,
+                )
+                .expect("matched a relation list intent");
+                let (memory, answer) = match self.active_relation_objects_answer(actor, query) {
                     Ok(value) => value,
                     Err(error) => {
                         let code = match &error {
@@ -22513,8 +22569,8 @@ mod active_relation_projection_tests {
         let (active, indexed_answer) = engine
             .active_relation_objects_answer(
                 "alice",
-                RelationObjectsReplay {
-                    subject: "ミナ",
+                RelationListQuery {
+                    bound: RelationListBound::Subject("ミナ"),
                     predicate: "use",
                     negative: false,
                     scope: "lab",

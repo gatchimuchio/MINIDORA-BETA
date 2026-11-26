@@ -842,7 +842,7 @@ fn verify_previous_relation_context(
         store.get_input_bundle(actor, case, &previous.input_id, previous.input_version)?
         && matches!(
             prior_bundle.meaning.intent,
-            Intent::AskRelationObjects { .. }
+            Intent::AskRelationObjects { .. } | Intent::AskRelationSubjects { .. }
         )
     {
         return verify_explain_previous_relation_objects_memory_result(
@@ -995,18 +995,30 @@ fn verify_explain_previous_relation_objects_memory_result(
             "the relation-object input and committed result identities differ",
         ));
     }
-    let Intent::AskRelationObjects {
-        subject,
-        predicate,
-        negative,
-        scope,
-    } = &prior_bundle.meaning.intent
-    else {
-        return Err(failure(
-            "RECOVERY_MEMORY_PROOF_MISMATCH",
-            "the prior input does not retain a typed relation-object request",
-        ));
+    let prior_intent = &prior_bundle.meaning.intent;
+    let relation_query = |budget: &ResourceBudget| {
+        crate::core::RelationListQuery::from_intent(
+            prior_intent,
+            budget.max_actions,
+            budget.max_evidence_bytes,
+        )
+        .ok_or_else(|| {
+            failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the prior input does not retain a typed relation-list request",
+            )
+        })
     };
+    let prior_query = relation_query(&prior_bundle.request.budget)?;
+    let explanation_query = relation_query(&goal.budget)?;
+    if matches!(prior_intent, Intent::AskRelationSubjects { .. })
+        && (previous.actor_memory_revision.is_none() || result.actor_memory_revision.is_none())
+    {
+        return Err(failure(
+            "RECOVERY_MEMORY_REVISION_MISSING",
+            "the relation-subject result or its explanation has no retained actor-memory revision",
+        ));
+    }
     let prior_plan = previous.content_plan.as_ref().ok_or_else(|| {
         failure(
             "RECOVERY_MEMORY_PROOF_MISMATCH",
@@ -1036,15 +1048,7 @@ fn verify_explain_previous_relation_objects_memory_result(
     verified_artifact(store, &state.actor_id, &state.case_id, prior_render)?;
 
     if let Some(original_memory) = result_memory_snapshot(store, &state.actor_id, previous)? {
-        let original_answer = crate::core::relation_objects_answer(
-            &original_memory,
-            subject,
-            predicate,
-            *negative,
-            scope,
-            prior_bundle.request.budget.max_actions,
-            prior_bundle.request.budget.max_evidence_bytes,
-        )?;
+        let original_answer = crate::core::relation_list_answer(&original_memory, prior_query)?;
         if previous.text != original_answer.text
             || previous.dependencies != original_answer.dependencies
             || previous.guarantee != original_answer.guarantee
@@ -1057,28 +1061,20 @@ fn verify_explain_previous_relation_objects_memory_result(
         }
     }
 
-    let replay = crate::core::RelationObjectsReplay {
-        subject,
-        predicate,
-        negative: *negative,
-        scope,
-        max_actions: goal.budget.max_actions,
-        max_evidence_bytes: goal.budget.max_evidence_bytes,
-    };
     let evaluation = if let Some(memory) = current_memory {
-        crate::core::relation_objects_explanation(memory, previous, replay)?
+        crate::core::relation_objects_explanation(memory, previous, explanation_query)?
     } else if let Some((_, evaluation)) =
         crate::core::indexed_relation_objects_explanation_from_store(
             store,
             &state.actor_id,
             previous,
-            replay,
+            explanation_query,
         )?
     {
         evaluation?
     } else {
         let memory = store.load_memory(&state.actor_id)?;
-        crate::core::relation_objects_explanation(&memory, previous, replay)?
+        crate::core::relation_objects_explanation(&memory, previous, explanation_query)?
     };
     let explanation = match evaluation {
         crate::core::RelationObjectsExplanationEvaluation::Complete(answer) => answer,
@@ -2541,7 +2537,7 @@ fn verify_explain_previous_relation_memory_result(
         previous.input_version,
     )? && matches!(
         prior_bundle.meaning.intent,
-        Intent::AskRelationObjects { .. }
+        Intent::AskRelationObjects { .. } | Intent::AskRelationSubjects { .. }
     ) {
         return verify_explain_previous_relation_objects_memory_result(
             store,
@@ -3229,6 +3225,12 @@ fn verify_result_memory_provenance(
     let case = request.case_id.as_str();
     let Some((memory, snapshot_sha256)) = result_memory_snapshot_with_digest(store, actor, result)?
     else {
+        if matches!(goal.intent, Intent::AskRelationSubjects { .. }) {
+            return Err(failure(
+                "RECOVERY_MEMORY_REVISION_MISSING",
+                "the relation-subject result has no retained actor-memory revision",
+            ));
+        }
         if matches!(goal.intent, Intent::AskPreviousRelation { .. })
             && state
                 .bundle
@@ -3242,6 +3244,23 @@ fn verify_result_memory_provenance(
         }
         return Ok(None);
     };
+    if let Some(query) = crate::core::RelationListQuery::from_intent(
+        &goal.intent,
+        goal.budget.max_actions,
+        goal.budget.max_evidence_bytes,
+    ) {
+        let answer = crate::core::relation_list_answer(&memory, query)?;
+        if answer.dependencies != result.dependencies
+            || answer.guarantee != result.guarantee
+            || plan.required_units != vec![answer.text]
+        {
+            return Err(failure(
+                "RECOVERY_MEMORY_PROOF_MISMATCH",
+                "the retained relation-list answer does not match its actor-memory revision",
+            ));
+        }
+        return Ok(None);
+    }
     match &goal.intent {
         Intent::Ask { proposition } | Intent::AskWhy { proposition } => {
             let (memory, answer) =
@@ -3260,31 +3279,6 @@ fn verify_result_memory_provenance(
                     snapshot_sha256,
                     projection: (memory, answer),
                 }));
-            }
-        }
-        Intent::AskRelationObjects {
-            subject,
-            predicate,
-            negative,
-            scope,
-        } => {
-            let answer = crate::core::relation_objects_answer(
-                &memory,
-                subject,
-                predicate,
-                *negative,
-                scope,
-                goal.budget.max_actions,
-                goal.budget.max_evidence_bytes,
-            )?;
-            if answer.dependencies != result.dependencies
-                || answer.guarantee != result.guarantee
-                || plan.required_units != vec![answer.text]
-            {
-                return Err(failure(
-                    "RECOVERY_MEMORY_PROOF_MISMATCH",
-                    "the retained object answer does not match its actor-memory revision",
-                ));
             }
         }
         Intent::AskConjunction { .. } => {
@@ -6277,44 +6271,22 @@ fn inspect(
             ));
         }
     }
-    if let Intent::AskRelationObjects {
-        subject,
-        predicate,
-        negative,
-        scope,
-    } = &goal.intent
-    {
-        // Rebuild the exact supported object list from current Core memory.
-        // If a premise or rule changed after the original write attempt, the
-        // old bytes cannot be confirmed as the current goal's result. Use the
-        // revision-matched scoped index when available; cold/stale stores keep
-        // the authenticated full-snapshot compatibility path.
-        let replay = crate::core::RelationObjectsReplay {
-            subject,
-            predicate,
-            negative: *negative,
-            scope,
-            max_actions: goal.budget.max_actions,
-            max_evidence_bytes: goal.budget.max_evidence_bytes,
-        };
-        match crate::core::indexed_relation_objects_answer_from_store(store, actor, replay)? {
-            Some((_indexed_memory, answer)) => {
-                verify_relation_objects_current_answer(answer, result, plan)?;
-            }
-            None => {
-                let memory = store.load_memory(actor)?;
-                let answer = crate::core::relation_objects_answer(
-                    &memory,
-                    subject,
-                    predicate,
-                    *negative,
-                    scope,
-                    goal.budget.max_actions,
-                    goal.budget.max_evidence_bytes,
-                );
-                verify_relation_objects_current_answer(answer, result, plan)?;
-            }
-        }
+    if let Some(query) = crate::core::RelationListQuery::from_intent(
+        &goal.intent,
+        goal.budget.max_actions,
+        goal.budget.max_evidence_bytes,
+    ) {
+        // Rebuild the supported relation list from current Core memory before
+        // confirming any pending file effect.
+        let answer =
+            match crate::core::indexed_relation_objects_answer_from_store(store, actor, query)? {
+                Some((_, answer)) => answer,
+                None => {
+                    let memory = store.load_memory(actor)?;
+                    crate::core::relation_list_answer(&memory, query)
+                }
+            };
+        verify_relation_objects_current_answer(answer, result, plan)?;
     }
     if matches!(goal.intent, Intent::AskCommonRelations { .. })
         && result.actor_memory_revision.is_some()

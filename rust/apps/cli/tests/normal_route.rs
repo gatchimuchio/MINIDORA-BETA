@@ -7244,6 +7244,41 @@ fn ordinary_question_lists_direct_and_derived_relations_with_provenance_after_re
 }
 
 #[test]
+fn natural_subject_question_finds_a_subject_bound_from_a_premise_object() {
+    let scratch = Scratch::new();
+    let fact = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "source-fact", "アオはユウを呼ぶ"],
+    ));
+    let rule = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "source-rule",
+            "もしXはYを呼ぶならYはノートを使う",
+        ],
+    ));
+    assert_eq!(fact["lifecycle"], "COMMIT");
+    assert_eq!(rule["lifecycle"], "COMMIT");
+
+    let answer = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "who", "誰がノートを使いますか？"],
+    ));
+    assert_eq!(answer["lifecycle"], "COMMIT", "{answer}");
+    assert_eq!(answer["guarantee"], "DERIVED");
+    let text = answer["text"].as_str().unwrap();
+    assert!(text.contains("ユウはノートを使う"));
+    assert!(!text.contains("アオはノートを使う"));
+    let dependencies = answer["dependencies"].as_array().unwrap();
+    assert!(dependencies.contains(&fact["dependencies"][0]));
+    assert!(dependencies.contains(&rule["dependencies"][0]));
+}
+
+#[test]
 fn natural_transitive_object_questions_use_same_actor_scope_and_relation_proofs() {
     let scratch = Scratch::new();
     let direct = record(&execute(
