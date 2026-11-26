@@ -53,6 +53,7 @@ pub(crate) const PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION: &str =
     "declarative-ja-v210-previous-filtered-csv-statistics";
 pub(crate) const RELATION_SUBJECT_QUESTION_PARSER_VERSION: &str =
     "declarative-ja-v211-relation-subject-query";
+const COPULAR_SUBJECT_QUESTION_PARSER_VERSION: &str = "declarative-ja-v212-copular-subject-query";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -749,6 +750,9 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::PreviousFilteredCsvStatistics { .. } => {
             PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION
+        }
+        Intent::AskRelationSubjects { predicate, .. } if predicate == "is" => {
+            COPULAR_SUBJECT_QUESTION_PARSER_VERSION
         }
         Intent::AskRelationSubjects { .. } => RELATION_SUBJECT_QUESTION_PARSER_VERSION,
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
@@ -2388,7 +2392,7 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
     if matches!(intent, Intent::AskRelationSubjects { .. }) {
-        return transitive_subject_question(text)?
+        return relation_subject_question(text)?
             .filter(|(parsed, _)| parsed == intent)
             .map(|(_, spans)| spans)
             .ok_or_else(|| {
@@ -5159,7 +5163,7 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = web_question_intent(statement) {
         return Ok(intent);
     }
-    if let Some((intent, _)) = transitive_subject_question(text)? {
+    if let Some((intent, _)) = relation_subject_question(text)? {
         return Ok(intent);
     }
     if source_packet_line_summary_request(statement) {
@@ -6736,7 +6740,7 @@ fn transitive_object_question_intent(text: &str, question_mark: bool) -> Result<
     }))
 }
 
-fn transitive_subject_question(
+fn relation_subject_question(
     text: &str,
 ) -> Result<Option<(Intent, BTreeMap<String, Vec<SourceSpan>>)>> {
     let statement = terminal_trim(text);
@@ -6746,7 +6750,7 @@ fn transitive_subject_question(
     let unresolved = || {
         Some((
             Intent::Unknown {
-                reason: "「誰が」の質問には、対象と対応する動詞を一つずつ指定してください。関係の範囲は [scope=名前] で指定できます。".into(),
+                reason: "「誰が」の質問には、対象と動詞の関係か、名詞に「ですか」を続けた属性を一つ指定してください。関係の範囲は [scope=名前] で指定できます。".into(),
             },
             BTreeMap::new(),
         ))
@@ -6761,29 +6765,61 @@ fn transitive_subject_question(
     {
         return Ok(unresolved());
     }
-    let Some(captures) = regex(r"^(誰|だれ)が([^を]+)を(.+)$")?.captures(body) else {
+    let Some(captures) = regex(r"^(誰|だれ)が(.+)$")?.captures(body) else {
         return Ok(unresolved());
     };
     let subject_slot = captures
         .get(1)
         .expect("question grammar captures the subject slot");
-    let object = captures
+    let relation = captures
         .get(2)
-        .expect("question grammar captures the object");
-    let verb = captures.get(3).expect("question grammar captures the verb");
-    let raw_verb = verb.as_str();
-    let verb_surface = raw_verb.trim();
-    let Some(verb_base) = verb_surface.strip_suffix('か').or_else(|| {
-        text.trim_end()
-            .ends_with(['?', '？'])
-            .then(|| verb_surface.strip_suffix('の').unwrap_or(verb_surface))
-    }) else {
-        return Ok(unresolved());
-    };
-    let Some((predicate, negative)) = japanese_transitive_verb(verb_base) else {
-        return Ok(unresolved());
-    };
-    let object_value = object.as_str().trim();
+        .expect("question grammar captures the relation");
+    let question_mark = text.trim_end().ends_with(['?', '？']);
+    let (raw_object, predicate_surface, predicate_offset, predicate, negative) =
+        if let Some((object, raw_verb)) = relation.as_str().split_once('を') {
+            let verb_surface = raw_verb.trim();
+            let Some(verb_base) = verb_surface.strip_suffix('か').or_else(|| {
+                question_mark.then(|| verb_surface.strip_suffix('の').unwrap_or(verb_surface))
+            }) else {
+                return Ok(unresolved());
+            };
+            let Some((predicate, negative)) = japanese_transitive_verb(verb_base) else {
+                return Ok(unresolved());
+            };
+            let predicate_offset =
+                object.len() + 'を'.len_utf8() + raw_verb.len() - raw_verb.trim_start().len();
+            (object, verb_base, predicate_offset, predicate, negative)
+        } else {
+            let relation_surface = relation.as_str().trim_end();
+            let Some(declared) = relation_surface
+                .strip_suffix('か')
+                .or_else(|| question_mark.then_some(relation_surface))
+            else {
+                return Ok(unresolved());
+            };
+            let Some((object, marker, negative)) = JAPANESE_NEGATIVE_COPULAS
+                .into_iter()
+                .find_map(|marker| {
+                    declared
+                        .strip_suffix(marker)
+                        .map(|object| (object, marker, true))
+                })
+                .or_else(|| {
+                    declared
+                        .strip_suffix("です")
+                        .map(|object| (object, "です", false))
+                })
+            else {
+                return Ok(unresolved());
+            };
+            let object_value = object.trim();
+            // A nominalized clause ending in の does not name an atomic attribute.
+            if !valid_japanese_copular_object(object_value) || object_value.ends_with('の') {
+                return Ok(unresolved());
+            }
+            (object, marker, object.len(), "is".into(), negative)
+        };
+    let object_value = raw_object.trim();
     if !valid_relation_subject(object_value)
         || object_value.contains([
             'で', '。', '.', '？', '?', '！', '!', '「', '」', '『', '』', '"',
@@ -6795,7 +6831,8 @@ fn transitive_subject_question(
     }
     let statement_offset = text.len() - text.trim_start().len();
     let body_offset = statement_offset + statement.len() - body.len();
-    let verb_start = body_offset + verb.start() + raw_verb.len() - raw_verb.trim_start().len();
+    let relation_start = body_offset + relation.start();
+    let predicate_start = relation_start + predicate_offset;
     let source = |start, end| {
         source_span_at(text, start, end).ok_or_else(|| {
             failure(
@@ -6804,8 +6841,7 @@ fn transitive_subject_question(
             )
         })
     };
-    let object_start =
-        body_offset + object.start() + object.as_str().len() - object.as_str().trim_start().len();
+    let object_start = relation_start + raw_object.len() - raw_object.trim_start().len();
     let mut roles = BTreeMap::from([
         (
             "/AskRelationSubjects/subject_query".into(),
@@ -6820,7 +6856,10 @@ fn transitive_subject_question(
         ),
         (
             "/AskRelationSubjects/predicate".into(),
-            vec![source(verb_start, verb_start + verb_base.len())?],
+            vec![source(
+                predicate_start,
+                predicate_start + predicate_surface.len(),
+            )?],
         ),
     ]);
     let scope = if let Some((scope, start)) = qualifiers.scope {
@@ -6874,6 +6913,18 @@ fn has_unsupported_single_relation_qualifier(text: &str) -> Result<bool> {
     Ok(regex(r"(?:すべて|全て|任意|一部|少なくとも|たいてい|通常|常に|必ず|かもしれ|とは限ら|じゃなく|ではなく|でなく|だけ|のみ|以外|かつ|且つ|および|及び|または|あるいは|もしくは|ただし|しかし|もし|なら|場合|時点|以前|以後|以降|現在|過去|将来|昨日|今日|明日|今朝|今夜|昨夜|今週|先週|来週|先月|今月|来月|さっき|まで|から|[0-9]+[年月日])|(?i:\b(?:all|every|any|some|might|may|and|or|but|unless|if|then|when|before|after|currently|yesterday|today|tomorrow|never|always|only|except|please|also)\b)")?.is_match(text))
 }
 
+const JAPANESE_NEGATIVE_COPULAS: [&str; 5] = [
+    "ではありません",
+    "ではない",
+    "じゃない",
+    "でありません",
+    "でない",
+];
+
+fn valid_japanese_copular_object(object: &str) -> bool {
+    !object.contains(['を', 'は', 'が', 'に', '。', '、', '!', '！', '?', '？'])
+}
+
 /// Bounded copular and Japanese transitive relations, not a claim of general
 /// Japanese parsing. Constants are preserved; only declared rule variables
 /// gain variable syntax.
@@ -6914,13 +6965,7 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
         let subject = capture[1].trim().to_string();
         let mut object = capture[2].trim().to_string();
         let mut negative = false;
-        for suffix in [
-            "ではありません",
-            "ではない",
-            "じゃない",
-            "でありません",
-            "でない",
-        ] {
+        for suffix in JAPANESE_NEGATIVE_COPULAS {
             if let Some(value) = object.strip_suffix(suffix) {
                 object = value.trim().to_string();
                 negative = true;
@@ -6935,7 +6980,7 @@ pub fn parse_proposition(text: &str, variables: bool) -> Result<Option<Propositi
                 }
             }
         }
-        if object.contains(['を', 'は', 'が', 'に', '。', '、', '!', '！', '?', '？']) {
+        if !valid_japanese_copular_object(&object) {
             return Ok(None);
         }
         Some((subject, "is".into(), object, negative))
