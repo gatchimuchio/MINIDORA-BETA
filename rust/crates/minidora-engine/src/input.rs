@@ -10,6 +10,9 @@ use unicode_normalization::char::{canonical_combining_class, compose};
 pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary";
 const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conversation";
 pub(crate) const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
+pub(crate) const LOCAL_FIRST_TOPIC_PARSER_VERSION: &str = "declarative-ja-v216-local-first-topic";
+pub(crate) const AUTONOMOUS_TOPIC_WEB_PARSER_VERSION: &str =
+    "declarative-ja-v217-autonomous-topic-web";
 pub(crate) const PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v180-partial-web-candidate-followup";
 pub(crate) const CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION: &str =
@@ -63,6 +66,8 @@ pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
     "declarative-ja-v182-csv-left-right-inner-join";
 pub(crate) const NATURAL_FINITE_EXPECTATION_PARSER_VERSION: &str =
     "declarative-ja-v183-natural-finite-expectation";
+pub(crate) const CONVERSATIONAL_MATH_PARSER_VERSION: &str =
+    "declarative-ja-v215-conversational-math-report";
 pub(crate) const PASTED_TEXT_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v170-pasted-text-replacement";
 pub(crate) const PREVIOUS_JSON_TABLE_TO_CSV_PARSER_VERSION: &str =
@@ -288,6 +293,7 @@ pub(crate) enum SourceContext {
     NamedDerivedRelationQuery,
     DerivedRelationFollowup,
     ConversationTopic,
+    AutonomousTopicWeb,
     Summary,
 }
 
@@ -629,6 +635,15 @@ pub(crate) fn seal_with_source_context(
                 && previous.is_some_and(|result| result.lifecycle == Lifecycle::Commit)
             {
                 interpret_conversation_reply(&request.text, intent)?
+            } else if matches!(source_context, Some(SourceContext::AutonomousTopicWeb))
+                && let Intent::InspectPremises { subject } = &intent
+                && local_first_topic_span(&request.text)?
+                    .is_some_and(|topic| topic.text == *subject)
+            {
+                Intent::AskWeb {
+                    topic: subject.clone(),
+                    elevation_in_kilometres: false,
+                }
             } else {
                 intent
             }
@@ -777,7 +792,8 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::CorrectionAssertionFollowup
         | SourceContext::NamedDerivedRelationQuery
         | SourceContext::DerivedRelationFollowup
-        | SourceContext::ConversationTopic => None,
+        | SourceContext::ConversationTopic
+        | SourceContext::AutonomousTopicWeb => None,
     });
     let parser_version = match &intent {
         Intent::ExplainPrevious
@@ -816,6 +832,20 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::AskRelationSubjects { .. } => RELATION_SUBJECT_QUESTION_PARSER_VERSION,
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
+        Intent::InspectPremises { subject }
+            if local_first_topic_span(&request.text)?
+                .is_some_and(|topic| topic.text == *subject) =>
+        {
+            LOCAL_FIRST_TOPIC_PARSER_VERSION
+        }
+        Intent::AskWeb {
+            topic,
+            elevation_in_kilometres: false,
+        } if matches!(source_context, Some(SourceContext::AutonomousTopicWeb))
+            && local_first_topic_span(&request.text)?.is_some_and(|span| span.text == *topic) =>
+        {
+            AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
+        }
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
         Intent::FetchPreviousSearchCandidate { .. } if resumes_partial_web_candidate => {
             PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
@@ -832,10 +862,10 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
-        Intent::FiniteProbabilityStatistics { .. }
-            if terminal_trim(&request.text).starts_with("値が") =>
+        Intent::FiniteProbabilityStatistics { .. } | Intent::Statistics { .. }
+            if conversational_math_matches(&request.text, &intent)? =>
         {
-            NATURAL_FINITE_EXPECTATION_PARSER_VERSION
+            CONVERSATIONAL_MATH_PARSER_VERSION
         }
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
         Intent::ConvertPreviousLength { .. }
@@ -1028,7 +1058,10 @@ pub(crate) fn seal_with_source_context(
                 && let [listing, body] = result.evidence.as_slice()
                 && listing.packet_kind == "SEARCH_LIST"
                 && body.packet_kind == "FETCHED_BODY"
-                && let [_, body_ref, _] = result.dependencies.as_slice()
+                && let [.., body_ref, _] = result.dependencies.as_slice()
+                && (result.dependencies.len() == 3
+                    || (result.dependencies.len() == 4
+                        && result.actor_memory_revision.is_some()))
                 && digest(&canonical(body)?) == *body_ref =>
         {
             WEB_ANSWER_EXPLANATION_PARSER_VERSION
@@ -2502,6 +2535,19 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    let topic_role = match intent {
+        Intent::InspectPremises { subject } => Some(("/InspectPremises/subject", subject)),
+        Intent::AskWeb {
+            topic,
+            elevation_in_kilometres: false,
+        } => Some(("/AskWeb/topic", topic)),
+        _ => None,
+    };
+    if let Some((role, topic)) = topic_role
+        && let Some(span) = local_first_topic_span(text)?.filter(|span| &span.text == topic)
+    {
+        return Ok(BTreeMap::from([(role.into(), vec![span])]));
+    }
     let conversation_role = match intent {
         Intent::OpenConversationTopic { topic } => Some(("/OpenConversationTopic/topic", topic)),
         Intent::RespondOnConversationTopic { remark } => {
@@ -4175,6 +4221,159 @@ fn premise_correction_intent(text: &str) -> Result<Option<Intent>> {
     }))
 }
 
+/// Only a bare named topic in a plain Japanese request is eligible for
+/// Core's local-first decision. An inspect request for private or contextual
+/// information keeps its existing local meaning with no implicit egress.
+fn local_first_topic_span(text: &str) -> Result<Option<SourceSpan>> {
+    let statement = terminal_trim(text);
+    let Some(captures) = regex(
+        r"^(.+?)(?:(?:とは|って)(?:何|なに)(?:ですか|でしょうか|なの|か)?|について教えてください)$",
+    )?
+    .captures(statement) else {
+        return Ok(None);
+    };
+    let matched = captures
+        .get(1)
+        .expect("plain topic grammar has one capture");
+    let topic = matched.as_str().trim();
+    let folded = topic.to_ascii_lowercase();
+    if text.chars().any(char::is_control)
+        || !bounded_web_topic(topic)
+        || !regex(r"^[\p{Han}\p{Hiragana}\p{Katakana}A-Za-zー・]{1,48}$")?.is_match(topic)
+        || (topic.is_ascii() && !(2..=24).contains(&topic.len()))
+        || singular_previous_subject(topic)
+        || unresolved_relation_subject(topic)
+        || [
+            "私",
+            "わたし",
+            "僕",
+            "ぼく",
+            "俺",
+            "自分",
+            "あなた",
+            "君",
+            "ミニドラ",
+            "この",
+            "その",
+            "前回",
+            "前の",
+            "直前",
+            "先ほど",
+            "さっき",
+            "当社",
+            "弊社",
+            "社内",
+            "我が家",
+            "家族",
+            "近所の",
+            "同僚の",
+            "友人の",
+            "利用者の",
+            "ユーザーの",
+            "最新の",
+            "現在の",
+        ]
+        .into_iter()
+        .any(|prefix| topic.starts_with(prefix))
+        || [
+            "秘密",
+            "機密",
+            "パスワード",
+            "トークン",
+            "認証鍵",
+            "アクセスキー",
+            "資格情報",
+            "住所",
+            "電話番号",
+            "口座番号",
+            "暗証番号",
+            "社外秘",
+            "個人情報",
+            "マイナンバー",
+            "内部資料",
+            "未公開",
+            "を削除",
+            "を実行",
+            "を送信",
+            "を保存",
+            "の標高",
+            "について",
+            "教えて",
+        ]
+        .into_iter()
+        .any(|marker| topic.contains(marker))
+        || [
+            "minidora",
+            "password",
+            "passphrase",
+            "apikey",
+            "secret",
+            "token",
+            "credential",
+            "authorization",
+            "apikeys",
+            "credentials",
+            "localhost",
+        ]
+        .into_iter()
+        .any(|marker| topic.eq_ignore_ascii_case(marker))
+        || (topic.is_ascii()
+            && topic.len() >= 12
+            && ["ghp", "githubpat", "aiza", "akia", "eyj", "xoxb"]
+                .into_iter()
+                .any(|prefix| folded.starts_with(prefix)))
+        || WEB_FRESHNESS_PROPERTIES
+            .iter()
+            .any(|property| topic.contains(property))
+    {
+        return Ok(None);
+    }
+    let start = text.len() - text.trim_start().len() + matched.start() + matched.as_str().len()
+        - matched.as_str().trim_start().len();
+    Ok(source_span_at(text, start, start + topic.len()))
+}
+
+fn verified_local_first_topic_seal(
+    bundle: &InputBundle,
+    version: &str,
+    topic: &str,
+) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    Ok(meaning.parser_version == version
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && text.len() <= request.budget.max_input_bytes
+        && matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        && local_first_topic_span(text)?.is_some_and(|span| span.text == topic)
+        && matches!(interpret(text)?, Intent::InspectPremises { subject } if subject == topic)
+        && source_role_spans(text, &meaning.intent)? == meaning.source_roles
+        && bundle.raw_sha256 == digest(text.as_bytes())
+        && bundle.semantic_signature == identity(meaning)?
+        && bundle.fingerprint
+            == identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?)
+}
+
+pub(crate) fn verified_local_first_topic_input(bundle: &InputBundle) -> Result<bool> {
+    let Intent::InspectPremises { subject } = &bundle.meaning.intent else {
+        return Ok(false);
+    };
+    verified_local_first_topic_seal(bundle, LOCAL_FIRST_TOPIC_PARSER_VERSION, subject)
+}
+
+pub(crate) fn verified_autonomous_topic_web_input(bundle: &InputBundle) -> Result<bool> {
+    let Intent::AskWeb {
+        topic,
+        elevation_in_kilometres: false,
+    } = &bundle.meaning.intent
+    else {
+        return Ok(false);
+    };
+    verified_local_first_topic_seal(bundle, AUTONOMOUS_TOPIC_WEB_PARSER_VERSION, topic)
+}
+
 fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
     let recorded_patterns = [
         r"(?i)^what (?:facts|premises) (?:have been|are) (?:provided|recorded|stated) about (.+)$",
@@ -5841,6 +6040,11 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = explicit_conversation_intent(text)? {
         return Ok(intent);
     }
+    if let Some(topic) = local_first_topic_span(text)? {
+        return Ok(Intent::InspectPremises {
+            subject: topic.text,
+        });
+    }
     if regex(r"(?i)^(?:which|what|who|where|when|how)\b")?.is_match(body)
         || regex(r"^(?:どの|どれ|何|なに|誰|だれ|どこ|いつ|どう|いくら|いくつ)")?.is_match(body)
     {
@@ -6518,13 +6722,17 @@ pub(crate) fn verified_previous_finite_event(bundle: &InputBundle) -> Result<boo
 }
 
 pub(crate) fn verified_finite_distribution_input(bundle: &InputBundle) -> Result<bool> {
-    if bundle.meaning.parser_version == NATURAL_FINITE_EXPECTATION_PARSER_VERSION {
-        return verified_natural_finite_expectation(bundle);
-    }
-    Ok(matches!(
+    if !matches!(
         bundle.meaning.intent,
         Intent::FiniteProbabilityStatistics { .. }
-    ) && interpret(&bundle.request.text)? == bundle.meaning.intent)
+    ) {
+        return Ok(false);
+    }
+    match bundle.meaning.parser_version.as_str() {
+        NATURAL_FINITE_EXPECTATION_PARSER_VERSION => verified_natural_finite_expectation(bundle),
+        CONVERSATIONAL_MATH_PARSER_VERSION => verified_conversational_math_input(bundle),
+        _ => Ok(interpret(&bundle.request.text)? == bundle.meaning.intent),
+    }
 }
 
 pub(crate) fn verified_natural_finite_expectation(bundle: &InputBundle) -> Result<bool> {
@@ -6536,6 +6744,24 @@ pub(crate) fn verified_natural_finite_expectation(bundle: &InputBundle) -> Resul
                 Intent::FiniteProbabilityStatistics { .. }
             )
             && parsed.as_ref() == Some(&bundle.meaning.intent),
+    )
+}
+
+fn conversational_math_matches(text: &str, intent: &Intent) -> Result<bool> {
+    let text = terminal_trim(text);
+    let parsed = match intent {
+        Intent::FiniteProbabilityStatistics { .. } => natural_finite_expectation_intent(text)?,
+        Intent::Statistics { units: None, .. } => natural_observation_statistics_intent(text)?,
+        _ => None,
+    };
+    Ok(parsed.as_ref() == Some(intent))
+}
+
+pub(crate) fn verified_conversational_math_input(bundle: &InputBundle) -> Result<bool> {
+    Ok(
+        bundle.meaning.parser_version == CONVERSATIONAL_MATH_PARSER_VERSION
+            && bundle.meaning.source_kind == "USER_REQUEST"
+            && conversational_math_matches(&bundle.request.text, &bundle.meaning.intent)?,
     )
 }
 
@@ -6851,6 +7077,10 @@ fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
         };
         return Ok(Some(Intent::Statistics { values, units }));
     }
+    natural_observation_statistics_intent(text)
+}
+
+fn natural_observation_statistics_intent(text: &str) -> Result<Option<Intent>> {
     if let Some(capture) = regex(r"^(.+?)\s*の(?:平均と分散|平均|分散|統計量)(?:を)?(?:計算して|計算してください|求めて|教えて)?$")?.captures(text) {
         let raw = capture[1].trim();
         let values = if raw.starts_with('[') {
@@ -8038,6 +8268,63 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn plain_topic_seals_local_and_autonomous_routes_without_changing_explicit_web() {
+        for text in [
+            "　富士山とは何ですか？ ",
+            "量子計算について教えてください。",
+            "Asiaとは何ですか",
+        ] {
+            let request = RequestEnvelope::new("c", "i", "actor", text);
+            let local = seal(&request, None).unwrap();
+            assert!(verified_local_first_topic_input(&local).unwrap(), "{text}");
+            let web =
+                seal_with_source_context(&request, None, Some(SourceContext::AutonomousTopicWeb))
+                    .unwrap();
+            assert!(verified_autonomous_topic_web_input(&web).unwrap(), "{text}");
+            let span = &web.meaning.source_roles["/AskWeb/topic"][0];
+            assert_eq!(&text[span.start..span.end], span.text);
+            assert!(
+                matches!(&web.meaning.intent, Intent::AskWeb { topic, elevation_in_kilometres: false } if topic == &span.text)
+            );
+        }
+        for text in [
+            "富士山について何がわかっていますか？",
+            "この会話について教えてください。",
+            "私の秘密とは何ですか？",
+            "a@example.comについて教えてください。",
+            "sk-proj-123とは何ですか？",
+            "C:\\notes.txtについて教えてください。",
+            "『富士山』について教えてください。",
+            "富士山の最新情報について教えてください。",
+            "富士山の標高について教えてください。",
+        ] {
+            let request = RequestEnvelope::new("c", "i", "actor", text);
+            let bundle =
+                seal_with_source_context(&request, None, Some(SourceContext::AutonomousTopicWeb))
+                    .unwrap();
+            assert_ne!(
+                bundle.meaning.parser_version, LOCAL_FIRST_TOPIC_PARSER_VERSION,
+                "{text}"
+            );
+            assert!(
+                !verified_autonomous_topic_web_input(&bundle).unwrap(),
+                "{text}"
+            );
+        }
+        let request = RequestEnvelope::new(
+            "c",
+            "i",
+            "actor",
+            "富士山について出典付きで教えてください。",
+        );
+        let explicit =
+            seal_with_source_context(&request, None, Some(SourceContext::AutonomousTopicWeb))
+                .unwrap();
+        assert_eq!(explicit.meaning.parser_version, WEB_QUESTION_PARSER_VERSION);
+        assert!(!verified_autonomous_topic_web_input(&explicit).unwrap());
     }
 
     #[test]
@@ -10044,6 +10331,7 @@ mod mathematics_and_source_tests {
             None,
         )
         .unwrap();
+        assert!(verified_conversational_math_input(&stats).unwrap());
         assert!(
             matches!(stats.meaning.intent, Intent::Statistics { values, units: None }
             if values == vec!["1", "2", "3"])
@@ -10058,6 +10346,8 @@ mod mathematics_and_source_tests {
             None,
         )
         .unwrap();
+        assert_eq!(precise.meaning.parser_version, PARSER_VERSION);
+        assert!(!verified_conversational_math_input(&precise).unwrap());
         assert!(
             matches!(precise.meaning.intent, Intent::Statistics { values, units: Some(units) }
             if values[0] == "0.12345678901234567890123456789" && values[1] == "1/3" && units == vec!["m", "m"])
@@ -10105,9 +10395,22 @@ mod mathematics_and_source_tests {
         assert_eq!(bundle.request.text, text);
         assert_eq!(
             bundle.meaning.parser_version,
-            NATURAL_FINITE_EXPECTATION_PARSER_VERSION
+            CONVERSATIONAL_MATH_PARSER_VERSION
         );
-        assert!(verified_natural_finite_expectation(&bundle).unwrap());
+        assert!(verified_conversational_math_input(&bundle).unwrap());
+        assert!(verified_finite_distribution_input(&bundle).unwrap());
+        let mut legacy = bundle.clone();
+        legacy.meaning.parser_version = NATURAL_FINITE_EXPECTATION_PARSER_VERSION.into();
+        legacy.semantic_signature = identity(&legacy.meaning).unwrap();
+        legacy.fingerprint = identity(&(
+            &legacy.request,
+            &legacy.raw_sha256,
+            &legacy.context_sha256,
+            NATURAL_FINITE_EXPECTATION_PARSER_VERSION,
+        ))
+        .unwrap();
+        assert!(verified_natural_finite_expectation(&legacy).unwrap());
+        assert!(verified_finite_distribution_input(&legacy).unwrap());
         assert!(matches!(
             &bundle.meaning.intent,
             Intent::FiniteProbabilityStatistics { outcomes, weights }
@@ -10125,7 +10428,9 @@ mod mathematics_and_source_tests {
         .unwrap();
         assert_eq!(old.meaning.intent, bundle.meaning.intent);
         assert_eq!(old.meaning.parser_version, PARSER_VERSION);
+        assert!(!verified_conversational_math_input(&old).unwrap());
         assert!(!verified_natural_finite_expectation(&old).unwrap());
+        assert!(verified_finite_distribution_input(&old).unwrap());
         for text in [
             "値が0、2で重みが1、のときの期待値を求めて",
             "値が0、2で、重みが1e+、2のときの期待値を求めて",

@@ -2,7 +2,7 @@
 //! Formal results apply to the supplied coefficients/data; they do not validate
 //! real-world premises or infer that observations share a physical population.
 use crate::language::{calculate, rational_text};
-use minidora_domain::{Guarantee, Lifecycle, Result, ResultRecord, failure};
+use minidora_domain::{Guarantee, Intent, Lifecycle, Result, ResultRecord, canonical, failure};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Zero};
@@ -1038,6 +1038,161 @@ fn preview_polynomial_terms(terms: &[PolynomialTerm]) -> String {
     preview.join("; ")
 }
 
+pub(crate) struct ConversationalMathReport {
+    pub(crate) units: Vec<String>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) explanation_units: Vec<String>,
+}
+
+pub(crate) fn conversational_math_report(intent: &Intent) -> Result<ConversationalMathReport> {
+    match intent {
+        Intent::Statistics { values, units } => {
+            let report = summarize(values, units.as_deref())?;
+            let suffix =
+                |unit: Option<&str>| unit.map_or_else(String::new, |unit| format!(" {unit}"));
+            let unit = suffix(report.unit.as_deref());
+            let variance_unit = suffix(report.variance_unit.as_deref());
+            let sample_variance = report.sample_variance.as_deref().map_or_else(
+                || "標本分散は、値が1件のため算出できません。".into(),
+                |value| format!("標本分散は {value}{variance_unit} です。"),
+            );
+            let units = vec![
+                format!(
+                    "{}件の値の平均は {}{unit}、中央値は {}{unit} です。",
+                    report.count, report.mean, report.median
+                ),
+                format!(
+                    "合計は {}{unit}、最小値は {}{unit}、最大値は {}{unit} です。",
+                    report.sum, report.min, report.max
+                ),
+                format!(
+                    "母分散は {}{variance_unit} です。",
+                    report.population_variance
+                ),
+                sample_variance,
+                "指定された値についての記述統計です。".into(),
+            ];
+            Ok(ConversationalMathReport {
+                units,
+                bytes: canonical(&report)?,
+                explanation_units: statistics_explanation_units(&report),
+            })
+        }
+        Intent::FiniteProbabilityStatistics { outcomes, weights } => {
+            let report = finite_probability_statistics(outcomes, weights)?;
+            let units = vec![
+                format!(
+                    "指定された有限分布の期待値は {}、分散は {} です。",
+                    report.expected_value, report.variance
+                ),
+                format!(
+                    "{}組の値と重みを使いました。正規化した確率の合計は {} です。",
+                    report.count, report.probability_sum
+                ),
+            ];
+            Ok(ConversationalMathReport {
+                units,
+                bytes: canonical(&report)?,
+                explanation_units: finite_probability_explanation_units(&report),
+            })
+        }
+        _ => Err(failure(
+            "CONVERSATIONAL_MATH_UNSUPPORTED",
+            "この数理処理には通常会話用の結果表示がありません。",
+        )),
+    }
+}
+
+fn statistics_explanation_units(report: &Statistics) -> Vec<String> {
+    let observations = report
+        .input_values
+        .iter()
+        .enumerate()
+        .take(MAX_CONTEXT_EXPLANATION_ITEMS)
+        .map(|(index, value)| {
+            let unit = report
+                .input_units
+                .as_ref()
+                .and_then(|units| units.get(index))
+                .map_or_else(String::new, |unit| format!(" {unit}"));
+            format!("{value}{unit}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut observed = observations;
+    if report.count > MAX_CONTEXT_EXPLANATION_ITEMS {
+        observed.push_str(&format!(
+            ", … ({}件は保存レポートに保持)",
+            report.count - MAX_CONTEXT_EXPLANATION_ITEMS
+        ));
+    }
+    let normalized = preview_strings(&report.normalized_values);
+    let unit = report.unit.as_deref().unwrap_or("");
+    let suffix = if unit.is_empty() {
+        String::new()
+    } else {
+        format!(" {unit}")
+    };
+    let variance_suffix = report
+        .variance_unit
+        .as_deref()
+        .map_or_else(String::new, |unit| format!(" {unit}"));
+    let sample_variance = report.sample_variance.as_deref().map_or_else(
+        || "標本分散: 算出対象外（観測値が1件）".into(),
+        |value| format!("標本分散: {value}{variance_suffix}"),
+    );
+    vec![
+        "前回の記述統計を元の値から再計算し、保存レポートと照合しました。".into(),
+        format!("入力値 (n={}): [{observed}]", report.count),
+        format!("単位換算後の値: [{normalized}]{suffix}"),
+        format!(
+            "合計: {}{suffix}; 平均: {}{suffix}; 中央値: {}{suffix}",
+            report.sum, report.mean, report.median
+        ),
+        format!(
+            "最小値: {}{suffix}; 最大値: {}{suffix}",
+            report.min, report.max
+        ),
+        format!(
+            "母分散: {}{variance_suffix}; {sample_variance}",
+            report.population_variance
+        ),
+        format!("適用範囲: {}", report.scope),
+    ]
+}
+
+fn finite_probability_explanation_units(report: &FiniteProbabilityStatistics) -> Vec<String> {
+    vec![
+        "前回の有限分布の期待値・分散を元の結果と重みから再計算し、保存レポートと照合しました。"
+            .into(),
+        format!(
+            "結果 (n={}): [{}]",
+            report.count,
+            preview_strings(&report.input_outcomes)
+        ),
+        format!(
+            "重み: [{}]; 重み合計: {}",
+            preview_strings(&report.input_weights),
+            report.total_weight
+        ),
+        format!(
+            "正規化後の確率: [{}]",
+            preview_strings(&report.normalized_probabilities)
+        ),
+        format!(
+            "期待値の各寄与: [{}]",
+            preview_strings(&report.expected_value_contributions)
+        ),
+        format!("期待値: {}", report.expected_value),
+        format!(
+            "分散の各寄与: [{}]",
+            preview_strings(&report.variance_contributions)
+        ),
+        format!("分散: {}", report.variance),
+        format!("適用範囲: {}", report.scope),
+    ]
+}
+
 /// Recompute bounded native math reports from their retained operands before
 /// a later turn explains them. Large lists and expressions are abbreviated in
 /// the display; the complete exact report remains in the prior result.
@@ -1070,61 +1225,7 @@ pub(crate) fn previous_math_report_explanation(
     )? {
         let recomputed = summarize(&report.input_values, report.input_units.as_deref())?;
         verify_previous_math_report(previous, &report, &recomputed)?;
-        let observations = report
-            .input_values
-            .iter()
-            .enumerate()
-            .take(MAX_CONTEXT_EXPLANATION_ITEMS)
-            .map(|(index, value)| {
-                let unit = report
-                    .input_units
-                    .as_ref()
-                    .and_then(|units| units.get(index))
-                    .map_or_else(String::new, |unit| format!(" {unit}"));
-                format!("{value}{unit}")
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut observed = observations;
-        if report.count > MAX_CONTEXT_EXPLANATION_ITEMS {
-            observed.push_str(&format!(
-                ", … ({}件は保存レポートに保持)",
-                report.count - MAX_CONTEXT_EXPLANATION_ITEMS
-            ));
-        }
-        let normalized = preview_strings(&report.normalized_values);
-        let unit = report.unit.as_deref().unwrap_or("");
-        let suffix = if unit.is_empty() {
-            String::new()
-        } else {
-            format!(" {unit}")
-        };
-        let variance_suffix = report
-            .variance_unit
-            .as_deref()
-            .map_or_else(String::new, |unit| format!(" {unit}"));
-        let sample_variance = report.sample_variance.as_deref().map_or_else(
-            || "標本分散: 算出対象外（観測値が1件）".into(),
-            |value| format!("標本分散: {value}{variance_suffix}"),
-        );
-        return Ok(Some(vec![
-            "前回の記述統計を元の値から再計算し、保存レポートと照合しました。".into(),
-            format!("入力値 (n={}): [{observed}]", report.count),
-            format!("単位換算後の値: [{normalized}]{suffix}"),
-            format!(
-                "合計: {}{suffix}; 平均: {}{suffix}; 中央値: {}{suffix}",
-                report.sum, report.mean, report.median
-            ),
-            format!(
-                "最小値: {}{suffix}; 最大値: {}{suffix}",
-                report.min, report.max
-            ),
-            format!(
-                "母分散: {}{variance_suffix}; {sample_variance}",
-                report.population_variance
-            ),
-            format!("適用範囲: {}", report.scope),
-        ]));
+        return Ok(Some(statistics_explanation_units(&report)));
     }
     if let Some(report) = parse_previous_math_report::<NormalizedProbabilityWeights>(
         previous,
@@ -1176,17 +1277,7 @@ pub(crate) fn previous_math_report_explanation(
         let recomputed =
             finite_probability_statistics(&report.input_outcomes, &report.input_weights)?;
         verify_previous_math_report(previous, &report, &recomputed)?;
-        return Ok(Some(vec![
-            "前回の有限分布の期待値・分散を元の結果と重みから再計算し、保存レポートと照合しました。".into(),
-            format!("結果 (n={}): [{}]", report.count, preview_strings(&report.input_outcomes)),
-            format!("重み: [{}]; 重み合計: {}", preview_strings(&report.input_weights), report.total_weight),
-            format!("正規化後の確率: [{}]", preview_strings(&report.normalized_probabilities)),
-            format!("期待値の各寄与: [{}]", preview_strings(&report.expected_value_contributions)),
-            format!("期待値: {}", report.expected_value),
-            format!("分散の各寄与: [{}]", preview_strings(&report.variance_contributions)),
-            format!("分散: {}", report.variance),
-            format!("適用範囲: {}", report.scope),
-        ]));
+        return Ok(Some(finite_probability_explanation_units(&report)));
     }
     if let Some(report) = parse_previous_math_report::<EventProbabilityResult>(
         previous,

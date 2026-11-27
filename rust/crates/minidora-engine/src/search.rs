@@ -996,9 +996,6 @@ fn partial_web_candidate_observation(
     {
         return Err(invalid());
     }
-    let [listing_ref, body_ref] = previous.dependencies.as_slice() else {
-        return Err(invalid());
-    };
     let [listing, packet] = previous.evidence.as_slice() else {
         return Err(invalid());
     };
@@ -1016,7 +1013,7 @@ fn partial_web_candidate_observation(
     let Intent::AskWeb { topic, .. } = &original.meaning.intent else {
         return Err(invalid());
     };
-    if original.meaning.parser_version != WEB_QUESTION_PARSER_VERSION
+    if !verified_web_answer_input(&original)?
         || request.actor_id != actor
         || request.case_id != case
         || identity(request)? != previous.id
@@ -1028,6 +1025,11 @@ fn partial_web_candidate_observation(
     {
         return Err(invalid());
     }
+    let (lookup_actions, dependencies) =
+        crate::core::web_dependencies_after_topic_lookup(store, &original, previous)?;
+    let [listing_ref, body_ref] = dependencies else {
+        return Err(invalid());
+    };
     let goal_ref = stopped.goal_sha256.as_ref().ok_or_else(invalid)?;
     let goal_bytes = store.get_bytes(actor, case, goal_ref)?;
     let goal: GoalContract = serde_json::from_slice(&goal_bytes)?;
@@ -1035,6 +1037,7 @@ fn partial_web_candidate_observation(
     let nodes: Vec<GoalNode> = serde_json::from_slice(&graph_bytes)?;
     let allowed_starts = (goal.budget.max_actions as usize)
         .checked_sub(nodes.len().saturating_sub(2))
+        .and_then(|remaining| remaining.checked_sub(lookup_actions as usize))
         .ok_or_else(invalid)?;
     if canonical(&goal)? != goal_bytes
         || !nodes.starts_with(&web_answer::nodes())
@@ -1109,6 +1112,15 @@ fn invalid_web_answer_context() -> minidora_domain::Error {
     )
 }
 
+/// Direct Web questions retain their original parser. Autonomous Web questions
+/// must revalidate the exact subject recovered from the original natural text.
+pub(crate) fn verified_web_answer_input(bundle: &InputBundle) -> Result<bool> {
+    if bundle.meaning.parser_version == WEB_QUESTION_PARSER_VERSION {
+        return Ok(matches!(bundle.meaning.intent, Intent::AskWeb { .. }));
+    }
+    crate::input::verified_autonomous_topic_web_input(bundle)
+}
+
 pub(crate) fn verify_committed_web_answer<'a>(
     store: &Store,
     history: &VerifiedCaseHistory<'_>,
@@ -1118,7 +1130,8 @@ pub(crate) fn verify_committed_web_answer<'a>(
     use web_answer::{ANSWER_NODE, BODY_NODE, LISTING_NODE};
 
     let invalid = invalid_web_answer_context;
-    if previous.lifecycle != Lifecycle::Commit
+    if !verified_web_answer_input(original)?
+        || previous.lifecycle != Lifecycle::Commit
         || history
             .input_result(&previous.input_id, previous.input_version)?
             .as_ref()

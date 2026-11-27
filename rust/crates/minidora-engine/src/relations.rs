@@ -2079,6 +2079,45 @@ pub(crate) fn active_relation_inventory_projection(
     subject: &str,
     max_actions: u32,
 ) -> Result<(RelationInventory, u32)> {
+    let (projection, actions) = active_relation_inventory(index, subject, max_actions)?;
+    let (inventory, _) = projection.require_inventory()?;
+    Ok((inventory, actions))
+}
+
+/// The same indexed inventory, with the exact work used even when no active
+/// premises support the subject. An unavailable proof is still an error.
+pub(crate) fn active_relation_inventory_with_cost(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    max_actions: u32,
+) -> Result<(Option<RelationInventory>, u32)> {
+    let (projection, actions) = active_relation_inventory(index, subject, max_actions)?;
+    let inventory = match projection {
+        RelationInventoryProjection::Supported(inventory, _) => Some(inventory),
+        RelationInventoryProjection::Missing(_) => None,
+    };
+    Ok((inventory, actions))
+}
+
+enum RelationInventoryProjection {
+    Supported(RelationInventory, Vec<RelationRule>),
+    Missing(&'static str),
+}
+
+impl RelationInventoryProjection {
+    fn require_inventory(self) -> Result<(RelationInventory, Vec<RelationRule>)> {
+        match self {
+            Self::Supported(inventory, rules) => Ok((inventory, rules)),
+            Self::Missing(reason) => Err(failure("MISSING_PREMISES", reason)),
+        }
+    }
+}
+
+fn active_relation_inventory(
+    index: &MemoryIndexSnapshot<'_, '_>,
+    subject: &str,
+    max_actions: u32,
+) -> Result<(RelationInventoryProjection, u32)> {
     if max_actions == 0 {
         return Err(failure(
             "RELATION_BUDGET",
@@ -2121,9 +2160,7 @@ pub(crate) fn active_relation_inventory_projection(
         }
     }
 
-    let (inventory, actions, _supporting_rules) =
-        active_relation_inventory_from_seeds(index, subject, max_actions, actions, seeds)?;
-    Ok((inventory, actions))
+    active_relation_inventory_from_seeds(index, subject, max_actions, actions, seeds)
 }
 
 /// Build the comparison inventory from active relation records in the exact
@@ -2196,7 +2233,10 @@ pub(crate) fn active_scoped_relation_inventory_projection(
         ..MemoryState::default()
     };
 
-    active_relation_inventory_from_seeds(index, subject, max_actions, actions, seeds)
+    let (projection, actions) =
+        active_relation_inventory_from_seeds(index, subject, max_actions, actions, seeds)?;
+    let (inventory, rules) = projection.require_inventory()?;
+    Ok((inventory, actions, rules))
 }
 
 fn active_relation_inventory_from_seeds(
@@ -2205,7 +2245,7 @@ fn active_relation_inventory_from_seeds(
     max_actions: u32,
     mut actions: u32,
     seeds: MemoryState,
-) -> Result<(RelationInventory, u32, Vec<RelationRule>)> {
+) -> Result<(RelationInventoryProjection, u32)> {
     if actions > max_actions {
         return Err(failure(
             "RELATION_BUDGET",
@@ -2225,9 +2265,11 @@ fn active_relation_inventory_from_seeds(
         usize::try_from(remaining).unwrap_or(usize::MAX),
     )?;
     if query_shapes.is_empty() {
-        return Err(failure(
-            "MISSING_PREMISES",
-            "no active supported relation query applies to this subject",
+        return Ok((
+            RelationInventoryProjection::Missing(
+                "no active supported relation query applies to this subject",
+            ),
+            actions,
         ));
     }
     let query_count = u32::try_from(query_shapes.len())
@@ -2309,9 +2351,11 @@ fn active_relation_inventory_from_seeds(
     }
 
     if reported_facts.is_empty() {
-        return Err(failure(
-            "MISSING_PREMISES",
-            "no supported relation result remains for this subject",
+        return Ok((
+            RelationInventoryProjection::Missing(
+                "no supported relation result remains for this subject",
+            ),
+            actions,
         ));
     }
     let guarantee = if reported_facts
@@ -2344,15 +2388,17 @@ fn active_relation_inventory_from_seeds(
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok((
-        RelationInventory {
-            facts,
-            contested_fact_ids,
-            has_conflict,
-            dependencies: dependencies.into_iter().collect(),
-            guarantee,
-        },
+        RelationInventoryProjection::Supported(
+            RelationInventory {
+                facts,
+                contested_fact_ids,
+                has_conflict,
+                dependencies: dependencies.into_iter().collect(),
+                guarantee,
+            },
+            supporting_rules.into_values().collect(),
+        ),
         actions,
-        supporting_rules.into_values().collect(),
     ))
 }
 

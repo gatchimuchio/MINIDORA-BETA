@@ -82,7 +82,7 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "exact-mathematics",
-                    scope: "有理数、対応単位、計算手順、統計、確率、有限の代数演算を処理します。",
+                    scope: "有理数、対応単位、計算手順、統計、確率、有限の代数演算を処理します。自然文の記述統計と有限分布の期待値・分散は日本語で返し、型付き計算記録を追問に使います。",
                     permission: None,
                     limits: "演算ごとの文型、次元、項数と実行予算に従います。確定値の長さ換算で換算先が不足すると、同じ会話で単位を補足できます。",
                 },
@@ -100,7 +100,7 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "web-grounded-answer",
-                    scope: "対応する日本語の依頼から候補を検索し、取得した本文の記述を出典・時点・ハッシュ付きで回答します。明示された標高の換算と、保存済み本文からの根拠付き抜粋も扱います。",
+                    scope: "対応する日本語の説明質問では保存知識の充足を確認し、必要時に許可済みWebを探索します。取得した本文の記述を出典・時点・ハッシュ付きで回答します。明示された標高の換算と、保存済み本文からの根拠付き抜粋も扱います。",
                     permission: Some(CapabilityPermission::ExactHttpsHost {
                         host: SearchProvider::Wikipedia.host(),
                     }),

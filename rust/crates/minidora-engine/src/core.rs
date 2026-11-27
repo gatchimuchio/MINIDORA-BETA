@@ -1737,6 +1737,79 @@ pub(crate) fn condition_evaluation_contract(
 }
 
 const WEB_ANSWER_PREDICATE: &str = "GROUNDED_WEB_ANSWER_V1";
+const AUTONOMOUS_TOPIC_LOOKUP_KIND: &str = "minidora.core.autonomous-topic-lookup.v1";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutonomousTopicLookup {
+    kind: String,
+    request_id: String,
+    topic: String,
+    memory_revision: u64,
+    actions: u32,
+}
+
+fn topic_lookup_budget(request: &RequestEnvelope) -> u32 {
+    // Reserve Core output, content and rendering, plus delivery when requested.
+    request
+        .budget
+        .max_actions
+        .saturating_sub(3 + u32::from(request.output_path.is_some()))
+}
+
+/// Recover the same evidence-based branch and charge its real work before
+/// interpreting the standard Web dependencies. No network is used here.
+pub(crate) fn web_dependencies_after_topic_lookup<'a>(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &'a ResultRecord,
+) -> Result<(u32, &'a [String])> {
+    let request = &bundle.request;
+    if bundle.meaning.parser_version != input::AUTONOMOUS_TOPIC_WEB_PARSER_VERSION {
+        return Ok((0, &result.dependencies));
+    }
+    let invalid = || {
+        failure(
+            "AUTONOMOUS_TOPIC_CONTEXT_INVALID",
+            "元の質問と、Web探索前に使用した保存知識の確認記録が一致しません。",
+        )
+    };
+    let Intent::AskWeb { topic, .. } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    if !input::verified_autonomous_topic_web_input(bundle)? {
+        return Err(invalid());
+    }
+    let (reference, dependencies) = result.dependencies.split_first().ok_or_else(invalid)?;
+    let bytes = store.get_bytes(&request.actor_id, &request.case_id, reference)?;
+    let lookup: AutonomousTopicLookup = serde_json::from_slice(&bytes)?;
+    let limit = topic_lookup_budget(request);
+    if lookup.kind != AUTONOMOUS_TOPIC_LOOKUP_KIND
+        || lookup.request_id != result.id
+        || identity(request)? != result.id
+        || lookup.topic != *topic
+        || Some(lookup.memory_revision) != result.actor_memory_revision
+        || lookup.actions == 0
+        || lookup.actions > limit
+        || canonical(&lookup)? != bytes
+    {
+        return Err(invalid());
+    }
+    let memory = match store.load_memory_revision(&request.actor_id, lookup.memory_revision)? {
+        Some(memory) => memory,
+        None if lookup.memory_revision == 0 => MemoryState::default(),
+        None => return Err(invalid()),
+    };
+    let (inventory, actions) =
+        Store::with_snapshot_relation_index(&request.actor_id, &memory, |index| {
+            relations::active_relation_inventory_with_cost(index, topic, limit)
+        })?;
+    if inventory.is_some() || actions != lookup.actions {
+        return Err(invalid());
+    }
+    Ok((actions, dependencies))
+}
+pub(crate) const CONVERSATIONAL_MATH_PREDICATE: &str = "COMPUTED_JAPANESE_MATH_REPORT_V1";
 const CODE_EXPLANATION_PREDICATE: &str = "SOURCE_CODE_EXPLANATION_V1";
 const RETURN_FUNCTION_PREDICATE: &str = "SOURCE_RETURN_FUNCTION_V1";
 pub(crate) const CONVERSATION_PREDICATE: &str = "GENERATED_CONVERSATION_V1";
@@ -1756,6 +1829,11 @@ pub(crate) fn goal_predicates(
             predicates.push(CONVERSATION_PREDICATE.into());
         }
         Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
+        Intent::Statistics { .. } | Intent::FiniteProbabilityStatistics { .. }
+            if meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION =>
+        {
+            predicates.push(CONVERSATIONAL_MATH_PREDICATE.into());
+        }
         Intent::ExplainCode { .. } => predicates.push(CODE_EXPLANATION_PREDICATE.into()),
         Intent::GenerateReturnFunction { .. } => predicates.push(RETURN_FUNCTION_PREDICATE.into()),
         Intent::VerifyPreviousCode { .. }
@@ -1926,6 +2004,7 @@ fn verify_report_goal_content(
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
                 | CONVERSATION_PREDICATE
+                | CONVERSATIONAL_MATH_PREDICATE
                 | hearing::PREDICATE
                 | CALCULATION_CORRECTION_PREDICATE
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
@@ -5858,6 +5937,25 @@ impl Engine {
         Ok((memory.revision, answer))
     }
 
+    fn topic_knowledge(
+        &self,
+        actor: &str,
+        subject: &str,
+        limit: u32,
+    ) -> Result<(u64, Result<(Option<relations::RelationInventory>, u32)>)> {
+        let read = |index: &MemoryIndexSnapshot<'_, '_>| {
+            Ok((
+                index.revision(),
+                relations::active_relation_inventory_with_cost(index, subject, limit),
+            ))
+        };
+        if let Some(value) = self.store.with_relation_index(actor, read)? {
+            return Ok(value);
+        }
+        let memory = self.store.load_memory(actor)?;
+        Store::with_snapshot_relation_index(actor, &memory, read)
+    }
+
     fn indexed_premise_inventory(
         &self,
         actor: &str,
@@ -6947,13 +7045,63 @@ impl Engine {
             }
             Ok(bundle)
         });
-        let bundle = match sealed {
+        let mut bundle = match sealed {
             Ok(v) => v,
             Err(e) => {
                 state.result = Some(base_result(&request));
                 return self.stop(&mut state, Lifecycle::Fail, "INPUT_FAILURE", &e.to_string());
             }
         };
+        let mut probed_topic_inventory = None;
+        let mut autonomous_topic_lookup = None;
+        let mut topic_actions = 0;
+        if has_compute_budget
+            && supports_japanese_output_locale(&request.locale)
+            && bundle.meaning.parser_version == input::LOCAL_FIRST_TOPIC_PARSER_VERSION
+            && input::verified_local_first_topic_input(&bundle)?
+            && let Intent::InspectPremises { subject } = &bundle.meaning.intent
+        {
+            let (revision, inventory) =
+                self.topic_knowledge(actor, subject, topic_lookup_budget(&request))?;
+            let expired = started.elapsed() >= Duration::from_millis(request.budget.deadline_ms);
+            match inventory {
+                Ok((None, actions)) if !expired => {
+                    topic_actions = actions as usize;
+                    autonomous_topic_lookup = Some(AutonomousTopicLookup {
+                        kind: AUTONOMOUS_TOPIC_LOOKUP_KIND.into(),
+                        request_id: fingerprint.clone(),
+                        topic: subject.clone(),
+                        memory_revision: revision,
+                        actions,
+                    });
+                    bundle = input::seal_with_source_context(
+                        &request,
+                        previous,
+                        Some(input::SourceContext::AutonomousTopicWeb),
+                    )?;
+                    if !input::verified_autonomous_topic_web_input(&bundle)? {
+                        return Err(failure(
+                            "AUTONOMOUS_TOPIC_CONTEXT_INVALID",
+                            "元の質問と探索する対象が一致しません。",
+                        ));
+                    }
+                }
+                Ok((Some(inventory), actions)) if !expired => {
+                    topic_actions = actions as usize;
+                    probed_topic_inventory = Some((revision, Ok(inventory)));
+                }
+                Err(error) if !expired => probed_topic_inventory = Some((revision, Err(error))),
+                _ => {
+                    probed_topic_inventory = Some((
+                        revision,
+                        Err(failure(
+                            "DEADLINE",
+                            "保存知識の確認中に元の依頼の締切へ達しました。",
+                        )),
+                    ))
+                }
+            }
+        }
         state.bundle = Some(bundle.clone());
         self.advance(&mut state, Lifecycle::Sealed, None)?;
         if let Some(reason) = bundle
@@ -7914,6 +8062,7 @@ impl Engine {
         }
         let required_graph_ref = self.store.put_artifact(actor, &request.case_id, &nodes)?;
         let required_actions = nodes.len()
+            + topic_actions
             + previous_sequence
                 .as_ref()
                 .map_or(0, PreviousCalculationSequence::context_actions)
@@ -7946,6 +8095,12 @@ impl Engine {
         };
         state.goal_sha256 = Some(self.store.put_artifact(actor, &request.case_id, &goal)?);
         let mut result = base_result(&request);
+        if let Some(lookup) = autonomous_topic_lookup.as_ref() {
+            result.actor_memory_revision = Some(lookup.memory_revision);
+            result
+                .dependencies
+                .push(self.store.put_artifact(actor, &request.case_id, lookup)?);
+        }
         if matches!(
             goal.intent,
             Intent::Retrieve { .. }
@@ -8519,6 +8674,43 @@ impl Engine {
                     }
                 }
                 result.guarantee = Guarantee::Computed;
+            }
+            Intent::Statistics { .. } | Intent::FiniteProbabilityStatistics { .. }
+                if bundle.meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION =>
+            {
+                let report = match crate::math::conversational_math_report(&goal.intent) {
+                    Ok(report) => report,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                if report
+                    .bytes
+                    .len()
+                    .saturating_add(report.units.join("\n").len())
+                    > request.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "数理の計算記録と日本語の回答が証拠予算を超えています。",
+                    );
+                }
+                result.dependencies.push(self.store.put_bytes(
+                    actor,
+                    &request.case_id,
+                    &report.bytes,
+                )?);
+                result.guarantee = Guarantee::Computed;
+                units = report.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: CONVERSATIONAL_MATH_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::Statistics {
                 values,
@@ -12398,8 +12590,12 @@ impl Engine {
                 });
             }
             Intent::InspectPremises { subject } => {
-                let (memory_revision, inventory) =
-                    self.active_premise_inventory(actor, subject, request.budget.max_actions)?;
+                let (memory_revision, inventory) = match probed_topic_inventory.take() {
+                    Some(observed) => observed,
+                    None => {
+                        self.active_premise_inventory(actor, subject, request.budget.max_actions)?
+                    }
+                };
                 result.actor_memory_revision = Some(memory_revision);
                 state.result = Some(result.clone());
                 let inventory = match inventory {
@@ -12419,6 +12615,9 @@ impl Engine {
                             "MISSING_PREMISES",
                             "この対象について有効な提示前提または規則導出はありません。",
                         );
+                    }
+                    Err(Error::Contract { code, message }) if code == "DEADLINE" => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
                     }
                     Err(Error::Contract { code, .. }) if code == "UNSUPPORTED_RELATION_RESULT" => {
                         return self.stop(
@@ -14583,6 +14782,46 @@ pub(crate) fn verify_retained_retry_source(
     {
         return Err(invalid());
     }
+    if result.actor_memory_revision.is_some()
+        && let Some((_, bundle)) = read_input()?
+        && bundle.meaning.parser_version == input::AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
+    {
+        let (_, deps) = web_dependencies_after_topic_lookup(store, &bundle, result)?;
+        let [listing, rest @ ..] = result.evidence.as_slice() else {
+            return Err(invalid());
+        };
+        let listing_ref = deps.first().ok_or_else(invalid)?;
+        let listing_bytes = store.get_bytes(&state.actor_id, &state.case_id, listing_ref)?;
+        let observation: search::SearchObservation = serde_json::from_slice(&listing_bytes)?;
+        let Intent::AskWeb { topic, .. } = &bundle.meaning.intent else {
+            return Err(invalid());
+        };
+        if observation.provider != search::SearchProvider::Wikipedia
+            || observation.query != *topic
+            || &observation.listing != listing
+            || canonical(&observation)? != listing_bytes
+        {
+            return Err(invalid());
+        }
+        let permissions = &bundle.request.permissions;
+        if packet == listing && rest.is_empty() && deps.len() == 1 {
+            return search::validate_failed_observation(&observation, Some(permissions));
+        }
+        if !matches!(rest, [body] if body == packet) || deps.len() != 2 {
+            return Err(invalid());
+        }
+        let candidate = crate::web_answer::select_candidate(&observation, permissions)?;
+        let bytes = canonical(packet)?;
+        if packet.provider_id != "https-direct-url-v1"
+            || packet.request_uri != search::candidate_body_uri(candidate)?
+            || packet.id != ports::fetch_packet_identity(packet)?
+            || digest(&bytes) != deps[1]
+            || store.get_bytes(&state.actor_id, &state.case_id, &deps[1])? != bytes
+        {
+            return Err(invalid());
+        }
+        return ports::validate_observed_route(packet, permissions);
+    }
     if packet.packet_kind == "SEARCH_LIST" {
         let index = result
             .evidence
@@ -14876,39 +15115,49 @@ pub(crate) fn previous_finite_event(
         || prior.guarantee != Guarantee::Computed
         || prior.calculation.is_some()
         || !prior.evidence.is_empty()
-        || !prior.dependencies.is_empty()
     {
         return Err(invalid());
     }
     if prior.text.len() > request.budget.max_evidence_bytes {
         return Err(limit());
     }
-    let distribution = crate::math::finite_probability_statistics(outcomes, weights)?;
-    let exact_text = serde_json::to_string_pretty(&distribution)?;
-    if prior.text != exact_text
-        || prior
-            .content_plan
-            .as_ref()
-            .is_none_or(|plan| plan.required_units != [exact_text.as_str()])
-    {
-        return Err(invalid());
-    }
-    crate::document::revalidate_previous_document_render(
-        store,
-        actor,
-        case,
-        prior,
-        None,
-        CODE,
-        "finite distribution",
-    )?;
+    let (distribution, distribution_bytes) =
+        if original.meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION {
+            let report = verify_conversational_math_report(store, &original, prior)?;
+            (
+                serde_json::from_slice::<crate::math::FiniteProbabilityStatistics>(&report.bytes)?,
+                report.bytes,
+            )
+        } else {
+            let distribution = crate::math::finite_probability_statistics(outcomes, weights)?;
+            let exact_text = serde_json::to_string_pretty(&distribution)?;
+            if !prior.dependencies.is_empty()
+                || prior.text != exact_text
+                || prior
+                    .content_plan
+                    .as_ref()
+                    .is_none_or(|plan| plan.required_units != [exact_text.as_str()])
+            {
+                return Err(invalid());
+            }
+            crate::document::revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                prior,
+                None,
+                CODE,
+                "finite distribution",
+            )?;
+            let bytes = canonical(&distribution)?;
+            (distribution, bytes)
+        };
     check_deadline()?;
     let event = crate::math::finite_event_probability(
         &distribution.input_outcomes,
         &distribution.input_weights,
         std::slice::from_ref(&event_value.text),
     )?;
-    let distribution_bytes = canonical(&distribution)?;
     let event_bytes = canonical(&event)?;
     let distribution_ref = digest(&distribution_bytes);
     let event_ref = digest(&event_bytes);
@@ -14961,6 +15210,58 @@ pub(crate) fn previous_finite_event(
     })
 }
 
+/// Exact typed values and the adopted Japanese output must both match the
+/// sealed input. This is used by follow-up and interrupted-write recovery.
+pub(crate) fn verify_conversational_math_report(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+) -> Result<crate::math::ConversationalMathReport> {
+    const CODE: &str = "MATH_CONTEXT_INVALID";
+    let invalid = || {
+        failure(
+            CODE,
+            "数理の封印済み入力・計算記録・採用した日本語本文が一致しません。",
+        )
+    };
+    let request = &bundle.request;
+    if !input::verified_conversational_math_input(bundle)?
+        || result.input_id != request.input_id
+        || result.input_version != request.input_version
+        || result.id != identity(request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+    {
+        return Err(invalid());
+    }
+    let report = crate::math::conversational_math_report(&bundle.meaning.intent)?;
+    let reference = digest(&report.bytes);
+    let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
+    if result.dependencies.as_slice() != [reference.as_str()]
+        || plan.required_units != report.units
+        || result.text != report.units.join("\n")
+        || plan
+            .dependencies
+            .strip_prefix(result.dependencies.as_slice())
+            .is_none_or(|rest| rest.len() != 1)
+        || store.get_bytes(&request.actor_id, &request.case_id, &reference)? != report.bytes
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        &request.actor_id,
+        &request.case_id,
+        result,
+        Some(&reference),
+        CODE,
+        "Japanese math report",
+    )?;
+    Ok(report)
+}
+
 pub(crate) fn registered_math_report_explanation(
     store: &Store,
     actor: &str,
@@ -14993,6 +15294,11 @@ pub(crate) fn registered_math_report_explanation(
         return Err(failure(
             "MATH_CONTEXT_INVALID",
             "the previous mathematical result does not match its registered input identity",
+        ));
+    }
+    if bundle.meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION {
+        return Ok(Some(
+            verify_conversational_math_report(store, &bundle, previous)?.explanation_units,
         ));
     }
     crate::math::previous_math_report_explanation(previous)

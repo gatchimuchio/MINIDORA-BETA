@@ -3221,6 +3221,15 @@ fn verify_result_memory_provenance(
     plan: &ContentPlan,
     goal: &GoalContract,
 ) -> Result<Option<RetainedRelationProof>> {
+    if matches!(goal.intent, Intent::AskWeb { .. })
+        && state.bundle.as_ref().is_some_and(|bundle| {
+            bundle.meaning.parser_version == crate::input::AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
+        })
+    {
+        // The Web proof verifies the original lookup against its recorded
+        // knowledge snapshot, including the empty initial revision.
+        return Ok(None);
+    }
     let actor = request.actor_id.as_str();
     let case = request.case_id.as_str();
     let Some((memory, snapshot_sha256)) = result_memory_snapshot_with_digest(store, actor, result)?
@@ -5251,6 +5260,17 @@ fn inspect(
     let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
+    let requires_conversational_math =
+        bundle.meaning.parser_version == crate::input::CONVERSATIONAL_MATH_PARSER_VERSION;
+    if requires_conversational_math
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::core::CONVERSATIONAL_MATH_PREDICATE))
+    {
+        return Err(failure(
+            "RECOVERY_CONVERSATIONAL_MATH_MISMATCH",
+            "the retained calculation goal differs from the sealed Japanese report contract",
+        ));
+    }
     let requires_conversation = matches!(
         goal.intent,
         Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. }
@@ -6572,7 +6592,12 @@ fn inspect(
     {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
-    if bundle.meaning.parser_version == crate::input::NATURAL_FINITE_EXPECTATION_PARSER_VERSION {
+    if requires_conversational_math {
+        verify_registered_input(store, bundle, "RECOVERY_CONVERSATIONAL_MATH_MISMATCH")?;
+        crate::core::verify_conversational_math_report(store, bundle, result)?;
+    } else if bundle.meaning.parser_version
+        == crate::input::NATURAL_FINITE_EXPECTATION_PARSER_VERSION
+    {
         const CODE: &str = "RECOVERY_FINITE_EXPECTATION_MISMATCH";
         let Intent::FiniteProbabilityStatistics { outcomes, weights } = &goal.intent else {
             return Err(failure(
@@ -8070,9 +8095,19 @@ pub(crate) fn verify_web_answer<'a>(
     else {
         return Err(invalid());
     };
-    let [listing_ref, body_ref, answer_ref] = result.dependencies.as_slice() else {
+    let (lookup_actions, web_dependencies) =
+        crate::core::web_dependencies_after_topic_lookup(store, bundle, result)?;
+    let [listing_ref, body_ref, answer_ref] = web_dependencies else {
         return Err(invalid());
     };
+    if web_dependencies.len() != result.dependencies.len()
+        && plan
+            .dependencies
+            .strip_prefix(result.dependencies.as_slice())
+            .is_none_or(|rest| rest.len() != 1)
+    {
+        return Err(invalid());
+    }
     let [listing, body] = result.evidence.as_slice() else {
         return Err(invalid());
     };
@@ -8096,11 +8131,12 @@ pub(crate) fn verify_web_answer<'a>(
     {
         return Err(invalid());
     }
-    // The original scheduler reserves non-network nodes and shares the
-    // remaining start and byte allowance across the two live reads.
+    // Reserve non-network nodes and the sealed local lookup before applying
+    // the remaining start and byte allowance across the two live reads.
     let non_read_nodes = graph_nodes.checked_sub(2).ok_or_else(invalid)?;
     let allowed_starts = (request.budget.max_actions as usize)
         .checked_sub(non_read_nodes)
+        .and_then(|remaining| remaining.checked_sub(lookup_actions as usize))
         .ok_or_else(invalid)?;
     if listing.redirect_chain.len() + body.redirect_chain.len() > allowed_starts
         || listing.raw_body.len().saturating_add(body.raw_body.len())
@@ -9577,6 +9613,86 @@ mod tests {
         assert_eq!(
             fs::metadata(&fixture.target).unwrap().modified().unwrap(),
             mtime
+        );
+    }
+
+    #[test]
+    fn conversational_math_recovers_the_japanese_report_without_resending() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "distribution",
+            "alice",
+            "値が0、2、2、4で、重みが1、2、3、4のときの期待値を求めて",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = engine.execute("alice", request).unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        assert!(adopted.text.contains("期待値は 13/5、分散は 41/25"));
+        let [report_ref] = adopted.dependencies.as_slice() else {
+            panic!("the natural result must retain its exact report");
+        };
+        let report: crate::math::FiniteProbabilityStatistics =
+            serde_json::from_slice(&engine.store.get_bytes("alice", "case", report_ref).unwrap())
+                .unwrap();
+        assert_eq!(report.expected_value, "13/5");
+        assert_eq!(report.variance, "41/25");
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, adopted.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let retained = store.load_case("alice", "case").unwrap().unwrap();
+        let retained_result = retained.result.as_ref().unwrap();
+        let mut without_predicate = retained.clone();
+        let mut goal: GoalContract = serde_json::from_slice(
+            &store
+                .get_bytes("alice", "case", retained.goal_sha256.as_ref().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            goal.required_predicates.remove(0),
+            crate::core::CONVERSATIONAL_MATH_PREDICATE
+        );
+        without_predicate.goal_sha256 = Some(store.put_artifact("alice", "case", &goal).unwrap());
+        assert!(
+            inspect(&store, "alice", &without_predicate, retained_result)
+                .err()
+                .is_some_and(|error| matches!(
+                    error,
+                    Error::Contract { code, .. } if code == "RECOVERY_CONVERSATIONAL_MATH_MISMATCH"
+                ))
+        );
+        assert_eq!(
+            store.actions("alice", "case").unwrap()[0].phase,
+            EffectPhase::Unknown
+        );
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.dependencies, adopted.dependencies);
+        assert_eq!(recovered.text, adopted.text);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
         );
     }
 

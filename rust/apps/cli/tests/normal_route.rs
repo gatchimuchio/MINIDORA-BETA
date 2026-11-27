@@ -4122,6 +4122,92 @@ fn finite_event_probability_reports_membership_and_exact_mass_on_the_normal_rout
     assert_eq!(english_report["event_probability"], "1/4");
 }
 
+const CONVERSATIONAL_MATH_PARSER: &str = "declarative-ja-v215-conversational-math-report";
+
+fn math_chat(directory: &Path, input: &str) -> String {
+    let mut process = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(directory)
+        .args(["--case", "normal-route", "--actor", "owner"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    process
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let output = process.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn natural_observation_statistics_display_and_explain_the_adopted_exact_result() {
+    const QUESTION: &str = "1、2、3の平均と分散を求めて";
+    const FOLLOWUP: &str = "詳しく説明して";
+    let scratch = Scratch::new();
+    let transcript = math_chat(&scratch.0, &format!("{QUESTION}\n/exit\n"));
+    for expected in ["平均は 2、中央値は 2", "母分散は 2/3", "標本分散は 1"] {
+        assert!(
+            transcript.contains(expected),
+            "missing {expected:?}: {transcript}"
+        );
+    }
+    assert!(
+        !transcript.contains("\"population_variance\""),
+        "{transcript}"
+    );
+    let original = inspect_normal_case(&scratch.0, "owner");
+    let prior = &original["result"];
+    assert_eq!(original["bundle"]["request"]["text"], QUESTION);
+    assert_eq!(
+        original["bundle"]["meaning"]["parser_version"],
+        CONVERSATIONAL_MATH_PARSER
+    );
+    assert_eq!(prior["lifecycle"], "COMMIT");
+    let displayed = prior["text"].as_str().unwrap();
+    assert!(transcript.contains(displayed));
+    assert_eq!(prior["content_plan"]["text"], prior["text"]);
+    assert_eq!(
+        prior["render"]["bytes"],
+        serde_json::json!(displayed.as_bytes())
+    );
+
+    let followed = math_chat(&scratch.0, &format!("{FOLLOWUP}\n/exit\n"));
+    assert!(
+        followed.contains("前回の記述統計を元の値から再計算し、保存レポートと照合しました。"),
+        "{followed}"
+    );
+    let stored = inspect_normal_case(&scratch.0, "owner");
+    let explanation = &stored["result"];
+    assert_eq!(explanation["lifecycle"], "COMMIT");
+    assert_eq!(explanation["guarantee"], "COMPUTED");
+    assert_eq!(stored["bundle"]["request"]["text"], FOLLOWUP);
+    let [prior_id] = explanation["dependencies"].as_array().unwrap().as_slice() else {
+        panic!("expected the original statistics result");
+    };
+    assert_eq!(prior["id"], *prior_id);
+    assert_eq!(stored["bundle"]["meaning"]["context_result_ref"], *prior_id);
+    assert_eq!(stored["prior_results"][prior_id.as_str().unwrap()], *prior);
+
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let [reference] = prior["dependencies"].as_array().unwrap().as_slice() else {
+        panic!("expected the original typed statistics report");
+    };
+    let reference = reference.as_str().unwrap();
+    let bytes = store.get_bytes("owner", "normal-route", reference).unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), reference);
+    let report: minidora_engine::math::Statistics = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(report.input_values, ["1", "2", "3"]);
+    assert_eq!(report.mean, "2");
+    assert_eq!(report.population_variance, "2/3");
+    assert_eq!(report.sample_variance.as_deref(), Some("1"));
+}
+
 #[test]
 fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
     const DISTRIBUTION: &str = "値が0、2、2、4で、重みが1、2、3、4のときの期待値を求めて";
@@ -4129,29 +4215,10 @@ fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
     const PARSER: &str = "declarative-ja-v209-previous-finite-event-probability";
 
     let scratch = Scratch::new();
-    let chat = |input: &str| {
-        let mut process = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
-            .args(["chat", "--db"])
-            .arg(&scratch.0)
-            .args(["--case", "normal-route", "--actor", "owner"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        process
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let output = process.wait_with_output().unwrap();
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8(output.stdout).unwrap()
-    };
+    let chat = |input: &str| math_chat(&scratch.0, input);
     let transcript = chat(&format!("{DISTRIBUTION}\n{QUESTION}\n/exit\n"));
     for expected in [
-        "\"expected_value\": \"13/5\"",
+        "指定された有限分布の期待値は 13/5、分散は 41/25 です。",
         "事象値: 2",
         "確率: 1/2",
         "該当する入力: 2 / 4件",
@@ -4161,6 +4228,7 @@ fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
             "missing {expected:?}: {transcript}"
         );
     }
+    assert!(!transcript.contains("\"expected_value\""), "{transcript}");
     let stored = inspect_normal_case(&scratch.0, "owner");
     let answer = &stored["result"];
     assert_eq!(answer["lifecycle"], "COMMIT");
@@ -4192,7 +4260,12 @@ fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
     let producer = &stored["prior_results"][prior_id];
     assert_eq!(producer["lifecycle"], "COMMIT");
     assert_eq!(producer["guarantee"], "COMPUTED");
-    assert!(producer["dependencies"].as_array().unwrap().is_empty());
+    assert_eq!(producer["dependencies"], serde_json::json!([distribution]));
+    assert_eq!(producer["content_plan"]["text"], producer["text"]);
+    assert_eq!(
+        producer["render"]["bytes"],
+        serde_json::json!(producer["text"].as_str().unwrap().as_bytes())
+    );
     let bundle = bundle.as_str().unwrap();
     let original_bytes = std::fs::read(scratch.0.join("blobs").join(bundle)).unwrap();
     assert_eq!(minidora_domain::digest(&original_bytes), bundle);
@@ -4200,6 +4273,10 @@ fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
     assert_eq!(original_bundle["request"]["text"], DISTRIBUTION);
     assert_eq!(original_bundle["request"]["actor_id"], "owner");
     assert_eq!(original_bundle["request"]["case_id"], "normal-route");
+    assert_eq!(
+        original_bundle["meaning"]["parser_version"],
+        CONVERSATIONAL_MATH_PARSER
+    );
 
     let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
     let read_artifact = |reference: &Value| -> Value {
@@ -4209,8 +4286,16 @@ fn previous_finite_distribution_feeds_the_exact_single_event_probability() {
         serde_json::from_slice(&bytes).unwrap()
     };
     let saved_distribution = read_artifact(distribution);
-    let original_report: Value = serde_json::from_str(producer["text"].as_str().unwrap()).unwrap();
-    assert_eq!(saved_distribution, original_report);
+    let exact: minidora_engine::math::FiniteProbabilityStatistics =
+        serde_json::from_value(saved_distribution.clone()).unwrap();
+    assert_eq!(exact.input_outcomes, ["0", "2", "2", "4"]);
+    assert_eq!(exact.input_weights, ["1", "2", "3", "4"]);
+    assert_eq!(
+        exact.normalized_probabilities,
+        ["1/10", "1/5", "3/10", "2/5"]
+    );
+    assert_eq!(exact.expected_value, "13/5");
+    assert_eq!(exact.variance, "41/25");
     let report = read_artifact(event);
     for key in [
         "input_outcomes",
@@ -7521,6 +7606,150 @@ fn hearing_file_delivery_requires_both_exact_grants_and_only_writes_once() {
         written_at
     );
     assert!(!alternate.exists());
+}
+
+#[test]
+fn ordinary_topic_question_prefers_local_evidence_and_budgets_web_fallback() {
+    use minidora_engine::store::Store;
+    use std::net::TcpListener;
+
+    const KNOWN: &str = "ヨモギについて教えてください。";
+    const MISSING: &str = "富士山について教えてください。";
+
+    let scratch = Scratch::new();
+    let premise = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--input", "topic-premise", "ヨモギは多年草です"],
+    ));
+
+    // An unexpected outbound attempt cannot reach the public Web.
+    let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+    proxy.set_nonblocking(true).unwrap();
+    let local = record(
+        &Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .env_remove("ALL_PROXY")
+            .env_remove("no_proxy")
+            .env_remove("NO_PROXY")
+            .env(
+                "HTTPS_PROXY",
+                format!("http://{}", proxy.local_addr().unwrap()),
+            )
+            .args(["--db", scratch.0.to_str().unwrap(), "--actor", "owner"])
+            .args([
+                "--case",
+                "normal-route",
+                "--json",
+                "--allow-read-host",
+                "ja.wikipedia.org",
+                KNOWN,
+            ])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        proxy.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert_eq!(local["lifecycle"], "COMMIT");
+    assert_eq!(local["guarantee"], "USER_PREMISE");
+    assert!(local["text"].as_str().unwrap().contains("ヨモギ"));
+    assert!(local["text"].as_str().unwrap().contains("多年草"));
+    assert_eq!(local["dependencies"], premise["dependencies"]);
+    assert_eq!(local["evidence"], serde_json::json!([]));
+    assert_eq!(local["receipts"], serde_json::json!([]));
+    let state = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(state["bundle"]["request"]["text"], KNOWN);
+    assert_eq!(
+        state["bundle"]["meaning"]["intent"]["kind"],
+        "INSPECT_PREMISES"
+    );
+    assert_eq!(
+        state["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-v216-local-first-topic"
+    );
+    let store = Store::open(&scratch.0).unwrap();
+    let revision = store.load_memory("owner").unwrap().revision;
+    assert!(revision > 0);
+    assert_eq!(local["actor_memory_revision"], revision);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+
+    let empty = Scratch::new();
+    let denied = stopped(&execute(&empty.0, "owner", &[MISSING]), 2, "SUSPEND");
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("READ_PERMISSION_REQUIRED:"),
+        "{denied}"
+    );
+    assert_eq!(denied["evidence"], serde_json::json!([]));
+    assert_eq!(denied["receipts"], serde_json::json!([]));
+    let [lookup] = denied["dependencies"].as_array().unwrap().as_slice() else {
+        panic!("expected only the local lookup dependency: {denied}");
+    };
+    let lookup = lookup.as_str().unwrap();
+    let bytes = std::fs::read(empty.0.join("blobs").join(lookup)).unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), lookup);
+    let observed: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(observed["kind"], "minidora.core.autonomous-topic-lookup.v1");
+    assert_eq!(observed["request_id"], denied["id"]);
+    assert_eq!(observed["topic"], "富士山");
+    assert_eq!(observed["memory_revision"], 0);
+    assert!(observed["actions"].as_u64().unwrap() > 0);
+    let state = inspect_normal_case(&empty.0, "owner");
+    assert_eq!(state["bundle"]["request"]["text"], MISSING);
+    assert_eq!(state["bundle"]["meaning"]["intent"]["kind"], "ASK_WEB");
+    assert_eq!(
+        state["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-v217-autonomous-topic-web"
+    );
+
+    let limited = stopped(
+        &execute_in_case(
+            &empty.0,
+            "owner",
+            "too-little-budget",
+            &["--max-actions", "6", MISSING],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        limited["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("ACTION_BUDGET_EXHAUSTED:"),
+        "{limited}"
+    );
+    assert_eq!(limited["evidence"], serde_json::json!([]));
+    assert_eq!(limited["receipts"], serde_json::json!([]));
+
+    let explicitly_local = stopped(
+        &execute_in_case(
+            &empty.0,
+            "owner",
+            "explicitly-local",
+            &["富士山について分かっていることを教えてください。"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        explicitly_local["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MISSING_PREMISES:"),
+        "{explicitly_local}"
+    );
+    assert_eq!(explicitly_local["dependencies"], serde_json::json!([]));
+    assert_eq!(explicitly_local["evidence"], serde_json::json!([]));
+    let store = Store::open(&empty.0).unwrap();
+    for case in ["normal-route", "too-little-budget", "explicitly-local"] {
+        assert!(store.actions("owner", case).unwrap().is_empty());
+    }
 }
 
 #[test]

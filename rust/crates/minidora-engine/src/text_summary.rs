@@ -2667,10 +2667,15 @@ pub(crate) fn legacy_body_question_source<'a>(
                 })
         }
         Intent::AskWeb { .. } => {
-            original.meaning.parser_version == crate::input::WEB_QUESTION_PARSER_VERSION
-                && source.dependencies.len() == 3
-                && matches!(source.evidence.as_slice(), [listing, body]
-                if listing.packet_kind == "SEARCH_LIST" && body.packet_kind == "FETCHED_BODY")
+            if !crate::search::verified_web_answer_input(&original)?
+                || !matches!(source.evidence.as_slice(), [listing, body]
+                    if listing.packet_kind == "SEARCH_LIST" && body.packet_kind == "FETCHED_BODY")
+            {
+                return Ok(None);
+            }
+            let (_, dependencies) =
+                crate::core::web_dependencies_after_topic_lookup(store, &original, source)?;
+            dependencies.len() == 3
         }
         _ => false,
     };
