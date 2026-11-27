@@ -119,6 +119,9 @@ fn typed_derived_explanation_carries_premise_and_rule_lineage_through_k7() {
     assert!(supported.text.contains("sensor"));
     assert!(supported.text.contains("calibrated"));
     assert!(supported.text.contains(&rule_id));
+    assert!(!supported.text.contains("「「"));
+    assert!(!supported.text.contains("ですなら"));
+    assert!(!supported.text.contains("ですです"));
 
     let plan = supported
         .content_plan

@@ -1563,6 +1563,7 @@ const CORE_COMPUTATION_ARTIFACT_KIND_V6: &str = "minidora.core-computation.relat
 const CORE_COMPUTATION_ARTIFACT_KIND_V7: &str = "minidora.core-computation.relation-meaning.v7";
 const CORE_COMPUTATION_ARTIFACT_KIND: &str = CORE_COMPUTATION_ARTIFACT_KIND_V4;
 const CORE_RELATION_MEANING_PLAN_SCHEMA: &str = "core-relation-meaning-plan-v1";
+const LINKED_RELATION_MEANING_PLAN_SCHEMA: &str = "core-relation-meaning-plan-v2";
 const DIRECT_ATOMIC_MEANING_KIND: &str = "CORE_TYPED_ATOMIC_MEANING_V1";
 const DIRECT_ATOMIC_MEANING_PARSER: &str = "core-typed-atomic-meaning-v1";
 const DIRECT_TYPED_RELATION_ASSERTION_KIND: &str = "CORE_TYPED_RELATION_ASSERTION_V1";
@@ -2601,6 +2602,42 @@ struct CoreRelationMeaningPlan {
     units: Vec<CoreSemanticMeaningUnit>,
     required_units: Vec<String>,
     dependencies: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+enum RelationMeaningGrammar {
+    Legacy,
+    LinkedClauses,
+}
+
+impl RelationMeaningGrammar {
+    fn schema(self) -> &'static str {
+        match self {
+            Self::Legacy => CORE_RELATION_MEANING_PLAN_SCHEMA,
+            Self::LinkedClauses => LINKED_RELATION_MEANING_PLAN_SCHEMA,
+        }
+    }
+
+    fn from_plan(plan: &CoreRelationMeaningPlan) -> Result<Self> {
+        match plan.schema.as_str() {
+            CORE_RELATION_MEANING_PLAN_SCHEMA => Ok(Self::Legacy),
+            LINKED_RELATION_MEANING_PLAN_SCHEMA => Ok(Self::LinkedClauses),
+            _ => Err(failure(
+                "CONTENT_PLAN_INVALID",
+                "unsupported Core relation meaning plan schema",
+            )),
+        }
+    }
+
+    fn fragments(
+        self,
+        meaning: &CoreSemanticMeaning,
+    ) -> Result<Vec<language::MeaningGrammarFragment>> {
+        match self {
+            Self::Legacy => core_semantic_meaning_fragments(meaning),
+            Self::LinkedClauses => linked_relation_meaning_fragments(meaning),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -11645,6 +11682,7 @@ impl Engine {
                         &explained,
                         &answer,
                         &answer_dependencies,
+                        RelationMeaningGrammar::LinkedClauses,
                     ) {
                         Ok(value) => value,
                         Err(error) => {
@@ -16308,9 +16346,10 @@ fn rule_grammar_documents(
         if retained_rules.len() != rule_ids.len() {
             continue;
         }
+        let grammar = RelationMeaningGrammar::from_plan(current)?;
         let mut documents = Vec::new();
         for meaning in retained_rules {
-            for fragment in core_semantic_meaning_fragments(meaning)? {
+            for fragment in grammar.fragments(meaning)? {
                 match fragment {
                     language::MeaningGrammarFragment::Literal { value } => documents.push(value),
                     language::MeaningGrammarFragment::ExactField { .. } => {}
@@ -16492,6 +16531,7 @@ pub(crate) fn verify_generated_why_computation(
             "the generated explanation does not bind its original actor-memory revision",
         )
     })?;
+    let grammar = RelationMeaningGrammar::from_plan(&artifact.relation_meaning_plan)?;
     let matches_proof = |memory: &MemoryState, answer: &relations::QueryOutcome| -> Result<bool> {
         let Some(conclusion) = relation_explanation_target(proposition, answer) else {
             return Ok(false);
@@ -16502,10 +16542,14 @@ pub(crate) fn verify_generated_why_computation(
         {
             return Ok(false);
         }
-        Ok(
-            relation_atomic_meaning_plan(memory, proposition, &conclusion, answer, &dependencies)?
-                == artifact.relation_meaning_plan,
-        )
+        Ok(relation_atomic_meaning_plan(
+            memory,
+            proposition,
+            &conclusion,
+            answer,
+            &dependencies,
+            grammar,
+        )? == artifact.relation_meaning_plan)
     };
     let (current_memory, current_answer) = proofs.current;
     if !matches_proof(current_memory, current_answer)? {
@@ -16936,6 +16980,7 @@ fn relation_atomic_meaning_plan(
     explained: &Proposition,
     answer: &relations::QueryOutcome,
     proof_dependencies: &[String],
+    grammar: RelationMeaningGrammar,
 ) -> Result<CoreRelationMeaningPlan> {
     use language::{
         MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle, MeaningRole,
@@ -17194,7 +17239,7 @@ fn relation_atomic_meaning_plan(
     }
     let required_units = units.iter().map(|unit| unit.id.clone()).collect();
     let mut plan = CoreRelationMeaningPlan {
-        schema: CORE_RELATION_MEANING_PLAN_SCHEMA.into(),
+        schema: grammar.schema().into(),
         id: String::new(),
         purpose: MeaningCompositionPurpose::Explain,
         format: MeaningCompositionFormat::Paragraph,
@@ -17316,8 +17361,8 @@ fn relation_meaning_plan_to_generation_request(
     plan: &CoreRelationMeaningPlan,
     max_output_bytes: usize,
 ) -> Result<language::MeaningGenerationRequest> {
-    if plan.schema != CORE_RELATION_MEANING_PLAN_SCHEMA
-        || plan.id != relation_meaning_plan_id(plan)?
+    let grammar = RelationMeaningGrammar::from_plan(plan)?;
+    if plan.id != relation_meaning_plan_id(plan)?
         || plan
             .units
             .iter()
@@ -17371,7 +17416,7 @@ fn relation_meaning_plan_to_generation_request(
                     &unit.evidence_ids,
                     &unit.dependencies,
                 ))?,
-                fragments: core_semantic_meaning_fragments(&unit.meaning)?,
+                fragments: grammar.fragments(&unit.meaning)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -17746,6 +17791,182 @@ fn core_semantic_meaning_fragments(
     Ok(fragments)
 }
 
+fn append_linked_proposition_surface(
+    fragments: &mut Vec<language::MeaningGrammarFragment>,
+    proposition: &Proposition,
+    slot_prefix: &str,
+) {
+    use language::MeaningGrammarFragment::Literal;
+
+    let term = |value: &str| {
+        if value.starts_with(['$', '?']) {
+            format!("変数「{value}」")
+        } else {
+            format!("「{value}」")
+        }
+    };
+    fragments.push(Literal {
+        value: term(&proposition.subject),
+    });
+    fragments.push(grammar_choice(
+        &format!("{slot_prefix}_subject_particle"),
+        &["は", "が"],
+    ));
+    let object = term(&proposition.object);
+    let predicate = proposition.predicate.as_str();
+    let godan_surface = if proposition.negative {
+        japanese_godan_negative_form(predicate)
+    } else {
+        predicate
+            .ends_with(['う', 'く', 'ぐ', 'す', 'つ', 'ぬ', 'ぶ', 'む', 'る'])
+            .then(|| predicate.to_owned())
+    };
+    let value = match (predicate, proposition.negative, godan_surface) {
+        ("is", false, _) => format!("{object}である"),
+        ("is", true, _) => format!("{object}ではない"),
+        ("eat", false, _) => format!("{object}を食べる"),
+        ("eat", true, _) => format!("{object}を食べない"),
+        ("use", false, _) => format!("{object}を使う"),
+        ("use", true, _) => format!("{object}を使わない"),
+        (_, _, Some(verb)) => format!("{object}を{verb}"),
+        (_, negative, None) => {
+            let relation = if negative { "持たない" } else { "持つ" };
+            format!("{object}との間に述語「{predicate}」の関係を{relation}")
+        }
+    };
+    fragments.push(Literal { value });
+    if let Some(time) = &proposition.temporal_scope {
+        fragments.push(Literal {
+            value: format!("（時刻範囲 {time}）"),
+        });
+    }
+}
+
+fn linked_relation_meaning_fragments(
+    meaning: &CoreSemanticMeaning,
+) -> Result<Vec<language::MeaningGrammarFragment>> {
+    use language::MeaningGrammarFragment::Literal;
+
+    let mut fragments = Vec::new();
+    match meaning {
+        CoreSemanticMeaning::Claim {
+            asked,
+            conclusion,
+            answer_status,
+            guarantee,
+        } => {
+            let contradicted = answer_status == "CONTRADICTED";
+            let (openings, ending) = if contradicted {
+                (
+                    ["保存記録を照合した結果、", "有効な保存前提を確認すると、"],
+                    "という反対の関係が支持されています".into(),
+                )
+            } else {
+                match guarantee {
+                    Guarantee::UserPremise => (
+                        ["有効な保存前提では、", "保存された入力前提では、"],
+                        "という内容が記録されています".into(),
+                    ),
+                    Guarantee::Derived => (
+                        ["保存前提と規則から、", "適用した保存規則により、"],
+                        "という結論が導かれています".into(),
+                    ),
+                    _ => (
+                        ["保存された根拠は、", "有効な記録は、"],
+                        format!(
+                            "という関係を{}として支えています",
+                            guarantee_label(guarantee)
+                        ),
+                    ),
+                }
+            };
+            fragments.push(grammar_choice("claim_opening", &openings));
+            if contradicted {
+                append_linked_proposition_surface(&mut fragments, asked, "asked");
+                fragments.push(Literal {
+                    value: "という関係は支持されず、".into(),
+                });
+            }
+            append_linked_proposition_surface(&mut fragments, conclusion, "conclusion");
+            fragments.push(Literal {
+                value: format!("{ending}（範囲 {}）。", conclusion.scope),
+            });
+        }
+        CoreSemanticMeaning::Fact {
+            proposition,
+            guarantee,
+            record_id,
+            record_dependencies,
+        } => {
+            let (openings, ending, role) = match guarantee {
+                Guarantee::UserPremise if record_dependencies.is_empty() => (
+                    ["直接提示された前提として、", "入力時の前提として、"],
+                    "という内容が記録されています",
+                    "前提ID",
+                ),
+                Guarantee::Derived => (
+                    ["この証明の途中で、", "この証明に含まれる導出では、"],
+                    "という関係が導かれました",
+                    "導出ID",
+                ),
+                _ => return core_semantic_meaning_fragments(meaning),
+            };
+            fragments.push(grammar_choice("fact_opening", &openings));
+            append_linked_proposition_surface(&mut fragments, proposition, "fact");
+            fragments.push(Literal {
+                value: format!(
+                    "{ending}（範囲 {}、{role} {record_id}）。",
+                    proposition.scope
+                ),
+            });
+        }
+        CoreSemanticMeaning::Rule {
+            premises,
+            conclusion,
+            record_id,
+            composed: false,
+            ..
+        } if !premises.is_empty() => {
+            fragments.push(grammar_choice(
+                "rule_opening",
+                &["保存規則では、", "記録された規則では、"],
+            ));
+            let conjunctive = premises.len() > 1;
+            for (index, premise) in premises.iter().enumerate() {
+                if index > 0 {
+                    fragments.push(Literal {
+                        value: "と、".into(),
+                    });
+                }
+                append_linked_proposition_surface(
+                    &mut fragments,
+                    premise,
+                    &format!("premise_{index}"),
+                );
+                if conjunctive {
+                    fragments.push(Literal {
+                        value: "こと".into(),
+                    });
+                }
+            }
+            fragments.push(Literal {
+                value: if conjunctive {
+                    "がともに成り立つなら、"
+                } else {
+                    "なら、"
+                }
+                .into(),
+            });
+            append_linked_proposition_surface(&mut fragments, conclusion, "rule_conclusion");
+            fragments.push(Literal {
+                value: format!("（結論範囲 {}、規則ID {record_id}）。", conclusion.scope),
+            });
+        }
+        _ => return core_semantic_meaning_fragments(meaning),
+    }
+    Ok(fragments)
+}
+
 fn validate_relation_meaning_generation(
     plan: &CoreRelationMeaningPlan,
     request: &language::MeaningGenerationRequest,
@@ -17932,8 +18153,14 @@ fn validate_relation_meaning_adoption(input: RelationMeaningAdoptionInput<'_>) -
     } = input;
     let dependencies = relations::answer_dependencies(answer);
     let guarantee = relations::answer_guarantee(answer);
-    let expected_plan =
-        relation_atomic_meaning_plan(memory, asked, conclusion, answer, &dependencies)?;
+    let expected_plan = relation_atomic_meaning_plan(
+        memory,
+        asked,
+        conclusion,
+        answer,
+        &dependencies,
+        RelationMeaningGrammar::LinkedClauses,
+    )?;
     let expected_request =
         relation_meaning_plan_to_generation_request(plan, request.max_output_bytes)?;
     let report_dependencies = report.evidence_ids.iter().cloned().collect::<BTreeSet<_>>();
