@@ -7,6 +7,7 @@ pub mod code_generation;
 pub mod core;
 pub mod document;
 mod durability;
+mod hearing;
 pub mod input;
 pub mod language;
 pub mod math;

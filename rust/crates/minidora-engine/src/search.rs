@@ -1185,39 +1185,84 @@ pub(crate) fn previous_web_length_conversion(
     previous: &ResultRecord,
     started: Instant,
 ) -> Result<WebLengthConversion> {
-    let invalid = || {
-        failure(
-            "WEB_LENGTH_CONVERSION_CONTEXT_INVALID",
-            "同じ会話の確定済み標高回答と採用した本文を照合できません。",
-        )
+    let Intent::ConvertPreviousLength { unit } = &bundle.meaning.intent else {
+        return Err(invalid_web_length_context());
     };
-    let limit = || {
-        failure(
-            "RESOURCE_LIMIT",
-            "保存済みの出典と換算結果が要求の証拠予算を超えています。",
-        )
-    };
+    if bundle.meaning.parser_version != crate::input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION
+    {
+        return Err(invalid_web_length_context());
+    }
+    let mut origin = verified_web_length_origin(store, bundle, previous, started)?;
+    origin.calculation = crate::language::convert_exact_length(&origin.calculation, unit)?;
+    origin
+        .units
+        .insert(0, crate::core::exact_calculation_unit(&origin.calculation));
+    if origin
+        .source_bytes
+        .saturating_add(origin.units.join("\n").len())
+        > bundle.request.budget.max_evidence_bytes
+    {
+        return Err(web_length_limit());
+    }
+    if started.elapsed() >= Duration::from_millis(bundle.request.budget.deadline_ms) {
+        return Err(web_length_deadline());
+    }
+    Ok(WebLengthConversion {
+        calculation: origin.calculation,
+        units: origin.units,
+        dependencies: origin.dependencies,
+    })
+}
+
+pub(crate) struct WebLengthOrigin {
+    pub(crate) calculation: Calculation,
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) source_bytes: usize,
+}
+
+fn invalid_web_length_context() -> minidora_domain::Error {
+    failure(
+        "WEB_LENGTH_CONVERSION_CONTEXT_INVALID",
+        "同じ会話の確定済み標高回答と採用した本文を照合できません。",
+    )
+}
+
+fn web_length_limit() -> minidora_domain::Error {
+    failure(
+        "RESOURCE_LIMIT",
+        "保存済みの出典と換算結果が要求の証拠予算を超えています。",
+    )
+}
+
+fn web_length_deadline() -> minidora_domain::Error {
+    failure(
+        "DEADLINE",
+        "標高の出典と換算結果の照合中に締切へ達しました。",
+    )
+}
+
+/// Authenticate a saved Web length and its source without an external observation.
+pub(crate) fn verified_web_length_origin(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    started: Instant,
+) -> Result<WebLengthOrigin> {
     let check_deadline = || {
         if started.elapsed() >= Duration::from_millis(bundle.request.budget.deadline_ms) {
-            return Err(failure(
-                "DEADLINE",
-                "標高の出典と換算結果の照合中に締切へ達しました。",
-            ));
+            return Err(web_length_deadline());
         }
         Ok(())
     };
-    let Intent::ConvertPreviousLength { unit } = &bundle.meaning.intent else {
-        return Err(invalid());
-    };
     let request = &bundle.request;
-    if bundle.meaning.parser_version != crate::input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION
-        || previous.guarantee != Guarantee::SourceReport
+    if previous.guarantee != Guarantee::SourceReport
         || request
             .context_ref
             .as_ref()
             .is_some_and(|id| id != &previous.id)
     {
-        return Err(invalid());
+        return Err(invalid_web_length_context());
     }
     validate_search_predecessor(bundle, previous, "WEB_LENGTH_CONVERSION_CONTEXT_INVALID")?;
     if request.budget.max_actions < 6 + u32::from(request.output_path.is_some()) {
@@ -1227,23 +1272,23 @@ pub(crate) fn previous_web_length_conversion(
         ));
     }
     let [listing, body] = previous.evidence.as_slice() else {
-        return Err(invalid());
+        return Err(invalid_web_length_context());
     };
     let source_bytes = listing.raw_body.len().saturating_add(body.raw_body.len());
     if source_bytes > request.budget.max_evidence_bytes {
-        return Err(limit());
+        return Err(web_length_limit());
     }
     check_deadline()?;
     let (input_ref, proof) =
         store.with_verified_case_history(&request.actor_id, &request.case_id, |history| {
             let (input_ref, original) = history
                 .input_bundle(&previous.input_id, previous.input_version)?
-                .ok_or_else(invalid)?;
+                .ok_or_else(invalid_web_length_context)?;
             if !is_web_elevation_query(&original)
                 || original.request.actor_id != request.actor_id
                 || original.request.case_id != request.case_id
             {
-                return Err(invalid());
+                return Err(invalid_web_length_context());
             }
             let proof = verify_committed_web_answer(store, history, previous, &original)?;
             Ok((input_ref, proof))
@@ -1251,15 +1296,13 @@ pub(crate) fn previous_web_length_conversion(
     let mut origin = proof
         .answer
         .elevation_calculation()
-        .ok_or_else(invalid)?
+        .ok_or_else(invalid_web_length_context)?
         .clone();
     // The preserved Web artifact stores a unitless m / 1000 quotient. Its
     // sealed objective and replay above establish that the quotient is km.
     origin.exact_value.push_str(" km");
-    let calculation = crate::language::convert_exact_length(&origin, unit)?;
     let passage = &proof.answer.passage;
     let units = vec![
-        crate::core::exact_calculation_unit(&calculation),
         format!(
             "前回採用した標高の出典: {}（取得時刻: Unix ms {}）",
             body.final_uri, body.observed_at_unix_ms
@@ -1270,20 +1313,18 @@ pub(crate) fn previous_web_length_conversion(
         ),
         "保存した本文の記述を換算しました。再取得や現時点の真偽の確認はしていません。".into(),
     ];
-    if source_bytes
-        .saturating_add(canonical(&proof.answer)?.len())
-        .saturating_add(units.join("\n").len())
-        > request.budget.max_evidence_bytes
-    {
-        return Err(limit());
+    let source_bytes = source_bytes.saturating_add(canonical(&proof.answer)?.len());
+    if source_bytes > request.budget.max_evidence_bytes {
+        return Err(web_length_limit());
     }
     check_deadline()?;
     let mut dependencies = vec![previous.id.clone(), input_ref];
     dependencies.extend(proof.refs.into_iter().map(str::to_owned));
-    Ok(WebLengthConversion {
-        calculation,
+    Ok(WebLengthOrigin {
+        calculation: origin,
         units,
         dependencies,
+        source_bytes,
     })
 }
 

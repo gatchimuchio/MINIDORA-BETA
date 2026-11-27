@@ -1,3 +1,4 @@
+use crate::hearing;
 use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
 use crate::{
     document::CsvInput,
@@ -1748,6 +1749,9 @@ pub(crate) fn goal_predicates(
 ) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
+        Intent::ClarifyPreviousLength
+        | Intent::ClarifyFilteredCsvStatistics
+        | Intent::SupplyHearingAnswer { .. } => predicates.push(hearing::PREDICATE.into()),
         Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
             predicates.push(CONVERSATION_PREDICATE.into());
         }
@@ -1922,6 +1926,7 @@ fn verify_report_goal_content(
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
                 | CONVERSATION_PREDICATE
+                | hearing::PREDICATE
                 | CALCULATION_CORRECTION_PREDICATE
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
                 | PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE
@@ -2038,9 +2043,47 @@ pub(crate) fn calculation_from_context(
     prior_results: &BTreeMap<String, ResultRecord>,
     started: Instant,
 ) -> Result<Calculation> {
+    let value = verified_calculation_in_context(store, bundle, previous, prior_results, started)?;
+    let result = apply_calculation_context_intent(value, &bundle.meaning.intent)?;
+    if started.elapsed().as_millis() >= u128::from(bundle.request.budget.deadline_ms) {
+        return Err(failure(
+            "DEADLINE",
+            if matches!(bundle.meaning.intent, Intent::CorrectCalculation { .. }) {
+                "訂正対象の確認中に締切へ達しました。"
+            } else {
+                "換算対象の確認中に締切へ達しました。"
+            },
+        ));
+    }
+    Ok(result)
+}
+
+fn apply_calculation_context_intent(value: Calculation, intent: &Intent) -> Result<Calculation> {
+    match intent {
+        Intent::ExplainPrevious => Ok(value),
+        Intent::CorrectCalculation {
+            operand_index,
+            replacement,
+        } => language::correct_binary_operand(&value, *operand_index, replacement),
+        Intent::ConvertPreviousLength { unit } => language::convert_exact_length(&value, unit),
+        _ => Err(failure(
+            "CALCULATION_CONTEXT_INVALID",
+            "確定した計算値を処理できません。",
+        )),
+    }
+}
+
+pub(crate) fn verified_calculation_in_context(
+    store: &Store,
+    bundle: &InputBundle,
+    previous: &ResultRecord,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    started: Instant,
+) -> Result<Calculation> {
     enum Origin<'a> {
         Scalar(Calculation),
         Sequence(Box<InputBundle>, &'a ResultRecord),
+        Hearing(Box<InputBundle>, &'a ResultRecord),
     }
 
     let correcting = matches!(bundle.meaning.intent, Intent::CorrectCalculation { .. });
@@ -2057,19 +2100,7 @@ pub(crate) fn calculation_from_context(
             )
         }
     };
-    if !correcting && !matches!(bundle.meaning.intent, Intent::ConvertPreviousLength { .. }) {
-        return Err(invalid());
-    }
     let request = &bundle.request;
-    let apply = |value: Calculation, intent: &Intent| match intent {
-        Intent::ExplainPrevious => Ok(value),
-        Intent::CorrectCalculation {
-            operand_index,
-            replacement,
-        } => language::correct_binary_operand(&value, *operand_index, replacement),
-        Intent::ConvertPreviousLength { unit } => language::convert_exact_length(&value, unit),
-        _ => Err(invalid()),
-    };
     let check_context = |input: &InputBundle, prior: &ResultRecord| -> Result<()> {
         if input.meaning.context_result_ref.as_deref() != Some(prior.id.as_str())
             || input.context_sha256 != identity(&Some(prior))?
@@ -2161,6 +2192,9 @@ pub(crate) fn calculation_from_context(
                             "連続計算は項番号だけでは訂正できません。元の計算手順の対象段の式を変更して、計算手順を再入力してください。",
                         ));
                     }
+                    Intent::SupplyHearingAnswer { .. } => {
+                        break Origin::Hearing(Box::new(input), current);
+                    }
                     Intent::ConvertPreviousLength { .. }
                         if input.meaning.parser_version == input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION => {}
                     Intent::ExplainPrevious | Intent::CorrectCalculation { .. } => {}
@@ -2183,6 +2217,14 @@ pub(crate) fn calculation_from_context(
         })?;
     let mut calculation = match origin {
         Origin::Scalar(value) => value,
+        Origin::Hearing(input, original) => {
+            let context = hearing::restore_answer(store, &input, prior_results)?;
+            let outcome = context.complete(store, &input, prior_results, started)?;
+            if !outcome.matches_result(original) {
+                return Err(invalid());
+            }
+            outcome.calculation.ok_or_else(invalid)?
+        }
         Origin::Sequence(input, original) => {
             let Intent::CalculateSequence { steps } = &input.meaning.intent else {
                 return Err(invalid());
@@ -2205,7 +2247,7 @@ pub(crate) fn calculation_from_context(
     };
     for (result, intent, parent_id) in links.into_iter().rev() {
         check_deadline()?;
-        calculation = apply(calculation, &intent)?;
+        calculation = apply_calculation_context_intent(calculation, &intent)?;
         if result.calculation.as_ref() != Some(&calculation)
             || result.dependencies.as_slice() != std::slice::from_ref(parent_id)
         {
@@ -2213,9 +2255,7 @@ pub(crate) fn calculation_from_context(
         }
     }
     check_deadline()?;
-    let result = apply(calculation, &bundle.meaning.intent)?;
-    check_deadline()?;
-    Ok(result)
+    Ok(calculation)
 }
 
 pub(crate) fn verify_goal_content(
@@ -6433,17 +6473,30 @@ impl Engine {
         };
         let mut resumed_summary_scope = None;
         let mut explicit_summary_question_scope = None;
+        let mut hearing_answer = None;
         let sealed = sealed.and_then(|bundle| {
-            if has_compute_budget
+            let bundle = if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::Unknown { .. })
                 && let Some(prior) = previous
                 && registered_conversation_input(&self.store, &state, prior)?.is_some()
             {
-                return input::seal_with_source_context(
+                input::seal_with_source_context(
                     &request,
                     previous,
                     Some(input::SourceContext::ConversationTopic),
-                );
+                )?
+            } else {
+                bundle
+            };
+            if has_compute_budget
+                && supports_japanese_output_locale(&request.locale)
+                && matches!(bundle.meaning.intent, Intent::Unknown { .. })
+                && state.prior_results.values().any(hearing::is_question)
+                && let Some((context, span)) = hearing::find_answer(&self.store, &request, started)?
+            {
+                let sealed = input::seal_hearing_answer(&request, context.question(), span)?;
+                hearing_answer = Some(context);
+                return Ok(sealed);
             }
             if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
@@ -7842,7 +7895,17 @@ impl Engine {
                 requires: vec!["content".into()],
             },
         ]);
-        if request.output_path.is_some() {
+        let effective_output_path = match &hearing_answer {
+            Some(context) => match context.output_path(&request) {
+                Ok(path) => path,
+                Err(Error::Contract { code, message }) => {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            },
+            None => request.output_path.clone(),
+        };
+        if effective_output_path.is_some() {
             nodes.push(GoalNode {
                 id: "file".into(),
                 kind: GoalNodeKind::RequiredFile,
@@ -7861,13 +7924,13 @@ impl Engine {
         let goal = GoalContract {
             input_fingerprint: fingerprint.clone(),
             intent: bundle.meaning.intent.clone(),
-            output_path: request.output_path.clone(),
+            output_path: effective_output_path.clone(),
             permissions: request.permissions.clone(),
             budget: request.budget.clone(),
             required_graph_ref,
             required_predicates: goal_predicates(
                 &bundle.meaning,
-                request.output_path.is_some(),
+                effective_output_path.is_some(),
                 previous_sequence
                     .as_ref()
                     .map(PreviousCalculationSequence::predicate)
@@ -7963,6 +8026,13 @@ impl Engine {
         {
             return self.stop(&mut state, Lifecycle::Suspend, code, message);
         }
+        if matches!(
+            goal.intent,
+            Intent::ClarifyPreviousLength | Intent::ClarifyFilteredCsvStatistics
+        ) && let Some((code, message)) = required_file_permission_stop(&goal)
+        {
+            return self.stop(&mut state, Lifecycle::Suspend, code, message);
+        }
         // Each explanation probe below consumes the same authenticated prior
         // input. Read it once, without rescanning the journal for each probe.
         let prior_context_input = if matches!(goal.intent, Intent::ExplainPrevious)
@@ -8020,6 +8090,7 @@ impl Engine {
             None
         };
         let mut units = Vec::new();
+        let mut pending_hearing = false;
         let mut approved_surfaces = None;
         let mut report_goal_content = None;
         let mut adopted_relation_meaning = None;
@@ -8217,6 +8288,65 @@ impl Engine {
                 result.calculation = Some(observed.calculation.clone());
                 result.guarantee = Guarantee::Computed;
                 sequence_result = Some(observed);
+            }
+            Intent::ClarifyPreviousLength
+            | Intent::ClarifyFilteredCsvStatistics
+            | Intent::SupplyHearingAnswer { .. } => {
+                if hearing_answer.is_none()
+                    && state.prior_results.values().any(hearing::is_question)
+                    && let Some(existing) =
+                        hearing::equivalent_question(&self.store, &bundle, previous, started)?
+                {
+                    result.dependencies.push(existing);
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "HEARING_ALREADY_PENDING",
+                        "同じ依頼は補足を待っています。先に表示した質問への回答を入力してください。",
+                    );
+                }
+                let outcome = if let Some(context) = hearing_answer.as_ref() {
+                    context
+                        .complete(&self.store, &bundle, &state.prior_results, started)
+                        .map(hearing::Preparation::Complete)
+                } else {
+                    hearing::prepare(
+                        &self.store,
+                        &bundle,
+                        previous,
+                        &state.prior_results,
+                        started,
+                    )
+                };
+                let outcome = match outcome {
+                    Ok(hearing::Preparation::Complete(outcome)) => outcome,
+                    Ok(hearing::Preparation::Question(prompt)) => {
+                        let prompt_ref =
+                            self.store.put_artifact(actor, &request.case_id, &prompt)?;
+                        pending_hearing = true;
+                        prompt.preview(&prompt_ref)
+                    }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some(bytes) = outcome.report_bytes.as_deref() {
+                    self.store.put_bytes(actor, &request.case_id, bytes)?;
+                }
+                result.calculation = outcome.calculation;
+                result.dependencies = outcome.dependencies;
+                result.guarantee = Guarantee::Computed;
+                units = outcome.units;
+                if !pending_hearing {
+                    report_goal_content = Some(ReportGoalContent {
+                        predicate: hearing::PREDICATE,
+                        guarantee: Guarantee::Computed,
+                        dependencies: result.dependencies.clone(),
+                        units: units.clone(),
+                    });
+                }
             }
             Intent::ConvertPreviousLength { .. }
                 if bundle.meaning.parser_version
@@ -13555,13 +13685,15 @@ impl Engine {
                 &error.to_string(),
             );
         }
-        if let Err(Error::Contract { code, message }) = verify_report_goal_content(
-            &goal,
-            &result,
-            &plan,
-            &compute_artifact,
-            report_goal_content.as_ref(),
-        ) {
+        if !pending_hearing
+            && let Err(Error::Contract { code, message }) = verify_report_goal_content(
+                &goal,
+                &result,
+                &plan,
+                &compute_artifact,
+                report_goal_content.as_ref(),
+            )
+        {
             return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
         }
         if let Some(observed) = sequence_result
@@ -13594,12 +13726,19 @@ impl Engine {
                 "描画前に元Goalの締切へ達しました。",
             );
         }
-        let target = match &goal.output_path {
+        // A preview is displayed without preparing the requested final write.
+        let preview_goal = pending_hearing.then(|| {
+            let mut preview = goal.clone();
+            preview.output_path = None;
+            preview
+        });
+        let render_goal = preview_goal.as_ref().unwrap_or(&goal);
+        let target = match &render_goal.output_path {
             Some(path) => RenderTarget::LocalFile { path: path.clone() },
             None => RenderTarget::Display,
         };
         let render = output::render_to(&plan, target)?;
-        if !validate_goal_render(&goal, &plan, &render) {
+        if !validate_goal_render(render_goal, &plan, &render) {
             return self.stop(
                 &mut state,
                 Lifecycle::Fail,
@@ -13629,6 +13768,21 @@ impl Engine {
                 Lifecycle::Suspend,
                 "DEADLINE",
                 "描画の照合後に元Goalの締切へ達しました。",
+            );
+        }
+        if pending_hearing {
+            result.execution_graph_ref = Some(store_execution_graph(
+                &self.store,
+                actor,
+                &request.case_id,
+                &graph,
+            )?);
+            state.result = Some(result);
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                hearing::REQUIRED,
+                "確定した部分を表示し、残りに必要な補足を待っています。",
             );
         }
         // Required file effect is performed once under a durable, fully bound

@@ -7244,6 +7244,286 @@ fn ordinary_question_lists_direct_and_derived_relations_with_provenance_after_re
 }
 
 #[test]
+fn hearing_completes_the_missing_unit_and_column_through_normal_chat() {
+    use minidora_domain::Lifecycle;
+    use minidora_engine::{Engine, store::Store};
+
+    const LENGTH_CASE: &str = "hearing-length";
+    const CSV_CASE: &str = "hearing-csv";
+    const CANCELLED_CASE: &str = "hearing-cancelled";
+    const CONVERT: &str = "前回の計算結果を換算して";
+    const CSV_STATS: &str = "前回絞り込んだCSVの統計量を計算して";
+
+    let scratch = Scratch::new();
+    let chat = |case: &str, input: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args(["--actor", "owner", "--case", case])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        (
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+    let engine = Engine::open(&scratch.0).unwrap();
+
+    let (display, status) = chat(LENGTH_CASE, &format!("1 km + 500 m\n{CONVERT}\n/exit\n"));
+    assert!(display.contains("1500 m"), "{display}");
+    assert!(display.contains("どの単位に換算しますか"), "{display}");
+    assert!(status.contains("HEARING_REQUIRED"), "{status}");
+    let waiting = engine.latest("owner", LENGTH_CASE).unwrap().unwrap();
+    assert_eq!(waiting.bundle.unwrap().request.text, CONVERT);
+    let pending = waiting.result.unwrap();
+    assert_eq!(pending.lifecycle, Lifecycle::Suspend);
+    assert!(pending.text.contains("1500 m"), "{}", pending.text);
+    assert!(pending.receipts.is_empty());
+    let calculation = waiting
+        .prior_results
+        .values()
+        .find(|result| result.lifecycle == Lifecycle::Commit && result.calculation.is_some())
+        .expect("the original unit-bearing calculation was committed");
+    assert_eq!(
+        calculation.calculation.as_ref().unwrap().exact_value,
+        "1500 m"
+    );
+
+    let (display, status) = chat(LENGTH_CASE, "センチメートル\n/exit\n");
+    assert!(display.contains("150000 cm"), "{display}");
+    assert!(!status.contains("HEARING_REQUIRED"), "{status}");
+    let resumed = engine
+        .latest("owner", LENGTH_CASE)
+        .unwrap()
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(resumed.lifecycle, Lifecycle::Commit);
+    assert_eq!(resumed.calculation.unwrap().exact_value, "150000 cm");
+    assert_eq!(
+        engine
+            .input_result(
+                "owner",
+                LENGTH_CASE,
+                &pending.input_id,
+                pending.input_version
+            )
+            .unwrap(),
+        Some(pending)
+    );
+    assert_eq!(
+        engine
+            .input_result(
+                "owner",
+                LENGTH_CASE,
+                &calculation.input_id,
+                calculation.input_version
+            )
+            .unwrap()
+            .as_ref(),
+        Some(calculation)
+    );
+
+    let csv = "status,value,weight\nopen,10,1\nclosed,999,99\nopen,30,3";
+    let (display, status) = chat(
+        CSV_CASE,
+        &format!(
+            "/paste\nCSVの列「status」が値「open」の行を選択して:\n{csv}\n/end\n{CSV_STATS}\n/exit\n"
+        ),
+    );
+    assert!(
+        display.contains("value") && display.contains("weight"),
+        "{display}"
+    );
+    assert!(status.contains("HEARING_REQUIRED"), "{status}");
+    let csv_waiting = engine.latest("owner", CSV_CASE).unwrap().unwrap();
+    assert_eq!(csv_waiting.bundle.unwrap().request.text, CSV_STATS);
+    let csv_pending = csv_waiting.result.unwrap();
+    assert_eq!(csv_pending.lifecycle, Lifecycle::Suspend);
+    assert!(
+        csv_pending.text.contains("value") && csv_pending.text.contains("weight"),
+        "{}",
+        csv_pending.text
+    );
+    assert!(csv_pending.receipts.is_empty());
+
+    let (display, status) = chat(
+        CSV_CASE,
+        &format!("17*23\n/context {}\nvalue\n/exit\n", csv_pending.id),
+    );
+    assert!(display.contains("391"), "{display}");
+    assert!(
+        display.contains("平均: 20") && display.contains("件数: 2"),
+        "{display}"
+    );
+    assert!(!status.contains("HEARING_REQUIRED"), "{status}");
+    let csv_resumed = engine.latest("owner", CSV_CASE).unwrap().unwrap();
+    assert_eq!(csv_resumed.result.unwrap().lifecycle, Lifecycle::Commit);
+    assert!(csv_resumed.prior_results.values().any(|result| {
+        result.lifecycle == Lifecycle::Commit
+            && result
+                .calculation
+                .as_ref()
+                .is_some_and(|value| value.exact_value == "391")
+    }));
+
+    let (display, status) = chat(
+        CANCELLED_CASE,
+        &format!("1 km + 500 m\n{CONVERT}\n中止\nセンチメートル\n/exit\n"),
+    );
+    assert!(status.contains("HEARING_REQUIRED"), "{status}");
+    assert!(!display.contains("150000 cm"), "{display}");
+    let cancelled = engine.latest("owner", CANCELLED_CASE).unwrap().unwrap();
+    assert!(
+        cancelled
+            .result
+            .iter()
+            .chain(cancelled.prior_results.values())
+            .any(|result| result.lifecycle == Lifecycle::Cancel)
+    );
+    assert_ne!(cancelled.result.unwrap().lifecycle, Lifecycle::Commit);
+
+    let store = Store::open(&scratch.0).unwrap();
+    for case in [LENGTH_CASE, CSV_CASE, CANCELLED_CASE] {
+        assert!(store.actions("owner", case).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn hearing_file_delivery_requires_both_exact_grants_and_only_writes_once() {
+    use minidora_domain::{EffectPhase, Lifecycle, RequestEnvelope, ResultRecord, digest};
+    use minidora_engine::{Engine, store::Store};
+
+    const DENIED_CASE: &str = "hearing-file-denied";
+    const ALLOWED_CASE: &str = "hearing-file-allowed";
+    const CONVERT: &str = "前回の計算結果を換算して";
+    const ANSWER: &str = "センチメートル";
+
+    let scratch = Scratch::new();
+    let mut engine = Engine::open(&scratch.0).unwrap();
+    let store = Store::open(&scratch.0).unwrap();
+    let denied_path = scratch.0.join("denied.txt");
+    let target = scratch.0.join("converted.txt");
+    let alternate = scratch.0.join("alternate.txt");
+    let request = |case, id, text| RequestEnvelope::new(case, id, "owner", text);
+    let assert_stop = |record: &ResultRecord, code: &str| {
+        assert_eq!(record.lifecycle, Lifecycle::Suspend, "{record:?}");
+        assert!(
+            record
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with(code)),
+            "{record:?}"
+        );
+        assert!(record.receipts.is_empty(), "{record:?}");
+    };
+
+    let base = engine
+        .execute("owner", request(DENIED_CASE, "base", "1 m + 2 m"))
+        .unwrap();
+    assert_eq!(base.lifecycle, Lifecycle::Commit);
+    assert_eq!(base.calculation.as_ref().unwrap().exact_value, "3 m");
+
+    let mut denied = request(DENIED_CASE, "question-without-grant", CONVERT);
+    denied.output_path = Some(denied_path.clone());
+    let denied = engine.execute("owner", denied).unwrap();
+    assert_stop(&denied, "WRITE_PERMISSION_MISSING:");
+    assert!(!denied.text.contains("どの単位に換算しますか"));
+    assert!(!denied_path.exists());
+    assert!(store.actions("owner", DENIED_CASE).unwrap().is_empty());
+
+    let mut direct = request(
+        DENIED_CASE,
+        "fully-specified",
+        "前回の計算結果をセンチメートルに換算して",
+    );
+    direct.context_ref = Some(base.id);
+    direct.output_path = Some(denied_path.clone());
+    direct.permissions.write_paths.insert(denied_path.clone());
+    let direct = engine.execute("owner", direct).unwrap();
+    assert_eq!(direct.lifecycle, Lifecycle::Commit, "{direct:?}");
+    assert_eq!(direct.calculation.as_ref().unwrap().exact_value, "300 cm");
+    assert_eq!(std::fs::read(&denied_path).unwrap(), direct.text.as_bytes());
+    assert_eq!(store.actions("owner", DENIED_CASE).unwrap().len(), 1);
+
+    let base = engine
+        .execute("owner", request(ALLOWED_CASE, "base", "1 m + 2 m"))
+        .unwrap();
+    assert_eq!(base.lifecycle, Lifecycle::Commit);
+    let mut question = request(ALLOWED_CASE, "question-with-grant", CONVERT);
+    question.output_path = Some(target.clone());
+    question.permissions.write_paths.insert(target.clone());
+    let pending = engine.execute("owner", question).unwrap();
+    assert_stop(&pending, "HEARING_REQUIRED:");
+    assert!(!target.exists());
+    assert!(store.actions("owner", ALLOWED_CASE).unwrap().is_empty());
+
+    let denied = engine
+        .execute(
+            "owner",
+            request(ALLOWED_CASE, "answer-without-grant", ANSWER),
+        )
+        .unwrap();
+    assert_stop(&denied, "WRITE_PERMISSION_MISSING:");
+    assert!(!target.exists());
+    assert!(store.actions("owner", ALLOWED_CASE).unwrap().is_empty());
+
+    let mut wrong_target = request(ALLOWED_CASE, "answer-to-different-path", ANSWER);
+    wrong_target.output_path = Some(alternate.clone());
+    wrong_target
+        .permissions
+        .write_paths
+        .extend([target.clone(), alternate.clone()]);
+    let wrong_target = engine.execute("owner", wrong_target).unwrap();
+    assert_stop(&wrong_target, "HEARING_OUTPUT_TARGET_CHANGED:");
+    assert!(!target.exists());
+    assert!(!alternate.exists());
+    assert!(store.actions("owner", ALLOWED_CASE).unwrap().is_empty());
+
+    let mut answer = request(ALLOWED_CASE, "answer-with-grant", ANSWER);
+    answer.permissions.write_paths.insert(target.clone());
+    assert!(answer.output_path.is_none());
+    let completed = engine.execute("owner", answer.clone()).unwrap();
+    assert_eq!(completed.lifecycle, Lifecycle::Commit, "{completed:?}");
+    assert_eq!(
+        completed.calculation.as_ref().unwrap().exact_value,
+        "300 cm"
+    );
+    let bytes = std::fs::read(&target).unwrap();
+    assert_eq!(bytes, completed.text.as_bytes());
+    let [receipt] = completed.receipts.as_slice() else {
+        panic!("expected exactly one confirmed file receipt: {completed:?}");
+    };
+    assert_eq!(receipt.phase, EffectPhase::Confirmed);
+    assert_eq!(receipt.content_sha256, digest(&bytes));
+
+    let actions = store.actions("owner", ALLOWED_CASE).unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].action_id, receipt.action_id);
+    let written_at = std::fs::metadata(&target).unwrap().modified().unwrap();
+    let duplicate = engine.execute("owner", answer).unwrap();
+    assert_eq!(duplicate, completed);
+    assert_eq!(store.actions("owner", ALLOWED_CASE).unwrap(), actions);
+    assert_eq!(std::fs::read(&target).unwrap(), bytes);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().modified().unwrap(),
+        written_at
+    );
+    assert!(!alternate.exists());
+}
+
+#[test]
 fn short_conversation_preserves_the_sealed_topic_across_normal_turns() {
     let scratch = Scratch::new();
     let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));

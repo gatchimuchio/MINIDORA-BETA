@@ -84,13 +84,13 @@ impl Engine {
                     id: "exact-mathematics",
                     scope: "有理数、対応単位、計算手順、統計、確率、有限の代数演算を処理します。",
                     permission: None,
-                    limits: "演算ごとの文型、次元、項数と実行予算に従います。",
+                    limits: "演算ごとの文型、次元、項数と実行予算に従います。確定値の長さ換算で換算先が不足すると、同じ会話で単位を補足できます。",
                 },
                 EngineCapability {
                     id: "structured-documents",
                     scope: "CSV・JSON・表の集計、比較と変換、本文の編集、貼り付けた文章の抽出要約を処理します。",
                     permission: None,
-                    limits: "表と文書は対応形式に限られます。抽出要約の意味範囲や網羅性は保証しません。",
+                    limits: "表と文書は対応形式に限られます。絞り込み済みCSVの統計で有効な列が複数あると、同じ会話で列を補足できます。抽出要約の意味範囲や網羅性は保証しません。",
                 },
                 EngineCapability {
                     id: "bounded-code",

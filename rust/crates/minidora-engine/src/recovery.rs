@@ -5181,15 +5181,58 @@ fn inspect(
         )
     })?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
+    let requires_hearing = matches!(
+        bundle.meaning.intent,
+        Intent::ClarifyPreviousLength
+            | Intent::ClarifyFilteredCsvStatistics
+            | Intent::SupplyHearingAnswer { .. }
+    );
+    let invalid_hearing = || {
+        failure(
+            "RECOVERY_HEARING_MISMATCH",
+            "the retained clarification, grounded outcome or rendered content differs",
+        )
+    };
+    if requires_hearing != (bundle.meaning.parser_version == crate::input::HEARING_PARSER_VERSION) {
+        return Err(invalid_hearing());
+    }
+    if requires_hearing {
+        verify_registered_input(store, bundle, "RECOVERY_HEARING_MISMATCH")?;
+    }
+    let hearing_answer = if matches!(bundle.meaning.intent, Intent::SupplyHearingAnswer { .. }) {
+        Some(crate::hearing::restore_answer(
+            store,
+            bundle,
+            &state.prior_results,
+        )?)
+    } else {
+        None
+    };
+    let inherited_path;
+    let expected_path = if let Some(context) = &hearing_answer {
+        inherited_path = context.output_path(request)?;
+        &inherited_path
+    } else {
+        &request.output_path
+    };
     if goal.input_fingerprint != fingerprint
         || goal.intent != bundle.meaning.intent
         || goal.permissions != request.permissions
-        || goal.output_path != request.output_path
+        || &goal.output_path != expected_path
         || goal.budget != request.budget
     {
         return Err(failure(
             "RECOVERY_GOAL_MISMATCH",
             "saved goal differs from sealed original request",
+        ));
+    }
+    if requires_hearing
+        && (matches!(goal.intent, Intent::ClarifyPreviousLength)
+            || crate::hearing::is_question(result))
+    {
+        return Err(failure(
+            "NO_LOCAL_FILE_GOAL",
+            "a clarification preview does not authorize a file effect",
         ));
     }
     let path = goal.output_path.as_ref().ok_or_else(|| {
@@ -5461,6 +5504,7 @@ fn inspect(
         && (requires_generated_comparison
             || requires_generated_calculation
             || requires_conversation
+            || requires_hearing
             || requires_verified_correction
             || requires_verified_length_conversion
             || requires_web_length_conversion
@@ -5582,6 +5626,58 @@ fn inspect(
             "actual retained rendering unavailable",
         )
     })?;
+    if requires_hearing {
+        let started = Instant::now();
+        let outcome = if let Some(context) = &hearing_answer {
+            context.complete(store, bundle, &state.prior_results, started)?
+        } else {
+            let prior = bundle
+                .meaning
+                .context_result_ref
+                .as_ref()
+                .and_then(|id| state.prior_results.get(id))
+                .ok_or_else(invalid_hearing)?;
+            if bundle.context_sha256 != identity(&Some(prior))?
+                || request
+                    .context_ref
+                    .as_ref()
+                    .is_some_and(|id| id != &prior.id)
+                || (request.context_ref.is_none()
+                    && store.input_start_predecessor(state)?.as_ref() != Some(prior))
+            {
+                return Err(invalid_hearing());
+            }
+            let crate::hearing::Preparation::Complete(outcome) =
+                crate::hearing::prepare(store, bundle, Some(prior), &state.prior_results, started)?
+            else {
+                return Err(failure(
+                    "NO_LOCAL_FILE_GOAL",
+                    "a clarification preview does not authorize a file effect",
+                ));
+            };
+            outcome
+        };
+        if result.guarantee != Guarantee::Computed
+            || result.calculation != outcome.calculation
+            || result.actor_memory_revision.is_some()
+            || !result.evidence.is_empty()
+            || result.dependencies != outcome.dependencies
+            || plan.guarantee != result.guarantee
+            || plan.required_units != outcome.units
+            || plan.text != outcome.units.join("\n")
+            || result.text != plan.text
+        {
+            return Err(invalid_hearing());
+        }
+        if let Some(report) = outcome.report_bytes {
+            let report_ref = digest(&report);
+            if !result.dependencies.contains(&report_ref)
+                || store.get_bytes(actor, case, &report_ref)? != report
+            {
+                return Err(invalid_hearing());
+            }
+        }
+    }
     if requires_filtered_csv_statistics {
         const CODE: &str = "RECOVERY_FILTERED_CSV_STATISTICS_MISMATCH";
         let invalid = || {
@@ -18540,6 +18636,72 @@ mod tests {
         assert_eq!(recovered.id, adopted.id);
         assert_eq!(recovered.dependencies, adopted.dependencies);
         assert_eq!(recovered.text, adopted.text);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn hearing_answer_reconciles_inherited_file_without_resending() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let calculation = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "calculation", "alice", "1 km + 500 m"),
+            )
+            .unwrap();
+        assert_eq!(calculation.lifecycle, Lifecycle::Commit, "{calculation:?}");
+
+        let mut request =
+            RequestEnvelope::new("case", "question", "alice", "前回の計算結果を換算して");
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let question = engine.execute("alice", request).unwrap();
+        assert!(crate::hearing::is_question(&question), "{question:?}");
+        assert_eq!(engine.reconcile("alice", "case").unwrap(), question);
+        assert!(!fixture.target.exists());
+
+        let mut answer = RequestEnvelope::new("case", "answer", "alice", "センチメートル");
+        answer
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = engine.execute("alice", answer).unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        assert!(adopted.dependencies.contains(&question.id));
+        assert_eq!(
+            adopted.calculation.as_ref().unwrap().exact_value,
+            "150000 cm"
+        );
+        drop(engine);
+
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        assert_eq!(
+            store.actions("alice", "case").unwrap()[0].phase,
+            EffectPhase::Unknown
+        );
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.calculation, adopted.calculation);
+        assert_eq!(recovered.dependencies, adopted.dependencies);
         assert_eq!(
             recovered.receipts[0].reason.as_deref(),
             Some("LOCAL_FILE_RECONCILED_NO_RESEND")

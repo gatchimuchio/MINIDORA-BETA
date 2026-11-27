@@ -55,6 +55,8 @@ pub(crate) const RELATION_SUBJECT_QUESTION_PARSER_VERSION: &str =
     "declarative-ja-v211-relation-subject-query";
 const COPULAR_SUBJECT_QUESTION_PARSER_VERSION: &str = "declarative-ja-v212-copular-subject-query";
 const CONVERSATION_TOPIC_PARSER_VERSION: &str = "declarative-ja-v213-conversation-topic";
+pub(crate) const HEARING_PARSER_VERSION: &str = "declarative-ja-v214-hearing";
+const HEARING_ANSWER_ROLE: &str = "/SupplyHearingAnswer/answer";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -569,11 +571,10 @@ pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Resul
     seal_with_source_context(request, previous, None)
 }
 
-pub(crate) fn seal_with_source_context(
+fn validate_user_seal_request(
     request: &RequestEnvelope,
     previous: Option<&ResultRecord>,
-    source_context: Option<SourceContext>,
-) -> Result<InputBundle> {
+) -> Result<()> {
     if [&request.case_id, &request.input_id, &request.actor_id]
         .iter()
         .any(|value| value.trim().is_empty())
@@ -597,6 +598,15 @@ pub(crate) fn seal_with_source_context(
             "explicit context does not name the supplied actual prior result",
         ));
     }
+    Ok(())
+}
+
+pub(crate) fn seal_with_source_context(
+    request: &RequestEnvelope,
+    previous: Option<&ResultRecord>,
+    source_context: Option<SourceContext>,
+) -> Result<InputBundle> {
+    validate_user_seal_request(request, previous)?;
     let intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
         if asks_for_previous_answer_source(&request.text)? {
             if previous.is_some_and(|result| {
@@ -723,7 +733,6 @@ pub(crate) fn seal_with_source_context(
     {
         unresolved.push("同じ会話に換算できる確定済み計算結果がありません。".into());
     }
-    let context_sha256 = identity(&previous)?;
     let source_roles = match source_role_spans(&request.text, &intent) {
         Ok(source_roles) => source_roles,
         Err(Error::Contract { code, message }) if code == "SOURCE_SPAN_INDEX_LIMIT" => {
@@ -792,6 +801,9 @@ pub(crate) fn seal_with_source_context(
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
         Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
             CONVERSATION_TOPIC_PARSER_VERSION
+        }
+        Intent::ClarifyPreviousLength | Intent::ClarifyFilteredCsvStatistics => {
+            HEARING_PARSER_VERSION
         }
         Intent::PreviousFiniteEventProbability { .. } => {
             PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION
@@ -1162,6 +1174,57 @@ pub(crate) fn seal_with_source_context(
         }
         _ => PARSER_VERSION,
     };
+    seal_user_input(
+        request,
+        previous,
+        parser_version,
+        intent,
+        source_roles,
+        unresolved,
+    )
+}
+
+pub(crate) fn seal_hearing_answer(
+    request: &RequestEnvelope,
+    question: &ResultRecord,
+    answer: SourceSpan,
+) -> Result<InputBundle> {
+    validate_user_seal_request(request, Some(question))?;
+    if question.lifecycle != Lifecycle::Suspend
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || request.text.chars().any(|ch| ch.is_control() && ch != '\t')
+        || answer.text.trim().is_empty()
+        || request.text.get(answer.start..answer.end) != Some(answer.text.as_str())
+        || !matches!(interpret(&request.text)?, Intent::Unknown { .. })
+    {
+        return Err(failure(
+            "HEARING_ANSWER_INPUT_MISMATCH",
+            "補足回答が、元の発話または保留中の質問と一致しません。",
+        ));
+    }
+    let source_roles = BTreeMap::from([(HEARING_ANSWER_ROLE.into(), vec![answer.clone()])]);
+    seal_user_input(
+        request,
+        Some(question),
+        HEARING_PARSER_VERSION,
+        Intent::SupplyHearingAnswer {
+            question_ref: question.id.clone(),
+            answer,
+        },
+        source_roles,
+        Vec::new(),
+    )
+}
+
+fn seal_user_input(
+    request: &RequestEnvelope,
+    previous: Option<&ResultRecord>,
+    parser_version: &str,
+    intent: Intent,
+    source_roles: BTreeMap<String, Vec<SourceSpan>>,
+    unresolved: Vec<String>,
+) -> Result<InputBundle> {
+    let context_sha256 = identity(&previous)?;
     let meaning = MeaningIR {
         parser_version: parser_version.into(),
         intent,
@@ -5486,6 +5549,9 @@ fn interpret(text: &str) -> Result<Intent> {
         };
         return Ok(Intent::ConvertPreviousLength { unit: unit.into() });
     }
+    if let Some(intent) = hearing_question_intent(text)? {
+        return Ok(intent);
+    }
     if let Some(intent) = condition_definition_intent(text)? {
         return Ok(intent);
     }
@@ -6313,6 +6379,63 @@ fn natural_finite_expectation_intent(text: &str) -> Result<Option<Intent>> {
         })),
         Err(error) => Err(error),
     }
+}
+
+fn hearing_question_intent(text: &str) -> Result<Option<Intent>> {
+    if !text.trim_start().starts_with('前') || text.contains(['?', '？', '\r', '\n']) {
+        return Ok(None);
+    }
+    let body = terminal_trim(text);
+    if regex(r"\A(?:前回|前)の計算結果を[ \t　]*(?:単位)?換算して(?:ください)?\z")?.is_match(body)
+    {
+        return Ok(Some(Intent::ClarifyPreviousLength));
+    }
+    if regex(concat!(
+        r"\A(?:前回(?:の)?|前の)(?:絞り込んだ|選択した)",
+        r"(?:表|(?i:csv))(?:の行)?(?:の列)?の統計量を(?:計算して|求めて)(?:ください)?\z",
+    ))?
+    .is_match(body)
+    {
+        return Ok(Some(Intent::ClarifyFilteredCsvStatistics));
+    }
+    Ok(None)
+}
+
+fn hearing_unit(text: &str) -> Option<(&str, &'static str)> {
+    if text.contains(['?', '？', '\r', '\n']) {
+        return None;
+    }
+    let statement = terminal_trim(text);
+    let unit = [
+        "にしてください",
+        "でお願いします",
+        "にして",
+        "です",
+        "で",
+        "に",
+    ]
+    .into_iter()
+    .find_map(|suffix| statement.strip_suffix(suffix))
+    .unwrap_or(statement)
+    .trim_end();
+    let canonical = match unit {
+        "mm" | "ミリメートル" => "mm",
+        "cm" | "センチメートル" => "cm",
+        "m" | "メートル" => "m",
+        "km" | "キロメートル" => "km",
+        _ => return None,
+    };
+    Some((unit, canonical))
+}
+
+pub(crate) fn hearing_length_target(text: &str) -> Option<&'static str> {
+    hearing_unit(text).map(|(_, canonical)| canonical)
+}
+
+pub(crate) fn hearing_unit_span(text: &str) -> Option<SourceSpan> {
+    let (unit, _) = hearing_unit(text)?;
+    let start = text.len() - text.trim_start().len();
+    source_span_at(text, start, start + unit.len())
 }
 
 const PREVIOUS_FINITE_EVENT_VALUE_ROLE: &str = "/PreviousFiniteEventProbability/event_value";

@@ -284,6 +284,12 @@ pub enum Intent {
     ConvertPreviousLength {
         unit: String,
     },
+    ClarifyPreviousLength,
+    ClarifyFilteredCsvStatistics,
+    SupplyHearingAnswer {
+        question_ref: String,
+        answer: SourceSpan,
+    },
     CalculateSequence {
         steps: Vec<CalculationSequenceStep>,
     },
