@@ -265,6 +265,12 @@ pub enum Intent {
     Greet {
         salutation: String,
     },
+    OpenConversationTopic {
+        topic: SourceSpan,
+    },
+    RespondOnConversationTopic {
+        remark: SourceSpan,
+    },
     AskLocalIdentity,
     AskLocalCapabilities,
     AskWeb {

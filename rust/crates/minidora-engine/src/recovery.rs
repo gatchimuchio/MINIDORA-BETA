@@ -5208,6 +5208,10 @@ fn inspect(
     let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
+    let requires_conversation = matches!(
+        goal.intent,
+        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. }
+    );
     let requires_verified_correction =
         bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
     let requires_verified_length_conversion =
@@ -5456,6 +5460,7 @@ fn inspect(
         )
         && (requires_generated_comparison
             || requires_generated_calculation
+            || requires_conversation
             || requires_verified_correction
             || requires_verified_length_conversion
             || requires_web_length_conversion
@@ -6154,6 +6159,11 @@ fn inspect(
     let mut generated_compute_ref = if requires_generated_calculation {
         Some(crate::core::verify_generated_calculation_computation(
             store, request, &goal, result, plan,
+        )?)
+    } else if requires_conversation {
+        verify_registered_input(store, bundle, "RECOVERY_CONVERSATION_MISMATCH")?;
+        Some(crate::core::verify_conversation_computation(
+            store, state, result, plan,
         )?)
     } else {
         None
@@ -18482,6 +18492,67 @@ mod tests {
                 .is_none()
         );
         assert_eq!(engine.execute("alice", request).unwrap(), recovered);
+    }
+
+    #[test]
+    fn topic_conversation_reconciles_its_observed_file_after_restart() {
+        let fixture = empty_fixture();
+        let adopted = {
+            let mut engine = Engine::open(&fixture.state).unwrap();
+            let opening = engine
+                .execute(
+                    "alice",
+                    RequestEnvelope::new("case", "topic", "alice", "編み物の話をしよう"),
+                )
+                .unwrap();
+            assert_eq!(opening.lifecycle, Lifecycle::Commit, "{opening:?}");
+            let previous = engine
+                .execute(
+                    "alice",
+                    RequestEnvelope::new("case", "first", "alice", "緑のマフラーを編みました"),
+                )
+                .unwrap();
+            assert_eq!(previous.lifecycle, Lifecycle::Commit, "{previous:?}");
+
+            let mut request =
+                RequestEnvelope::new("case", "save", "alice", "小さな飾りも編みました");
+            request.output_path = Some(fixture.target.clone());
+            request
+                .permissions
+                .write_paths
+                .insert(fixture.target.clone());
+            let adopted = engine.execute("alice", request).unwrap();
+            assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+            assert!(adopted.dependencies.contains(&opening.id));
+            assert!(adopted.text.contains("小さな飾り"));
+            adopted
+        };
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        assert_eq!(
+            store.actions("alice", "case").unwrap()[0].phase,
+            EffectPhase::Unknown
+        );
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.dependencies, adopted.dependencies);
+        assert_eq!(recovered.text, adopted.text);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]

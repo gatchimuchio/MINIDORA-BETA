@@ -54,6 +54,7 @@ pub(crate) const PREVIOUS_FILTERED_CSV_STATISTICS_PARSER_VERSION: &str =
 pub(crate) const RELATION_SUBJECT_QUESTION_PARSER_VERSION: &str =
     "declarative-ja-v211-relation-subject-query";
 const COPULAR_SUBJECT_QUESTION_PARSER_VERSION: &str = "declarative-ja-v212-copular-subject-query";
+const CONVERSATION_TOPIC_PARSER_VERSION: &str = "declarative-ja-v213-conversation-topic";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
     "declarative-ja-v167-csv-before-after-compare";
 pub(crate) const CSV_LEFT_RIGHT_JOIN_PARSER_VERSION: &str =
@@ -284,6 +285,7 @@ pub(crate) enum SourceContext {
     CorrectionAssertionFollowup,
     NamedDerivedRelationQuery,
     DerivedRelationFollowup,
+    ConversationTopic,
     Summary,
 }
 
@@ -528,6 +530,41 @@ pub(crate) fn verified_multi_condition_relation_source(bundle: &InputBundle) -> 
     Ok(!roles.is_empty() && bundle.meaning.source_roles == roles)
 }
 
+pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    if meaning.parser_version != CONVERSATION_TOPIC_PARSER_VERSION
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !matches!(
+            meaning.intent,
+            Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. }
+        )
+        || !matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US")
+        || text.len() > request.budget.max_input_bytes
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                CONVERSATION_TOPIC_PARSER_VERSION,
+            ))?
+    {
+        return Ok(false);
+    }
+    let parsed = interpret(text)?;
+    let parsed = if meaning.context_result_ref.is_some() {
+        interpret_conversation_reply(text, parsed)?
+    } else {
+        parsed
+    };
+    Ok(parsed == meaning.intent && source_role_spans(text, &parsed)? == meaning.source_roles)
+}
+
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     seal_with_source_context(request, previous, None)
 }
@@ -577,7 +614,14 @@ pub(crate) fn seal_with_source_context(
                 }
             }
         } else {
-            interpret(&request.text)?
+            let intent = interpret(&request.text)?;
+            if matches!(source_context, Some(SourceContext::ConversationTopic))
+                && previous.is_some_and(|result| result.lifecycle == Lifecycle::Commit)
+            {
+                interpret_conversation_reply(&request.text, intent)?
+            } else {
+                intent
+            }
         }
     } else {
         Intent::Unknown {
@@ -723,7 +767,8 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::CorrectionRelationAssertion
         | SourceContext::CorrectionAssertionFollowup
         | SourceContext::NamedDerivedRelationQuery
-        | SourceContext::DerivedRelationFollowup => None,
+        | SourceContext::DerivedRelationFollowup
+        | SourceContext::ConversationTopic => None,
     });
     let parser_version = match &intent {
         Intent::ExplainPrevious
@@ -745,6 +790,9 @@ pub(crate) fn seal_with_source_context(
             PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION
         }
         Intent::Greet { .. } | Intent::AskLocalCapabilities => LOCAL_CONVERSATION_PARSER_VERSION,
+        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
+            CONVERSATION_TOPIC_PARSER_VERSION
+        }
         Intent::PreviousFiniteEventProbability { .. } => {
             PREVIOUS_FINITE_EVENT_PROBABILITY_PARSER_VERSION
         }
@@ -2391,6 +2439,22 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    let conversation_role = match intent {
+        Intent::OpenConversationTopic { topic } => Some(("/OpenConversationTopic/topic", topic)),
+        Intent::RespondOnConversationTopic { remark } => {
+            Some(("/RespondOnConversationTopic/remark", remark))
+        }
+        _ => None,
+    };
+    if let Some((role, span)) = conversation_role {
+        if source_span_at(text, span.start, span.end).as_ref() != Some(span) {
+            return Err(failure(
+                "CONVERSATION_SOURCE_SPAN",
+                "conversation role does not match the original request",
+            ));
+        }
+        return Ok(BTreeMap::from([(role.into(), vec![span.clone()])]));
+    }
     if matches!(intent, Intent::AskRelationSubjects { .. }) {
         return relation_subject_question(text)?
             .filter(|(parsed, _)| parsed == intent)
@@ -5708,6 +5772,9 @@ fn interpret(text: &str) -> Result<Intent> {
     {
         return Ok(Intent::Calculate { expression });
     }
+    if let Some(intent) = explicit_conversation_intent(text)? {
+        return Ok(intent);
+    }
     if regex(r"(?i)^(?:which|what|who|where|when|how)\b")?.is_match(body)
         || regex(r"^(?:どの|どれ|何|なに|誰|だれ|どこ|いつ|どう|いくら|いくつ)")?.is_match(body)
     {
@@ -5750,6 +5817,107 @@ fn interpret(text: &str) -> Result<Intent> {
         });
     }
     Ok(Intent::Unknown { reason: "no unambiguous interpretation in the supported arithmetic, copular relation, context, source or JSON grammar".into() })
+}
+
+fn conversation_sentence(text: &str) -> &str {
+    let trimmed = text.trim();
+    trimmed.strip_suffix('。').unwrap_or(trimmed).trim_end()
+}
+
+fn conversation_remark(text: &str, remark: &str, start: usize) -> Result<Option<SourceSpan>> {
+    let Some(stem) = ["ませんでした", "ました", "でした"]
+        .into_iter()
+        .find_map(|ending| remark.strip_suffix(ending))
+    else {
+        return Ok(None);
+    };
+    if stem.is_empty()
+        || !regex(r"^[\p{Han}\p{Hiragana}\p{Katakana}\p{Latin}\p{Nd}ー・]{1,96}$")?.is_match(remark)
+        || [
+            "ました",
+            "ませんでした",
+            "でした",
+            "です",
+            "その話だけど",
+            "それから",
+            "してから",
+            "ながら",
+            "けれど",
+            "だけど",
+            "ので",
+            "かつ",
+            "および",
+            "または",
+            "もし",
+            "なら",
+            "ただし",
+            "ください",
+            "してくれ",
+            "送って",
+            "実行して",
+            "調べて",
+            "保存して",
+            "無視して",
+        ]
+        .into_iter()
+        .any(|marker| stem.contains(marker))
+    {
+        return Ok(None);
+    }
+    Ok(source_span_at(text, start, start + remark.len()))
+}
+
+fn explicit_conversation_intent(text: &str) -> Result<Option<Intent>> {
+    let sentence = conversation_sentence(text);
+    let start = text.len() - text.trim_start().len();
+    if let Some(rest) = sentence.strip_prefix("その話だけど") {
+        let remark = if !text.chars().any(char::is_control)
+            && let Some(remark) = rest.strip_prefix(['、', '，'])
+        {
+            let remark = remark.trim_start();
+            conversation_remark(text, remark, start + sentence.len() - remark.len())?
+        } else {
+            None
+        };
+        return Ok(Some(match remark {
+            Some(remark) => Intent::RespondOnConversationTopic { remark },
+            None => Intent::Unknown {
+                reason: "「その話だけど、」に続けて、経験や観察を一文で入力してください。".into(),
+            },
+        }));
+    }
+    let Some(topic) = ["の話をしよう", "について話そう", "について話したいです"]
+        .into_iter()
+        .find_map(|ending| sentence.strip_suffix(ending))
+    else {
+        return Ok(None);
+    };
+    if text.chars().any(char::is_control)
+        || topic.contains('を')
+        || !regex(r"^[\p{Han}\p{Hiragana}\p{Katakana}\p{Latin}\p{Nd}ー・]{1,48}$")?.is_match(topic)
+    {
+        return Ok(Some(Intent::Unknown {
+            reason: "話したい話題を一つ指定してください。".into(),
+        }));
+    }
+    Ok(source_span_at(text, start, start + topic.len())
+        .map(|topic| Intent::OpenConversationTopic { topic }))
+}
+
+fn interpret_conversation_reply(text: &str, intent: Intent) -> Result<Intent> {
+    let sentence = conversation_sentence(text);
+    if !matches!(intent, Intent::Unknown { .. })
+        || text.chars().any(char::is_control)
+        || sentence.starts_with("その話だけど")
+    {
+        return Ok(intent);
+    }
+    Ok(
+        conversation_remark(text, sentence, text.len() - text.trim_start().len())?
+            .map_or(intent, |remark| Intent::RespondOnConversationTopic {
+                remark,
+            }),
+    )
 }
 
 fn constrained_previous_source_summary_intent(text: &str) -> Result<Option<Intent>> {

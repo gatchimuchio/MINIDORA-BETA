@@ -1738,6 +1738,8 @@ pub(crate) fn condition_evaluation_contract(
 const WEB_ANSWER_PREDICATE: &str = "GROUNDED_WEB_ANSWER_V1";
 const CODE_EXPLANATION_PREDICATE: &str = "SOURCE_CODE_EXPLANATION_V1";
 const RETURN_FUNCTION_PREDICATE: &str = "SOURCE_RETURN_FUNCTION_V1";
+pub(crate) const CONVERSATION_PREDICATE: &str = "GENERATED_CONVERSATION_V1";
+const GENERATED_CONVERSATION_KIND: &str = "minidora.core-computation.conversation.v1";
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1746,6 +1748,9 @@ pub(crate) fn goal_predicates(
 ) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
+        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
+            predicates.push(CONVERSATION_PREDICATE.into());
+        }
         Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
         Intent::ExplainCode { .. } => predicates.push(CODE_EXPLANATION_PREDICATE.into()),
         Intent::GenerateReturnFunction { .. } => predicates.push(RETURN_FUNCTION_PREDICATE.into()),
@@ -1916,6 +1921,7 @@ fn verify_report_goal_content(
                 | GROUP_MEAN_HYPOTHESIS_PREDICATE
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
+                | CONVERSATION_PREDICATE
                 | CALCULATION_CORRECTION_PREDICATE
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
                 | PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE
@@ -2467,6 +2473,406 @@ pub(crate) fn verify_generated_calculation_computation(
     }
     store.get_bytes(&original.actor_id, &original.case_id, &compute_ref)?;
     verify_generated_model_artifacts(store, &original.actor_id, &original.case_id, plan)?;
+    Ok(compute_ref)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationOpening {
+    result_id: String,
+    input_id: String,
+    input_version: u64,
+    bundle_fingerprint: String,
+    topic: SourceSpan,
+}
+
+impl ConversationOpening {
+    fn from_input(bundle: &InputBundle, topic: &SourceSpan) -> Result<Self> {
+        Ok(Self {
+            result_id: identity(&bundle.request)?,
+            input_id: bundle.request.input_id.clone(),
+            input_version: bundle.request.input_version,
+            bundle_fingerprint: bundle.fingerprint.clone(),
+            topic: topic.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ConversationFocus {
+    Creation,
+    CompletedWork,
+    Challenge,
+    Preference,
+    OpenQuestion,
+}
+
+impl ConversationFocus {
+    fn from_remark(remark: &str) -> Self {
+        if remark.ends_with("ませんでした") {
+            Self::OpenQuestion
+        } else if [
+            "編みました",
+            "作りました",
+            "つくりました",
+            "描きました",
+            "書きました",
+            "組み立てました",
+            "仕上げました",
+            "完成しました",
+        ]
+        .into_iter()
+        .any(|ending| remark.ends_with(ending))
+        {
+            Self::CompletedWork
+        } else if ["好きでした", "気に入りました", "楽しいと思いました"]
+            .into_iter()
+            .any(|ending| remark.ends_with(ending))
+        {
+            Self::Preference
+        } else if ["難し", "むずかし", "苦手", "困って", "うまくいか"]
+            .into_iter()
+            .any(|cue| remark.contains(cue))
+        {
+            Self::Challenge
+        } else if remark
+            .strip_suffix("と思いました")
+            .or_else(|| remark.strip_suffix("と考えました"))
+            .is_some_and(|intention| {
+                ["作りたい", "つくりたい", "描きたい", "書きたい", "始めたい"]
+                    .into_iter()
+                    .any(|ending| intention.ends_with(ending))
+            })
+        {
+            Self::Creation
+        } else {
+            Self::OpenQuestion
+        }
+    }
+
+    fn question(self) -> &'static str {
+        match self {
+            Self::Creation => {
+                "小さく試せるものを一つ考えると、始め方を絞れます。最初にどんな形にしてみたいですか。"
+            }
+            Self::CompletedWork => "どんなものになりましたか。工夫した点があれば聞かせてください。",
+            Self::Challenge => {
+                "つまずいた場面を一つ挙げると、一緒に原因を考えられます。どこが気になりますか。"
+            }
+            Self::Preference => {
+                "どんなところが気に入りましたか。印象に残った点から話を広げましょう。"
+            }
+            Self::OpenQuestion => "どんな場面やきっかけがあったのか、もう少し聞かせてください。",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationReply {
+    prior_id: String,
+    remark: SourceSpan,
+    focus: ConversationFocus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationMeaningPlan {
+    source_bundle: String,
+    opening: ConversationOpening,
+    reply: Option<ConversationReply>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GeneratedConversationArtifact {
+    kind: String,
+    meaning_plan: ConversationMeaningPlan,
+    content_generation: language::MeaningGenerationReport,
+}
+
+fn registered_conversation_input(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+) -> Result<Option<InputBundle>> {
+    if result.lifecycle != Lifecycle::Commit || result.guarantee != Guarantee::Computed {
+        return Ok(None);
+    }
+    let Some((_, bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &result.input_id,
+        result.input_version,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        bundle.meaning.intent,
+        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. }
+    ) {
+        return Ok(None);
+    }
+    if identity(&bundle.request)? != result.id
+        || !input::verified_conversation_input(&bundle)?
+        || store
+            .get_input_result(
+                &state.actor_id,
+                &state.case_id,
+                &result.input_id,
+                result.input_version,
+            )?
+            .as_ref()
+            != Some(result)
+    {
+        return Err(failure(
+            "CONVERSATION_CONTEXT_INVALID",
+            "保存された会話結果とその入力を照合できません。",
+        ));
+    }
+    Ok(Some(bundle))
+}
+
+fn retained_conversation_opening(
+    store: &Store,
+    state: &CaseRevision,
+    prior: &ResultRecord,
+    prior_bundle: &InputBundle,
+) -> Result<ConversationOpening> {
+    if let Intent::OpenConversationTopic { topic } = &prior_bundle.meaning.intent {
+        return ConversationOpening::from_input(prior_bundle, topic);
+    }
+    let invalid = || {
+        failure(
+            "CONVERSATION_CONTEXT_INVALID",
+            "前の発話から、元の話題入力を照合できません。",
+        )
+    };
+    let Intent::RespondOnConversationTopic { remark } = &prior_bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    let content = prior.content_plan.as_ref().ok_or_else(invalid)?;
+    let compute_ref = content.dependencies.last().ok_or_else(invalid)?;
+    let artifact: GeneratedConversationArtifact =
+        serde_json::from_slice(&store.get_bytes(&state.actor_id, &state.case_id, compute_ref)?)?;
+    let meaning = artifact.meaning_plan;
+    let reply = meaning.reply.as_ref().ok_or_else(invalid)?;
+    let context = state
+        .prior_results
+        .get(&reply.prior_id)
+        .ok_or_else(invalid)?;
+    if artifact.kind != GENERATED_CONVERSATION_KIND
+        || meaning.source_bundle != prior_bundle.fingerprint
+        || &reply.remark != remark
+        || reply.focus != ConversationFocus::from_remark(&remark.text)
+        || prior_bundle.meaning.context_result_ref.as_deref() != Some(reply.prior_id.as_str())
+        || prior_bundle.context_sha256 != identity(&Some(context))?
+        || prior.dependencies != meaning.dependencies()
+        || artifact.content_generation.text != prior.text
+        || content.text != prior.text
+        || artifact.content_generation.model_revision != content.model_revision
+        || artifact.content_generation.model_artifact_ref.as_deref()
+            != Some(content.model_artifact_ref.as_str())
+    {
+        return Err(invalid());
+    }
+    let opening = state
+        .prior_results
+        .get(&meaning.opening.result_id)
+        .ok_or_else(invalid)?;
+    let source = registered_conversation_input(store, state, opening)?.ok_or_else(invalid)?;
+    let Intent::OpenConversationTopic { topic } = &source.meaning.intent else {
+        return Err(invalid());
+    };
+    if ConversationOpening::from_input(&source, topic)? != meaning.opening {
+        return Err(invalid());
+    }
+    Ok(meaning.opening)
+}
+
+impl ConversationMeaningPlan {
+    fn resolve(store: &Store, state: &CaseRevision, bundle: &InputBundle) -> Result<Self> {
+        if bundle.request.actor_id != state.actor_id
+            || bundle.request.case_id != state.case_id
+            || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
+            || !input::verified_conversation_input(bundle)?
+        {
+            return Err(failure(
+                "CONVERSATION_SOURCE_INVALID",
+                "元の発話とその意味を照合できません。",
+            ));
+        }
+        let (opening, reply) = match &bundle.meaning.intent {
+            Intent::OpenConversationTopic { topic } => {
+                (ConversationOpening::from_input(bundle, topic)?, None)
+            }
+            Intent::RespondOnConversationTopic { remark } => {
+                let invalid = || {
+                    failure(
+                        "CONVERSATION_CONTEXT_INVALID",
+                        "同じ会話の確定した話題を確認できません。",
+                    )
+                };
+                let prior = bundle
+                    .meaning
+                    .context_result_ref
+                    .as_ref()
+                    .and_then(|id| state.prior_results.get(id))
+                    .ok_or_else(invalid)?;
+                let matches_context = if let Some(reference) = bundle.request.context_ref.as_ref() {
+                    reference == &prior.id
+                } else {
+                    store.input_start_predecessor(state)?.as_ref() == Some(prior)
+                };
+                if !matches_context || bundle.context_sha256 != identity(&Some(prior))? {
+                    return Err(invalid());
+                }
+                let prior_bundle =
+                    registered_conversation_input(store, state, prior)?.ok_or_else(invalid)?;
+                let opening = retained_conversation_opening(store, state, prior, &prior_bundle)?;
+                (
+                    opening,
+                    Some(ConversationReply {
+                        prior_id: prior.id.clone(),
+                        remark: remark.clone(),
+                        focus: ConversationFocus::from_remark(&remark.text),
+                    }),
+                )
+            }
+            _ => {
+                return Err(failure(
+                    "CONVERSATION_SOURCE_INVALID",
+                    "話題に対応する発話がありません。",
+                ));
+            }
+        };
+        Ok(Self {
+            source_bundle: bundle.fingerprint.clone(),
+            opening,
+            reply,
+        })
+    }
+
+    fn dependencies(&self) -> Vec<String> {
+        let Some(reply) = &self.reply else {
+            return Vec::new();
+        };
+        let mut ids = vec![reply.prior_id.clone()];
+        if reply.prior_id != self.opening.result_id {
+            ids.push(self.opening.result_id.clone());
+        }
+        ids
+    }
+
+    fn generation_request(&self, budget: usize) -> Result<language::MeaningGenerationRequest> {
+        use language::{
+            MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle,
+            MeaningGrammarFragment::{ExactField, Literal},
+            MeaningGrammarUnit, MeaningRole,
+        };
+
+        let mut fragments = vec![
+            Literal {
+                value: "「".into()
+            },
+            ExactField {
+                value: self.opening.topic.text.clone(),
+            },
+        ];
+        if let Some(reply) = self.reply.as_ref() {
+            fragments.extend([
+                Literal {
+                    value: "」の話で「".into(),
+                },
+                ExactField {
+                    value: reply.remark.text.clone(),
+                },
+                Literal {
+                    value: "」と聞きました。".into(),
+                },
+                grammar_choice("reply_intro", &["ここから、", "もう少し具体的に、"]),
+                Literal {
+                    value: reply.focus.question().into(),
+                },
+            ]);
+        } else {
+            fragments.extend([
+                Literal {
+                    value: "」の話をしましょう。".into(),
+                },
+                grammar_choice("topic_intro", &["まず、", "よければ、"]),
+                Literal {
+                    value: "気になったきっかけや、話したいことを聞かせてください。".into(),
+                },
+            ]);
+        }
+        Ok(language::MeaningGenerationRequest {
+            purpose: MeaningCompositionPurpose::ShortComposition,
+            format: MeaningCompositionFormat::Paragraph,
+            style: MeaningCompositionStyle::Neutral,
+            units: vec![MeaningGrammarUnit {
+                id: "conversation_turn".into(),
+                role: MeaningRole::Body,
+                semantic_sha256: identity(&(GENERATED_CONVERSATION_KIND, self))?,
+                evidence_ids: self.dependencies(),
+                dependencies: Vec::new(),
+                fragments,
+            }],
+            max_output_bytes: budget.min(language::MAX_EXACT_FIELD_GENERATION_BYTES),
+            max_tokens: language::MAX_EXACT_FIELD_GENERATION_TOKENS,
+        })
+    }
+}
+
+pub(crate) fn verify_conversation_computation(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let invalid = || {
+        failure(
+            "RECOVERY_CONVERSATION_MISMATCH",
+            "元の話題と発話から保存内容を再現できません。",
+        )
+    };
+    let bundle = state.bundle.as_ref().ok_or_else(invalid)?;
+    let meaning_plan = ConversationMeaningPlan::resolve(store, state, bundle)?;
+    let dependencies = meaning_plan.dependencies();
+    if result.id != identity(&bundle.request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != dependencies
+    {
+        return Err(invalid());
+    }
+    let grammar = meaning_plan.generation_request(bundle.request.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning(&grammar)?;
+    validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    if result.text != replay.report.text {
+        return Err(invalid());
+    }
+    let artifact = GeneratedConversationArtifact {
+        kind: GENERATED_CONVERSATION_KIND.into(),
+        meaning_plan,
+        content_generation: replay.report,
+    };
+    let compute_ref = digest(&canonical(&artifact)?);
+    validate_generated_content_plan_adoption(
+        result,
+        &artifact.content_generation,
+        &replay.emission,
+        &dependencies,
+        &compute_ref,
+        &bundle.request.locale,
+        plan,
+    )?;
+    store.get_bytes(&state.actor_id, &state.case_id, &compute_ref)?;
+    verify_generated_model_artifacts(store, &state.actor_id, &state.case_id, plan)?;
     Ok(compute_ref)
 }
 
@@ -6029,6 +6435,17 @@ impl Engine {
         let mut explicit_summary_question_scope = None;
         let sealed = sealed.and_then(|bundle| {
             if has_compute_budget
+                && matches!(bundle.meaning.intent, Intent::Unknown { .. })
+                && let Some(prior) = previous
+                && registered_conversation_input(&self.store, &state, prior)?.is_some()
+            {
+                return input::seal_with_source_context(
+                    &request,
+                    previous,
+                    Some(input::SourceContext::ConversationTopic),
+                );
+            }
+            if has_compute_budget
                 && matches!(bundle.meaning.intent, Intent::AskPreviousRelation { .. })
                 && let Some(prior) = previous
                 && previous_assertion_context(
@@ -7613,6 +8030,7 @@ impl Engine {
         let mut content_generation = None;
         let mut generation_proof_ids = None;
         let mut calculation_meaning_plan = None;
+        let mut conversation_meaning_plan = None;
         let mut applied_rule_adaptation = None;
         let mut generation_model = None;
         let mut generation_emission = None;
@@ -12778,6 +13196,69 @@ impl Engine {
                 result.dependencies.push(condition.id);
                 result.guarantee = Guarantee::UserPremise;
             }
+            Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
+                let meaning_plan =
+                    match ConversationMeaningPlan::resolve(&self.store, &state, &bundle) {
+                        Ok(plan) => plan,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                let dependencies = meaning_plan.dependencies();
+                let grammar = meaning_plan.generation_request(goal.budget.max_evidence_bytes)?;
+                let deadline = started
+                    .checked_add(Duration::from_millis(goal.budget.deadline_ms))
+                    .ok_or_else(|| {
+                        failure(
+                            "INVALID_DEADLINE",
+                            "execution deadline overflows this clock",
+                        )
+                    })?;
+                let mut generation = match language::generate_semantic_meaning_with_rules_until(
+                    &grammar,
+                    &[],
+                    deadline,
+                ) {
+                    Ok(generation) => generation,
+                    Err(error) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            "LANGUAGE_RESOURCE_OR_COVERAGE",
+                            &error.to_string(),
+                        );
+                    }
+                };
+                if let Err(error) =
+                    validate_meaning_generation(&grammar, &dependencies, &generation.report)
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "CONTENT_PLAN_INVALID",
+                        &error.to_string(),
+                    );
+                }
+                generation.report.model_artifact_ref = Some(self.store.put_artifact(
+                    actor,
+                    &request.case_id,
+                    &generation.model,
+                )?);
+                units.extend(generation.report.units.iter().map(|unit| unit.text.clone()));
+                result.guarantee = Guarantee::Computed;
+                result.dependencies = dependencies;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: CONVERSATION_PREDICATE,
+                    guarantee: Guarantee::Computed,
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+                conversation_meaning_plan = Some(meaning_plan);
+                content_generation = Some(generation.report);
+                generation_model = Some(generation.model);
+                generation_emission = Some(generation.emission);
+            }
             Intent::Greet { salutation } => {
                 units.push(format!("{salutation}。ミニドラです。"));
                 units.push(
@@ -12830,6 +13311,18 @@ impl Engine {
         }
         state.result = Some(result.clone());
         let compute_artifact = if let (Some(meaning_plan), Some(content_generation)) =
+            (conversation_meaning_plan, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &GeneratedConversationArtifact {
+                    kind: GENERATED_CONVERSATION_KIND.into(),
+                    meaning_plan,
+                    content_generation: content_generation.clone(),
+                },
+            )?
+        } else if let (Some(meaning_plan), Some(content_generation)) =
             (&calculation_meaning_plan, &content_generation)
         {
             self.store.put_artifact(

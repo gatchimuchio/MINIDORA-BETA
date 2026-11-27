@@ -70,7 +70,7 @@ impl Engine {
             capabilities: vec![
                 EngineCapability {
                     id: "japanese-dialogue",
-                    scope: "日本語の挨拶、ミニドラ自身についての質問、関係の質問、比較、説明、追問、訂正を同じCoreで処理します。",
+                    scope: "日本語の挨拶、指定した話題での短い会話と追問、ミニドラ自身についての質問、関係の質問、比較、説明、訂正を同じCoreで処理します。",
                     permission: None,
                     limits: "入力形式は実装済みの文型に限られ、不明な依頼は保留します。",
                 },

@@ -7244,6 +7244,78 @@ fn ordinary_question_lists_direct_and_derived_relations_with_provenance_after_re
 }
 
 #[test]
+fn short_conversation_preserves_the_sealed_topic_across_normal_turns() {
+    let scratch = Scratch::new();
+    let run = |args: &[&str]| record(&execute(&scratch.0, "owner", args));
+
+    let opener = run(&["--input", "topic", "編み物の話をしよう"]);
+    assert_eq!(opener["lifecycle"], "COMMIT", "{opener}");
+    assert!(opener["text"].as_str().unwrap().contains("編み物"));
+    let opener_id = opener["id"].as_str().unwrap();
+
+    let reply = run(&["--input", "reply", "緑のマフラーを編みました"]);
+    assert_eq!(reply["lifecycle"], "COMMIT", "{reply}");
+    assert!(reply["text"].as_str().unwrap().contains("編み物"));
+    assert!(reply["text"].as_str().unwrap().contains("緑のマフラー"));
+    assert!(
+        reply["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&opener["id"])
+    );
+
+    let continuation = run(&["--input", "next", "小さな飾りも編みました"]);
+    assert_eq!(continuation["lifecycle"], "COMMIT", "{continuation}");
+    assert!(continuation["text"].as_str().unwrap().contains("編み物"));
+    assert!(
+        continuation["text"]
+            .as_str()
+            .unwrap()
+            .contains("小さな飾り")
+    );
+
+    let arithmetic = run(&["--input", "math", "17*23"]);
+    assert_eq!(arithmetic["lifecycle"], "COMMIT", "{arithmetic}");
+    assert!(arithmetic["text"].as_str().unwrap().contains("391"));
+    let explicit = run(&[
+        "--input",
+        "explicit",
+        "--context",
+        opener_id,
+        "その話だけど、青い帽子も編みました",
+    ]);
+    assert_eq!(explicit["lifecycle"], "COMMIT", "{explicit}");
+    assert!(explicit["text"].as_str().unwrap().contains("編み物"));
+    assert!(explicit["text"].as_str().unwrap().contains("青い帽子"));
+    assert!(
+        explicit["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&opener["id"])
+    );
+
+    let outsider = execute(
+        &scratch.0,
+        "outsider",
+        &[
+            "--input",
+            "foreign",
+            "--context",
+            opener_id,
+            "その話だけど、帽子を編みました",
+        ],
+    );
+    assert_eq!(outsider.status.code(), Some(3));
+    let outsider: Value = serde_json::from_slice(&outsider.stdout).unwrap();
+    assert_eq!(outsider["lifecycle"], "REJECT", "{outsider}");
+    assert!(!outsider["text"].as_str().unwrap().contains("編み物"));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let memory = store.load_memory("owner").unwrap();
+    assert!(memory.facts.is_empty() && memory.rules.is_empty());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
 fn natural_subject_question_finds_a_subject_bound_from_a_premise_object() {
     let scratch = Scratch::new();
     let fact = record(&execute(
