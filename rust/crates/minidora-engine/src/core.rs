@@ -3860,6 +3860,104 @@ fn original_message_plan(
     }
 }
 
+fn initial_translation_plan(
+    bundle: &InputBundle,
+    request: &minidora_domain::TranslationRequest,
+) -> Result<crate::translation::TranslationMeaningPlan> {
+    crate::translation::TranslationMeaningPlan::from_request(
+        request.clone(),
+        bundle.fingerprint.clone(),
+        None,
+    )
+}
+
+fn generate_verified_meaning(
+    grammar: &language::MeaningGenerationRequest,
+    dependencies: &[String],
+    deadline: Instant,
+) -> Result<language::MeaningGenerationOutput> {
+    let generation =
+        language::generate_semantic_meaning_until(grammar, deadline).map_err(|error| {
+            if matches!(&error, Error::Contract { code, .. } if code == "MODEL_DEADLINE") {
+                error
+            } else {
+                failure("LANGUAGE_RESOURCE_OR_COVERAGE", error.to_string())
+            }
+        })?;
+    validate_meaning_generation(grammar, dependencies, &generation.report)
+        .map_err(|error| failure("CONTENT_PLAN_INVALID", error.to_string()))?;
+    Ok(generation)
+}
+
+/// Compute a new draft or translation using the ordinary source plans without
+/// registering a child turn or creating a separate output action.
+pub(crate) fn observe_initial_text_generation(
+    bundle: &InputBundle,
+    deadline: Instant,
+) -> Result<Option<(String, Vec<u8>)>> {
+    use crate::{
+        translation::{GeneratedTranslationArtifact, TranslationMeaningPlan},
+        writing::{GeneratedMessageArtifact, MessageMeaningPlan},
+    };
+    enum Plan {
+        Message(MessageMeaningPlan),
+        Translation(TranslationMeaningPlan),
+    }
+
+    let source_invalid = || {
+        failure(
+            "BRANCH_INPUT_UNVERIFIED",
+            "The drafted or translated item does not match its isolated input.",
+        )
+    };
+    let request = &bundle.request;
+    if request.context_ref.is_some()
+        || bundle.meaning.context_result_ref.is_some()
+        || request.output_path.is_some()
+        || request.permissions != Default::default()
+        || !request.attachments.is_empty()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+    {
+        return Err(source_invalid());
+    }
+    let plan = match &bundle.meaning.intent {
+        Intent::DraftMessage { draft } if input::verified_message_input(bundle)? => {
+            Plan::Message(original_message_plan(bundle, draft))
+        }
+        Intent::TranslateText { request } if input::verified_translation_input(bundle)? => {
+            Plan::Translation(initial_translation_plan(bundle, request)?)
+        }
+        Intent::DraftMessage { .. } | Intent::TranslateText { .. } => {
+            return Err(source_invalid());
+        }
+        _ => return Ok(None),
+    };
+    let budget = request.budget.max_evidence_bytes;
+    let (dependencies, grammar) = match &plan {
+        Plan::Message(meaning) => (meaning.dependencies(), meaning.grammar(budget)?),
+        Plan::Translation(meaning) => (meaning.dependencies(), meaning.grammar(budget)?),
+    };
+    let generation = generate_verified_meaning(&grammar, &dependencies, deadline)?;
+    let text = generation.report.text.clone();
+    // The item retains its report in the parent observation. Replaying its
+    // grammar rebuilds the transient model without a separate stored effect.
+    let proof = match plan {
+        Plan::Message(meaning) => {
+            meaning.verify_surface(&text)?;
+            canonical(&GeneratedMessageArtifact::new(meaning, generation.report))?
+        }
+        Plan::Translation(meaning) => {
+            meaning.verify_surface(&text)?;
+            canonical(&GeneratedTranslationArtifact::new(
+                meaning,
+                generation.report,
+            ))?
+        }
+    };
+    Ok(Some((text, proof)))
+}
+
 fn apply_message_revision(
     input: &InputBundle,
     mut plan: crate::writing::MessageMeaningPlan,
@@ -4364,11 +4462,7 @@ fn resolve_translation_plan(
         ));
     }
     if let Intent::TranslateText { request } = &bundle.meaning.intent {
-        return TranslationMeaningPlan::from_request(
-            request.clone(),
-            bundle.fingerprint.clone(),
-            None,
-        );
+        return initial_translation_plan(bundle, request);
     }
     let budget = &bundle.request.budget;
     let mut remaining = generated_history_allowance(&bundle.request);
@@ -4403,11 +4497,7 @@ fn resolve_translation_plan(
             before = committed.revision;
             match &input.meaning.intent {
                 Intent::TranslateText { request } => {
-                    let original = TranslationMeaningPlan::from_request(
-                        request.clone(),
-                        input.fingerprint.clone(),
-                        None,
-                    )?;
+                    let original = initial_translation_plan(&input, request)?;
                     ancestors.push((input, parent));
                     break original;
                 }
@@ -11800,12 +11890,18 @@ impl Engine {
                     })
                     .ok_or_else(|| compound_explanation_context_unavailable(english))
                     .and_then(|(prior, parent)| {
+                        let deadline = started
+                            .checked_add(Duration::from_millis(goal.budget.deadline_ms))
+                            .ok_or_else(|| {
+                                failure("INVALID_DEADLINE", "Invalid request deadline.")
+                            })?;
                         crate::composition::explain_previous(
                             &self.store,
                             parent,
                             prior,
                             compound_explanation_item,
                             english,
+                            deadline,
                         )
                     });
                 let explanation = match explanation {
@@ -17979,13 +18075,14 @@ impl Engine {
                     conversation_meaning_plan = Some(plan);
                     (dependencies, grammar, CONVERSATION_PREDICATE)
                 };
-                let mut generation = match language::generate_semantic_meaning_with_rules_until(
+                let mut generation = match generate_verified_meaning(
                     &grammar,
-                    &[],
+                    &dependencies,
                     deadline,
                 ) {
                     Ok(generation) => generation,
-                    Err(error) => {
+                    Err(error) if matches!(&error, Error::Contract { code, .. } if code == "MODEL_DEADLINE") =>
+                    {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
@@ -17993,17 +18090,11 @@ impl Engine {
                             &error.to_string(),
                         );
                     }
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
                 };
-                if let Err(error) =
-                    validate_meaning_generation(&grammar, &dependencies, &generation.report)
-                {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "CONTENT_PLAN_INVALID",
-                        &error.to_string(),
-                    );
-                }
                 generation.report.model_artifact_ref = Some(self.store.put_artifact(
                     actor,
                     &request.case_id,

@@ -1691,13 +1691,16 @@ pub(crate) fn seal_with_source_context(
     if let Some(bundle) = attached_independent_input(request)? {
         return Ok(bundle);
     }
+    if let Some(bundle) = generated_independent_input(request)? {
+        return Ok(bundle);
+    }
     if let Some(bundle) = bilingual_statistics_independent_input(request)? {
         return Ok(bundle);
     }
     if let Some(bundle) = english_message_input(request, previous)? {
         return Ok(bundle);
     }
-    if bilingual_statistics_text_scope(request)
+    if bilingual_text_scope(request)
         && let Some((intent, roles)) = bilingual_statistics_goal(
             &request.text,
             crate::core::supports_english_output_locale(&request.locale),
@@ -9425,10 +9428,150 @@ pub(crate) fn parse_independent_requests(text: &str) -> Result<Option<Intent>> {
     crate::composition::parse(text, interpret_single)
 }
 
+/// Seal a generation-only item exactly as an ordinary request would be sealed.
+fn generated_leaf_input(request: &RequestEnvelope, text: &str) -> Result<Option<InputBundle>> {
+    let Some(first) = text.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        return Ok(None);
+    };
+    // A leaf cannot trigger another independent list.
+    if first.starts_with("- ")
+        || matches!(first, "別々の依頼:" | "別々の依頼：")
+        || first.eq_ignore_ascii_case("Independent requests:")
+    {
+        return Ok(None);
+    }
+    let request = RequestEnvelope {
+        text: text.into(),
+        output_path: None,
+        context_ref: None,
+        permissions: Permissions::default(),
+        attachments: Vec::new(),
+        speech: None,
+        purpose: None,
+        ..request.clone()
+    };
+    let leaf = seal(&request, None)?;
+    let verified = match &leaf.meaning.intent {
+        Intent::DraftMessage { .. } => verified_message_input(&leaf)?,
+        Intent::TranslateText { .. } => verified_translation_input(&leaf)?,
+        _ => false,
+    };
+    Ok(verified.then_some(leaf))
+}
+
+pub(crate) fn generated_independent_leaf(
+    request: &RequestEnvelope,
+    item: &IndependentRequest,
+) -> Result<Option<InputBundle>> {
+    let source = &item.source;
+    if !bilingual_text_scope(request)
+        || !matches!(
+            item.intent.as_ref(),
+            Intent::DraftMessage { .. } | Intent::TranslateText { .. }
+        )
+        || request.text.get(source.start..source.end) != Some(source.text.as_str())
+    {
+        return Ok(None);
+    }
+    Ok(generated_leaf_input(request, &source.text)?
+        .filter(|leaf| &leaf.meaning.intent == item.intent.as_ref()))
+}
+
+pub(crate) fn generated_independent_input(
+    request: &RequestEnvelope,
+) -> Result<Option<InputBundle>> {
+    if !bilingual_text_scope(request) {
+        return Ok(None);
+    }
+    let english_output = crate::core::supports_english_output_locale(&request.locale);
+    let Some(intent @ Intent::IndependentRequests { .. }) =
+        crate::composition::parse(&request.text, |item| {
+            if let Some(leaf) = generated_leaf_input(request, item)? {
+                return Ok(leaf.meaning.intent);
+            }
+            if let Some((intent, _)) = bilingual_statistics_goal(item, english_output)? {
+                return Ok(intent);
+            }
+            interpret_single(item)
+        })?
+    else {
+        return Ok(None);
+    };
+    let Intent::IndependentRequests { items } = &intent else {
+        unreachable!("independent request list above");
+    };
+    let mut roles = source_role_spans(&request.text, &intent)?;
+    let mut has_generation = false;
+    for (index, item) in items.iter().enumerate() {
+        let source_roles = if let Some(leaf) = generated_independent_leaf(request, item)? {
+            has_generation = true;
+            leaf.meaning.source_roles
+        } else if matches!(item.intent.as_ref(), Intent::DescribeStatistics { .. })
+            && let Some((_, source_roles)) =
+                bilingual_statistics_goal(&item.source.text, english_output)?
+                    .filter(|(candidate, _)| candidate == item.intent.as_ref())
+        {
+            source_roles
+        } else {
+            continue;
+        };
+        anchor_independent_roles(&request.text, index, item, source_roles, &mut roles)?;
+    }
+    if !has_generation {
+        return Ok(None);
+    }
+    validate_user_seal_request(request, None)?;
+    seal_user_input(
+        request,
+        None,
+        crate::composition::GENERATED_PARSER_VERSION,
+        intent,
+        roles,
+        Vec::new(),
+    )
+    .map(Some)
+}
+
+fn anchor_independent_roles(
+    text: &str,
+    index: usize,
+    item: &IndependentRequest,
+    source_roles: BTreeMap<String, Vec<SourceSpan>>,
+    roles: &mut BTreeMap<String, Vec<SourceSpan>>,
+) -> Result<()> {
+    for (role, spans) in source_roles {
+        let anchored = spans
+            .into_iter()
+            .map(|span| {
+                if item.source.text.get(span.start..span.end) == Some(span.text.as_str())
+                    && let Some(source) = source_span_at(
+                        text,
+                        item.source.start + span.start,
+                        item.source.start + span.end,
+                    )
+                    && source.text == span.text
+                {
+                    Ok(source)
+                } else {
+                    Err(failure(
+                        "COMPOUND_INPUT_MISMATCH",
+                        "項目の原文位置を照合できません。",
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        roles.insert(
+            format!("/IndependentRequests/items/{index}{role}"),
+            anchored,
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn bilingual_statistics_independent_input(
     request: &RequestEnvelope,
 ) -> Result<Option<InputBundle>> {
-    if !bilingual_statistics_text_scope(request) {
+    if !bilingual_text_scope(request) {
         return Ok(None);
     }
     let english_output = crate::core::supports_english_output_locale(&request.locale);
@@ -9457,29 +9600,7 @@ pub(crate) fn bilingual_statistics_independent_input(
             continue;
         };
         has_statistics = true;
-        for (role, spans) in source_roles {
-            let anchored = spans
-                .into_iter()
-                .map(|span| {
-                    source_span_at(
-                        &request.text,
-                        item.source.start + span.start,
-                        item.source.start + span.end,
-                    )
-                    .filter(|source| source.text == span.text)
-                    .ok_or_else(|| {
-                        failure(
-                            "STATISTICS_SOURCE_INVALID",
-                            "統計項目の原文位置を照合できません。",
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            roles.insert(
-                format!("/IndependentRequests/items/{index}{role}"),
-                anchored,
-            );
-        }
+        anchor_independent_roles(&request.text, index, item, source_roles, &mut roles)?;
     }
     if !has_statistics {
         return Ok(None);
@@ -11325,7 +11446,7 @@ pub(crate) fn verified_conversational_math_input(bundle: &InputBundle) -> Result
     let text = &bundle.request.text;
     let meaning = &bundle.meaning;
     match meaning.parser_version.as_str() {
-        BILINGUAL_STATISTICS_PARSER_VERSION => Ok(bilingual_statistics_text_scope(&bundle.request)
+        BILINGUAL_STATISTICS_PARSER_VERSION => Ok(bilingual_text_scope(&bundle.request)
             && meaning.context_result_ref.is_none()
             && meaning.unresolved.is_empty()
             && bilingual_statistics_goal(text, uses_english_statistics_output(bundle))?
@@ -11688,7 +11809,7 @@ fn natural_observation_statistics_intent(text: &str) -> Result<Option<Intent>> {
 // unrecognized directive never falls through to a numeric prefix.
 type StatisticsCandidate = (Intent, BTreeMap<String, Vec<SourceSpan>>);
 
-fn bilingual_statistics_text_scope(request: &RequestEnvelope) -> bool {
+fn bilingual_text_scope(request: &RequestEnvelope) -> bool {
     matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
         && request.attachments.is_empty()
         && request.context_ref.is_none()

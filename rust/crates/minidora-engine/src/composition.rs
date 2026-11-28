@@ -3,7 +3,10 @@ use crate::{
     attachment_analysis::AnalysisAction,
     composition_input,
     composition_source::{self, SourceObservation, SourceRequest},
-    core::{exact_calculation_unit, read_case_changed, supports_english_output_locale},
+    core::{
+        exact_calculation_unit, observe_initial_text_generation, read_case_changed,
+        supports_english_output_locale,
+    },
     input, language, math,
     news::{self, NewsAction},
     ports,
@@ -24,6 +27,7 @@ use std::{
 
 pub(crate) const PREDICATE: &str = "INDEPENDENT_REQUESTS_V1";
 pub(crate) const PARSER_VERSION: &str = "independent-request-list-v1";
+pub(crate) const GENERATED_PARSER_VERSION: &str = "generated-independent-request-list-v1";
 pub(crate) const BILINGUAL_STATISTICS_PARSER_VERSION: &str =
     "bilingual-statistics-independent-request-list-v1";
 pub(crate) const ATTACHED_PARSER_VERSION: &str = "attached-independent-request-list-v1";
@@ -183,13 +187,53 @@ enum Branch {
     Blocked(&'static str),
 }
 
+fn initial_text_generation_item(item: &IndependentRequest) -> bool {
+    matches!(
+        item.intent.as_ref(),
+        Intent::DraftMessage { .. } | Intent::TranslateText { .. }
+    )
+}
+
+fn observe_generated_item(
+    bundle: &InputBundle,
+    item: &IndependentRequest,
+    deadline: Instant,
+) -> Result<Option<Value>> {
+    let Some(leaf) = input::generated_independent_leaf(&bundle.request, item)? else {
+        return Ok(None);
+    };
+    Ok(
+        observe_initial_text_generation(&leaf, deadline)?.map(|(text, bytes)| Value {
+            guarantee: Guarantee::Computed,
+            units: vec![text],
+            bytes,
+            quantities: BTreeMap::new(),
+        }),
+    )
+}
+
 fn evaluate(
     item: &IndependentRequest,
     bundle: &InputBundle,
     english: bool,
+    deadline: Option<Instant>,
     quantities: &BTreeMap<String, language::SequenceValue>,
     prerequisites: &BTreeMap<String, String>,
 ) -> Result<Branch> {
+    if generated_items_enabled(bundle) && initial_text_generation_item(item) {
+        let Some(end) = deadline else {
+            return Ok(Branch::Blocked("BRANCH_TIME_BUDGET"));
+        };
+        return match observe_generated_item(bundle, item, end) {
+            Ok(Some(value)) => Ok(Branch::Value(value)),
+            Ok(None) => Ok(Branch::Blocked("BRANCH_INPUT_UNVERIFIED")),
+            Err(Error::Contract { code, .. }) if code == "MODEL_DEADLINE" => {
+                Ok(Branch::Blocked("BRANCH_TIME_BUDGET"))
+            }
+            Err(Error::Contract { .. }) => Ok(Branch::Blocked("BRANCH_GENERATION_UNAVAILABLE")),
+            Err(error) => Err(error),
+        };
+    }
     if let Some(action) = language::CalculationAction::bind(&item.intent) {
         let observed = match action.observe(quantities, prerequisites) {
             Ok(value) => value,
@@ -369,8 +413,15 @@ pub(crate) fn live_read_count(bundle: &InputBundle, items: &[IndependentRequest]
         .count()
 }
 
+fn generated_items_enabled(bundle: &InputBundle) -> bool {
+    bundle.meaning.parser_version == GENERATED_PARSER_VERSION
+}
+
 fn bilingual_statistics_enabled(bundle: &InputBundle) -> bool {
-    bundle.meaning.parser_version == BILINGUAL_STATISTICS_PARSER_VERSION
+    matches!(
+        bundle.meaning.parser_version.as_str(),
+        BILINGUAL_STATISTICS_PARSER_VERSION | GENERATED_PARSER_VERSION
+    )
 }
 
 fn news_items_enabled(bundle: &InputBundle) -> bool {
@@ -414,6 +465,9 @@ fn delivery_items(bundle: &InputBundle) -> Result<&[IndependentRequest]> {
         }
         BILINGUAL_STATISTICS_PARSER_VERSION => {
             input::bilingual_statistics_independent_input(request)?.as_ref() == Some(bundle)
+        }
+        GENERATED_PARSER_VERSION => {
+            input::generated_independent_input(request)?.as_ref() == Some(bundle)
         }
         ATTACHED_PARSER_VERSION => {
             input::validate_request_attachments(request)?;
@@ -617,7 +671,7 @@ pub(crate) fn evaluate_items(
                 None => Ok(Branch::Blocked("BRANCH_REFERENCE_SOURCE_UNAVAILABLE")),
             }
         } else {
-            evaluate(item, bundle, english, &quantities, &prerequisites)
+            evaluate(item, bundle, english, deadline, &quantities, &prerequisites)
         };
         let (state, reason, value) = match evaluated {
             Ok(Branch::Value(value)) => (BranchState::Confirmed, None, Some(value)),
@@ -791,6 +845,12 @@ fn branch_status(english: bool, state: BranchState, reason: Option<&str>) -> &'s
         (true, _, Some("BRANCH_LOCALE_UNAVAILABLE")) => {
             "English output is unavailable for this item."
         }
+        (true, _, Some("BRANCH_GENERATION_UNAVAILABLE")) => {
+            "The item could not generate a verified text result."
+        }
+        (false, _, Some("BRANCH_GENERATION_UNAVAILABLE")) => {
+            "この項目では照合済みの文面を作成できませんでした。"
+        }
         (false, _, Some("BRANCH_AUDIENCE_UNRESOLVED")) => {
             "指定された読者向けの説明は保留しました。"
         }
@@ -893,6 +953,7 @@ pub(crate) fn explain_previous(
     prior: &ResultRecord,
     selection: Option<usize>,
     english: bool,
+    current_deadline: Instant,
 ) -> Result<PreviousExplanation> {
     let items = delivery_items(parent)?;
     let request = &parent.request;
@@ -1006,6 +1067,33 @@ pub(crate) fn explain_previous(
         {
             return Err(invalid());
         }
+        if generated_items_enabled(parent)
+            && initial_text_generation_item(item)
+            && selection.is_none_or(|number| number == index + 1)
+            && let Some(value) = &saved.value
+        {
+            let reproduced = observe_generated_item(parent, item, deadline.min(current_deadline))
+                .map_err(|error| match error {
+                    Error::Contract { code, .. } if code == "MODEL_DEADLINE" => failure(
+                        "BRANCH_TIME_BUDGET",
+                        if english {
+                            "The time budget expired while verifying the saved item."
+                        } else {
+                            "項目の記録を照合するための時間が足りませんでした。"
+                        },
+                    ),
+                    error => error,
+                })?
+                .ok_or_else(invalid)?;
+            if saved.state != BranchState::Confirmed
+                || saved.evidence_ref.is_some()
+                || value.guarantee != reproduced.guarantee
+                || value.units != reproduced.units
+                || value.bytes != reproduced.bytes
+            {
+                return Err(invalid());
+            }
+        }
         if bilingual_statistics_enabled(parent)
             && matches!(&*item.intent, Intent::DescribeStatistics { .. })
             && let Some(value) = &saved.value
@@ -1014,6 +1102,7 @@ pub(crate) fn explain_previous(
                 item,
                 parent,
                 parent_english,
+                Some(deadline),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
             )?;
@@ -1447,7 +1536,7 @@ pub(crate) fn verify_delivery(
         bundle,
         items,
         &mut graph,
-        (!request.attachments.is_empty())
+        (!request.attachments.is_empty() || generated_items_enabled(bundle))
             .then(|| Instant::now() + Duration::from_millis(request.budget.deadline_ms)),
         |index, source| {
             let branch = &result.branch_outcomes[index];
@@ -1671,8 +1760,9 @@ mod tests {
             .unwrap()
             .bundle
             .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
         let explanation =
-            explain_previous(&engine.store, &parent, &original, Some(2), true).unwrap();
+            explain_previous(&engine.store, &parent, &original, Some(2), true, deadline).unwrap();
         assert!(
             explanation
                 .units
@@ -1688,10 +1778,20 @@ mod tests {
         let mut substituted = original.clone();
         substituted.branch_outcomes[1].artifact_ref =
             original.branch_outcomes[0].artifact_ref.clone();
-        assert!(explain_previous(&engine.store, &parent, &substituted, Some(2), true).is_err());
+        assert!(
+            explain_previous(
+                &engine.store,
+                &parent,
+                &substituted,
+                Some(2),
+                true,
+                deadline
+            )
+            .is_err()
+        );
 
         let mut changed = original;
         changed.text.push('!');
-        assert!(explain_previous(&engine.store, &parent, &changed, None, false).is_err());
+        assert!(explain_previous(&engine.store, &parent, &changed, None, false, deadline).is_err());
     }
 }
