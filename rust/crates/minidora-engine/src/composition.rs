@@ -1,16 +1,17 @@
 //! Planning and observation for bounded lists of requests within one Goal.
 use crate::{
-    composition_input,
-    core::{exact_calculation_unit, supports_english_output_locale},
-    input, language, math,
+    composition_input, composition_source,
+    core::{exact_calculation_unit, read_case_changed, supports_english_output_locale},
+    input, language, math, ports,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
     store::Store,
 };
 use minidora_domain::{
-    BranchOutcome, BranchState, Error, ExplanationAudience, ExplanationRequest, Guarantee,
-    IndependentRequest, InputBundle, Intent, Result, SourceSpan, canonical, failure,
+    BranchOutcome, BranchState, Error, EvidencePacket, ExplanationAudience, ExplanationRequest,
+    Guarantee, IndependentRequest, InputBundle, Intent, Result, ResultRecord, SourceSpan,
+    canonical, digest, failure, identity,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
@@ -122,6 +123,7 @@ fn is_reference_input_stop(code: &str) -> bool {
 fn prerequisite_ids(item: &IndependentRequest) -> &[String] {
     match item.intent.as_ref() {
         Intent::CalculateFromRequestItems { requires, .. } => requires,
+        Intent::SelectRequestJsonNumber { source, .. } => std::slice::from_ref(source),
         _ => &[],
     }
 }
@@ -129,7 +131,11 @@ fn prerequisite_ids(item: &IndependentRequest) -> &[String] {
 pub(crate) fn nodes(items: &[IndependentRequest]) -> impl Iterator<Item = GoalNode> {
     items.iter().enumerate().map(|(index, item)| GoalNode {
         id: node_id(index),
-        kind: GoalNodeKind::CoreResult,
+        kind: if composition_source::read_url(item).is_some() {
+            GoalNodeKind::Evidence
+        } else {
+            GoalNodeKind::CoreResult
+        },
         requires: prerequisite_ids(item).to_vec(),
     })
 }
@@ -150,6 +156,8 @@ struct Observation<'a> {
     source_range: (usize, usize),
     state: BranchState,
     reason_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_ref: Option<&'a str>,
     value: Option<Value>,
 }
 
@@ -277,11 +285,21 @@ fn evaluate(
 
 pub(crate) struct Outcome {
     pub(crate) branches: Vec<BranchOutcome>,
+    pub(crate) retry_evidence: Vec<EvidencePacket>,
     pub(crate) units: Vec<String>,
     pub(crate) guarantee: Guarantee,
 }
 
 impl Outcome {
+    pub(crate) fn new() -> Self {
+        Self {
+            branches: Vec::new(),
+            retry_evidence: Vec::new(),
+            units: Vec::new(),
+            guarantee: Guarantee::Unknown,
+        }
+    }
+
     pub(crate) fn complete(&self) -> bool {
         self.branches
             .iter()
@@ -294,7 +312,10 @@ pub(crate) fn produce(
     bundle: &InputBundle,
     graph: &mut Scheduler,
     started: Instant,
-) -> Result<Outcome> {
+    retrieval: Option<Result<ports::RetrievalBudget>>,
+    admit: &dyn Fn() -> Result<()>,
+    output: &mut Outcome,
+) -> Result<()> {
     let request = &bundle.request;
     let Intent::IndependentRequests { items } = &bundle.meaning.intent else {
         return Err(failure(
@@ -336,11 +357,13 @@ pub(crate) fn produce(
     let compute_limit = Duration::from_millis(request.budget.deadline_ms - render_reserve);
     // The remaining half covers the shared plan/render and their retained bytes.
     let mut evidence_remaining = request.budget.max_evidence_bytes / 2;
-    let mut output = Outcome {
-        branches: Vec::new(),
-        units: Vec::new(),
-        guarantee: Guarantee::Unknown,
-    };
+    let source_count = items
+        .iter()
+        .filter(|item| composition_source::read_url(item).is_some())
+        .count();
+    let mut reads =
+        composition_source::SourceReads::new(retrieval, &request.budget, source_count, admit)?;
+    let mut sources = BTreeMap::<String, String>::new();
     let mut quantities = BTreeMap::new();
     for (index, item) in items.iter().enumerate() {
         let id = node_id(index);
@@ -359,10 +382,66 @@ pub(crate) fn produce(
         let blocked_predecessor = output.branches.iter().any(|outcome| {
             prerequisites.contains_key(&outcome.node_id) && outcome.state != BranchState::Confirmed
         });
+        let mut evidence_ref = None;
+        let mut retry_evidence = None;
+        let available = evidence_remaining / (items.len() - index);
         let evaluated = if started.elapsed() >= compute_limit {
             Ok(Branch::Blocked("BRANCH_TIME_BUDGET"))
         } else if blocked_predecessor {
             Ok(Branch::Blocked("BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED"))
+        } else if let Some(uri) = composition_source::read_url(item) {
+            // The failed branch record must fit even if the read has no value.
+            if available < 512 {
+                Ok(Branch::Blocked("BRANCH_EVIDENCE_BUDGET"))
+            } else {
+                reads
+                    .observe(store, bundle, uri)
+                    .and_then(|(reference, packet)| {
+                        let value = if let Some(code) = &packet.failure {
+                            Err(failure(code, "The requested source was not obtained."))
+                        } else {
+                            let unit = if english {
+                                format!("Source retained: {}", packet.final_uri)
+                            } else {
+                                format!("本文を取得しました。出典は {} です。", packet.final_uri)
+                            };
+                            Ok(Branch::Value(Value {
+                                units: vec![unit],
+                                bytes: canonical(&(&packet.id, &packet.raw_sha256, &reference))?,
+                                quantities: BTreeMap::new(),
+                                guarantee: Guarantee::SourceReport,
+                            }))
+                        };
+                        evidence_ref = Some(reference);
+                        if packet.retry_after.is_some() {
+                            retry_evidence = Some(packet);
+                        }
+                        value
+                    })
+            }
+        } else if let Intent::SelectRequestJsonNumber { source, pointer } = item.intent.as_ref() {
+            match sources.get(source) {
+                Some(reference) => {
+                    composition_source::select_json_number(store, bundle, reference, pointer)
+                        .and_then(|selection| {
+                            let unit = if english {
+                                format!("JSON number at {pointer}: {}", selection.exact_value)
+                            } else {
+                                format!(
+                                    "JSONの {pointer} の数値は {} です。",
+                                    selection.exact_value
+                                )
+                            };
+                            Ok(Branch::Value(Value {
+                                units: vec![unit],
+                                bytes: canonical(&selection)?,
+                                quantities: BTreeMap::from([("", selection.exact_value)]),
+                                guarantee: Guarantee::SourceReport,
+                            }))
+                        })
+                }
+                None => Ok(Branch::Blocked("BRANCH_REFERENCE_SOURCE_UNAVAILABLE")),
+            }
         } else {
             evaluate(item, bundle, english, &quantities, &prerequisites)
         };
@@ -372,6 +451,10 @@ pub(crate) fn produce(
                 (BranchState::Blocked, Some(code.into()), Some(value))
             }
             Ok(Branch::Blocked(code)) => (BranchState::Blocked, Some(code.into()), None),
+            Err(error) if read_case_changed(&error) => return Err(error),
+            Err(Error::Contract { code, .. }) if code == ports::READ_PERMISSION_REQUIRED => {
+                (BranchState::Blocked, Some(code), None)
+            }
             Err(Error::Contract { code, .. }) => (BranchState::Failed, Some(code), None),
             Err(error) => return Err(error),
         };
@@ -381,12 +464,12 @@ pub(crate) fn produce(
             source_range: (item.source.start, item.source.end),
             state,
             reason_code: reason.as_deref(),
+            evidence_ref: evidence_ref.as_deref(),
             value,
         };
         let mut bytes = canonical(&observed)?;
         let mut units = display_units(&observed, index + 1, english);
         // Carry unused bytes forward while reserving room for later outcomes.
-        let available = evidence_remaining / (items.len() - index);
         if observed.value.is_some() && observation_size(&bytes, &units) > available {
             observed.state = BranchState::Blocked;
             observed.reason_code = Some("BRANCH_EVIDENCE_BUDGET");
@@ -408,8 +491,17 @@ pub(crate) fn produce(
             })?;
         let reference = store.put_bytes(&request.actor_id, &request.case_id, &bytes)?;
         graph.observe(&id, &reference, &prerequisites)?;
+        if observed.state == BranchState::Confirmed
+            && let Some(evidence) = observed.evidence_ref
+        {
+            sources.insert(id.clone(), evidence.to_owned());
+        }
         if let Some(value) = observed.value {
-            if output.guarantee == Guarantee::Unknown || value.guarantee == Guarantee::Hypothesis {
+            if output.guarantee == Guarantee::Unknown
+                || value.guarantee == Guarantee::Hypothesis
+                || (output.guarantee == Guarantee::Computed
+                    && value.guarantee == Guarantee::SourceReport)
+            {
                 output.guarantee = value.guarantee;
             }
             if observed.state == BranchState::Confirmed {
@@ -438,8 +530,11 @@ pub(crate) fn produce(
             reason_code,
             artifact_ref: reference,
         });
+        if let Some(packet) = retry_evidence {
+            output.retry_evidence.push(packet);
+        }
     }
-    Ok(output)
+    Ok(())
 }
 
 fn observation_size(bytes: &[u8], units: &[String]) -> usize {
@@ -491,10 +586,88 @@ fn display_units(observation: &Observation<'_>, number: usize, english: bool) ->
         (false, _, Some("BRANCH_REFERENCE_VALUE_UNAVAILABLE")) => {
             "参照先で指定の数値を利用できません。"
         }
+        (true, _, Some(ports::READ_PERMISSION_REQUIRED)) => {
+            "This source hostname is not authorized."
+        }
+        (false, _, Some(ports::READ_PERMISSION_REQUIRED)) => {
+            "この資料の接続先は許可されていません。"
+        }
+        (true, _, Some("BRANCH_REFERENCE_SOURCE_UNAVAILABLE")) => {
+            "The referenced item has no verified source body."
+        }
+        (false, _, Some("BRANCH_REFERENCE_SOURCE_UNAVAILABLE")) => {
+            "参照先に照合済みの本文がありません。"
+        }
         (true, BranchState::Failed, _) => "The operation failed.",
         (false, BranchState::Failed, _) => "処理に失敗しました。",
         (true, _, _) => "This item could not be completed.",
         (false, _, _) => "この項目は保留しました。",
     };
     vec![format!("{heading}　{status}")]
+}
+
+/// Confirm that a Retry-After arose from an authored fetch item and its
+/// retained observation before the Core restores the case's transport gate.
+pub(crate) fn verify_retry_source(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    packet: &EvidencePacket,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct RetainedObservation {
+        node_id: String,
+        input_fingerprint: String,
+        source_range: (usize, usize),
+        evidence_ref: Option<String>,
+    }
+    let invalid = || {
+        failure(
+            "RETRY_AFTER_SOURCE_INVALID",
+            "Saved Retry-After does not match an authored fetch item and its observation.",
+        )
+    };
+    let Intent::IndependentRequests { items } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    if identity(&bundle.request)? != result.id
+        || !result.evidence.contains(packet)
+        || packet.mode != "LIVE"
+        || packet.packet_kind != "FETCH_FAILURE"
+        || packet.provider_id != "https-direct-url-v1"
+        || packet.failure.is_none()
+        || packet.retry_after.is_none()
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || packet.id != ports::fetch_packet_identity(packet)?
+    {
+        return Err(invalid());
+    }
+    let request = &bundle.request;
+    let bytes = canonical(packet)?;
+    let reference = digest(&bytes);
+    for (index, item) in items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| composition_source::read_url(item) == Some(packet.request_uri.as_str()))
+    {
+        let Some(branch) = result.branch_outcomes.get(index) else {
+            continue;
+        };
+        let id = node_id(index);
+        if branch.node_id != id || !result.dependencies.contains(&branch.artifact_ref) {
+            continue;
+        }
+        let retained =
+            store.get_bytes(&request.actor_id, &request.case_id, &branch.artifact_ref)?;
+        let observed: RetainedObservation = serde_json::from_slice(&retained)?;
+        if observed.node_id == id
+            && observed.input_fingerprint == bundle.fingerprint
+            && observed.source_range == (item.source.start, item.source.end)
+            && observed.evidence_ref.as_deref() == Some(reference.as_str())
+            && store.get_bytes(&request.actor_id, &request.case_id, &reference)? == bytes
+        {
+            return ports::validate_observed_route(packet, &request.permissions);
+        }
+    }
+    Err(invalid())
 }

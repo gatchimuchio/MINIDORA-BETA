@@ -1,4 +1,4 @@
-//! Bounded calculation references inside a composed request.
+//! Bounded item references inside a composed request.
 use crate::input::{arithmetic_expression, calculation_step_references};
 use minidora_domain::{Intent, Result, failure};
 use regex::Regex;
@@ -39,6 +39,19 @@ static JAPANESE_OPERATION: LazyLock<Regex> = LazyLock::new(|| {
     ))
     .expect("Japanese arithmetic reference grammar is static")
 });
+static JAPANESE_JSON_NUMBER_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\A依頼\s*[0-9０-９]*\s*の\s*(?i:JSON)\s*「")
+        .expect("Japanese JSON-number prefix is static")
+});
+static JAPANESE_JSON_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\A依頼\s*([0-9０-９]*)\s*の\s*(?i:JSON)\s*「([^「」\r\n]*)」\s*の\s*数値を取り出して(?:ください|下さい)?。?\z",
+    )
+    .expect("Japanese JSON-number grammar is static")
+});
+static JSON_POINTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\A(?:/(?:[^~/\p{Cc}]|~[01])*)*\z").expect("JSON pointer grammar is static")
+});
 
 fn invalid_reference() -> minidora_domain::Error {
     failure(
@@ -75,6 +88,57 @@ fn prior_item(id: &str, item_index: usize) -> Result<String> {
         return Err(not_prior());
     }
     Ok(format!("request-{ordinal}"))
+}
+
+fn invalid_json_reference() -> minidora_domain::Error {
+    failure(
+        "BRANCH_REFERENCE_INVALID",
+        "先行項目とJSON Pointerを「json-number @{request-1} /value」の形式で指定してください。",
+    )
+}
+
+fn json_selection(source: &str, pointer: &str, item_index: usize) -> Result<Intent> {
+    let ordinal = source
+        .strip_prefix("request-")
+        .ok_or_else(invalid_json_reference)?;
+    if ordinal.contains('-') || !JSON_POINTER.is_match(pointer) {
+        return Err(invalid_json_reference());
+    }
+    Ok(Intent::SelectRequestJsonNumber {
+        source: prior_item(source, item_index)?,
+        pointer: pointer.to_owned(),
+    })
+}
+
+fn parse_json_number(text: &str, item_index: usize) -> Result<Option<Intent>> {
+    let mut tokens = text.split_whitespace();
+    if tokens
+        .next()
+        .is_some_and(|command| command.eq_ignore_ascii_case("json-number"))
+    {
+        let source = tokens
+            .next()
+            .and_then(|token| token.strip_prefix("@{"))
+            .and_then(|token| token.strip_suffix('}'))
+            .ok_or_else(invalid_json_reference)?;
+        let pointer = tokens.next().ok_or_else(invalid_json_reference)?;
+        if tokens.next().is_some() || text.contains(['\r', '\n']) {
+            return Err(invalid_json_reference());
+        }
+        let pointer = if pointer == "\"\"" { "" } else { pointer };
+        return json_selection(source, pointer, item_index).map(Some);
+    }
+    if !JAPANESE_JSON_NUMBER_PREFIX.is_match(text) {
+        return Ok(None);
+    }
+    if text.contains(['\r', '\n']) {
+        return Err(invalid_json_reference());
+    }
+    let parts = JAPANESE_JSON_NUMBER
+        .captures(text)
+        .ok_or_else(invalid_json_reference)?;
+    let ordinal: String = parts[1].nfkc().collect();
+    json_selection(&format!("request-{ordinal}"), &parts[2], item_index).map(Some)
 }
 
 fn japanese_operation(text: &str) -> Result<Option<String>> {
@@ -123,9 +187,12 @@ fn arithmetic_surface(text: &str) -> Option<&str> {
         .then_some(text)
 }
 
-/// Parse only a complete calculation item. Referring to an item does not grant
+/// Parse only a complete reference item. Referring to an item does not grant
 /// permission to reinterpret any text produced by that item as an instruction.
 pub(crate) fn parse(text: &str, item_index: usize) -> Result<Option<Intent>> {
+    if let Some(intent) = parse_json_number(text.trim(), item_index)? {
+        return Ok(Some(intent));
+    }
     if text.contains(['\r', '\n']) {
         return Ok(None);
     }

@@ -574,6 +574,7 @@ pub(crate) struct RetrievalBudget {
     remaining_bytes: usize,
     retry_not_before: BTreeMap<String, RetryGate>,
     observed_routes: BTreeSet<String>,
+    compact_failure_uri_limit: Option<usize>,
 }
 
 struct RetryGate {
@@ -592,7 +593,12 @@ impl RetrievalBudget {
             remaining_bytes: budget.max_evidence_bytes,
             retry_not_before: BTreeMap::new(),
             observed_routes: BTreeSet::new(),
+            compact_failure_uri_limit: None,
         })
+    }
+
+    pub(crate) fn bound_failure_metadata(&mut self, max_uri_bytes: usize) {
+        self.compact_failure_uri_limit = Some(max_uri_bytes);
     }
 
     pub(crate) fn standalone(budget: &ResourceBudget) -> Result<Self> {
@@ -805,6 +811,15 @@ fn fetch_packet(
     redirect_wait: &mut Option<String>,
 ) -> Result<EvidencePacket> {
     let mut url = approved_url(raw_url, permissions)?;
+    if budget
+        .compact_failure_uri_limit
+        .is_some_and(|limit| raw_url.len() > limit || url.as_str().len() > limit)
+    {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "The read budget cannot retain the requested route metadata.",
+        ));
+    }
     if budget.remaining_bytes == 0 {
         return Err(failure("RESOURCE_LIMIT", NO_REMAINING_EVIDENCE_BYTES));
     }
@@ -941,8 +956,14 @@ fn fetch_packet(
                 );
             };
             let target = match approved_url(target.as_str(), permissions) {
-                Ok(target) => target,
-                Err(_) => {
+                Ok(target)
+                    if !budget
+                        .compact_failure_uri_limit
+                        .is_some_and(|limit| target.as_str().len() > limit) =>
+                {
+                    target
+                }
+                _ => {
                     return packet(
                         &redirects,
                         raw_url,
@@ -994,9 +1015,9 @@ fn fetch_packet(
             }
             Ok(result)
         };
-        // A news failure uses the status and any Retry-After header. An
-        // error page is neither listing nor article evidence.
-        if news.is_some() && status != 200 {
+        // News and composed reads retain failure status and any Retry-After.
+        // Their evidence budget does not cover an unrelated error page.
+        if (news.is_some() || budget.compact_failure_uri_limit.is_some()) && status != 200 {
             let code = if status == 429 {
                 "HTTP_RATE_LIMITED"
             } else {

@@ -711,6 +711,10 @@ pub enum Intent {
         expression: String,
         requires: Vec<String>,
     },
+    SelectRequestJsonNumber {
+        source: String,
+        pointer: String,
+    },
     ConvertPreviousLength {
         unit: String,
     },

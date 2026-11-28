@@ -5837,6 +5837,50 @@ fn independent_items_keep_verified_results_when_another_item_cannot_run() {
 }
 
 #[test]
+fn composed_source_without_read_grant_preserves_the_independent_item() {
+    let scratch = Scratch::new();
+    math_chat(
+        &scratch.0,
+        "/paste\n- 取得 https://example.test/values.json\n- 依頼1のJSON「/value」の数値を取り出して\n- 依頼2の結果に7を足して\n- 17*9を計算して\n/end\n/exit\n",
+    );
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let result = &state["result"];
+    assert_eq!(result["lifecycle"], "SUSPEND");
+    let branches = result["branch_outcomes"].as_array().unwrap();
+    assert_eq!(branches.len(), 4);
+    assert_eq!(branches[0]["state"], "BLOCKED");
+    assert_eq!(branches[0]["reason_code"], "READ_PERMISSION_REQUIRED");
+    for branch in &branches[1..3] {
+        assert_eq!(branch["state"], "BLOCKED");
+        assert_eq!(
+            branch["reason_code"],
+            "BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED"
+        );
+    }
+    assert_eq!(branches[3]["state"], "CONFIRMED");
+    assert!(result["text"].as_str().unwrap().contains("153"));
+    assert_eq!(result["evidence"], serde_json::json!([]));
+    assert_eq!(result["receipts"], serde_json::json!([]));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bytes = store
+        .get_bytes(
+            "owner",
+            "normal-route",
+            result["execution_graph_ref"].as_str().unwrap(),
+        )
+        .unwrap();
+    let graph: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        graph[5]["request-2"]["request-1"],
+        branches[0]["artifact_ref"]
+    );
+    assert_eq!(
+        graph[5]["request-3"]["request-2"],
+        branches[1]["artifact_ref"]
+    );
+}
+
+#[test]
 fn composed_statistics_value_is_bound_to_its_producing_artifact() {
     let scratch = Scratch::new();
     math_chat(

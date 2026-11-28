@@ -10998,15 +10998,22 @@ impl Engine {
             })
         };
         match &goal.intent {
-            Intent::IndependentRequests { .. } => {
-                let observed =
-                    match crate::composition::produce(&self.store, &bundle, &mut graph, started) {
-                        Ok(observed) => observed,
-                        Err(Error::Contract { code, message }) => {
-                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
-                        }
-                        Err(error) => return Err(error),
-                    };
+            Intent::IndependentRequests { items } => {
+                let reads = items
+                    .iter()
+                    .filter(|item| crate::composition_source::read_url(item).is_some())
+                    .count();
+                let retrieval = (reads != 0).then(|| retrieval_budget(reads, &state, &self.store));
+                let mut observed = crate::composition::Outcome::new();
+                let executed = crate::composition::produce(
+                    &self.store,
+                    &bundle,
+                    &mut graph,
+                    started,
+                    retrieval,
+                    &read_admission(&state)?,
+                    &mut observed,
+                );
                 independent_requests_partial = !observed.complete();
                 result.dependencies = observed
                     .branches
@@ -11014,8 +11021,19 @@ impl Engine {
                     .map(|branch| branch.artifact_ref.clone())
                     .collect();
                 result.branch_outcomes = observed.branches;
+                result.evidence = observed.retry_evidence;
                 units = observed.units;
                 result.guarantee = observed.guarantee;
+                // A later branch failure or deadline must not discard a retained Retry-After.
+                state.result = Some(result.clone());
+                match executed {
+                    Ok(()) => {}
+                    Err(error) if read_case_changed(&error) => return Err(error),
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                }
                 report_goal_content = Some(ReportGoalContent {
                     predicate: crate::composition::PREDICATE,
                     guarantee: result.guarantee.clone(),
@@ -17312,7 +17330,7 @@ impl Engine {
                 ]);
                 result.guarantee = Guarantee::Computed;
             }
-            Intent::CalculateFromRequestItems { .. } => {
+            Intent::CalculateFromRequestItems { .. } | Intent::SelectRequestJsonNumber { .. } => {
                 return self.stop(
                     &mut state,
                     Lifecycle::Suspend,
@@ -19021,13 +19039,19 @@ pub(crate) fn verify_retained_retry_source(
     {
         return Err(invalid());
     }
-    if let Some((_, bundle)) = read_input()?
-        && matches!(bundle.meaning.intent, Intent::CompareWebResearch { .. })
-    {
-        if identity(&bundle.request)? != result.id {
-            return Err(invalid());
+    if let Some((_, bundle)) = read_input()? {
+        match bundle.meaning.intent {
+            Intent::CompareWebResearch { .. } => {
+                if identity(&bundle.request)? != result.id {
+                    return Err(invalid());
+                }
+                return crate::research_goal::verify_retry_source(store, &bundle, result, packet);
+            }
+            Intent::IndependentRequests { .. } => {
+                return crate::composition::verify_retry_source(store, &bundle, result, packet);
+            }
+            _ => {}
         }
-        return crate::research_goal::verify_retry_source(store, &bundle, result, packet);
     }
     if ports::is_news_packet(packet) {
         let (_, bundle) = read_input()?.ok_or_else(invalid)?;
