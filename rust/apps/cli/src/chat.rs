@@ -10,9 +10,10 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const HELP: &str = "\
-日本語で入力し、Enterで送信します。\n\
+依頼を入力し、Enterで送信します。\n\
 /help               この案内を表示\n\
 /exit               対話を終了\n\
+/language [ja|en]   テキスト依頼の応答言語を確認・変更。音声入力は日本語\n\
 /case ID            同じ利用者の会話を選択\n\
 /new ID             未使用の会話IDを選択\n\
 /fork ID [結果ID]   現在の会話の確定結果から、未使用のIDへ分岐\n\
@@ -767,6 +768,19 @@ pub(super) fn run(engine: &mut Engine, mut options: Options) -> Result<u8, Strin
                 ("/exit", "") => break,
                 ("/help", "") => {
                     eprintln!("{HELP}");
+                    continue;
+                }
+                ("/language", locale) => {
+                    match locale {
+                        "" => eprintln!("応答言語: {}", options.locale),
+                        "ja" | "en" => {
+                            options.locale = locale.into();
+                            eprintln!("応答言語: {}", options.locale);
+                        }
+                        _ => eprintln!(
+                            "応答言語を指定するには /language ja または /language en を入力してください。"
+                        ),
+                    }
                     continue;
                 }
                 ("/case" | "/new", id) => {

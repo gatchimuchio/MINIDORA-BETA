@@ -67,6 +67,15 @@
                 <textarea id="request-text" rows="6" required placeholder="例: ココについて保存されている情報をもとに短い紹介文を書いて"></textarea>
               </label>
 
+              <label class="field">
+                <span>テキスト依頼の応答言語</span>
+                <select id="response-locale">
+                  <option value="ja">日本語</option>
+                  <option value="en" lang="en">English</option>
+                </select>
+                <small>英語は計算や基本的な挨拶など、対応している依頼で使えます。</small>
+              </label>
+
               <details class="web-read-settings">
                 <summary>オンライン調査</summary>
                 <p id="web-read-help" class="case-status">次のテキスト依頼で使う接続先を選べます。選択は送信後に解除されます。</p>

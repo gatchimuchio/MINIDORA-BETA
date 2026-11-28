@@ -120,6 +120,8 @@ const LEGACY_FORMATTED_COMPARISON_PARSER_VERSION: &str =
     "declarative-ja-en-v87-formatted-relation-comparison";
 pub(crate) const COMPARISON_PARSER_VERSION: &str = "declarative-ja-en-v91-comparison-source-roles";
 pub const CALCULATION_PARSER_VERSION: &str = "declarative-ja-en-v86-generated-exact-calculation";
+pub(crate) const ENGLISH_CALCULATION_PARSER_VERSION: &str =
+    "declarative-ja-en-v119-exact-calculation-display";
 pub(crate) const CALCULATION_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v118-verified-calculation-correction";
 pub(crate) const PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION: &str =
@@ -1924,6 +1926,11 @@ pub(crate) fn seal_with_source_context(
             version
         }
         Intent::CompareRelationInventories { .. } => COMPARISON_PARSER_VERSION,
+        Intent::Calculate { .. }
+            if crate::core::supports_english_output_locale(&request.locale) =>
+        {
+            ENGLISH_CALCULATION_PARSER_VERSION
+        }
         Intent::Calculate { .. } => CALCULATION_PARSER_VERSION,
         Intent::FiniteProbabilityStatistics { .. } | Intent::Statistics { .. }
             if conversational_math_matches(&request.text, &intent)? =>
@@ -8488,9 +8495,19 @@ fn interpret(text: &str) -> Result<Intent> {
     {
         return Ok(Intent::AskLocalIdentity);
     }
-    match statement {
+    let greeting =
+        if statement.eq_ignore_ascii_case("hello") || statement.eq_ignore_ascii_case("hi") {
+            "こんにちは"
+        } else if statement.eq_ignore_ascii_case("good morning") {
+            "おはようございます"
+        } else if statement.eq_ignore_ascii_case("good evening") {
+            "こんばんは"
+        } else {
+            statement
+        };
+    match greeting {
         "こんにちは" | "こんばんは" | "おはよう" | "おはようございます" => {
-            let salutation = match statement {
+            let salutation = match greeting {
                 "おはよう" => "おはようございます",
                 other => other,
             };

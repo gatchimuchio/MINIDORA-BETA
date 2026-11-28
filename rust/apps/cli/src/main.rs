@@ -42,6 +42,7 @@ Options:
   --context RESULT_ID        Reference an exact prior result in the same case (run only)
   --version N                Input version (default 1)
   --actor ID                 Trusted local frontend identity
+  --locale ja|ja-JP|en|en-US   Locale for supported text requests (run and chat; default ja)
   --json                     Print the full result or case revision as JSON
   --allow-read-host HOST      Permit one exact read destination; repeatable
   --attach EXACT_PATH        Read one local PDF, XLSX, PNG, JPEG, or UTF-8 .csv, .txt, or .md (Windows run; repeatable)
@@ -127,6 +128,7 @@ struct Options {
     context_ref: Option<String>,
     input_version: u64,
     actor: String,
+    locale: String,
     json: bool,
     read_hosts: BTreeSet<String>,
     write_paths: BTreeSet<PathBuf>,
@@ -175,6 +177,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         context_ref: None,
         input_version: 1,
         actor: default_actor(),
+        locale: "ja".into(),
         json: false,
         read_hosts: BTreeSet::new(),
         write_paths: BTreeSet::new(),
@@ -237,6 +240,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
                 "--db"
                     | "--case"
                     | "--actor"
+                    | "--locale"
                     | "--allow-read-host"
                     | "--allow-write"
                     | "--wasm-node"
@@ -284,6 +288,16 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
                 explicit_input_version = true;
             }
             "--actor" => options.actor = next_value(&mut args, &arg)?,
+            "--locale" => {
+                if !matches!(options.mode, Mode::Run | Mode::Chat) {
+                    return Err("--locale is only accepted by run and chat".into());
+                }
+                let locale = next_value(&mut args, &arg)?;
+                if !matches!(locale.as_str(), "ja" | "ja-JP" | "en" | "en-US") {
+                    return Err("--locale requires ja, ja-JP, en or en-US".into());
+                }
+                options.locale = locale;
+            }
             "--json" => options.json = true,
             "--allow-read-host" => {
                 options.read_hosts.insert(next_value(&mut args, &arg)?);
@@ -649,6 +663,7 @@ fn execute_request(
     request.purpose = purpose.map(Box::new);
     let speech = match input {
         RequestInput::Text(_) => {
+            request.locale.clone_from(&options.locale);
             request.attachments = attachments;
             request.permissions.read_hosts = read_hosts.clone();
             request.permissions.wasm_execution = allow_wasm_execution;
@@ -1346,6 +1361,21 @@ mod tests {
         let options = args(&["--output", "/tmp/result", "2+3"]).unwrap();
         assert!(options.write_paths.is_empty());
         assert_eq!(options.output, Some(PathBuf::from("/tmp/result")));
+    }
+
+    #[test]
+    fn text_locale_is_limited_to_run_and_chat() {
+        assert_eq!(args(&["2+3"]).unwrap().locale, "ja");
+        for locale in ["ja", "ja-JP", "en", "en-US"] {
+            assert_eq!(
+                args(&["run", "--locale", locale, "2+3"]).unwrap().locale,
+                locale
+            );
+            assert_eq!(args(&["chat", "--locale", locale]).unwrap().locale, locale);
+        }
+        assert!(args(&["run", "--locale", "fr", "2+3"]).is_err());
+        assert!(args(&["serve", "--locale", "en"]).is_err());
+        assert!(args(&["inspect", "--locale", "en"]).is_err());
     }
 
     #[test]

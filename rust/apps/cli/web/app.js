@@ -5,6 +5,7 @@ const actorField = document.querySelector("#actor-id");
 const caseField = document.querySelector("#case-id");
 const tokenField = document.querySelector("#api-token");
 const requestField = document.querySelector("#request-text");
+const responseLocaleField = document.querySelector("#response-locale");
 const webReadButton = document.querySelector("#web-read-hosts-button");
 const webReadHosts = document.querySelector("#web-read-hosts");
 const webReadStatus = document.querySelector("#web-read-status");
@@ -142,7 +143,7 @@ function updateControls() {
   for (const field of [actorField, caseField, tokenField, speechClearButton]) {
     field.disabled = busy;
   }
-  for (const field of [requestField, openCaseButton, attachmentField, attachmentClearButton,
+  for (const field of [requestField, responseLocaleField, openCaseButton, attachmentField, attachmentClearButton,
     submitButton, forkCaseField, forkSubmitButton]) {
     field.disabled = conversationBusy;
   }
@@ -1329,7 +1330,7 @@ form.addEventListener("submit", async (event) => {
     input_version: 1,
     actor_id: scope.actorId,
     text,
-    locale: "ja",
+    locale: responseLocaleField.value,
     permissions: { read_hosts: readHosts, write_paths: [] },
     output_path: null,
     context_ref: null,

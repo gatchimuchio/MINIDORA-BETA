@@ -10770,14 +10770,30 @@ impl Engine {
                 "取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
             );
         }
-        let translation_locale = is_translation_intent(&goal.intent)
-            && matches!(request.locale.as_str(), "en" | "en-US");
-        if !supports_japanese_output_locale(&request.locale) && !translation_locale {
+        let english = supports_english_output_locale(&request.locale);
+        let english_display = english
+            && goal.output_path.is_none()
+            && (matches!(&goal.intent, Intent::Greet { .. })
+                || bundle.meaning.parser_version == input::ENGLISH_CALCULATION_PARSER_VERSION
+                || matches!(&goal.intent, Intent::ExplainPrevious)
+                    && verified_plain_calculation_predecessor(
+                        &bundle,
+                        previous,
+                        prior_explanation_input.as_ref(),
+                    ));
+        if !supports_japanese_output_locale(&request.locale)
+            && !english_display
+            && !(english && is_translation_intent(&goal.intent))
+        {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
                 "SEMANTIC_VERIFIER_UNAVAILABLE",
-                "この版の表現検証は日本語の限定経路のみ対応しています。",
+                if english {
+                    "English output is unavailable for this operation."
+                } else {
+                    "この版の表現検証はこの応答言語に対応していません。"
+                },
             );
         }
         if !has_compute_budget {
@@ -13129,6 +13145,40 @@ impl Engine {
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
                 });
+            }
+            Intent::ExplainPrevious if english => {
+                let Some(prior) = previous else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MISSING_ACTUAL_RESULT",
+                        "There is no committed calculation to explain in this conversation.",
+                    );
+                };
+                let calculation = match calculation_from_context(
+                    &self.store,
+                    &bundle,
+                    prior,
+                    &state.prior_results,
+                    started,
+                ) {
+                    Ok(calculation) => calculation,
+                    Err(Error::Contract { code, .. }) => {
+                        return self.stop(
+                            &mut state,
+                            Lifecycle::Suspend,
+                            &code,
+                            "The previous calculation could not be verified in this conversation.",
+                        );
+                    }
+                    Err(error) => return Err(error),
+                };
+                units.push(format!("Expression: {}", calculation.expression));
+                units.extend(calculation.steps.iter().cloned());
+                units.push(format!("Exact result: {}", calculation.exact_value));
+                result.calculation = Some(calculation);
+                result.dependencies.push(prior.id.clone());
+                result.guarantee = Guarantee::Computed;
             }
             Intent::ExplainPrevious => {
                 let Some(prior) = previous.filter(|p| p.lifecycle == Lifecycle::Commit) else {
@@ -17141,14 +17191,28 @@ impl Engine {
                 generation_emission = Some(generation.emission);
             }
             Intent::Greet { salutation } => {
-                units.push(format!("{salutation}。ミニドラです。"));
-                units.push(
-                    if previous.is_some_and(|result| result.lifecycle == Lifecycle::Commit) {
+                let continuing =
+                    previous.is_some_and(|result| result.lifecycle == Lifecycle::Commit);
+                if english {
+                    let salutation = match salutation.as_str() {
+                        "おはようございます" => "Good morning",
+                        "こんばんは" => "Good evening",
+                        _ => "Hello",
+                    };
+                    units.push(format!("{salutation}. I'm MINIDORA."));
+                    units.push(if continuing {
+                        "We can continue here, or you can ask a new question.".into()
+                    } else {
+                        "What would you like to ask?".into()
+                    });
+                } else {
+                    units.push(format!("{salutation}。ミニドラです。"));
+                    units.push(if continuing {
                         "会話の続きを聞かせてください。新しい質問もどうぞ。".into()
                     } else {
                         "質問したいことや、一緒に考えたいことを教えてください。".into()
-                    },
-                );
+                    });
+                }
                 result.guarantee = Guarantee::Computed;
             }
             Intent::AskLocalIdentity => {
@@ -18167,6 +18231,36 @@ impl Engine {
 
 pub(crate) fn supports_japanese_output_locale(locale: &str) -> bool {
     matches!(locale, "ja" | "ja-JP")
+}
+
+pub(crate) fn supports_english_output_locale(locale: &str) -> bool {
+    matches!(locale, "en" | "en-US")
+}
+
+fn plain_calculation(bundle: &InputBundle) -> bool {
+    matches!(bundle.meaning.intent, Intent::Calculate { .. })
+        && matches!(
+            bundle.meaning.parser_version.as_str(),
+            input::CALCULATION_PARSER_VERSION | input::ENGLISH_CALCULATION_PARSER_VERSION
+        )
+}
+
+fn verified_plain_calculation_predecessor(
+    bundle: &InputBundle,
+    prior: Option<&ResultRecord>,
+    prior_bundle: Option<&InputBundle>,
+) -> bool {
+    matches!((prior, prior_bundle), (Some(result), Some(input))
+        if result.lifecycle == Lifecycle::Commit
+            && result.guarantee == Guarantee::Computed
+            && result.calculation.is_some()
+            && result.evidence.is_empty()
+            && bundle.meaning.context_result_ref.as_deref() == Some(result.id.as_str())
+            && plain_calculation(input)
+            && input.request.input_id == result.input_id
+            && input.request.input_version == result.input_version
+            && input.request.actor_id == bundle.request.actor_id
+            && input.request.case_id == bundle.request.case_id)
 }
 
 fn validate_direct_relation_request(actor: &str, request: &RequestEnvelope) -> Result<()> {
