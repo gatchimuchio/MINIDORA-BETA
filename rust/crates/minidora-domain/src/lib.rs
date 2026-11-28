@@ -665,6 +665,9 @@ pub enum Intent {
     PlanWork {
         request: WorkPlanRequest,
     },
+    ClarifyWorkPlanPersonnel {
+        draft: WorkPlanWithoutPersonnel,
+    },
     ReviseWorkPlan {
         change: WorkPlanChange,
     },
@@ -1555,6 +1558,29 @@ pub struct WorkPlanRequest {
     pub personnel: u8,
     pub deadline_minutes: u16,
     pub allow_parallel: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkPlanWithoutPersonnel {
+    pub purpose: Option<SourceSpan>,
+    pub tasks: Vec<WorkPlanTask>,
+    pub dependencies: Vec<WorkPlanDependency>,
+    pub deadline_minutes: u16,
+    pub allow_parallel: bool,
+}
+
+impl WorkPlanWithoutPersonnel {
+    pub fn with_personnel(self, personnel: u8) -> WorkPlanRequest {
+        WorkPlanRequest {
+            purpose: self.purpose,
+            tasks: self.tasks,
+            dependencies: self.dependencies,
+            personnel,
+            deadline_minutes: self.deadline_minutes,
+            allow_parallel: self.allow_parallel,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

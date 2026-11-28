@@ -1097,7 +1097,7 @@ pub(crate) fn verified_work_plan_input(bundle: &InputBundle) -> Result<bool> {
     let version = meaning.parser_version.as_str();
     let has_context = bundle.context_sha256 != identity(&None::<&ResultRecord>)?;
     let scope_matches = match &meaning.intent {
-        Intent::PlanWork { .. } => {
+        Intent::PlanWork { .. } | Intent::ClarifyWorkPlanPersonnel { .. } => {
             !has_context && request.context_ref.is_none() && meaning.context_result_ref.is_none()
         }
         Intent::ReviseWorkPlan { .. } => {
@@ -2631,14 +2631,20 @@ pub(crate) fn seal_hearing_answer(
     request: &RequestEnvelope,
     question: &ResultRecord,
     answer: SourceSpan,
+    work_plan_personnel: bool,
 ) -> Result<InputBundle> {
     validate_user_seal_request(request, Some(question))?;
+    let selected_personnel_answer = work_plan_personnel
+        && request.context_ref.as_deref() == Some(question.id.as_str())
+        && crate::work_plan_input::personnel_answer(&request.text)
+            .is_some_and(|(span, _)| span == answer);
     if question.lifecycle != Lifecycle::Suspend
         || !matches!(request.locale.as_str(), "ja" | "ja-JP")
         || request.text.chars().any(|ch| ch.is_control() && ch != '\t')
         || answer.text.trim().is_empty()
         || request.text.get(answer.start..answer.end) != Some(answer.text.as_str())
-        || !matches!(interpret(&request.text)?, Intent::Unknown { .. })
+        || (!selected_personnel_answer
+            && !matches!(interpret(&request.text)?, Intent::Unknown { .. }))
     {
         return Err(failure(
             "HEARING_ANSWER_INPUT_MISMATCH",

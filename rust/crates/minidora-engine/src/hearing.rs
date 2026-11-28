@@ -4,11 +4,14 @@ use std::time::{Duration, Instant};
 
 use minidora_domain::{
     Calculation, EffectPhase, GoalContract, Guarantee, InputBundle, Intent, Lifecycle,
-    RenderTarget, RequestEnvelope, Result, ResultRecord, SourceSpan, failure, identity,
+    RenderTarget, RequestEnvelope, ResourceBudget, Result, ResultRecord, SourceSpan,
+    WorkPlanWithoutPersonnel, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{core, document, input, language, output, search, store::Store};
+use crate::{
+    core, document, input, language, output, search, store::Store, work_plan, work_plan_input,
+};
 
 pub(crate) const REQUIRED: &str = "HEARING_REQUIRED";
 pub(crate) const PREDICATE: &str = "RESOLVED_HEARING_V1";
@@ -34,6 +37,9 @@ enum Task {
     FilteredCsv {
         row_count: usize,
         columns: Vec<String>,
+    },
+    WorkPlanPersonnel {
+        units: Vec<String>,
     },
 }
 
@@ -109,6 +115,7 @@ impl Prompt {
                 ],
                 None,
             ),
+            Task::WorkPlanPersonnel { units } => (units.clone(), None),
         };
         let mut dependencies = self.dependencies.clone();
         dependencies.push(reference.into());
@@ -123,6 +130,9 @@ impl Prompt {
     fn answer_span(&self, text: &str) -> Option<SourceSpan> {
         match &self.task {
             Task::Length { .. } => input::hearing_unit_span(text),
+            Task::WorkPlanPersonnel { .. } => {
+                work_plan_input::personnel_answer(text).map(|(span, _)| span)
+            }
             Task::FilteredCsv { columns, .. } => {
                 let (field, _) = csv_answer(columns, text)?;
                 let start = usize::checked_sub(field.as_ptr() as usize, text.as_ptr() as usize)?;
@@ -191,6 +201,160 @@ fn csv_outcome(value: document::FilteredCsvStatistics) -> Outcome {
     }
 }
 
+fn work_plan_known_units(
+    draft: &WorkPlanWithoutPersonnel,
+    preview: &work_plan::PersonnelPreview,
+) -> Vec<String> {
+    let title = draft
+        .purpose
+        .as_ref()
+        .map_or("作業", |purpose| &purpose.text);
+    let tasks = draft
+        .tasks
+        .iter()
+        .map(|task| format!("{}は{}分", task.name.text, task.duration_minutes))
+        .collect::<Vec<_>>()
+        .join("、");
+    let mut units = vec![format!(
+        "「{title}」の作業は{tasks}。期限は{}分です。",
+        draft.deadline_minutes
+    )];
+    if !draft.dependencies.is_empty() {
+        let dependencies = draft
+            .dependencies
+            .iter()
+            .map(|edge| format!("{}の後に{}", edge.before.text, edge.after.text))
+            .collect::<Vec<_>>()
+            .join("、");
+        units.push(format!("作業の前後関係は{dependencies}です。"));
+    }
+    units.push(format!(
+        "作業順と所要時間から、完了まで最低{}分かかります。",
+        preview.lower_bound_minutes
+    ));
+    if preview.minimum_crew > 1 {
+        units.push(format!(
+            "一つの工程に同時に{}人が必要です。",
+            preview.minimum_crew
+        ));
+    }
+    units
+}
+
+fn needs_work_plan_personnel(
+    draft: &WorkPlanWithoutPersonnel,
+    preview: &work_plan::PersonnelPreview,
+) -> bool {
+    preview.max_personnel_bound_minutes <= u32::from(draft.deadline_minutes)
+        && !(preview.no_overlap && preview.minimum_crew == 1)
+}
+
+fn work_plan_question_units(
+    draft: &WorkPlanWithoutPersonnel,
+    preview: &work_plan::PersonnelPreview,
+) -> Vec<String> {
+    let mut units = work_plan_known_units(draft, preview);
+    units.push("同時に作業できる人数は何人ですか？".into());
+    units
+}
+
+#[derive(Serialize)]
+struct WorkPlanHearingReport<'a> {
+    kind: &'static str,
+    original_bundle: &'a str,
+    answer: Option<(&'a str, &'a SourceSpan)>,
+    plan: &'a work_plan::WorkPlanMeaningPlan,
+}
+
+fn plan_outcome(
+    original: &InputBundle,
+    answer: Option<(&str, &SourceSpan)>,
+    plan: &work_plan::WorkPlanMeaningPlan,
+    budget: &ResourceBudget,
+) -> Result<Outcome> {
+    let mut units = plan.units();
+    if answer.is_none() {
+        units.insert(
+            0,
+            "同時に1人作業できれば、この日程を組めます。実際の人数は未指定です。".into(),
+        );
+    }
+    let report_bytes = canonical(&WorkPlanHearingReport {
+        kind: "minidora.core.hearing-work-plan.v1",
+        original_bundle: &original.fingerprint,
+        answer,
+        plan,
+    })?;
+    if report_bytes.len().saturating_add(units.join("\n").len()) > budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "作業計画と根拠が証拠予算を超えています。",
+        ));
+    }
+    Ok(Outcome {
+        units,
+        calculation: None,
+        dependencies: vec![digest(&report_bytes)],
+        report_bytes: Some(report_bytes),
+    })
+}
+
+fn prepare_work_plan(
+    bundle: &InputBundle,
+    draft: &WorkPlanWithoutPersonnel,
+    started: Instant,
+) -> Result<Preparation> {
+    if !input::verified_work_plan_input(bundle)? {
+        return Err(invalid());
+    }
+    let preview = work_plan::personnel_preview(draft)?;
+    let budget = &bundle.request.budget;
+    let due = u32::from(draft.deadline_minutes);
+    if preview.max_personnel_bound_minutes > due {
+        let mut units = work_plan_known_units(draft, &preview);
+        units.push(if preview.lower_bound_minutes > due {
+            "作業の所要時間と順番を保つ限り、人数を増やしても期限に間に合いません。".into()
+        } else {
+            format!(
+                "この計画で扱える上限の{}人でも、作業量から最低{}分かかるため、期限に間に合いません。",
+                work_plan::MAX_PERSONNEL, preview.max_personnel_bound_minutes
+            )
+        });
+        return Ok(Preparation::Complete(Outcome {
+            units,
+            calculation: None,
+            dependencies: Vec::new(),
+            report_bytes: None,
+        }));
+    }
+    if !needs_work_plan_personnel(draft, &preview) {
+        let deadline = started
+            .checked_add(Duration::from_millis(budget.deadline_ms))
+            .ok_or_else(invalid)?;
+        let plan = work_plan::WorkPlanMeaningPlan::new(
+            draft.clone().with_personnel(1),
+            bundle.fingerprint.clone(),
+            deadline,
+        )?;
+        return plan_outcome(bundle, None, &plan, budget).map(Preparation::Complete);
+    }
+    let units = work_plan_question_units(draft, &preview);
+    let display_bytes = units.join("\n").len();
+    let prompt = Prompt {
+        kind: PROMPT_KIND.into(),
+        source_ref: bundle.fingerprint.clone(),
+        dependencies: Vec::new(),
+        task: Task::WorkPlanPersonnel { units },
+    };
+    if canonical(&prompt)?.len().saturating_add(display_bytes) > budget.max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "補足に必要な作業情報が証拠予算を超えています。",
+        ));
+    }
+    Ok(Preparation::Question(prompt))
+}
+
 pub(crate) fn prepare(
     store: &Store,
     bundle: &InputBundle,
@@ -198,6 +362,9 @@ pub(crate) fn prepare(
     prior_results: &BTreeMap<String, ResultRecord>,
     started: Instant,
 ) -> Result<Preparation> {
+    if let Intent::ClarifyWorkPlanPersonnel { draft } = &bundle.meaning.intent {
+        return prepare_work_plan(bundle, draft, started);
+    }
     let previous = previous
         .filter(|prior| prior.lifecycle == Lifecycle::Commit)
         .ok_or_else(|| {
@@ -314,11 +481,20 @@ fn read_question(
         .ok_or_else(invalid)?;
     let goal_ref = revision.goal_sha256.as_deref().ok_or_else(invalid)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
-    if original.meaning.parser_version != input::HEARING_PARSER_VERSION
-        || !matches!(
-            original.meaning.intent,
-            Intent::ClarifyPreviousLength | Intent::ClarifyFilteredCsvStatistics
-        )
+    let work_plan = matches!(
+        original.meaning.intent,
+        Intent::ClarifyWorkPlanPersonnel { .. }
+    );
+    let valid_source = if work_plan {
+        input::verified_work_plan_input(&original)?
+    } else {
+        original.meaning.parser_version == input::HEARING_PARSER_VERSION
+            && matches!(
+                original.meaning.intent,
+                Intent::ClarifyPreviousLength | Intent::ClarifyFilteredCsvStatistics
+            )
+    };
+    if !valid_source
         || identity(&original.request)? != question.id
         || original.request.actor_id != actor
         || original.request.case_id != case
@@ -340,19 +516,28 @@ fn read_question(
         return Err(invalid());
     }
     let prompt_ref = question.dependencies.last().ok_or_else(invalid)?.clone();
-    let prompt: Prompt = serde_json::from_slice(&store.get_bytes(actor, case, &prompt_ref)?)?;
+    let prompt_bytes = store.get_bytes(actor, case, &prompt_ref)?;
+    let prompt: Prompt = serde_json::from_slice(&prompt_bytes)?;
     let expected = prompt.preview(&prompt_ref);
     let plan = question.content_plan.as_ref().ok_or_else(invalid)?;
+    let source_matches = match (&original.meaning.intent, &prompt.task) {
+        (Intent::ClarifyWorkPlanPersonnel { draft }, Task::WorkPlanPersonnel { units }) => {
+            let preview = work_plan::personnel_preview(draft)?;
+            prompt.source_ref == original.fingerprint
+                && prompt.dependencies.is_empty()
+                && needs_work_plan_personnel(draft, &preview)
+                && *units == work_plan_question_units(draft, &preview)
+                && prompt_bytes.len().saturating_add(units.join("\n").len())
+                    <= original.request.budget.max_evidence_bytes
+        }
+        (Intent::ClarifyPreviousLength, Task::Length { .. })
+        | (Intent::ClarifyFilteredCsvStatistics, Task::FilteredCsv { .. }) => {
+            original.meaning.context_result_ref.as_deref() == Some(prompt.source_ref.as_str())
+        }
+        _ => false,
+    };
     if prompt.kind != PROMPT_KIND
-        || !matches!(
-            (&original.meaning.intent, &prompt.task),
-            (Intent::ClarifyPreviousLength, Task::Length { .. })
-                | (
-                    Intent::ClarifyFilteredCsvStatistics,
-                    Task::FilteredCsv { .. }
-                )
-        )
-        || original.meaning.context_result_ref.as_deref() != Some(prompt.source_ref.as_str())
+        || !source_matches
         || expected.dependencies != question.dependencies
         || expected.calculation != question.calculation
         || expected.units != plan.required_units
@@ -460,6 +645,7 @@ pub(crate) fn find_answer(
     store: &Store,
     request: &RequestEnvelope,
     started: Instant,
+    personnel_only: bool,
 ) -> Result<Option<(AnswerContext, SourceSpan)>> {
     if request.text.len() > MAX_ANSWER_BYTES
         || request.text.chars().any(|ch| ch.is_control() && ch != '\t')
@@ -476,6 +662,10 @@ pub(crate) fn find_answer(
             return Ok(true);
         }
         let context = read_question(store, &request.actor_id, &request.case_id, result)?;
+        if !context.admits_answer(request) || (personnel_only && !context.is_work_plan_personnel())
+        {
+            return Ok(true);
+        }
         let Some(span) = context.prompt.answer_span(&request.text) else {
             return Ok(true);
         };
@@ -500,16 +690,23 @@ pub(crate) fn equivalent_question(
     previous: Option<&ResultRecord>,
     started: Instant,
 ) -> Result<Option<String>> {
-    let Some(previous) = previous else {
+    let independent = matches!(
+        bundle.meaning.intent,
+        Intent::ClarifyWorkPlanPersonnel { .. }
+    );
+    if previous.is_none() && !independent {
         return Ok(None);
-    };
+    }
     let request = &bundle.request;
     let mut existing = None;
     active_questions(store, request, started, |result| {
         let context = read_question(store, &request.actor_id, &request.case_id, result)?;
         if context.original.meaning.intent == bundle.meaning.intent
             && context.original.request.output_path == request.output_path
-            && (context.prompt.source_ref == previous.id || result.id == previous.id)
+            && (independent
+                || previous.is_some_and(|prior| {
+                    context.prompt.source_ref == prior.id || result.id == prior.id
+                }))
         {
             existing = Some(result.id.clone());
             return Ok(false);
@@ -532,22 +729,49 @@ pub(crate) fn restore_answer(
         return Err(invalid());
     };
     let question = prior_results.get(question_ref).ok_or_else(invalid)?;
-    if input::seal_hearing_answer(&bundle.request, question, answer.clone())? != *bundle {
-        return Err(invalid());
-    }
     let context = read_question(
         store,
         &bundle.request.actor_id,
         &bundle.request.case_id,
         question,
     )?;
-    if context.prompt.answer_span(&bundle.request.text).as_ref() != Some(answer) {
+    if !context.admits_answer(&bundle.request)
+        || context.prompt.answer_span(&bundle.request.text).as_ref() != Some(answer)
+        || input::seal_hearing_answer(
+            &bundle.request,
+            question,
+            answer.clone(),
+            context.is_work_plan_personnel(),
+        )? != *bundle
+    {
         return Err(invalid());
     }
     Ok(context)
 }
 
 impl AnswerContext {
+    pub(crate) fn is_work_plan_personnel(&self) -> bool {
+        matches!(self.prompt.task, Task::WorkPlanPersonnel { .. })
+    }
+
+    fn admits_answer(&self, request: &RequestEnvelope) -> bool {
+        !self.is_work_plan_personnel()
+            || (request.attachments.is_empty()
+                && request.speech.is_none()
+                && request.purpose.is_none())
+    }
+
+    pub(crate) fn effective_budget(&self, request: &RequestEnvelope) -> ResourceBudget {
+        let mut budget = request.budget.clone();
+        if self.is_work_plan_personnel() {
+            let original = &self.original.request.budget;
+            budget.max_actions = budget.max_actions.min(original.max_actions);
+            budget.max_evidence_bytes = budget.max_evidence_bytes.min(original.max_evidence_bytes);
+            budget.deadline_ms = budget.deadline_ms.min(original.deadline_ms);
+        }
+        budget
+    }
+
     pub(crate) fn question(&self) -> &ResultRecord {
         &self.question
     }
@@ -590,11 +814,39 @@ impl AnswerContext {
         else {
             return Err(invalid());
         };
+        if question_ref != &self.question.id {
+            return Err(invalid());
+        }
+        if let (Task::WorkPlanPersonnel { .. }, Intent::ClarifyWorkPlanPersonnel { draft }) =
+            (&self.prompt.task, &self.original.meaning.intent)
+        {
+            let (_, personnel) = work_plan_input::personnel_answer(&bundle.request.text)
+                .filter(|(span, _)| span == answer)
+                .ok_or_else(invalid)?;
+            let budget = self.effective_budget(&bundle.request);
+            let deadline = started
+                .checked_add(Duration::from_millis(budget.deadline_ms))
+                .ok_or_else(invalid)?;
+            let plan = work_plan::WorkPlanMeaningPlan::new(
+                draft.clone().with_personnel(personnel),
+                self.original.fingerprint.clone(),
+                deadline,
+            )?;
+            let mut outcome = plan_outcome(
+                &self.original,
+                Some((&bundle.fingerprint, answer)),
+                &plan,
+                &budget,
+            )?;
+            outcome
+                .dependencies
+                .extend([self.question.id.clone(), self.prompt_ref.clone()]);
+            return Ok(outcome);
+        }
         let previous = prior_results
             .get(&self.prompt.source_ref)
             .ok_or_else(invalid)?;
-        if question_ref != &self.question.id
-            || previous.lifecycle != Lifecycle::Commit
+        if previous.lifecycle != Lifecycle::Commit
             || self.original.context_sha256 != identity(&Some(previous))?
         {
             return Err(invalid());
@@ -641,6 +893,7 @@ impl AnswerContext {
                     store, &source, previous, column, started,
                 )?)
             }
+            Task::WorkPlanPersonnel { .. } => return Err(invalid()),
         };
         if started.elapsed() >= Duration::from_millis(deadline_ms) {
             return Err(failure(

@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use minidora_domain::{
-    Intent, Result, SourceSpan, WorkPlanChange, WorkPlanDependency, WorkPlanRequest, WorkPlanTask,
+    Intent, Result, SourceSpan, WorkPlanChange, WorkPlanDependency, WorkPlanTask,
+    WorkPlanWithoutPersonnel,
 };
 use regex::Regex;
 
@@ -14,6 +15,8 @@ const CONSULTATION_REVISION_PARSER_VERSION: &str =
     "declarative-ja-v1-work-plan-consultation-revision";
 pub(crate) const HISTORY_REVISION_PARSER_VERSION: &str =
     "declarative-ja-v1-work-plan-history-revision";
+pub(crate) const PERSONNEL_HEARING_PARSER_VERSION: &str =
+    "declarative-ja-v1-work-plan-personnel-hearing";
 
 pub(crate) struct ParsedWorkPlan {
     pub(crate) version: &'static str,
@@ -36,6 +39,7 @@ const PLAN_HEADERS: &[&str] = &[
 pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
     match intent {
         Intent::PlanWork { .. } => matches!(version, PARSER_VERSION | CONSULTATION_PARSER_VERSION),
+        Intent::ClarifyWorkPlanPersonnel { .. } => version == PERSONNEL_HEARING_PARSER_VERSION,
         Intent::ReviseWorkPlan { .. } => matches!(
             version,
             REVISION_PARSER_VERSION
@@ -49,6 +53,7 @@ pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
                 | REVISION_PARSER_VERSION
                 | CONSULTATION_REVISION_PARSER_VERSION
                 | HISTORY_REVISION_PARSER_VERSION
+                | PERSONNEL_HEARING_PARSER_VERSION
         ),
     }
 }
@@ -66,6 +71,7 @@ struct Grammar {
     task: Regex,
     deadline: Regex,
     personnel: Regex,
+    personnel_answer: Regex,
     remaining: Regex,
     duration_edit: Regex,
     deadline_edit: Regex,
@@ -92,6 +98,14 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
             concat!(
                 r"\A(?:(?:全員で|人数は|人手は|作業者は|作業人数は|人数の上限は)[ \t　]*(?P<labelled>{numeral}人)(?:です)?",
                 r"|(?P<workers>{numeral}人)[ \t　]*で(?:作業する|進めたい|作業したい)?(?P<rest>.*))\z"
+            ),
+            numeral = numeral
+        )),
+        personnel_answer: make(format!(
+            concat!(
+                r"\A(?:はい[、，,][ 　]*)?(?:(?:人数|作業人数|作業者数|作業者|人手|全員)は[ 　]*)?",
+                r"(?P<crew>{numeral}[ 　]*[人名]|ひとり|ふたり)",
+                r"(?:[ 　]*(?:です|でお願いします|で大丈夫(?:です)?|でいいです|で構いません|で作業します))?\z"
             ),
             numeral = numeral
         )),
@@ -231,8 +245,38 @@ fn minutes(text: &str) -> Option<u16> {
 }
 
 fn people(text: &str) -> Option<u8> {
-    let count = u8::try_from(number(text.strip_suffix('人')?.trim())?).ok()?;
+    crew_count(text.strip_suffix('人')?)
+}
+
+fn crew_count(numeral: &str) -> Option<u8> {
+    let count = u8::try_from(number(numeral.trim())?).ok()?;
     (1..=8).contains(&count).then_some(count)
+}
+
+pub(crate) fn personnel_answer(text: &str) -> Option<(SourceSpan, u8)> {
+    if text.len() > 128 || text.chars().any(char::is_control) {
+        return None;
+    }
+    let body = text.trim();
+    let body = body.strip_suffix(['。', '.', '！', '!']).unwrap_or(body);
+    let crew = GRAMMAR
+        .personnel_answer
+        .captures(body.trim_end())?
+        .name("crew")?;
+    let count = match crew.as_str() {
+        "ひとり" => 1,
+        "ふたり" => 2,
+        number => crew_count(number.strip_suffix(['人', '名'])?)?,
+    };
+    let offset = text.len() - text.trim_start().len();
+    Some((
+        SourceSpan {
+            start: offset + crew.start(),
+            end: offset + crew.end(),
+            text: crew.as_str().into(),
+        },
+        count,
+    ))
 }
 
 fn set_once<T: Copy + Eq>(slot: &mut Option<T>, current: T) -> Option<()> {
@@ -547,19 +591,42 @@ fn finish_plan(
         role(&mut parts.roles, "/PlanWork/purpose", purpose.clone());
     }
     let dependencies = parts.dependencies(raw)?;
-    Some(ParsedWorkPlan {
-        version,
-        intent: Intent::PlanWork {
-            request: WorkPlanRequest {
-                purpose,
-                tasks: parts.tasks,
-                dependencies,
-                personnel: parts.personnel?,
-                deadline_minutes: parts.deadline?,
-                allow_parallel: parts.parallel.unwrap_or(true),
+    let draft = WorkPlanWithoutPersonnel {
+        purpose,
+        tasks: parts.tasks,
+        dependencies,
+        deadline_minutes: parts.deadline?,
+        allow_parallel: parts.parallel.unwrap_or(true),
+    };
+    if let Some(personnel) = parts.personnel {
+        return Some(ParsedWorkPlan {
+            version,
+            intent: Intent::PlanWork {
+                request: draft.with_personnel(personnel),
             },
-        },
-        roles: parts.roles,
+            roles: parts.roles,
+        });
+    }
+    if draft.tasks.iter().any(|task| {
+        matches!(
+            task.name.text.as_str(),
+            "人数" | "人手" | "作業者" | "作業人数" | "作業者数" | "人数の上限" | "全員"
+        )
+    }) {
+        // A crew clause with the wrong unit can otherwise look like a timed task.
+        return None;
+    }
+    Some(ParsedWorkPlan {
+        version: PERSONNEL_HEARING_PARSER_VERSION,
+        intent: Intent::ClarifyWorkPlanPersonnel { draft },
+        roles: parts
+            .roles
+            .into_iter()
+            .map(|(key, spans)| {
+                let field = key.strip_prefix("/PlanWork/").expect("initial plan role");
+                (format!("/ClarifyWorkPlanPersonnel/draft/{field}"), spans)
+            })
+            .collect(),
     })
 }
 
@@ -770,4 +837,107 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedWorkPlan>> {
     Ok(structured
         .or_else(|| consultation_revision(raw, text))
         .or_else(|| consultation(raw, text)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONSULTATION: &str = "発送準備です。梱包は30分、宛名確認は15分、出荷点検は10分。梱包と宛名確認が終わったら出荷点検をします。50分以内に終える段取りを考えて。";
+    const EXPLICIT: &str = "発送準備の作業計画を立てて。梱包は30分。宛名確認は15分。出荷点検は10分。梱包と宛名確認が終わってから出荷点検。期限は50分。";
+
+    #[test]
+    fn work_plan_personnel_gap_preserves_exact_known_constraints() {
+        for (raw, complete, old_version) in [
+            (EXPLICIT, format!("{EXPLICIT}人数は二人。"), PARSER_VERSION),
+            (
+                CONSULTATION,
+                CONSULTATION.replace("50分以内", "2人で50分以内"),
+                CONSULTATION_PARSER_VERSION,
+            ),
+        ] {
+            let pending = parse(raw).unwrap().unwrap();
+            assert_eq!(pending.version, PERSONNEL_HEARING_PARSER_VERSION);
+            assert!(version_matches(pending.version, &pending.intent));
+            assert!(!version_matches(old_version, &pending.intent));
+            let Intent::ClarifyWorkPlanPersonnel { draft } = pending.intent else {
+                panic!("expected only the crew size to be missing")
+            };
+            assert_eq!(draft.deadline_minutes, 50);
+            assert_eq!(draft.tasks.len(), 3);
+            assert_eq!(draft.dependencies.len(), 2);
+            assert!(draft.allow_parallel);
+            assert!(
+                pending
+                    .roles
+                    .contains_key("/ClarifyWorkPlanPersonnel/draft/deadline_minutes")
+            );
+            for (key, spans) in pending.roles {
+                assert!(key.starts_with("/ClarifyWorkPlanPersonnel/draft/"));
+                assert!(!key.ends_with("/personnel"));
+                for span in spans {
+                    assert_eq!(&raw[span.start..span.end], span.text);
+                }
+            }
+            let complete = parse(&complete).unwrap().unwrap();
+            assert_eq!(complete.version, old_version);
+            assert!(!version_matches(
+                PERSONNEL_HEARING_PARSER_VERSION,
+                &complete.intent
+            ));
+            assert!(
+                complete
+                    .roles
+                    .keys()
+                    .all(|key| key.starts_with("/PlanWork/"))
+            );
+            let Intent::PlanWork { request } = complete.intent else {
+                panic!("a supplied crew size must use the ordinary completed plan parser")
+            };
+            assert_eq!(request.personnel, 2);
+            assert_eq!(request.deadline_minutes, draft.deadline_minutes);
+        }
+    }
+
+    #[test]
+    fn personnel_gap_does_not_mask_other_missing_or_malformed_constraints() {
+        for raw in [
+            CONSULTATION.replace("50分以内に終える", ""),
+            CONSULTATION.replace("梱包は30分、", ""),
+            CONSULTATION.replace("梱包と宛名確認が終わったら", "見積が終わったら"),
+            CONSULTATION.replace("50分以内", "9人で50分以内"),
+            CONSULTATION.replace("50分以内", "人数は2人。人数は3人。50分以内"),
+            CONSULTATION.replace("50分以内", "人数は2分。50分以内"),
+        ] {
+            assert!(parse(&raw).unwrap().is_none(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn personnel_answers_are_whole_utterances_with_exact_numeral_spans() {
+        for (raw, text, count) in [
+            ("2人", "2人", 2),
+            ("　はい、２人です。　", "２人", 2),
+            ("作業者は八名です", "八名", 8),
+            ("人数は二人です", "二人", 2),
+            ("ふたりでお願いします", "ふたり", 2),
+            ("１ 人で大丈夫です", "１ 人", 1),
+        ] {
+            let (span, actual) = personnel_answer(raw).unwrap_or_else(|| panic!("{raw}"));
+            assert_eq!(span.text, text);
+            assert_eq!(&raw[span.start..span.end], text);
+            assert_eq!(actual, count);
+        }
+        for raw in [
+            "0人",
+            "9人",
+            "二人か三人",
+            "２人ですか？",
+            "2人？",
+            "2人で。期限は30分。",
+            "はいいいえ",
+        ] {
+            assert!(personnel_answer(raw).is_none(), "{raw}");
+        }
+    }
 }

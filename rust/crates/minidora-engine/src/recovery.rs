@@ -5329,19 +5329,33 @@ fn inspect(
         )
     })?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
-    let requires_hearing = matches!(
-        bundle.meaning.intent,
+    let hearing_parser = match bundle.meaning.intent {
         Intent::ClarifyPreviousLength
-            | Intent::ClarifyFilteredCsvStatistics
-            | Intent::SupplyHearingAnswer { .. }
-    );
+        | Intent::ClarifyFilteredCsvStatistics
+        | Intent::SupplyHearingAnswer { .. } => Some(crate::input::HEARING_PARSER_VERSION),
+        Intent::ClarifyWorkPlanPersonnel { .. } => {
+            Some(crate::work_plan_input::PERSONNEL_HEARING_PARSER_VERSION)
+        }
+        _ => None,
+    };
+    let requires_hearing = hearing_parser.is_some();
     let invalid_hearing = || {
         failure(
             "RECOVERY_HEARING_MISMATCH",
             "the retained clarification, grounded outcome or rendered content differs",
         )
     };
-    if requires_hearing != (bundle.meaning.parser_version == crate::input::HEARING_PARSER_VERSION) {
+    let actual_hearing_parser = bundle.meaning.parser_version.as_str();
+    if hearing_parser.map_or_else(
+        || {
+            matches!(
+                actual_hearing_parser,
+                crate::input::HEARING_PARSER_VERSION
+                    | crate::work_plan_input::PERSONNEL_HEARING_PARSER_VERSION
+            )
+        },
+        |expected| actual_hearing_parser != expected,
+    ) {
         return Err(invalid_hearing());
     }
     if requires_hearing {
@@ -5363,11 +5377,15 @@ fn inspect(
     } else {
         &request.output_path
     };
+    let expected_budget = hearing_answer.as_ref().map_or_else(
+        || request.budget.clone(),
+        |context| context.effective_budget(request),
+    );
     if goal.input_fingerprint != fingerprint
         || goal.intent != bundle.meaning.intent
         || goal.permissions != request.permissions
         || &goal.output_path != expected_path
-        || goal.budget != request.budget
+        || goal.budget != expected_budget
     {
         return Err(failure(
             "RECOVERY_GOAL_MISMATCH",
@@ -6078,24 +6096,32 @@ fn inspect(
         let outcome = if let Some(context) = &hearing_answer {
             context.complete(store, bundle, &state.prior_results, started)?
         } else {
-            let prior = bundle
-                .meaning
-                .context_result_ref
-                .as_ref()
-                .and_then(|id| state.prior_results.get(id))
-                .ok_or_else(invalid_hearing)?;
-            if bundle.context_sha256 != identity(&Some(prior))?
-                || request
-                    .context_ref
+            let prior = if matches!(
+                bundle.meaning.intent,
+                Intent::ClarifyWorkPlanPersonnel { .. }
+            ) {
+                None
+            } else {
+                let prior = bundle
+                    .meaning
+                    .context_result_ref
                     .as_ref()
-                    .is_some_and(|id| id != &prior.id)
-                || (request.context_ref.is_none()
-                    && store.input_start_predecessor(state)?.as_ref() != Some(prior))
-            {
-                return Err(invalid_hearing());
-            }
+                    .and_then(|id| state.prior_results.get(id))
+                    .ok_or_else(invalid_hearing)?;
+                if bundle.context_sha256 != identity(&Some(prior))?
+                    || request
+                        .context_ref
+                        .as_ref()
+                        .is_some_and(|id| id != &prior.id)
+                    || (request.context_ref.is_none()
+                        && store.input_start_predecessor(state)?.as_ref() != Some(prior))
+                {
+                    return Err(invalid_hearing());
+                }
+                Some(prior)
+            };
             let crate::hearing::Preparation::Complete(outcome) =
-                crate::hearing::prepare(store, bundle, Some(prior), &state.prior_results, started)?
+                crate::hearing::prepare(store, bundle, prior, &state.prior_results, started)?
             else {
                 return Err(failure(
                     "NO_LOCAL_FILE_GOAL",

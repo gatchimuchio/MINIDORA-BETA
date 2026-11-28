@@ -1882,6 +1882,7 @@ pub(crate) fn goal_predicates(
         Intent::IndependentRequests { .. } => predicates.push(crate::composition::PREDICATE.into()),
         Intent::ClarifyPreviousLength
         | Intent::ClarifyFilteredCsvStatistics
+        | Intent::ClarifyWorkPlanPersonnel { .. }
         | Intent::SupplyHearingAnswer { .. } => predicates.push(hearing::PREDICATE.into()),
         intent if is_conversation_intent(intent) => {
             predicates.push(CONVERSATION_PREDICATE.into());
@@ -9352,13 +9353,21 @@ impl Engine {
             } else {
                 bundle
             };
+            let unknown_reply = matches!(bundle.meaning.intent, Intent::Unknown { .. });
             if has_compute_budget
                 && supports_japanese_output_locale(&request.locale)
-                && matches!(bundle.meaning.intent, Intent::Unknown { .. })
                 && state.prior_results.values().any(hearing::is_question)
-                && let Some((context, span)) = hearing::find_answer(&self.store, &request, started)?
+                && (unknown_reply || request.context_ref.is_some()
+                    && crate::work_plan_input::personnel_answer(&request.text).is_some())
+                && let Some((context, span)) =
+                    hearing::find_answer(&self.store, &request, started, !unknown_reply)?
             {
-                let sealed = input::seal_hearing_answer(&request, context.question(), span)?;
+                let sealed = input::seal_hearing_answer(
+                    &request,
+                    context.question(),
+                    span,
+                    context.is_work_plan_personnel(),
+                )?;
                 hearing_answer = Some(context);
                 return Ok(sealed);
             }
@@ -11156,13 +11165,17 @@ impl Engine {
             + sequence_edit
                 .as_ref()
                 .map_or(0, SequenceEdit::verification_actions);
-        let mut graph = Scheduler::new(nodes, request.budget.max_actions)?;
+        let effective_budget = hearing_answer.as_ref().map_or_else(
+            || request.budget.clone(),
+            |context| context.effective_budget(&request),
+        );
+        let mut graph = Scheduler::new(nodes, effective_budget.max_actions)?;
         let goal = GoalContract {
             input_fingerprint: fingerprint.clone(),
             intent: bundle.meaning.intent.clone(),
             output_path: effective_output_path.clone(),
             permissions: request.permissions.clone(),
-            budget: request.budget.clone(),
+            budget: effective_budget,
             required_graph_ref,
             required_predicates: goal_predicates(
                 &bundle.meaning,
@@ -11290,7 +11303,7 @@ impl Engine {
                 NO_COMPUTE_BUDGET,
             );
         }
-        if (request.budget.max_actions as usize) < required_actions {
+        if (goal.budget.max_actions as usize) < required_actions {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
@@ -11317,7 +11330,9 @@ impl Engine {
         }
         if matches!(
             goal.intent,
-            Intent::ClarifyPreviousLength | Intent::ClarifyFilteredCsvStatistics
+            Intent::ClarifyPreviousLength
+                | Intent::ClarifyFilteredCsvStatistics
+                | Intent::ClarifyWorkPlanPersonnel { .. }
         ) && let Some((code, message)) = required_file_permission_stop(&goal)
         {
             return self.stop(&mut state, Lifecycle::Suspend, code, message);
@@ -11697,6 +11712,7 @@ impl Engine {
             }
             Intent::ClarifyPreviousLength
             | Intent::ClarifyFilteredCsvStatistics
+            | Intent::ClarifyWorkPlanPersonnel { .. }
             | Intent::SupplyHearingAnswer { .. } => {
                 if hearing_answer.is_none()
                     && state.prior_results.values().any(hearing::is_question)
@@ -17820,7 +17836,7 @@ impl Engine {
             }
             Intent::Cancel => unreachable!("handled before computation"),
         }
-        if started.elapsed().as_millis() >= u128::from(request.budget.deadline_ms) {
+        if started.elapsed().as_millis() >= u128::from(goal.budget.deadline_ms) {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
@@ -18371,12 +18387,12 @@ impl Engine {
                     message,
                 );
             }
-            return self.stop(
-                &mut state,
-                Lifecycle::Suspend,
-                hearing::REQUIRED,
-                "確定した部分を表示し、残りに必要な補足を待っています。",
-            );
+            let message = if matches!(goal.intent, Intent::ClarifyWorkPlanPersonnel { .. }) {
+                "同時に作業できる人数が分かると、工程を並行できるかと全体の所要時間を計算できます。何人で作業できますか？"
+            } else {
+                "確定した部分を表示し、残りに必要な補足を待っています。"
+            };
+            return self.stop(&mut state, Lifecycle::Suspend, hearing::REQUIRED, message);
         }
         // Required file effect is performed once under a durable, fully bound
         // identity. Physical output never independently closes the case.

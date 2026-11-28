@@ -2,7 +2,10 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use minidora_domain::{Result, WorkPlanChange, WorkPlanRequest, failure, identity};
+use minidora_domain::{
+    Result, SourceSpan, WorkPlanChange, WorkPlanDependency, WorkPlanRequest, WorkPlanTask,
+    WorkPlanWithoutPersonnel, failure, identity,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::language::{
@@ -14,6 +17,7 @@ use crate::scheduler::{GoalNode, GoalNodeKind, Scheduler};
 
 pub(crate) const ARTIFACT_KIND: &str = "minidora.core-computation.work-plan.v1";
 const MAX_SEARCH_STATES: usize = 40_000;
+pub(crate) const MAX_PERSONNEL: u8 = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,69 +115,169 @@ fn check_deadline(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
+struct ValidatedGraph<'a> {
+    prerequisites: Vec<Vec<usize>>,
+    index: BTreeMap<&'a str, usize>,
+}
+
+fn validate_graph<'a>(
+    purpose: Option<&SourceSpan>,
+    tasks: &'a [WorkPlanTask],
+    dependencies: &[WorkPlanDependency],
+    deadline_minutes: u16,
+) -> Result<ValidatedGraph<'a>> {
+    if !(1..=10).contains(&tasks.len())
+        || deadline_minutes == 0
+        || purpose.is_some_and(|purpose| !label_ok(&purpose.text))
+        || tasks.iter().any(|task| {
+            !label_ok(&task.name.text)
+                || task.duration_minutes == 0
+                || !(1..=MAX_PERSONNEL).contains(&task.workers)
+        })
+    {
+        return Err(invalid_plan());
+    }
+    let index: BTreeMap<_, _> = tasks
+        .iter()
+        .enumerate()
+        .map(|(i, task)| (task.name.text.as_str(), i))
+        .collect();
+    if index.len() != tasks.len() {
+        return Err(failure(
+            "WORK_PLAN_DUPLICATE_TASK",
+            "同じ作業名が複数あります。",
+        ));
+    }
+    let mut prerequisites = vec![Vec::new(); tasks.len()];
+    for edge in dependencies {
+        let before = *index
+            .get(edge.before.text.as_str())
+            .ok_or_else(invalid_plan)?;
+        let after = *index
+            .get(edge.after.text.as_str())
+            .ok_or_else(invalid_plan)?;
+        prerequisites[after].push(before);
+    }
+    for dependencies in &mut prerequisites {
+        dependencies.sort_unstable();
+    }
+    // Validate only the shape and dependencies. A proposal cannot record work as done.
+    let nodes = tasks
+        .iter()
+        .enumerate()
+        .map(|(i, task)| GoalNode {
+            id: task.name.text.clone(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: prerequisites[i]
+                .iter()
+                .map(|p| tasks[*p].name.text.clone())
+                .collect(),
+        })
+        .collect();
+    Scheduler::new(nodes, 0).map_err(|_| {
+        failure(
+            "WORK_PLAN_DEPENDENCIES",
+            "作業の前後関係に重複または循環があります。",
+        )
+    })?;
+    Ok(ValidatedGraph {
+        prerequisites,
+        index,
+    })
+}
+
+fn critical_path_bound(
+    tasks: &[WorkPlanTask],
+    prerequisites: &[Vec<usize>],
+    mut ends: Vec<Option<u32>>,
+) -> u32 {
+    while ends.iter().any(Option::is_none) {
+        for index in 0..ends.len() {
+            if ends[index].is_some() {
+                continue;
+            }
+            if let Some(release) = prerequisites[index]
+                .iter()
+                .try_fold(0, |latest, before| ends[*before].map(|end| latest.max(end)))
+            {
+                ends[index] = Some(release + u32::from(tasks[index].duration_minutes));
+            }
+        }
+    }
+    ends.into_iter().flatten().max().unwrap_or_default()
+}
+
+fn serial_duration(tasks: &[WorkPlanTask]) -> u32 {
+    tasks
+        .iter()
+        .map(|task| u32::from(task.duration_minutes))
+        .sum()
+}
+
+fn labor_bound(tasks: &[WorkPlanTask], personnel: u8) -> u32 {
+    tasks
+        .iter()
+        .map(|task| u32::from(task.workers) * u32::from(task.duration_minutes))
+        .sum::<u32>()
+        .div_ceil(u32::from(personnel))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PersonnelPreview {
+    pub(crate) minimum_crew: u8,
+    pub(crate) lower_bound_minutes: u32,
+    pub(crate) max_personnel_bound_minutes: u32,
+    pub(crate) no_overlap: bool,
+}
+
+pub(crate) fn personnel_preview(draft: &WorkPlanWithoutPersonnel) -> Result<PersonnelPreview> {
+    let graph = validate_graph(
+        draft.purpose.as_ref(),
+        &draft.tasks,
+        &draft.dependencies,
+        draft.deadline_minutes,
+    )?;
+    let minimum_crew = draft
+        .tasks
+        .iter()
+        .map(|task| task.workers)
+        .max()
+        .ok_or_else(invalid_plan)?;
+    let critical = critical_path_bound(
+        &draft.tasks,
+        &graph.prerequisites,
+        vec![None; draft.tasks.len()],
+    );
+    let serial = serial_duration(&draft.tasks);
+    let lower_bound_minutes = if draft.allow_parallel {
+        critical
+    } else {
+        serial
+    };
+    Ok(PersonnelPreview {
+        minimum_crew,
+        lower_bound_minutes,
+        max_personnel_bound_minutes: lower_bound_minutes
+            .max(labor_bound(&draft.tasks, MAX_PERSONNEL)),
+        no_overlap: !draft.allow_parallel || critical == serial,
+    })
+}
+
 impl<'a> Graph<'a> {
     fn new(request: &'a WorkPlanRequest) -> Result<Self> {
-        if !(1..=10).contains(&request.tasks.len())
-            || !(1..=8).contains(&request.personnel)
-            || request.deadline_minutes == 0
-            || request
-                .purpose
-                .as_ref()
-                .is_some_and(|purpose| !label_ok(&purpose.text))
-            || request.tasks.iter().any(|task| {
-                !label_ok(&task.name.text)
-                    || task.duration_minutes == 0
-                    || !(1..=8).contains(&task.workers)
-            })
-        {
+        if !(1..=MAX_PERSONNEL).contains(&request.personnel) {
             return Err(invalid_plan());
         }
-        let index: BTreeMap<_, _> = request
-            .tasks
-            .iter()
-            .enumerate()
-            .map(|(i, task)| (task.name.text.as_str(), i))
-            .collect();
-        if index.len() != request.tasks.len() {
-            return Err(failure(
-                "WORK_PLAN_DUPLICATE_TASK",
-                "同じ作業名が複数あります。",
-            ));
-        }
-        let mut prerequisites = vec![Vec::new(); request.tasks.len()];
-        for edge in &request.dependencies {
-            let before = *index
-                .get(edge.before.text.as_str())
-                .ok_or_else(invalid_plan)?;
-            let after = *index
-                .get(edge.after.text.as_str())
-                .ok_or_else(invalid_plan)?;
-            prerequisites[after].push(before);
-        }
-        for dependencies in &mut prerequisites {
-            dependencies.sort_unstable();
-        }
-        // Use the shared validator for unique, complete, acyclic prerequisite graphs.
-        // It is never advanced with the proposed schedule: no real work has taken place.
-        let nodes = request
-            .tasks
-            .iter()
-            .enumerate()
-            .map(|(i, task)| GoalNode {
-                id: task.name.text.clone(),
-                kind: GoalNodeKind::ComputedValue,
-                requires: prerequisites[i]
-                    .iter()
-                    .map(|p| request.tasks[*p].name.text.clone())
-                    .collect(),
-            })
-            .collect();
-        Scheduler::new(nodes, 0).map_err(|_| {
-            failure(
-                "WORK_PLAN_DEPENDENCIES",
-                "作業の前後関係に重複または循環があります。",
-            )
-        })?;
+        let ValidatedGraph {
+            prerequisites,
+            index,
+        } = validate_graph(
+            request.purpose.as_ref(),
+            &request.tasks,
+            &request.dependencies,
+            request.deadline_minutes,
+        )?;
         Ok(Self {
             request,
             prerequisites,
@@ -205,37 +309,15 @@ impl<'a> Graph<'a> {
     }
 
     fn earliest_bound(&self, scheduled: &[Option<Slot>]) -> u32 {
-        let mut ends: Vec<_> = scheduled
+        let ends = scheduled
             .iter()
             .map(|slot| slot.map(|slot| slot.end_minute))
             .collect();
-        while ends.iter().any(Option::is_none) {
-            for index in 0..ends.len() {
-                if ends[index].is_some() {
-                    continue;
-                }
-                if let Some(release) = self.prerequisites[index]
-                    .iter()
-                    .try_fold(0, |latest, before| ends[*before].map(|end| latest.max(end)))
-                {
-                    ends[index] = Some(release + self.duration(index));
-                }
-            }
-        }
-        let critical = ends.into_iter().flatten().max().unwrap_or_default();
+        let critical = critical_path_bound(&self.request.tasks, &self.prerequisites, ends);
         let labor: u32 = if self.request.allow_parallel {
-            self.request
-                .tasks
-                .iter()
-                .map(|task| u32::from(task.workers) * u32::from(task.duration_minutes))
-                .sum::<u32>()
-                .div_ceil(u32::from(self.request.personnel))
+            labor_bound(&self.request.tasks, self.request.personnel)
         } else {
-            self.request
-                .tasks
-                .iter()
-                .map(|task| u32::from(task.duration_minutes))
-                .sum()
+            serial_duration(&self.request.tasks)
         };
         critical.max(labor)
     }
@@ -618,7 +700,7 @@ impl WorkPlanMeaningPlan {
             .collect()
     }
 
-    fn units(&self) -> Vec<String> {
+    pub(crate) fn units(&self) -> Vec<String> {
         let title = self
             .request
             .purpose
@@ -796,5 +878,78 @@ impl GeneratedWorkPlanArtifact {
             meaning_plan,
             content_generation,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn personnel_preview_preserves_dependency_and_serial_bounds() {
+        let span = |text: &str| SourceSpan {
+            start: 0,
+            end: text.len(),
+            text: text.into(),
+        };
+        let task = |name, duration_minutes, workers| WorkPlanTask {
+            name: span(name),
+            duration_minutes,
+            workers,
+        };
+        let edge = |before, after| WorkPlanDependency {
+            before: span(before),
+            after: span(after),
+        };
+        let mut draft = WorkPlanWithoutPersonnel {
+            purpose: None,
+            tasks: vec![
+                task("梱包", 15, 1),
+                task("搬入", 12, 2),
+                task("点検", 10, 1),
+            ],
+            dependencies: vec![edge("梱包", "点検")],
+            deadline_minutes: 30,
+            allow_parallel: true,
+        };
+        assert_eq!(
+            personnel_preview(&draft).unwrap(),
+            PersonnelPreview {
+                minimum_crew: 2,
+                lower_bound_minutes: 25,
+                max_personnel_bound_minutes: 25,
+                no_overlap: false,
+            }
+        );
+        draft.allow_parallel = false;
+        assert_eq!(
+            personnel_preview(&draft).unwrap(),
+            PersonnelPreview {
+                minimum_crew: 2,
+                lower_bound_minutes: 37,
+                max_personnel_bound_minutes: 37,
+                no_overlap: true,
+            }
+        );
+        draft.allow_parallel = true;
+        draft.dependencies.push(edge("搬入", "梱包"));
+        assert_eq!(
+            personnel_preview(&draft).unwrap(),
+            PersonnelPreview {
+                minimum_crew: 2,
+                lower_bound_minutes: 37,
+                max_personnel_bound_minutes: 37,
+                no_overlap: true,
+            }
+        );
+        draft.dependencies.push(edge("点検", "搬入"));
+        assert!(
+            matches!(personnel_preview(&draft), Err(minidora_domain::Error::Contract { code, .. }) if code == "WORK_PLAN_DEPENDENCIES")
+        );
+        draft.tasks = vec![task("搬入", 10, 5), task("片付け", 10, 5)];
+        draft.dependencies.clear();
+        let preview = personnel_preview(&draft).unwrap();
+        assert_eq!(preview.lower_bound_minutes, 10);
+        assert_eq!(preview.max_personnel_bound_minutes, 13);
     }
 }
